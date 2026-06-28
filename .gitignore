@@ -31,3 +31,6 @@ playwright-report/
 
 # Log de eventos de alarme (runtime — só metadados, mas não versionar)
 server/alarms.json
+
+# Config de câmeras/views compartilhadas (runtime)
+server/camcfg.json

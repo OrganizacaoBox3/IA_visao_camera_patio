@@ -91,6 +91,22 @@ create table if not exists alarm_events (
   ack_by text, ack_at bigint
 );
 
+-- ── CONFIG COMPARTILHADA DAS CÂMERAS (operadores/turnos) ─────────────────────
+-- VIEWS: layouts salvos do dashboard (lista global). `cameras` = ids das câmeras (jsonb).
+-- `ord` preserva a ordem da lista (a UI substitui a lista inteira no PUT).
+create table if not exists app_views (
+  id text primary key,
+  name text not null,
+  cameras jsonb not null default '[]'::jsonb,
+  ord int default 0
+);
+-- TRIPWIRES: linhas de contagem por câmera. `data` = array de { id, a:{x,y}, b:{x,y} } (0..1).
+-- SÓ geometria/ids — nunca imagem/frame (LGPD).
+create table if not exists cam_tripwires (
+  camera_id text primary key,
+  data jsonb not null default '[]'::jsonb
+);
+
 -- ── ÍNDICES (consultas: eventos por ts desc; buckets por hora) ───────────────
 create index if not exists idx_ativ_events_ts on ativ_events (ts desc);
 create index if not exists idx_read_events_ts on read_events (ts desc);

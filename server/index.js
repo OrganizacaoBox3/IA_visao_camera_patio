@@ -10,6 +10,7 @@ const whatsapp = require("./whatsapp");
 const dispatch = require("./dispatch");
 const alarmPolicy = require("./alarmPolicy");
 const recipients = require("./recipients");
+const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
 const pgstore = require("./pgstore");
@@ -52,7 +53,7 @@ function requireConfigurer(req, res) {
 const httpServer = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*"); // dev cross-origin; prod é same-origin via nginx
   res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
 
   try {
@@ -240,6 +241,32 @@ const httpServer = createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
     }
+
+    // ── VIEWS (layouts do dashboard) — COMPARTILHADAS, lista global ───────────
+    // GET (qualquer usuário autenticado) lê; PUT (qualquer autenticado — operadores
+    // organizam o monitoramento compartilhado) substitui a lista inteira e persiste.
+    if (path0 === "/api/views") {
+      if (req.method === "GET") { if (!requireAuth(req, res)) return; return json(res, 200, camcfg.allViews()); }
+      if (req.method === "PUT") {
+        if (!requireAuth(req, res)) return;
+        const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+        return json(res, 200, await camcfg.saveViews(body && body.views));
+      }
+    }
+
+    // ── TRIPWIRES (linhas de contagem) — COMPARTILHADAS, por câmera ───────────
+    // GET (qualquer autenticado) lê; PUT exige perfil de configuração (engenharia),
+    // coerente com o gate de edição no front. Substitui as linhas da câmera e persiste.
+    const mtw = path0.match(/^\/api\/tripwires\/([\w-]+)$/);
+    if (mtw) {
+      const cameraId = decodeURIComponent(mtw[1]);
+      if (req.method === "GET") { if (!requireAuth(req, res)) return; return json(res, 200, camcfg.getTripwires(cameraId)); }
+      if (req.method === "PUT") {
+        if (!requireConfigurer(req, res)) return;
+        const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+        return json(res, 200, await camcfg.saveTripwires(cameraId, body && body.tripwires));
+      }
+    }
   } catch { return json(res, 400, { error: "requisição inválida" }); }
 
   res.writeHead(404); res.end();
@@ -332,7 +359,7 @@ io.on("connection", (socket) => {
 // aceitar conexões — assim verifyToken/login já têm os dados em memória.
 (async () => {
   await db.init();
-  await Promise.all([users.init(), recipients.init(), settings.init(), events.init()]);
+  await Promise.all([users.init(), recipients.init(), settings.init(), events.init(), camcfg.init()]);
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);

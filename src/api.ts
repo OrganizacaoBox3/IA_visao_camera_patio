@@ -178,3 +178,26 @@ export const listShelves = () => apiGet<Shelve[]>("/api/alarms/shelves");
 export const createShelve = (s: { key: string; ms?: number; reason?: string }) => apiSend<Shelve>("POST", "/api/alarms/shelves", s);
 // DELETE /api/alarms/shelves/:key — remove shelve (key via encodeURIComponent). Auth: canConfigure.
 export const deleteShelve = (key: string) => apiSend<{ ok: true }>("DELETE", `/api/alarms/shelves/${encodeURIComponent(key)}`);
+
+// ── Config COMPARTILHADA das câmeras (views + tripwires) — antes em localStorage ──
+// Centraliza o que os operadores configuravam localmente, para partilhar entre turnos.
+// SÓ geometria/ids/nomes (LGPD). apiSend não tem "PUT"; usamos fetch direto pelo mesmo
+// caminho (auth/erro via request()), mantendo retrocompatibilidade do client existente.
+function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(fetch(APP_CONFIG.net.serverUrl + path, { method: "PUT", headers: headers(true), body: JSON.stringify(body) }));
+}
+
+// VIEWS — layouts salvos do dashboard (lista global). { id, name, cameraIds[] }.
+export type SavedView = { id: string; name: string; cameraIds: string[] };
+// GET /api/views → SavedView[]. Auth: qualquer usuário autenticado.
+export const getViews = () => apiGet<SavedView[]>("/api/views");
+// PUT /api/views {views} → substitui a lista inteira; responde a lista salva. Auth: autenticado.
+export const saveViews = (views: SavedView[]) => apiPut<SavedView[]>("/api/views", { views });
+
+// TRIPWIRES — linhas de contagem por câmera. coords NORMALIZADAS 0..1.
+export type Tripwire = { id: string; a: { x: number; y: number }; b: { x: number; y: number } };
+// GET /api/tripwires/:cameraId → Tripwire[]. Auth: qualquer usuário autenticado.
+export const getTripwires = (cameraId: string) => apiGet<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`);
+// PUT /api/tripwires/:cameraId {tripwires} → substitui as linhas; responde a lista salva.
+// Auth: perfil de configuração (engenharia) — coerente com o gate de edição no front.
+export const saveTripwires = (cameraId: string, tripwires: Tripwire[]) => apiPut<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`, { tripwires });
