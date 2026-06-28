@@ -1,0 +1,21 @@
+/* Telemetria lateral "nunca número cru" (valor + sparkline + faixa-alvo).
+   Importado SÓ por Sparkline.tsx (consumido pela tela de câmera). Usa os tokens da
+   fundação (--state-*, --cam-*, --mono, --text-*); não redefine nada global. */
+
+.metric { padding: 6px 0; border-bottom: 1px solid var(--cam-panel-border, #16202b); }
+.metric:last-child { border-bottom: none; }
+
+.metric-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2, 8px); }
+.metric-label { font-size: 10px; color: var(--text-muted, #7d8aa0); text-transform: uppercase; letter-spacing: .3px; }
+.metric-value { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--cam-panel-fg, #e6edf3); white-space: nowrap; }
+.metric-flag { font-size: 10px; font-weight: 600; }
+
+/* realce sutil da célula quando o indicador está fora da faixa-alvo (cor reservada ao anormal) */
+.metric.out { border-bottom-color: var(--state-warn-border, #4d3a09); }
+
+.metric .spark-svg { display: block; width: 100%; height: 28px; margin-top: 3px; }
+.metric-band { font-size: 10px; color: var(--text-muted, #7d8aa0); font-family: var(--mono); margin-top: 2px; }
+
+/* faixa-alvo = banda verde/aceitável (translúcida, sob a linha) */
+.spark-band { fill: var(--state-ok, #22c55e); opacity: 0.13; }
+.spark-dot { opacity: 0.95; }

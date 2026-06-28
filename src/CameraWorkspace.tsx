@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { APP_CONFIG, type OverlayLayers } from "./config";
+import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
 import { fmtDuration, fmtLimit, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame } from "./vision/detect";
 import { requestInference } from "./vision/scheduler";
-import { AtividadeProcessor, ACTIVITIES, type AtividadeCtx, type ZoneView, type ZoneState } from "./processors/atividade";
+import { AtividadeProcessor, ACTIVITIES, sensitivityFactor, type AtividadeCtx, type ZoneView, type ZoneState } from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
 import { FadigaProcessor, type FadigaModelState } from "./processors/fadiga";
@@ -21,8 +21,11 @@ import { predictAlertsPerDay } from "./report/predict";
 import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import { loadZones, saveZones, newZoneId, DEFAULT_GRID, ZONE_MODE_LABEL, type Zone, type ZoneMode } from "./zones";
 import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxNorm, anySet, clearMask, containsNorm, type Mask } from "./zoneMask";
+import { createCounter, createOccupancy, inwardNormal, type Tripwire, type Counter, type Occupancy, type TripwireCounts } from "./vision/counting";
 import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
 import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
+import { MetricCell, type Band, type MetricState } from "./components/Sparkline";
+import { useAuth } from "./auth";
 import "./camera/cine.css";
 
 const MODO_OPTS = [{ value: "atividade", label: "Atividade" }, { value: "leitura", label: "Leitura" }, { value: "objetos", label: "Objetos" }, { value: "fadiga", label: "Fadiga" }];
@@ -30,6 +33,27 @@ const BRUSH_OPTS = [{ value: "1", label: "1×" }, { value: "2", label: "2×" }, 
 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
 const HEAT_COLS = 32, HEAT_ROWS = 18;
+
+// ── Tripwires (linhas de contagem com direção) — persistência por câmera ──
+// Espelha o padrão de zones.ts: chave localStorage `vp-tripwires-<id>`, coords normalizadas 0..1.
+const tripwireKey = (cameraId: string) => `vp-tripwires-${cameraId}`;
+let twSeq = 0;
+function newTripwireId(cameraId: string) { return `${cameraId}-tw${Date.now().toString(36)}${++twSeq}`; }
+function loadTripwires(cameraId: string): Tripwire[] {
+  let raw: unknown = null;
+  try { const s = localStorage.getItem(tripwireKey(cameraId)); raw = s ? JSON.parse(s) : null; } catch { raw = null; }
+  if (!Array.isArray(raw)) return [];
+  const out: Tripwire[] = [];
+  for (const w of raw as Partial<Tripwire>[]) {
+    if (!w || typeof w.id !== "string" || !w.a || !w.b) continue;
+    if (typeof w.a.x !== "number" || typeof w.a.y !== "number" || typeof w.b.x !== "number" || typeof w.b.y !== "number") continue;
+    out.push({ id: w.id, a: { x: w.a.x, y: w.a.y }, b: { x: w.b.x, y: w.b.y } });
+  }
+  return out;
+}
+function saveTripwires(cameraId: string, wires: Tripwire[]) {
+  try { localStorage.setItem(tripwireKey(cameraId), JSON.stringify(wires)); } catch { /* no-op */ }
+}
 
 // ── Tokens da FUNDAÇÃO (Onda A) resolvidos p/ o canvas ──
 // O canvas precisa de cores literais; lemos as CSS vars de :root (index.css) e cacheamos.
@@ -102,8 +126,50 @@ const RISK_LABEL: Record<RiskState, string> = { OK: "OK", ALERTA_FADIGA: "Fadiga
 const RISK_TONE: Record<RiskState, Tone> = { OK: "ok", ALERTA_FADIGA: "warn", ALERTA_CELULAR: "warn", ALERTA_DUPLO: "alert" };
 
 // taxa de leitura → cor (verde ≥95 · âmbar ≥80 · vermelho abaixo). Espelha a semântica do relatório.
-function rateColor(pct: number): string { return pct >= 95 ? "var(--state-ok)" : pct >= 80 ? "var(--state-warn)" : "var(--state-critical)"; }
 const MODE_TONE: Record<ZoneMode, Tone> = { atividade: "ok", leitura: "info", objetos: "warn", fadiga: "info" };
+
+// ── TELEMETRIA "NUNCA NÚMERO CRU" (Onda B item 10) ───────────────────────────────────────
+// Cada indicador numérico do painel lateral vira valor + sparkline + FAIXA-ALVO (banda verde/
+// aceitável), com realce quando fora da faixa (tokens --state-warn / --state-critical). As
+// faixas-alvo DERIVAM dos thresholds já existentes; premissas documentadas abaixo:
+//
+//  • Movimento (atividade): unidades de view.motion (= min(1, motionEMA/(motionActiveRatio·6))).
+//    A zona vira ATIVA quando motionEMA > motionActiveRatio·sf, i.e. view.motion > sf/6.
+//    Faixa-alvo = [sf/6, 1] (movimento saudável). Abaixo = LENTA/parada → warn/critical (estado).
+//  • Ocupação (atividade): faixa-alvo = [1, OCC_HI] pessoas (zona guarnecida, sem superlotar).
+//    Acima de OCC_HI = warn. OCC_HI é heurístico (não há ocupação-alvo por zona ainda) — A CONFIRMAR.
+//  • Taxa de leitura: faixa-alvo = [95, 100]% (via rateToMetric: ≥95 ok, ≥80 warn, abaixo
+//    critical — alinhado a reading.rateAlertPct=80).
+//  • No-reads: faixa-alvo = [0, 0] (ideal é zero). >0 = warn, ≥NOREAD_CRIT = critical.
+//  • Lidas/min e Total de objetos: SEM faixa-alvo fixa (depende da linha/cena) → só valor +
+//    tendência. A CONFIRMAR se houver meta de throughput por ponto/cena.
+//  • EAR (fadiga): faixa-alvo = [eyesClosedEarThreshold, EAR_HI] (olhos abertos). Abaixo do
+//    limiar de olhos fechados = sinal de fadiga → realce conforme o RISCO da zona.
+const HIST_LEN = 32;                          // tamanho do ring buffer por indicador (sparkline)
+const OCC_HI = 8;                             // teto heurístico de ocupação por zona — A CONFIRMAR
+const EAR_HI = 0.45;                          // teto de escala do EAR p/ a sparkline
+const NOREAD_CRIT = 3;                        // no-reads: ≥ isto vira critical (1..2 = warn)
+
+// estado da zona/risco/taxa → estado da MÉTRICA (cor da telemetria, tokens --state-*)
+function stateToMetric(s: ZoneState): MetricState { return s === "ALERTA" ? "critical" : s === "ATIVA" ? "ok" : "warn"; }
+function riskToMetric(r: RiskState): MetricState { return r === "ALERTA_DUPLO" ? "critical" : r === "OK" ? "ok" : "warn"; }
+function rateToMetric(pct: number): MetricState { return pct >= 95 ? "ok" : pct >= 80 ? "warn" : "critical"; }
+function noReadMetric(n: number): MetricState { return n >= NOREAD_CRIT ? "critical" : n > 0 ? "warn" : "ok"; }
+function occMetric(n: number): MetricState { return n > OCC_HI ? "warn" : "ok"; } // baixa ocupação não "grita" (zona pode estar legitimamente vazia)
+const NOREAD_BAND: Band = { lo: 0, hi: 0 };
+const RATE_BAND: Band = { lo: 95, hi: 100 };
+const OCC_BAND: Band = { lo: 1, hi: OCC_HI };
+
+// MODO-COMO-PRESET: o workspace tem N zonas (cada uma com seu modo), mas overlays/confiança
+// são GLOBAIS da sessão. O "preset ativo" segue o modo PREDOMINANTE entre as zonas
+// (empate → ordem atividade>leitura>objetos>fadiga). Trocar o modo de uma zona reaplica o preset.
+const PRESET_ORDER: ModeKey[] = ["atividade", "leitura", "objetos", "fadiga"];
+function dominantMode(zs: Zone[]): ModeKey {
+  if (!zs.length) return "atividade";
+  const counts: Record<string, number> = {};
+  for (const z of zs) counts[z.modo] = (counts[z.modo] ?? 0) + 1;
+  return PRESET_ORDER.reduce((best, m) => ((counts[m] ?? 0) > (counts[best] ?? 0) ? m : best), PRESET_ORDER[0]);
+}
 
 // Overlay compacto de fadiga DENTRO do retângulo da zona (olhos/boca + bbox de celular).
 // Landmarks são normalizados ao recorte → mapeados direto no rect da zona. (Mesh completo fica na câmera dedicada.)
@@ -139,6 +205,10 @@ type Props = {
 const C = APP_CONFIG.detection;
 
 export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = true, onOpen, onClose, onAlert }: Props) {
+  // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
+  // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
+  // camadas, mas NÃO edita configuração (criar/apagar/pintar zona, thresholds/sensibilidade/limite).
+  const { canConfigure } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const procRef = useRef<HTMLCanvasElement | null>(null);
@@ -174,7 +244,15 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const eventIdRef = useRef(0);
   const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers });   // camadas visíveis (lido no rAF)
   const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold);       // limiar global de confiança
-  const heatRef = useRef<Float32Array | null>(null);                            // acúmulo do heatmap de ocupação
+  // Tripwires + ocupação (Onda C item 13): counter/occupancy da lib pura counting.ts (criados sob demanda no rAF).
+  const counterRef = useRef<Counter | null>(null);
+  const occRef = useRef<Occupancy | null>(null);
+  const tripwiresRef = useRef<Tripwire[]>([]);                   // lido no rAF (desenho + setTripwires)
+  const twCountsRef = useRef<Record<string, TripwireCounts>>({}); // snapshot p/ o HUD no canvas (sem alocar por frame)
+  const twDrawRef = useRef<{ active: boolean; sx: number; sy: number; cx: number; cy: number } | null>(null); // linha em traçado (viewport px)
+  // Telemetria lateral (Onda B item 10): ring buffer leve por zona/indicador, alimentado pelo
+  // loop já existente na cadência de UI (sem custo extra de inferência). Map<zoneId, {key: série}>.
+  const histRef = useRef<Map<string, Record<string, number[]>>>(new Map());
   // ── CONGELAR + CINE-LOOP (Onda B) ──
   // Buffer de quadros EM MEMÓRIA / EFÊMERO (LGPD: nunca vai ao servidor; ver cineBuffer.ts).
   const cineRef = useRef<CineBuffer | null>(null);
@@ -185,6 +263,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const [zones, setZones] = useState<Zone[]>([]);
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
   const [drawMode, setDrawMode] = useState(false);
+  const [tripwires, setTripwires] = useState<Tripwire[]>([]);
+  const [tripwireMode, setTripwireMode] = useState(false);                       // editor de linha ativo (gated por canConfigure)
+  const [twCounts, setTwCounts] = useState<Record<string, TripwireCounts>>({});  // contadores in/out p/ o painel lateral
   const [paintZoneId, setPaintZoneId] = useState<string | null>(null);
   const [brush, setBrush] = useState(2);
   const [erase, setErase] = useState(false);
@@ -192,11 +273,13 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const [perf, setPerf] = useState({ fps: 0 });
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
-  const [drawerTab, setDrawerTab] = useState<"zonas" | "timeline" | "presenca" | "camadas">("zonas");
+  const [drawerTab, setDrawerTab] = useState<"zonas" | "linhas" | "timeline" | "presenca" | "camadas">("zonas");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
   // Onda 2: camadas + slider de confiança (estado local; inicia de APP_CONFIG.overlay).
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
+  // MODO-COMO-PRESET: modo cujo preset está aplicado à sessão (camadas + confiança + métricas em destaque).
+  const [activePreset, setActivePreset] = useState<ModeKey | null>(null);
   // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
   const [histDataset, setHistDataset] = useState<Dataset | null>(null);
   const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -218,7 +301,21 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   useEffect(() => { zonesRef.current = zones; }, [zones]);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   useEffect(() => { confRef.current = conf; }, [conf]);
-  useEffect(() => { const z = loadZones(cameraId, label); setZones(z); }, [cameraId, label]);
+  useEffect(() => {
+    const z = loadZones(cameraId, label); setZones(z);
+    // MODO-COMO-PRESET: ao abrir a câmera, carrega o preset do modo predominante (camadas + confiança).
+    // Não toca na GEOMETRIA/zonas persistidas — só governa overlays/visão/métricas da sessão.
+    const dom = dominantMode(z); const p = MODE_PRESETS[dom];
+    setLayers({ ...p.layers }); setConf(p.confidenceThreshold); setActivePreset(dom);
+  }, [cameraId, label]);
+  // Tripwires: carrega as linhas persistidas ao abrir a câmera (somente leitura p/ operador; edição gated).
+  useEffect(() => { setTripwires(loadTripwires(cameraId)); setTripwireMode(false); }, [cameraId]);
+  // Re-set da geometria no counter quando as linhas mudam (preserva contadores por id) + reflete no painel.
+  useEffect(() => {
+    tripwiresRef.current = tripwires;
+    if (counterRef.current) { counterRef.current.setTripwires(tripwires); twCountsRef.current = counterRef.current.counts(); }
+    setTwCounts(counterRef.current ? counterRef.current.counts() : {});
+  }, [tripwires]);
   // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
   useEffect(() => {
     const z = cfgZoneId ? zonesRef.current.find((zz) => zz.id === cfgZoneId) : null;
@@ -310,6 +407,17 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     setTimeline((p) => [{ id: ++eventIdRef.current, ts: Date.now(), text, sev }, ...p].slice(0, APP_CONFIG.timeline.maxItems));
   }
 
+  // Telemetria: empurra uma amostra no ring buffer do indicador (mantém só HIST_LEN pontos).
+  function pushHist(zoneId: string, key: string, val: number) {
+    let m = histRef.current.get(zoneId);
+    if (!m) { m = {}; histRef.current.set(zoneId, m); }
+    const arr = m[key] ?? (m[key] = []);
+    arr.push(val);
+    if (arr.length > HIST_LEN) arr.shift();
+  }
+  // Série recente de um indicador (vazio se ainda não houver amostras).
+  function hist(zoneId: string, key: string): number[] { return histRef.current.get(zoneId)?.[key] ?? []; }
+
   useEffect(() => {
     let stopped = false;
     const loop = () => {
@@ -372,16 +480,18 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
 
-      // Heatmap de ocupação (camada opcional): acumula a posição das pessoas com decaimento.
-      if (layersRef.current.heatmap) {
-        const heat = heatRef.current ?? (heatRef.current = new Float32Array(HEAT_COLS * HEAT_ROWS));
-        for (let i = 0; i < heat.length; i++) heat[i] *= 0.97;
-        for (const t of tracks) {
-          const c = Math.min(HEAT_COLS - 1, Math.max(0, Math.floor(t.cx * HEAT_COLS)));
-          const rr = Math.min(HEAT_ROWS - 1, Math.max(0, Math.floor(t.cy * HEAT_ROWS)));
-          const k = rr * HEAT_COLS + c; heat[k] = Math.min(6, heat[k] + 0.6);
-        }
+      // ── Tripwires + ocupação (Onda C item 13) — REUSA os tracks já existentes (sem inferência extra) ──
+      // counter/occupancy criados 1x (sob demanda); a geometria é re-setada via effect quando as linhas mudam.
+      const counter = counterRef.current ?? (counterRef.current = createCounter(tripwiresRef.current, { minMove: 0.01, ttl: 1500 }));
+      const occ = occRef.current ?? (occRef.current = createOccupancy({ cols: HEAT_COLS, rows: HEAT_ROWS, decay: 0.97, addAmount: 0.6, max: 6 }));
+      const tps = tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy }));
+      const crossings = counter.update(tps, now);
+      for (const ev of crossings) {
+        const wi = tripwiresRef.current.findIndex((w) => w.id === ev.tripwireId);
+        pushTimeline(`${ev.dir === "in" ? "Entrada" : "Saída"} · Linha ${wi >= 0 ? wi + 1 : "?"}`, "info");
       }
+      if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
+      occ.add(tps.map((t) => ({ x: t.cx, y: t.cy })));               // decai + acumula ocupação 1x/frame (heatmap)
 
       const sampleFlow = now - lastFlowAtRef.current > 500;
       const recEmit = now - lastRecAtRef.current > 3000;
@@ -434,7 +544,15 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
 
       if (now - lastUiRef.current > (mode === "full" ? 200 : 500)) {
         lastUiRef.current = now;
+        // Telemetria lateral: amostra os indicadores na cadência de UI (sem custo de inferência).
+        for (const [zid, r] of resultsRef.current) {
+          if (r.modo === "atividade") { pushHist(zid, "motion", r.view.motion); pushHist(zid, "people", r.view.people); }
+          else if (r.modo === "leitura") { pushHist(zid, "rate", r.ratePct); pushHist(zid, "perMin", r.perMin); pushHist(zid, "noReads", r.noReads); }
+          else if (r.modo === "objetos") { pushHist(zid, "total", r.total); }
+          else if (r.modo === "fadiga" && r.ear != null) { pushHist(zid, "ear", r.ear); }
+        }
         setPanel(new Map(resultsRef.current));
+        setTwCounts(counterRef.current ? counterRef.current.counts() : {}); // reflete contadores in/out no painel lateral
         setPerf({ fps: Math.round(meterRef.current.fps) });
         const dwellable = tracks.filter((t) => now - t.firstSeen >= APP_CONFIG.people.dwellMinMs);
         const dwell = dwellable.length ? dwellable.reduce((a, t) => a + (now - t.firstSeen), 0) / dwellable.length : 0;
@@ -457,16 +575,17 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
     const detailed = mode === "full";
 
-    // Heatmap de ocupação (camada) — desenhado sob as geometrias, com ramp warn→critical (tokens).
-    if (layersRef.current.heatmap && heatRef.current) {
-      const heat = heatRef.current;
-      let max = 0; for (let i = 0; i < heat.length; i++) if (heat[i] > max) max = heat[i];
+    // Heatmap de ocupação (camada) — agora UNIFICADO na lib pura counting.ts (occ.grid() já normalizado 0..1).
+    // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
+    if (layersRef.current.heatmap && occRef.current) {
+      const occ = occRef.current, g = occ.grid(), cols = occ.cols, rows = occ.rows;
+      let max = 0; for (let i = 0; i < g.length; i++) if (g[i] > max) max = g[i];
       if (max > 0.05) {
-        const cw = cr.w / HEAT_COLS, ch = cr.h / HEAT_ROWS;
+        const cw = cr.w / cols, ch = cr.h / rows;
         const warn = hexToRgb(cssVar("--state-warn", "#eab308"));
         const crit = hexToRgb(cssVar("--state-critical", "#ef4444"));
-        for (let rr = 0; rr < HEAT_ROWS; rr++) for (let cc = 0; cc < HEAT_COLS; cc++) {
-          const v = heat[rr * HEAT_COLS + cc] / max; if (v < 0.05) continue;
+        for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++) {
+          const v = g[rr * cols + cc]; if (v < 0.05) continue; // já é raw/max (0..1)
           const R = Math.round(warn[0] + (crit[0] - warn[0]) * v);
           const G = Math.round(warn[1] + (crit[1] - warn[1]) * v);
           const B = Math.round(warn[2] + (crit[2] - warn[2]) * v);
@@ -548,6 +667,46 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       if (layersRef.current.boxes && detailed && r?.modo === "fadiga") drawFadigaZone(ctx, x, y, w, h, r.scene);
     }
 
+    // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
+    // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral) + HUD in/out.
+    const wires = tripwiresRef.current;
+    if (wires.length) {
+      const info = cssVar("--state-info", "#38bdf8");
+      const neutral = cssVar("--state-neutral", "#64748b");
+      const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+      const counts = twCountsRef.current;
+      for (let wi = 0; wi < wires.length; wi++) {
+        const w = wires[wi];
+        const ax = cr.x + w.a.x * cr.w, ay = cr.y + w.a.y * cr.h;
+        const bx = cr.x + w.b.x * cr.w, by = cr.y + w.b.y * cr.h;
+        ctx.lineWidth = 2.5; ctx.strokeStyle = info;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.fillStyle = info;
+        ctx.beginPath(); ctx.arc(ax, ay, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill();
+        // seta da direção "in": normal mapeada p/ tela (compensa o aspecto do letterbox) a partir do ponto médio
+        const n = inwardNormal(w);
+        let dx = n.x * cr.w, dy = n.y * cr.h; const dl = Math.hypot(dx, dy) || 1;
+        const AR = 16; dx = (dx / dl) * AR; dy = (dy / dl) * AR;
+        const mx = (ax + bx) / 2, my = (ay + by) / 2, ex = mx + dx, ey = my + dy;
+        ctx.strokeStyle = neutral; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(ex, ey); ctx.stroke();
+        const ang = Math.atan2(dy, dx), ha = 0.5, hl = 6;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey); ctx.lineTo(ex - hl * Math.cos(ang - ha), ey - hl * Math.sin(ang - ha));
+        ctx.moveTo(ex, ey); ctx.lineTo(ex - hl * Math.cos(ang + ha), ey - hl * Math.sin(ang + ha));
+        ctx.stroke();
+        // HUD discreto: in/out por linha (do lado oposto à seta p/ não cobri-la)
+        const c = counts[w.id] ?? { in: 0, out: 0 };
+        const tag = `L${wi + 1}  in ${c.in}  out ${c.out}`;
+        ctx.font = "bold 11px ui-sans-serif, system-ui";
+        const tw = ctx.measureText(tag).width + 10;
+        const hx = mx - dx - tw / 2, hy = my - dy - 18;
+        ctx.fillStyle = scrim; ctx.fillRect(hx, hy, tw, 16);
+        ctx.fillStyle = info; ctx.fillText(tag, hx + 5, hy + 12);
+      }
+    }
+
     // grade de pintura (ao editar a máscara de uma zona)
     if (paintZoneId) {
       const cols = DEFAULT_GRID.cols, rows = DEFAULT_GRID.rows, cw = cr.w / cols, ch = cr.h / rows;
@@ -560,6 +719,13 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
 
     const d = drawRef.current;
     if (d?.active) { const x = Math.min(d.sx, d.cx), y = Math.min(d.sy, d.cy); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = "#38bdf8"; ctx.strokeRect(x, y, Math.abs(d.cx - d.sx), Math.abs(d.cy - d.sy)); ctx.setLineDash([]); }
+
+    // tripwire em traçado (clique em A, arrasta até B)
+    const td = twDrawRef.current;
+    if (td?.active) {
+      ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.strokeStyle = cssVar("--state-info", "#38bdf8");
+      ctx.beginPath(); ctx.moveTo(td.sx, td.sy); ctx.lineTo(td.cx, td.cy); ctx.stroke(); ctx.setLineDash([]);
+    }
   }
 
   // ── CONGELAR + CINE-LOOP: render do quadro em revisão ──
@@ -693,16 +859,20 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   }
   function onDown(e: ReactMouseEvent) {
     if (mode !== "full" || reviewRef.current) return; // em revisão o palco mostra o buffer — sem edição de zona
+    if (!canConfigure) return; // RBAC: operador não cria/edita/pinta zonas (defensivo; controles já desabilitados)
 
     if (paintZoneId) { paintingRef.current = true; eraseRef.current = e.altKey || e.button === 2 || erase; paintAt(e); return; }
+    if (tripwireMode) { const p = vpPoint(e); twDrawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y }; return; }
     if (drawMode) { const p = vpPoint(e); drawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y }; }
   }
   function onMove(e: ReactMouseEvent) {
     if (paintingRef.current) { paintAt(e); return; }
+    if (twDrawRef.current?.active) { const p = vpPoint(e); twDrawRef.current.cx = p.x; twDrawRef.current.cy = p.y; return; }
     if (drawRef.current?.active) { const p = vpPoint(e); drawRef.current.cx = p.x; drawRef.current.cy = p.y; }
   }
   function onUp() {
     if (paintingRef.current) { paintingRef.current = false; commitPaint(); return; }
+    if (twDrawRef.current?.active) { commitTripwire(); return; }
     const d = drawRef.current; if (!d?.active) return; drawRef.current = null;
     const f = getFrame(), viewport = viewportRef.current; if (!f || !viewport) return;
     const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
@@ -712,10 +882,41 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     const nz: Zone = { id, label: `Área ${zonesRef.current.length + 1}`, x: Math.max(0, (x0 - cr.x) / cr.w), y: Math.max(0, (y0 - cr.y) / cr.h), w: Math.min(1, w / cr.w), h: Math.min(1, h / cr.h), modo: "atividade" as ZoneMode, idleAlertMs: APP_CONFIG.zones.defaultIdleAlertMs, sensitivity: 5, atividade: "Indefinida", ponto: APP_CONFIG.reading.defaultPonto, selectedClasses: OBJECT_CATALOG.map((o) => o.key) };
     setZones((p) => persist([...p, nz]));
   }
+  // ── editor de tripwires (linhas de contagem) — distinto do editor de zonas ──
+  function commitTripwire() {
+    const d = twDrawRef.current; twDrawRef.current = null; if (!d) return;
+    if (Math.hypot(d.cx - d.sx, d.cy - d.sy) < 20) return; // linha muito curta → ignora (evita clique acidental)
+    const f = getFrame(), viewport = viewportRef.current; if (!f || !viewport) return;
+    const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
+    const cl = (v: number) => Math.max(0, Math.min(1, v));
+    const a = { x: cl((d.sx - cr.x) / cr.w), y: cl((d.sy - cr.y) / cr.h) };
+    const b = { x: cl((d.cx - cr.x) / cr.w), y: cl((d.cy - cr.y) / cr.h) };
+    const w: Tripwire = { id: newTripwireId(cameraId), a, b };
+    setTripwires((p) => persistTw([...p, w]));
+  }
+  function persistTw(next: Tripwire[]): Tripwire[] { saveTripwires(cameraId, next); return next; }
+  // Inverte a direção (troca a↔b → Entrada↔Saída). O counter preserva contadores por id ao re-setar.
+  function invertTripwire(id: string) { setTripwires((p) => persistTw(p.map((w) => (w.id === id ? { id: w.id, a: w.b, b: w.a } : w)))); }
+  function removeTripwire(id: string) { setTripwires((p) => persistTw(p.filter((w) => w.id !== id))); }
+  // Zera os contadores da SESSÃO (geometria mantida); reflete no HUD e no painel.
+  function resetCounts() {
+    counterRef.current?.reset();
+    twCountsRef.current = counterRef.current ? counterRef.current.counts() : {};
+    setTwCounts(counterRef.current ? counterRef.current.counts() : {});
+  }
+  // Modos de edição mutuamente exclusivos (não conflitar tripwire × zona × pintura).
+  function toggleDrawMode() { setDrawMode((v) => { const nv = !v; if (nv) { setTripwireMode(false); setPaintZoneId(null); } return nv; }); }
+  function toggleTripwireMode() { setTripwireMode((v) => { const nv = !v; if (nv) { setDrawMode(false); setPaintZoneId(null); } return nv; }); }
+
   function persist(next: Zone[]): Zone[] { saveZones(cameraId, next); return next; }
   function patchZone(id: string, patch: Partial<Zone>) { setZones((p) => persist(p.map((z) => (z.id === id ? { ...z, ...patch } : z)))); }
-  function removeZone(id: string) { holdersRef.current.get(id)?.proc.dispose(); holdersRef.current.delete(id); cropsRef.current.delete(id); resultsRef.current.delete(id); maskCacheRef.current.delete(id); if (paintZoneId === id) setPaintZoneId(null); setZones((p) => persist(p.filter((z) => z.id !== id))); }
-  function startPaint(z: Zone) { setDrawMode(false); ensureMaskForPaint(z); setPaintZoneId(z.id); }
+  // MODO-COMO-PRESET: recarrega de uma vez camadas + confiança a partir do preset do modo,
+  // e marca o preset ativo (governa o que o painel destaca). Não mexe em geometria/zonas.
+  function applyPreset(mode: ModeKey) { const p = MODE_PRESETS[mode]; setLayers({ ...p.layers }); setConf(p.confidenceThreshold); setActivePreset(mode); }
+  // Troca o modo de uma zona PRESERVANDO sua geometria/máscara/parâmetros e reaplica o preset.
+  function changeZoneMode(z: Zone, next: ZoneMode) { patchZone(z.id, { modo: next }); applyPreset(next); }
+  function removeZone(id: string) { holdersRef.current.get(id)?.proc.dispose(); holdersRef.current.delete(id); cropsRef.current.delete(id); resultsRef.current.delete(id); maskCacheRef.current.delete(id); histRef.current.delete(id); if (paintZoneId === id) setPaintZoneId(null); setZones((p) => persist(p.filter((z) => z.id !== id))); }
+  function startPaint(z: Zone) { setDrawMode(false); setTripwireMode(false); ensureMaskForPaint(z); setPaintZoneId(z.id); }
   function clearActive() { const z = zonesRef.current.find((zz) => zz.id === paintZoneId); if (!z) return; clearMask(ensureMaskForPaint(z)); commitPaint(); }
   const paintZone = paintZoneId ? zones.find((z) => z.id === paintZoneId) ?? null : null;
 
@@ -738,6 +939,12 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     return out;
   })();
   const cfgZone = cfgZoneId ? zones.find((z) => z.id === cfgZoneId) ?? null : null;
+  // Preset ativo + se o operador divergiu dele manualmente nesta sessão (sobrepondo o preset).
+  const activePresetDef = activePreset ? MODE_PRESETS[activePreset] : null;
+  const presetDirty = !!activePresetDef && (
+    conf !== activePresetDef.confidenceThreshold ||
+    (Object.keys(activePresetDef.layers) as (keyof OverlayLayers)[]).some((k) => layers[k] !== activePresetDef.layers[k])
+  );
 
   // ── TILE ──
   if (mode === "tile") {
@@ -756,7 +963,11 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   return (
     <div className="cam" ref={fullRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Câmera ${label} em tela cheia`}>
       <header className="cam-head">
-        <div className="cam-title"><b>{label}</b>{paintZone ? <span className="muted">pintando “{paintZone.label}”</span> : <span className="muted">{zones.length} zona(s)</span>}</div>
+        <div className="cam-title"><b>{label}</b>{paintZone ? <span className="muted">pintando “{paintZone.label}”</span> : (<>
+          <span className="muted">{zones.length} zona(s)</span>
+          {activePresetDef && <span title={`Preset ativo: ${activePresetDef.label} — ${activePresetDef.description}${presetDirty ? " (ajustado manualmente nesta sessão)" : ""}`}><Badge tone={MODE_TONE[activePreset!]}>{activePresetDef.label}{presetDirty ? " ·" : ""}</Badge></span>}
+          {!canConfigure && <span title="Edição de configuração requer perfil de engenharia"><Badge tone="info">🔒 Somente leitura</Badge></span>}
+        </>)}</div>
         <div className="spacer" />
         {paintZone ? (<>
           <IconButton label="Pincel (pintar)" active={!erase} onClick={() => setErase(false)}>🖌</IconButton>
@@ -767,13 +978,14 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
         </>) : (<>
           <Button active={review} onClick={() => (review ? exitReview() : enterReview())} title="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">{review ? "▶ Ao vivo" : "❄ Congelar"}</Button>
           <Button active={paused} disabled={review} onClick={() => setPaused((v) => !v)} title="Congela o frame e rotula quem está em cena">{paused ? "▶ Retomar" : "⏸ Pausar"}</Button>
-          <Button active={drawMode} disabled={review} onClick={() => setDrawMode((v) => !v)}>{drawMode ? "Desenhando…" : "✎ Zona"}</Button>
+          <Button active={drawMode} disabled={review || !canConfigure} onClick={toggleDrawMode} title={canConfigure ? "Desenhar uma nova zona sobre o vídeo" : "Requer perfil de engenharia"}>{drawMode ? "Desenhando…" : "✎ Zona"}</Button>
+          <Button active={tripwireMode} disabled={review || !canConfigure} onClick={toggleTripwireMode} title={canConfigure ? "Desenhar uma linha de contagem (clique em A e arraste até B)" : "Requer perfil de engenharia"}>{tripwireMode ? "Traçando…" : "⇄ Linha"}</Button>
           <IconButton label="Fechar" onClick={onClose}>✕</IconButton>
         </>)}
         {reviewTip && <span className="muted" style={{ color: "var(--state-warn-fg, #fde68a)" }}>{reviewTip}</span>}
       </header>
 
-      <div className={`cam-stage ${drawMode || paintZone ? "draw-cursor" : ""}`} ref={viewportRef} style={{ background: "var(--cam-surface-bg)" }} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onContextMenu={(e) => { if (paintZone) e.preventDefault(); }}>
+      <div className={`cam-stage ${drawMode || tripwireMode || paintZone ? "draw-cursor" : ""}`} ref={viewportRef} style={{ background: "var(--cam-surface-bg)" }} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onContextMenu={(e) => { if (paintZone) e.preventDefault(); }}>
         <canvas className="overlay" ref={canvasRef} />
         {review && (<>
           <div className="cine-flag"><span className="dot" /> REVISÃO · cine-loop (buffer em memória)</div>
@@ -792,41 +1004,46 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
           </div>
         </>)}
         <aside className="cam-drawer" style={{ background: "var(--cam-panel-bg)", color: "var(--cam-panel-fg)", borderLeftColor: "var(--cam-panel-border)" }}>
-          <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
-            options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
+          <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
+            options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "linhas", label: `Linhas (${tripwires.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
           <div style={{ height: "var(--sp-2)" }} />
           <div className="drawer-body">
-            {drawerTab === "zonas" && zones.length === 0 && <p className="empty-note">Use “✎ Zona” para desenhar uma área e escolher o modo.</p>}
+            {drawerTab === "zonas" && zones.length === 0 && <p className="empty-note">{canConfigure ? "Use “✎ Zona” para desenhar uma área e escolher o modo." : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}</p>}
             {drawerTab === "zonas" && zones.map((z) => { const r = panel.get(z.id); const st = r?.modo === "atividade" ? r.view.state : "ATIVA"; return (
               <div key={z.id} className={`zone ${st}`}>
                 <div className="row">
                   <span className="zone-head"><b className="zone-name" title={z.label}>{z.label}</b><Badge tone={MODE_TONE[z.modo]}>{ZONE_MODE_LABEL[z.modo]}</Badge></span>
                   <span className="zone-tools">
-                    <button className="del" title="Configurar zona (modo e parâmetros)" aria-label="Configurar zona" onClick={() => setCfgZoneId(z.id)}>⚙</button>
-                    <button className={`del ${paintZoneId === z.id ? "on" : ""}`} title="Pintar a área (blueprint em grade)" aria-label="Pintar área" onClick={() => (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))}>🖌</button>
-                    <button className="del" title="Remover zona" aria-label="Remover zona" onClick={() => removeZone(z.id)}>✕</button>
+                    <button className="del" disabled={!canConfigure} title={canConfigure ? "Configurar zona (modo e parâmetros)" : "Configuração requer perfil de engenharia"} aria-label="Configurar zona" onClick={() => canConfigure && setCfgZoneId(z.id)}>⚙</button>
+                    <button className={`del ${paintZoneId === z.id ? "on" : ""}`} disabled={!canConfigure} title={canConfigure ? "Pintar a área (blueprint em grade)" : "Edição requer perfil de engenharia"} aria-label="Pintar área" onClick={() => canConfigure && (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))}>🖌</button>
+                    <button className="del" disabled={!canConfigure} title={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"} aria-label="Remover zona" onClick={() => canConfigure && removeZone(z.id)}>✕</button>
                   </span>
                 </div>
 
-                {z.modo === "atividade" && (r?.modo === "atividade" ? (<>
-                  <div className="kpis ws-kpis">
-                    <div className="kpi"><div className="v" style={{ color: stateVar(r.view.state), fontSize: 13 }}>{r.view.state}</div><div className="l">estado</div></div>
-                    <div className="kpi"><div className="v">{r.view.people}</div><div className="l">pessoas</div></div>
-                    <div className="kpi"><div className="v">{fmtDuration(r.view.idleMs)}</div><div className="l">parada</div></div>
-                  </div>
-                  <div className="zone-flow"><span>Fluxo</span><span className={`flow-chip ${r.view.flowLevel}`}>{r.view.flowLevel}</span><span className="spark">{r.view.flow.map((s, i) => <i key={i} style={{ height: `${Math.max(6, Math.round(s * 100))}%` }} />)}</span></div>
-                  <div className="bar"><i style={{ width: `${Math.round(r.view.motion * 100)}%`, background: stateVar(r.view.state) }} /></div>
-                </>) : <p className="ws-wait">iniciando…</p>)}
+                {z.modo === "atividade" && (r?.modo === "atividade" ? (() => {
+                  const ms = stateToMetric(r.view.state);
+                  const activeThr = sensitivityFactor(z.sensitivity) / 6; // limiar ATIVA em unidades de view.motion
+                  return (<>
+                    {/* estado/parada: indicadores categóricos/temporais (mantidos como KPI) */}
+                    <div className="kpis ws-kpis">
+                      <div className="kpi"><div className="v" style={{ color: stateVar(r.view.state), fontSize: 13 }}>{r.view.state}</div><div className="l">estado</div></div>
+                      <div className="kpi"><div className="v">{fmtDuration(r.view.idleMs)}</div><div className="l">parada</div></div>
+                    </div>
+                    {/* telemetria "nunca número cru": valor + sparkline + faixa-alvo */}
+                    <MetricCell label="Movimento" value={`${Math.round(r.view.motion * 100)}%`} values={hist(z.id, "motion")} band={{ lo: activeThr, hi: 1 }} bandLabel="alvo: zona ativa" state={ms} min={0} max={1} />
+                    <MetricCell label="Ocupação" value={`${r.view.people}`} values={hist(z.id, "people")} band={OCC_BAND} bandLabel={`alvo 1–${OCC_HI} pessoas`} state={occMetric(r.view.people)} min={0} />
+                    <div className="zone-flow"><span>Fluxo</span><span className={`flow-chip ${r.view.flowLevel}`}>{r.view.flowLevel}</span><span className="spark">{r.view.flow.map((s, i) => <i key={i} style={{ height: `${Math.max(6, Math.round(s * 100))}%` }} />)}</span></div>
+                  </>);
+                })() : <p className="ws-wait">iniciando…</p>)}
 
-                {z.modo === "leitura" && (<>
-                  <div className="kpis ws-kpis">
-                    <div className="kpi"><div className="v" style={{ color: r?.modo === "leitura" ? rateColor(r.ratePct) : undefined }}>{r?.modo === "leitura" ? `${r.ratePct}%` : "—"}</div><div className="l">taxa</div></div>
-                    <div className="kpi"><div className="v">{r?.modo === "leitura" ? r.perMin : "—"}</div><div className="l">lidas/min</div></div>
-                    <div className="kpi"><div className="v" style={{ color: r?.modo === "leitura" && r.noReads > 0 ? "var(--alert)" : undefined }}>{r?.modo === "leitura" ? r.noReads : "—"}</div><div className="l">no-reads</div></div>
-                  </div>
-                  <div className="ws-code"><span className="muted">último código</span><code>{r?.modo === "leitura" ? (r.lastCode ?? "—") : "—"}</code></div>
-                  <div className="ws-metric-row">Ponto <b>{z.ponto}</b> · {r?.modo === "leitura" ? r.passes : 0} passagens</div>
-                </>)}
+                {z.modo === "leitura" && (r?.modo === "leitura" ? (<>
+                  {/* telemetria "nunca número cru": valor + sparkline + faixa-alvo */}
+                  <MetricCell label="Taxa de leitura" value={`${r.ratePct}%`} values={hist(z.id, "rate")} band={RATE_BAND} bandLabel="alvo ≥ 95%" state={rateToMetric(r.ratePct)} min={0} max={100} />
+                  <MetricCell label="Lidas/min" value={`${r.perMin}`} values={hist(z.id, "perMin")} min={0} />
+                  <MetricCell label="No-reads" value={`${r.noReads}`} values={hist(z.id, "noReads")} band={NOREAD_BAND} bandLabel="alvo 0" state={noReadMetric(r.noReads)} min={0} />
+                  <div className="ws-code"><span className="muted">último código</span><code>{r.lastCode ?? "—"}</code></div>
+                  <div className="ws-metric-row">Ponto <b>{z.ponto}</b> · {r.passes} passagens</div>
+                </>) : <p className="ws-wait">iniciando…</p>)}
 
                 {z.modo === "objetos" && (<>
                   <div className="ws-counts">
@@ -835,17 +1052,21 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                       <span key={k} className={`count-chip ${n > 0 ? "on" : ""}`} style={n > 0 ? { borderColor: o?.color, color: o?.color } : undefined} title={o?.label}>{o?.emoji} <b>{n}</b></span>
                     ); })}
                   </div>
-                  <div className="ws-metric-row">Total em cena <b>{r?.modo === "objetos" ? r.total : 0}</b></div>
+                  {/* telemetria: total em cena com tendência (sem faixa-alvo fixa — depende da cena) */}
+                  <MetricCell label="Total em cena" value={`${r?.modo === "objetos" ? r.total : 0}`} values={hist(z.id, "total")} min={0} />
                 </>)}
 
                 {z.modo === "fadiga" && (<>
                   <div className="ws-fadiga">
                     {r?.modo === "fadiga" && r.faceState === "ready" ? (<>
                       <Badge tone={RISK_TONE[r.risk]}>{RISK_LABEL[r.risk]}</Badge>
-                      <span className="muted">EAR <b>{r.ear == null ? "--" : r.ear.toFixed(2)}</b></span>
                       <span className="muted">📱 {r.phone ? "sim" : "não"}</span>
                     </>) : <span className="muted">{r?.modo === "fadiga" ? (r.faceState === "loading" ? "carregando modelo…" : "modelo falhou") : "iniciando…"}</span>}
                   </div>
+                  {r?.modo === "fadiga" && r.faceState === "ready" && (
+                    /* telemetria "nunca número cru": EAR com faixa-alvo (olhos abertos) */
+                    <MetricCell label="EAR (abertura ocular)" value={r.ear == null ? "--" : r.ear.toFixed(2)} values={hist(z.id, "ear")} band={{ lo: APP_CONFIG.fadiga.eyesClosedEarThreshold, hi: EAR_HI }} bandLabel={`alvo ≥ ${APP_CONFIG.fadiga.eyesClosedEarThreshold.toFixed(2)}`} state={riskToMetric(r.risk)} min={0} max={EAR_HI} />
+                  )}
                   <p className="empty-note" style={{ margin: "4px 0 0" }}>Monitora 1 operador na ROI da zona (recorte). Som/calibração na câmera dedicada.</p>
                 </>)}
               </div>
@@ -856,6 +1077,30 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                 <div className="ws-legend-items">{legend.map((e, i) => (<span key={i} className="leg"><i style={{ background: e.color }} />{e.label}</span>))}</div>
               </div>
             )}
+
+            {drawerTab === "linhas" && (<>
+              <div className="row" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-2)" }}>
+                <Button size="sm" active={tripwireMode} disabled={!canConfigure} onClick={toggleTripwireMode} title={canConfigure ? "Clique em A e arraste até B sobre o vídeo" : "Edição requer perfil de engenharia"}>{tripwireMode ? "Traçando…" : "⇄ Nova linha"}</Button>
+                <Button size="sm" onClick={resetCounts} title="Zera os contadores in/out desta sessão (geometria mantida)">↺ Zerar contagem</Button>
+              </div>
+              {tripwires.length === 0 && <p className="empty-note">{canConfigure ? "Use “⇄ Nova linha” e arraste sobre o vídeo (A→B). Cruzar da esquerda→direita da seta conta como Entrada; o sentido oposto, Saída." : "Nenhuma linha de contagem configurada. A edição requer perfil de engenharia."}</p>}
+              {tripwires.map((w, i) => { const c = twCounts[w.id] ?? { in: 0, out: 0 }; return (
+                <div key={w.id} className="zone">
+                  <div className="row">
+                    <span className="zone-head"><b className="zone-name">Linha {i + 1}</b><Badge tone="info">contagem</Badge></span>
+                    <span className="zone-tools">
+                      <button className="del" disabled={!canConfigure} title={canConfigure ? "Inverter direção (troca Entrada↔Saída)" : "Edição requer perfil de engenharia"} aria-label="Inverter direção" onClick={() => canConfigure && invertTripwire(w.id)}>⇄</button>
+                      <button className="del" disabled={!canConfigure} title={canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"} aria-label="Remover linha" onClick={() => canConfigure && removeTripwire(w.id)}>✕</button>
+                    </span>
+                  </div>
+                  <div className="kpis ws-kpis">
+                    <div className="kpi"><div className="v" style={{ color: "var(--state-info)" }}>{c.in}</div><div className="l">entradas</div></div>
+                    <div className="kpi"><div className="v" style={{ color: "var(--state-neutral)" }}>{c.out}</div><div className="l">saídas</div></div>
+                  </div>
+                </div>
+              ); })}
+              <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) — depende de ao menos uma zona de Atividade ativa p/ detectar pessoas. Contadores são por sessão.</p>
+            </>)}
 
             {drawerTab === "timeline" && (timeline.length === 0
               ? <p className="empty-note">Sem eventos.</p>
@@ -871,6 +1116,26 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
             </>)}
 
             {drawerTab === "camadas" && (<>
+              {activePresetDef && (
+                <div style={{ marginBottom: "var(--sp-3)", padding: "var(--sp-2)", borderRadius: 8, border: "1px solid var(--cam-panel-border)", background: "var(--cam-surface-bg)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".4px", color: "var(--text-dim)" }}>Preset ativo</span>
+                    <Badge tone={MODE_TONE[activePreset!]}>{activePresetDef.label}</Badge>
+                    {presetDirty && <span style={{ fontSize: 11, color: "var(--state-warn-fg, #fde68a)" }}>· ajustado</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--cam-panel-fg)" }}>{activePresetDef.description}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                    {activePresetDef.metrics.map((m) => (
+                      <span key={m.key} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 999, border: "1px solid var(--cam-panel-border)", color: "var(--cam-panel-fg)" }}>{m.label}</span>
+                    ))}
+                  </div>
+                  {presetDirty && (
+                    <div style={{ marginTop: "var(--sp-2)" }}>
+                      <Button size="sm" onClick={() => applyPreset(activePreset!)} title="Restaura camadas e confiança do preset deste modo.">↺ Reaplicar preset</Button>
+                    </div>
+                  )}
+                </div>
+              )}
               {([["boxes", "Caixas / detecções"], ["mask", "Máscara (área pintada)"], ["zones", "Zonas (retângulos)"], ["heatmap", "Heatmap de ocupação"]] as [keyof OverlayLayers, string][]).map(([k, lbl]) => (
                 <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid var(--cam-panel-border)" }}>
                   <span>{lbl}</span>
@@ -882,7 +1147,7 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                   <div className="cfg-slider"><span className="ss-end">0</span><Slider value={Math.round(conf * 100)} min={0} max={100} step={5} onChange={(v) => setConf(v / 100)} ariaLabel="Confiança mínima" /><span className="ss-end">100</span></div>
                 </Field>
               </div>
-              <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>Camadas e confiança valem só nesta sessão (padrões em APP_CONFIG.overlay). Heatmap acumula a presença de pessoas.</p>
+              <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>Camadas e confiança seguem o preset do modo ativo; ajustes manuais valem só nesta sessão e sobrepõem o preset (padrões em APP_CONFIG.overlay / MODE_PRESETS). Heatmap acumula a presença de pessoas.</p>
             </>)}
           </div>
         </aside>
@@ -906,8 +1171,8 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
             <Field label="Nome da zona" htmlFor={`cfg-name-${z.id}`}>
               <Input id={`cfg-name-${z.id}`} value={z.label} onChange={(e) => patchZone(z.id, { label: e.target.value })} />
             </Field>
-            <Field label="Modo" hint="O que esta área monitora.">
-              <Select value={z.modo} onChange={(v) => patchZone(z.id, { modo: v as ZoneMode })} options={MODO_OPTS} ariaLabel="Modo da zona" />
+            <Field label="Modo" hint="Modo = preset completo: troca camadas, confiança e métricas em destaque. Geometria/zonas preservadas.">
+              <Select value={z.modo} onChange={(v) => changeZoneMode(z, v as ZoneMode)} options={MODO_OPTS} ariaLabel="Modo da zona" />
             </Field>
 
             {z.modo === "atividade" && (<>

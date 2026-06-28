@@ -196,3 +196,78 @@ export type ZoneSeed = (typeof APP_CONFIG.defaultZones)[number];
 // Overlay (Onda A) — tipos exportados p/ a Onda 2 (CameraWorkspace) consumir.
 export type OverlayLayers = typeof APP_CONFIG.overlay.layers;
 export type OverlayConfig = typeof APP_CONFIG.overlay;
+
+// ── MODO-COMO-PRESET (Onda B item 9) ───────────────────────────────────────────
+// Cada MODO é um PRESET COMPLETO: ao trocar o modo de uma zona, a sessão recarrega
+// de uma vez (1) quais CAMADAS de overlay ligar, (2) a CONFIANÇA default e (3) quais
+// MÉTRICAS/KPIs o painel deve destacar — espelhando os "presets por exame" do
+// ultrassom (03-ultrassom-imagem-medica.md §2.3/§3.5; síntese "Modo = preset completo").
+// ADITIVO e RETROCOMPATÍVEL: o bloco `overlay` acima segue sendo o estado-base/fallback
+// da sessão; o preset apenas SOBRESCREVE camadas/confiança quando o modo é trocado, e o
+// operador pode reajustar manualmente depois (os toggles/slider continuam valendo).
+//
+// `ModeKey` repete o literal de `ZoneMode` (zones.ts) de propósito: config.ts é importado
+// POR zones.ts, então não pode importá-lo de volta (evita dependência circular). Se um novo
+// modo for adicionado em ZoneMode, o TS acusará a chave faltante aqui em MODE_PRESETS.
+export type ModeKey = "atividade" | "leitura" | "objetos" | "fadiga";
+
+// Uma métrica/KPI em destaque no painel para o modo (chave estável + rótulo curto p/ UI).
+export type ModeMetric = { key: string; label: string };
+
+export type ModePreset = {
+  label: string;                 // nome curto do modo (UI)
+  description: string;           // o que o modo monitora (UI, 1 linha)
+  layers: OverlayLayers;         // camadas a LIGAR ao entrar no modo
+  confidenceThreshold: number;   // confiança default do modo (0..1)
+  metrics: ModeMetric[];         // KPIs/indicadores que o painel destaca neste modo
+};
+
+export type ModePresets = Record<ModeKey, ModePreset>;
+
+export const MODE_PRESETS: ModePresets = {
+  atividade: {
+    label: "Atividade",
+    description: "Movimento e ocupação por zona; alerta de parada/gargalo.",
+    layers: { boxes: true, mask: true, zones: true, heatmap: false },
+    confidenceThreshold: 0.5, // tracks de pessoa têm score razoável
+    metrics: [
+      { key: "state", label: "Estado" },
+      { key: "people", label: "Pessoas" },
+      { key: "idle", label: "Parada" },
+      { key: "flow", label: "Fluxo" },
+    ],
+  },
+  leitura: {
+    label: "Leitura",
+    description: "Leitura de códigos na esteira; taxa, ritmo e no-reads.",
+    layers: { boxes: false, mask: false, zones: true, heatmap: false }, // só a faixa de leitura importa
+    confidenceThreshold: 0.5,
+    metrics: [
+      { key: "ratePct", label: "Taxa" },
+      { key: "perMin", label: "Lidas/min" },
+      { key: "noReads", label: "No-reads" },
+      { key: "lastCode", label: "Último código" },
+    ],
+  },
+  objetos: {
+    label: "Objetos",
+    description: "Contagem de objetos/classes na cena (zero-shot).",
+    layers: { boxes: true, mask: false, zones: true, heatmap: false },
+    confidenceThreshold: 0.15, // scores do OWL-ViT são baixos (objects.threshold=0.1) → não esconder caixas
+    metrics: [
+      { key: "total", label: "Total em cena" },
+      { key: "counts", label: "Por classe" },
+    ],
+  },
+  fadiga: {
+    label: "Fadiga",
+    description: "Sinais de fadiga do operador (olhos/boca) e uso de celular.",
+    layers: { boxes: true, mask: false, zones: true, heatmap: false }, // boxes liga os marcadores de rosto/celular
+    confidenceThreshold: 0.5,
+    metrics: [
+      { key: "risk", label: "Risco" },
+      { key: "ear", label: "EAR" },
+      { key: "phone", label: "Celular" },
+    ],
+  },
+};
