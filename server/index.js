@@ -250,7 +250,9 @@ const httpServer = createServer(async (req, res) => {
       if (req.method === "PUT") {
         if (!requireAuth(req, res)) return;
         const body = JSON.parse((await readBody(req, 200_000)) || "{}");
-        return json(res, 200, await camcfg.saveViews(body && body.views));
+        const saved = await camcfg.saveViews(body && body.views);
+        io.to("dashboards").emit("camcfg-updated", { kind: "views" });
+        return json(res, 200, saved);
       }
     }
 
@@ -264,7 +266,9 @@ const httpServer = createServer(async (req, res) => {
       if (req.method === "PUT") {
         if (!requireConfigurer(req, res)) return;
         const body = JSON.parse((await readBody(req, 200_000)) || "{}");
-        return json(res, 200, await camcfg.saveTripwires(cameraId, body && body.tripwires));
+        const saved = await camcfg.saveTripwires(cameraId, body && body.tripwires);
+        io.to("dashboards").emit("camcfg-updated", { kind: "tripwires", cameraId });
+        return json(res, 200, saved);
       }
     }
   } catch { return json(res, 400, { error: "requisição inválida" }); }

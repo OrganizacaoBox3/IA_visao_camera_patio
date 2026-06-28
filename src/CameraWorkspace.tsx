@@ -206,11 +206,16 @@ type Props = {
   onOpen?: () => void;
   onClose?: () => void;
   onAlert?: (msg: string) => void;
+  // SYNC AO VIVO (ADR-006): contador de revisão por câmera, incrementado pela central
+  // (DashboardPage) quando o backend emite `camcfg-updated {kind:"tripwires", cameraId}`.
+  // OPCIONAL/retrocompatível: se a central não passar, o CameraWorkspace mantém o
+  // comportamento atual (carrega os tripwires só ao abrir/trocar a câmera).
+  tripwiresRev?: number;
 };
 
 const C = APP_CONFIG.detection;
 
-export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = true, onOpen, onClose, onAlert }: Props) {
+export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = true, onOpen, onClose, onAlert, tripwiresRev }: Props) {
   // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
   // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
   // camadas, mas NÃO edita configuração (criar/apagar/pintar zona, thresholds/sensibilidade/limite).
@@ -256,6 +261,8 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const tripwiresRef = useRef<Tripwire[]>([]);                   // lido no rAF (desenho + setTripwires)
   const twCountsRef = useRef<Record<string, TripwireCounts>>({}); // snapshot p/ o HUD no canvas (sem alocar por frame)
   const twDrawRef = useRef<{ active: boolean; sx: number; sy: number; cx: number; cy: number } | null>(null); // linha em traçado (viewport px)
+  const tripwireModeRef = useRef(false);                        // espelha tripwireMode p/ checagem fresca dentro do re-sync assíncrono
+  const liveSyncCamRef = useRef<string | null>(null);           // câmera já "armada" p/ re-sync (pula a 1ª execução por câmera — o load inicial já buscou)
   // Telemetria lateral (Onda B item 10): ring buffer leve por zona/indicador, alimentado pelo
   // loop já existente na cadência de UI (sem custo extra de inferência). Map<zoneId, {key: série}>.
   const histRef = useRef<Map<string, Record<string, number[]>>>(new Map());
@@ -344,6 +351,33 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     })();
     return () => { cancelled = true; };
   }, [cameraId, canConfigure]);
+  useEffect(() => { tripwireModeRef.current = tripwireMode; }, [tripwireMode]);
+  // SYNC AO VIVO last-write-wins (ADR-006): re-busca os tripwires quando a central sinaliza
+  // (prop `tripwiresRev` incrementada após `camcfg-updated {kind:"tripwires", cameraId}`).
+  // Retrocompatível: se a prop NÃO vier (undefined), sai cedo e nada muda — segue carregando
+  // só ao abrir/trocar a câmera (effect acima). Sem dependências novas.
+  useEffect(() => {
+    if (tripwiresRev === undefined) return;                 // central não passou a prop → comportamento atual preservado
+    // Pula a PRIMEIRA execução para cada câmera: o effect de load acima já buscou (e pode estar
+    // migrando o legado). Evita double-fetch e a corrida de sobrescrever a migração. Só reage a
+    // INCREMENTOS reais de tripwiresRev depois que a câmera está montada/carregada.
+    if (liveSyncCamRef.current !== cameraId) { liveSyncCamRef.current = cameraId; return; }
+    // NÃO sobrescrever edição local em curso: se o editor de linha está ativo (tripwireMode) ou há
+    // uma linha sendo traçada (twDrawRef), PULA o re-fetch para não descartar trabalho não salvo
+    // (ADR-006: "re-fetch é pulado durante edição local"). A central segue incrementando; o próximo
+    // sinal após concluir/cancelar a edição traz o estado mais recente.
+    if (tripwireModeRef.current || twDrawRef.current?.active) return;
+    let cancelled = false;
+    (async () => {
+      let list: Tripwire[];
+      try { list = await getTripwires(cameraId); }
+      catch (e) { console.error("[tripwires] re-sync ao vivo falhou — mantendo lista atual", e); return; } // erro gracioso: não quebra a tela
+      if (cancelled) return;                                                    // guard de corrida (troca rápida de câmera)
+      if (tripwireModeRef.current || twDrawRef.current?.active) return;         // usuário entrou em edição durante o fetch → não sobrescreve
+      setTripwires(list);                                                       // o counter re-seta + painel via effect [tripwires]
+    })();
+    return () => { cancelled = true; };
+  }, [cameraId, tripwiresRev]);
   // Re-set da geometria no counter quando as linhas mudam (preserva contadores por id) + reflete no painel.
   useEffect(() => {
     tripwiresRef.current = tripwires;

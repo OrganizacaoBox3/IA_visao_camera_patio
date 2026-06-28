@@ -122,6 +122,10 @@ export function DashboardPage() {
   const [activeViewId, setActiveViewId] = useState<string | null>(() => initialPrefs.activeViewId);
   const [autoSurface, setAutoSurface] = useState<boolean>(() => initialPrefs.autoSurface);
   const [viewsMgrOpen, setViewsMgrOpen] = useState(false);
+  // ── Sincronização ao vivo (ADR-006) — revisão de tripwires por câmera ──
+  // Cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela câmera; o número
+  // é repassado às tiles via prop `tripwiresRev` (CameraWorkspace re-busca os tripwires quando muda).
+  const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
   // Editor do gerenciador: editId = id da view em edição, "new" (criando) ou null (nada aberto).
   const [editId, setEditId] = useState<string | "new" | null>(null);
   const [draftName, setDraftName] = useState("");
@@ -151,6 +155,21 @@ export function DashboardPage() {
       f.pending = p.buf; f.ts = Date.now();
       // Só decodifica feeds ATIVOS: feeds fora da página atual não pagam createImageBitmap (CPU/memória).
       if (activeIdsRef.current.has(p.id)) drainDecode(p.id);
+    });
+    // Sincronização ao vivo de config compartilhada (ADR-006). Evento aditivo na sala `dashboards`:
+    //   • kind:"views" → recarrega a LISTA de views do backend (last-write-wins). A seleção local
+    //     (activeViewId) é preservada; se a view selecionada sumiu, o efeito de validação cai p/ "Todas".
+    //     Idempotente: como o próprio salvar já atualiza o estado, recarregar não dispara toasts (silencioso
+    //     em sucesso; só loga em falha p/ não quebrar a central nem repetir avisos).
+    //   • kind:"tripwires" → incrementa a revisão daquela câmera; a prop `tripwiresRev` faz a tile re-buscar.
+    socket.on("camcfg-updated", (p: { kind: "views" } | { kind: "tripwires"; cameraId: string }) => {
+      if (p?.kind === "views") {
+        getViews()
+          .then((remote) => setViews(remote))
+          .catch((e) => { console.error("[views] recarga ao vivo falhou", e); });
+      } else if (p?.kind === "tripwires" && typeof p.cameraId === "string") {
+        setRevByCamera((prev) => { const next = new Map(prev); next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1); return next; });
+      }
     });
     return () => { socket.disconnect(); framesRef.current.forEach((f) => f.bmp?.close()); };
   }, [token, logout]);
@@ -488,7 +507,7 @@ export function DashboardPage() {
       ? <div className="tile tile-open">aberta no painel</div>
       : isFadiga(c.id)
         ? <FadigaView key={`fad-${c.id}`} cameraId={c.id} label={c.label} getFrame={getterFor(c.id)} mode="tile" onOpen={() => setOpenId(c.id)} onAlert={handleAlert} onSample={recordFadigaSamples} onEvent={recordFadigaEvent} />
-        : <CameraWorkspace key={`ws-${c.id}`} cameraId={c.id} label={c.label} getFrame={getterFor(c.id)} mode="tile" demoMode={demoMode} onOpen={() => setOpenId(c.id)} onAlert={handleAlert} />;
+        : <CameraWorkspace key={`ws-${c.id}`} cameraId={c.id} label={c.label} getFrame={getterFor(c.id)} mode="tile" demoMode={demoMode} tripwiresRev={revByCamera.get(c.id) ?? 0} onOpen={() => setOpenId(c.id)} onAlert={handleAlert} />;
     return (
       <div key={`wrap-${c.id}`} style={{ position: "relative", display: "grid", minHeight: 0 }}>
         {inner}
@@ -566,7 +585,7 @@ export function DashboardPage() {
           <div className="cam-overlay">
             {isFadiga(open.id)
               ? <FadigaView key={`full-${open.id}`} cameraId={open.id} label={open.label} getFrame={getterFor(open.id)} mode="full" onClose={() => setOpenId(null)} onAlert={handleAlert} onSample={recordFadigaSamples} onEvent={recordFadigaEvent} />
-              : <CameraWorkspace key={`full-${open.id}`} cameraId={open.id} label={open.label} getFrame={getterFor(open.id)} mode="full" demoMode={demoMode} onClose={() => setOpenId(null)} onAlert={handleAlert} />}
+              : <CameraWorkspace key={`full-${open.id}`} cameraId={open.id} label={open.label} getFrame={getterFor(open.id)} mode="full" demoMode={demoMode} tripwiresRev={revByCamera.get(open.id) ?? 0} onClose={() => setOpenId(null)} onAlert={handleAlert} />}
           </div>
         )}
 
