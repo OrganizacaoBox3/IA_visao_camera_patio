@@ -57,7 +57,22 @@ Validação: `tsc` + `vite build` + `e2e 3/3` verdes.
 - Camadas/confiança são estado só de sessão; confirmar se persistem por câmera.
 - CSS legado `.dot-status`/`.badge.*`/`.tile.alerting` em `index.css` ainda usa tokens-base antigos (`--ok/--idle/--alert`); alinhar aos `--state-*` numa próxima passada (afeta a tela `/camera`).
 
+## Onda B — Diferenciais de produto maduro (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` verdes. Contrato em `analises/contrato-eventos-alarme.md`.
+- **Backend de eventos (B1)** `server/events.js` (novo), `index.js`, `schema.sql`: store de eventos de alarme **só metadados (LGPD)**, cache+Postgres+fallback JSON (`alarms.json`, gitignored), retenção `ALARM_EVENTS_*`; `GET /api/alarms`, `POST /api/alarms/:id/{ack,forward}`, sockets aditivos `alarm-event`/`alarm-update`.
+- **Cine-loop (B2)** `src/camera/cineBuffer.ts` (novo), `cine.css`, `CameraWorkspace.tsx`: congelar + revisar últimos ~10s com scrubber e snapshot por download local; buffer **em memória/efêmero**, nunca no servidor (LGPD).
+- **Relatório↔eventos (B3)** `ReportPage.tsx`, `report/{store,mock,csv}.ts`, `alarms.css`: aba Alarmes, cards sem thumbnail, ligação bidirecional pico↔eventos, filtros, CSV.
+- **Fila na central (B4)** `DashboardPage.tsx`, `api.ts`, `alarms.css`: drawer ao vivo (socket + listAlarms), acknowledge/forward otimista, going-gray por prioridade/estado, filtros e contador.
+
+### "A confirmar" da Onda B
+- Live update via socket no relatório (hoje só fetch on-load); buckets de dia em UTC vs local.
+- Exportar clipe/GIF do cine-loop (hoje só snapshot PNG) — TODO marcado.
+- Paginação da fila de alarmes (hoje limite 200/500 na carga); persistência de filtros.
+- Confirmar entrada na sala `dashboards` por role (verificado em `index.js:259` — OK).
+
 ## Pendências para evolução futura (não bloqueantes)
+- **Onda B parte 2 (não feita):** modo-como-preset completo e telemetria lateral (valor+sparkline+faixa-alvo) na câmera — ambos residem em `CameraWorkspace.tsx` (serial após cine-loop).
+- **Onda C (não feita):** views salvas por setor + auto-surface, RBAC Setup×Live, tripwires com direção + heatmap de ocupação, filosofia formal de alarme.
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).
 - Validar feeds demo com ffmpeg instalado (`winget install Gyan.FFmpeg`).
