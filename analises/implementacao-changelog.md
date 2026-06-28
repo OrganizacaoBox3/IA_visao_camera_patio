@@ -43,6 +43,20 @@ Execução do `plano-desenvolvimento.md`. Status: **todas as frentes implementad
 ## Higiene/Segurança
 - `.gitignore`: adicionados `server/cameras.json` e `server/wa-auth/` (contêm credenciais).
 
+## Onda A — Quick wins do benchmark de interfaces (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` verdes.
+- **Fundação (A0)** `src/index.css`, `src/config.ts`: tokens semânticos de estado ("going gray") + tokens dark da superfície de câmera; bloco `config.overlay` (confiança + camadas).
+- **Backend de alarme (B)** `server/alarmPolicy.js` (novo), `alerts.js`, `dispatch.js`, `index.js`: dedup temporal por chave, supressão de inundação (rajada → 1 resumo), prioridade 3 níveis; envs `ALARM_*`; passthrough com `ALARM_POLICY_ENABLED=0`.
+- **Câmera (A1a)** `src/CameraWorkspace.tsx`, `src/report/predict.ts` (novo): estados/zonas via tokens, palco dark + números no painel, toggles de camadas + slider global de confiança, estimativa de alertas/dia no slider de sensibilidade.
+- **Central (A1b)** `src/routes/DashboardPage.tsx`: pílula `camera-status` e dots glanceable via tokens.
+
+### "A confirmar" da Onda A (para validar em runtime / Onda B)
+- Modelo de previsão de alertas/dia assume sensibilidade padrão; calibrar com dados reais.
+- Slider de confiança não reabre o gate fixo `people.scoreThreshold`; confirmar semântica.
+- Heatmap é de ocupação de pessoas (não dwell/objetos); não persiste entre sessões.
+- Camadas/confiança são estado só de sessão; confirmar se persistem por câmera.
+- CSS legado `.dot-status`/`.badge.*`/`.tile.alerting` em `index.css` ainda usa tokens-base antigos (`--ok/--idle/--alert`); alinhar aos `--state-*` numa próxima passada (afeta a tela `/camera`).
+
 ## Pendências para evolução futura (não bloqueantes)
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).
