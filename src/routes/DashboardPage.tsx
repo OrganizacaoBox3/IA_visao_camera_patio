@@ -8,9 +8,10 @@ import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
-import { Button, IconButton, Switch, Checkbox, Select, Dialog, Tooltip, useToast } from "../ui";
+import { Button, IconButton, Switch, Checkbox, Select, Input, Dialog, Tooltip, useToast } from "../ui";
 import { listAlarms, ackAlarm, forwardAlarm, ApiError, type AlarmEvent, type AlarmPriority, type AlarmState } from "../api";
 import "./alarms.css";
+import "./views.css";
 
 type Camera = { id: string; label: string };
 // Status por câmera vindo do hub (contrato A4 — evento socket `camera-status`). Aditivo: se o hub
@@ -20,6 +21,36 @@ type CameraStatus = { id: string; state: "connecting" | "online" | "error" | "st
 type FrameEntry = { bmp: ImageBitmap | null; w: number; h: number; ts: number; pending: ArrayBuffer | null; decoding: boolean };
 
 function colsFor(n: number): number { return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4; }
+
+// ── Views salvas por setor (Onda C · item 11) ──────────────────────────────────────────────
+// Uma "view" é um subconjunto ordenado de câmeras (ex.: "Docas", "Expedição"). A ordem dos ids
+// define a ordem dos tiles. A view especial "Todas" (activeViewId=null) mostra tudo como hoje.
+// Persistência 100% no localStorage (sem backend), por usuário + host do hub — assim cada
+// operador tem suas views e elas não vazam entre instalações/servidores diferentes.
+type SavedView = { id: string; name: string; cameraIds: string[] };
+type ViewsStore = { views: SavedView[]; activeViewId: string | null; autoSurface: boolean };
+
+function viewsKey(userId: string): string { return `vp-views::${userId}::${APP_CONFIG.net.serverUrl}`; }
+
+function loadViewsStore(userId: string): ViewsStore {
+  try {
+    const raw = localStorage.getItem(viewsKey(userId));
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<ViewsStore>;
+      const views = Array.isArray(p.views)
+        ? p.views.filter((v): v is SavedView => !!v && typeof v.id === "string" && typeof v.name === "string" && Array.isArray(v.cameraIds))
+        : [];
+      const activeViewId = typeof p.activeViewId === "string" && views.some((v) => v.id === p.activeViewId) ? p.activeViewId : null;
+      return { views, activeViewId, autoSurface: !!p.autoSurface };
+    }
+  } catch { /* no-op */ }
+  return { views: [], activeViewId: null, autoSurface: false };
+}
+
+function newViewId(): string { return `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
+
+// Janela de "atividade recente" para o auto-surface (ver activityScore abaixo).
+const AUTOSURFACE_WINDOW_MS = 10 * 60_000;
 
 export function DashboardPage() {
   const { token, user, logout } = useAuth();
@@ -49,6 +80,20 @@ export function DashboardPage() {
   const [fState, setFState] = useState<"all" | AlarmState>("all");
   const [hideAcked, setHideAcked] = useState(false); // só filtro de exibição (não apaga no servidor)
   const { toast } = useToast();
+
+  // ── Views salvas por setor + auto-surface (Onda C · item 11) ──
+  const initialViews = useMemo(() => loadViewsStore(user.id), [user.id]);
+  const [views, setViews] = useState<SavedView[]>(() => initialViews.views);
+  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialViews.activeViewId);
+  const [autoSurface, setAutoSurface] = useState<boolean>(() => initialViews.autoSurface);
+  const [viewsMgrOpen, setViewsMgrOpen] = useState(false);
+  // Editor do gerenciador: editId = id da view em edição, "new" (criando) ou null (nada aberto).
+  const [editId, setEditId] = useState<string | "new" | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftIds, setDraftIds] = useState<string[]>([]);
+  // "Tick" para reordenar periodicamente no auto-surface (a recência decai com o tempo, mesmo sem
+  // novos eventos socket). Só roda quando o modo está ligado.
+  const [surfaceTick, setSurfaceTick] = useState(0);
 
   useEffect(() => {
     const socket = io(APP_CONFIG.net.serverUrl, { transports: ["websocket"], auth: { token }, query: { role: "dashboard" } });
@@ -97,13 +142,71 @@ export function DashboardPage() {
     });
   }, [cameras]);
 
+  // Persiste views/seleção/auto-surface no localStorage (por usuário + host). Sem backend nesta frente.
+  useEffect(() => {
+    try { localStorage.setItem(viewsKey(user.id), JSON.stringify({ views, activeViewId, autoSurface })); } catch { /* no-op */ }
+  }, [user.id, views, activeViewId, autoSurface]);
+
+  // No auto-surface, reavalia a ordem a cada 15s para que a recência (decaimento) atualize o ranking
+  // mesmo sem novos eventos chegando pelo socket.
+  useEffect(() => {
+    if (!autoSurface) return;
+    const t = setInterval(() => setSurfaceTick((n) => n + 1), 15_000);
+    return () => clearInterval(t);
+  }, [autoSurface]);
+
+  // View ativa (null = "Todas"). Se o id apontar para uma view inexistente, comporta-se como "Todas".
+  const activeView = useMemo(() => views.find((v) => v.id === activeViewId) ?? null, [views, activeViewId]);
+
+  // Critério de ATIVIDADE para o auto-surface (documentado): combina os sinais já disponíveis na central:
+  //   • alarmes recentes da câmera (últimos 10 min) — sinal mais forte de "está acontecendo algo",
+  //     ponderado por prioridade (crítico=100 / alta=40 / informativo=15) e por recência (decai linear);
+  //   • fps do camera-status (frames fluindo = câmera viva/movimentada) como contribuição menor;
+  //   • câmeras em erro/paradas afundam para o fim (não faz sentido destacá-las).
+  function activityScore(camId: string): number {
+    const s = statuses[camId];
+    const state = s?.state ?? "online";
+    if (state === "error" || state === "stopped") return -1_000 + (s?.fps ?? 0); // afunda offline/erro
+    const now = Date.now();
+    let score = 0;
+    for (const a of alarms) {
+      if (a.cameraId !== camId) continue;
+      const age = now - a.ts;
+      if (age < 0 || age > AUTOSURFACE_WINDOW_MS) continue;
+      const w = a.priority === "critical" ? 100 : a.priority === "high" ? 40 : 15;
+      const recency = 1 - age / AUTOSURFACE_WINDOW_MS; // 1 (agora) → 0 (limite da janela)
+      score += w * (0.5 + 0.5 * recency);
+    }
+    score += (s?.fps ?? 0) * 0.5; // câmera com mais frames/s pesa um pouco mais
+    return score;
+  }
+
+  // Conjunto base = câmeras da view ativa (na ordem salva), ou todas. Câmeras da view que não estão
+  // mais conectadas são silenciosamente omitidas (o id permanece salvo para quando voltarem).
+  const viewCameras = useMemo<Camera[]>(() => {
+    if (!activeView) return cameras;
+    const byId = new Map(cameras.map((c) => [c.id, c]));
+    return activeView.cameraIds.map((id) => byId.get(id)).filter((c): c is Camera => !!c);
+  }, [cameras, activeView]);
+
+  // Ordem final: auto-surface reordena por atividade; senão mantém a ordem da view/lista.
+  const orderedCameras = useMemo<Camera[]>(() => {
+    if (!autoSurface) return viewCameras;
+    return [...viewCameras].sort((a, b) => activityScore(b.id) - activityScore(a.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewCameras, autoSurface, statuses, alarms, surfaceTick]);
+
+  // Ao trocar de view ou ligar/desligar auto-surface, volta para a 1ª página (evita ficar "preso").
+  useEffect(() => { setPage(0); }, [activeViewId, autoSurface]);
+
   // ── Paginação dos feeds: só os feeds da página atual são montados (CameraWorkspace) → só eles
-  //    processam inferência. Não se roda detecção de TODOS os feeds ao mesmo tempo. ──
+  //    processam inferência. A view/auto-surface definem o CONJUNTO e a ORDEM; a paginação continua
+  //    valendo sobre esse conjunto (no auto-surface, as mais ativas caem na 1ª página = processadas). ──
   const feedsPerPage = APP_CONFIG.dashboard.feedsPerPage;
-  const pageCount = Math.max(1, Math.ceil(cameras.length / feedsPerPage));
+  const pageCount = Math.max(1, Math.ceil(orderedCameras.length / feedsPerPage));
   const pageCameras = useMemo(
-    () => cameras.slice(page * feedsPerPage, page * feedsPerPage + feedsPerPage),
-    [cameras, page, feedsPerPage],
+    () => orderedCameras.slice(page * feedsPerPage, page * feedsPerPage + feedsPerPage),
+    [orderedCameras, page, feedsPerPage],
   );
   // mantém a página dentro do intervalo válido quando a lista de câmeras muda
   useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [page, pageCount]);
@@ -183,6 +286,39 @@ export function DashboardPage() {
   function setKind(id: string, fadiga: boolean) {
     setCfgs((prev) => { const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" }; setCameraCfg(id, merged); return { ...prev, [id]: merged }; });
   }
+
+  // ── Handlers do gerenciador de views ──
+  function pickView(v: string) { setActiveViewId(v === "__all__" ? null : v); }
+  function startNewView() { setEditId("new"); setDraftName(""); setDraftIds([]); }
+  function startEditView(v: SavedView) { setEditId(v.id); setDraftName(v.name); setDraftIds([...v.cameraIds]); }
+  function cancelEditView() { setEditId(null); }
+  function toggleDraftCam(id: string) { setDraftIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])); }
+  function moveDraftCam(id: string, dir: -1 | 1) {
+    setDraftIds((prev) => {
+      const i = prev.indexOf(id); if (i < 0) return prev;
+      const j = i + dir; if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev]; const tmp = next[i]; next[i] = next[j]; next[j] = tmp; return next;
+    });
+  }
+  function saveEditView() {
+    const name = draftName.trim() || "View sem nome";
+    if (editId === "new") {
+      const id = newViewId();
+      setViews((prev) => [...prev, { id, name, cameraIds: draftIds }]);
+      setActiveViewId(id);
+    } else if (editId) {
+      setViews((prev) => prev.map((v) => (v.id === editId ? { ...v, name, cameraIds: draftIds } : v)));
+    }
+    setEditId(null);
+    toast("View salva.", "ok");
+  }
+  function deleteView(id: string) {
+    setViews((prev) => prev.filter((v) => v.id !== id));
+    setActiveViewId((cur) => (cur === id ? null : cur));
+    if (editId === id) setEditId(null);
+    toast("View excluída.", "default");
+  }
+  const camLabel = (id: string): string => cameras.find((c) => c.id === id)?.label ?? id;
 
   const open = openId ? cameras.find((c) => c.id === openId) ?? null : null;
   const camNodeUrl = `${location.origin}/camera`;
@@ -281,6 +417,15 @@ export function DashboardPage() {
       <header className="page-head">
         <h1 className="page-title">Central de câmeras</h1>
         <div className="spacer" />
+        {/* Views salvas por setor (Onda C · item 11): troca rápida do conjunto/ordem de câmeras. */}
+        <span className="switch view-picker" aria-label="View por setor">
+          <Select value={activeView ? activeView.id : "__all__"} onChange={pickView} ariaLabel="View por setor"
+            options={[{ value: "__all__", label: "Todas as câmeras" }, ...views.map((v) => ({ value: v.id, label: v.name }))]} />
+        </span>
+        <Button onClick={() => setViewsMgrOpen(true)} title="Criar, renomear ou excluir views por setor">▤ Views</Button>
+        <Tooltip content="Prioriza as câmeras com mais atividade recente (alarmes + fps) na 1ª página.">
+          <span className="switch"><Switch checked={autoSurface} onCheckedChange={setAutoSurface} ariaLabel="Auto-destaque das câmeras ativas" /> Auto-destaque</span>
+        </Tooltip>
         <Tooltip content="Encurta o limite p/ demonstrar ao vivo. Tempo exibido é real.">
           <span className="switch"><Switch checked={demoMode} onCheckedChange={setDemoMode} ariaLabel="Limite curto (10s)" /> Limite curto (10s)</span>
         </Tooltip>
@@ -312,6 +457,12 @@ export function DashboardPage() {
             <a className="ui-btn ui-btn--primary" href={camNodeUrl} target="_blank" rel="noreferrer">Abrir um nó de câmera</a>
             <p className="muted" style={{ marginTop: 12 }}>Hub: <code>{APP_CONFIG.net.serverUrl}</code> · {connected ? "conectado" : "desconectado"}</p>
           </div>
+        ) : orderedCameras.length === 0 ? (
+          <div className="dash-empty">
+            <p><b>Esta view não tem câmeras conectadas.</b></p>
+            <p className="muted">Edite a view em <b>▤ Views</b> ou selecione <b>Todas as câmeras</b>.</p>
+            <Button onClick={() => setActiveViewId(null)}>Ver todas as câmeras</Button>
+          </div>
         ) : (
           <div className="dash-grid" style={{ gridTemplateColumns: `repeat(${colsFor(pageCameras.length)}, 1fr)` }}>
             {pageCameras.map(renderTile)}
@@ -338,6 +489,69 @@ export function DashboardPage() {
                 options={[{ value: "area", label: "Câmera de área (zonas)" }, { value: "fadiga", label: "Operador (fadiga)" }]} />
             </div>
           ))}
+        </Dialog>
+
+        {/* Gerenciador de views por setor (Onda C · item 11) — criar/renomear/excluir + ordenar */}
+        <Dialog open={viewsMgrOpen} onOpenChange={(o) => { setViewsMgrOpen(o); if (!o) setEditId(null); }}
+          title="Views por setor"
+          description={<>Monte conjuntos de câmeras por setor (ex.: <b>Docas</b>, <b>Expedição</b>) e alterne rápido pelo seletor do cabeçalho. <b>Todas as câmeras</b> é a view padrão. Salvo neste navegador.</>}>
+          {editId === null ? (
+            <div className="views-mgr">
+              <div className="views-mgr__row views-mgr__row--all">
+                <div className="views-mgr__name"><b>Todas as câmeras</b><span className="muted">padrão · {cameras.length} câmera(s)</span></div>
+              </div>
+              {views.length === 0 && <p className="empty-note">Nenhuma view salva ainda.</p>}
+              {views.map((v) => (
+                <div key={`vrow-${v.id}`} className="views-mgr__row">
+                  <div className="views-mgr__name"><b>{v.name}</b><span className="muted">{v.cameraIds.length} câmera(s)</span></div>
+                  <Button size="sm" onClick={() => startEditView(v)} title="Editar câmeras, ordem e nome">Editar</Button>
+                  <Button size="sm" variant="danger" onClick={() => deleteView(v.id)} title="Excluir esta view">Excluir</Button>
+                </div>
+              ))}
+              <div className="views-mgr__foot">
+                <Button variant="primary" onClick={startNewView}>+ Nova view</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="views-mgr views-editor">
+              <label className="views-editor__name">
+                <span className="ui-label">Nome da view</span>
+                <Input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Ex.: Docas" autoFocus />
+              </label>
+
+              <div className="views-editor__col">
+                <span className="ui-label">Câmeras na view (ordem dos tiles)</span>
+                {draftIds.length === 0
+                  ? <p className="empty-note">Adicione câmeras da lista abaixo.</p>
+                  : draftIds.map((id, i) => (
+                    <div key={`sel-${id}`} className="views-editor__item">
+                      <span className="views-editor__pos">{i + 1}</span>
+                      <span className="views-editor__lbl">{camLabel(id)}</span>
+                      <IconButton label="Subir" onClick={() => moveDraftCam(id, -1)} disabled={i === 0}>↑</IconButton>
+                      <IconButton label="Descer" onClick={() => moveDraftCam(id, 1)} disabled={i === draftIds.length - 1}>↓</IconButton>
+                      <IconButton label="Remover da view" onClick={() => toggleDraftCam(id)}>✕</IconButton>
+                    </div>
+                  ))}
+              </div>
+
+              <div className="views-editor__col">
+                <span className="ui-label">Câmeras disponíveis</span>
+                {cameras.filter((c) => !draftIds.includes(c.id)).length === 0
+                  ? <p className="empty-note">Todas as câmeras conectadas já estão na view.</p>
+                  : cameras.filter((c) => !draftIds.includes(c.id)).map((c) => (
+                    <div key={`av-${c.id}`} className="views-editor__item">
+                      <span className="views-editor__lbl">{c.label}</span>
+                      <Button size="sm" onClick={() => toggleDraftCam(c.id)} title="Adicionar à view">+ Adicionar</Button>
+                    </div>
+                  ))}
+              </div>
+
+              <div className="views-mgr__foot">
+                <Button onClick={cancelEditView}>Cancelar</Button>
+                <Button variant="primary" onClick={saveEditView}>Salvar view</Button>
+              </div>
+            </div>
+          )}
         </Dialog>
 
         {/* Fila de alarmes acionável (Onda B · item 7) — drawer lateral, ts desc, ack/forward */}

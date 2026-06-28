@@ -1,0 +1,83 @@
+/* Views salvas por setor + auto-surface (Onda C · item 11) — estilos da central.
+   Importado SÓ por DashboardPage.tsx. Reusa tokens var(--state-*)/var(--sp-*)/var(--mono)
+   já existentes (going-gray: base neutra, cor só para anormalidade). NÃO edita index.css/ui.css. */
+
+/* Seletor de view no cabeçalho — discreto (largura contida p/ não dominar a barra). */
+.view-picker .ui-select { min-width: 150px; }
+
+/* ── Gerenciador de views (dentro do Dialog) ── */
+.views-mgr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.views-mgr__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-radius: 8px;
+  background: var(--state-neutral-bg, #161c24);
+}
+.views-mgr__row--all { background: transparent; }
+
+.views-mgr__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.views-mgr__name .muted {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.views-mgr__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ── Editor de uma view ── */
+.views-editor { gap: 12px; }
+.views-editor__name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.views-editor__col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-radius: 8px;
+}
+
+.views-editor__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+.views-editor__pos {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  width: 18px;
+  text-align: right;
+  flex: none;
+}
+.views-editor__lbl {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

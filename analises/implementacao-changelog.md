@@ -70,9 +70,26 @@ Validação: `tsc` + `vite build` + `e2e 3/3` verdes. Contrato em `analises/cont
 - Paginação da fila de alarmes (hoje limite 200/500 na carga); persistência de filtros.
 - Confirmar entrada na sala `dashboards` por role (verificado em `index.js:259` — OK).
 
+## Onda B parte 2 + Onda C (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` verdes.
+- **Modo-como-preset (item 9)** `config.ts` (MODE_PRESETS), `CameraWorkspace.tsx`: trocar de modo recarrega camadas+confiança+métricas de destaque sem apagar zonas; badge de preset ativo + reaplicar.
+- **RBAC Setup×Live (item 12)** `server/users.js`, `index.js`, `src/auth.tsx`, `api.ts`, `UsersPage.tsx`, `CameraWorkspace.tsx`: papel "engenheiro" + `canConfigure`; operador em só-leitura (vê ao vivo/overlays/telemetria/cine-loop, não edita config/zonas/tripwires).
+- **Política de alarme madura (item 14)** `server/alarmPolicy.js`: shelving com expiração (curinga), métricas de taxa/% crítico com aviso EEMUA, anti-flapping; novas funções `shelve/unshelve/listShelved/metrics` e envs `ALARM_SHELVE_*`/`ALARM_RATE_*`/`ALARM_FLAP_*` (endpoints ficam para depois).
+- **Views salvas + auto-surface (item 11)** `DashboardPage.tsx`, `views.css`: views por setor em localStorage (por usuário+host), seletor + gerenciador; auto-destaque por atividade (alarmes recentes ponderados + fps), coerente com paginação.
+- **Telemetria lateral (item 10)** `src/components/Sparkline.tsx` (novo), `telemetry.css`, `CameraWorkspace.tsx`: "nunca número cru" — valor + sparkline + faixa-alvo com realce fora da banda.
+- **Tripwires + ocupação (item 13)** `src/vision/counting.ts` (novo, lógica pura), `CameraWorkspace.tsx`: linhas de contagem com direção (in/out) persistidas por câmera, editor gated por RBAC, HUD de contagem, heatmap de ocupação unificado na camada existente.
+
+### "A confirmar" da Onda B2/C
+- Tripwires reusam `tracks`, que só ligam com zona de Atividade presente — confirmar se a linha deve, por si, ligar a detecção de pessoas.
+- Faixas-alvo da telemetria (ocupação OCC_HI=8 etc.) são heurísticas — calibrar; sem meta para lidas/min e total de objetos.
+- Auto-surface pode "pular" tiles quando o ranking muda (sem histerese); critério/janela a calibrar.
+- alarmPolicy: shelving/métricas voláteis por processo (sem persistência/multi-instância); endpoints de shelve/metrics ainda não expostos no index.js.
+- RBAC: coluna `papel` é texto livre (sem CHECK no schema) — "engenheiro" persiste sem migração.
+
 ## Pendências para evolução futura (não bloqueantes)
-- **Onda B parte 2 (não feita):** modo-como-preset completo e telemetria lateral (valor+sparkline+faixa-alvo) na câmera — ambos residem em `CameraWorkspace.tsx` (serial após cine-loop).
-- **Onda C (não feita):** views salvas por setor + auto-surface, RBAC Setup×Live, tripwires com direção + heatmap de ocupação, filosofia formal de alarme.
+- Expor endpoints de shelve/metrics de alarme + tela de saúde de alarmes.
+- Persistência de views/tripwires no backend (hoje localStorage) para compartilhar entre operadores/turnos.
+- Exportar clipe/GIF do cine-loop (hoje só snapshot PNG).
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).
 - Validar feeds demo com ffmpeg instalado (`winget install Gyan.FFmpeg`).
