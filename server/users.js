@@ -1,6 +1,13 @@
 // Base de usuários (multi-usuário, papéis). Cache em memória → leitura sync rápida (verifyToken/login
 // em todo request). Escrita persiste no Postgres (se configurado) OU em users.json (fallback dev/PG off).
 // Senha: scrypt. Sessão: token HMAC assinado. Bootstrap do superadmin no 1º boot.
+//
+// PAPÉIS (RBAC Setup × Live — Onda C item 12):
+//   - "superadmin": acesso total — gestão de usuários, câmeras, notificações E configuração (thresholds/zonas).
+//   - "engenheiro": equipe de engenharia/setup — PODE configurar (thresholds/zonas), mas NÃO gerencia usuários.
+//   - "usuario":    operador em modo só-visualização/operação — NÃO configura nem gerencia usuários.
+// A capacidade de CONFIGURAR (canConfigure) = superadmin OU engenheiro; ver helper canConfigure() abaixo.
+const ROLES = ["superadmin", "engenheiro", "usuario"];
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
@@ -86,19 +93,26 @@ async function init() {
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 function publicUser(u) { const { senhaHash, ...r } = u; return r; } // eslint-disable-line no-unused-vars
 function getById(id) { return users.find((x) => x.id === id) || null; }
+// normaliza um papel recebido do cliente; valor inválido/ausente → "usuario" (mais restrito).
+function normalizeRole(papel) { return ROLES.includes(papel) ? papel : "usuario"; }
+// capacidade de configuração (thresholds/zonas etc.): superadmin OU engenheiro.
+// Helper de servidor para futuro gate de endpoints de configuração; hoje os thresholds são
+// client-side, então isto fica disponível mas ainda não protege nenhuma rota.
+function canConfigure(papel) { return papel === "superadmin" || papel === "engenheiro"; }
 
 async function createUser({ usuario, senha, papel }) {
   usuario = String(usuario || "").trim();
   if (!usuario || !senha) return { error: "usuário e senha são obrigatórios" };
   if (users.some((u) => u.usuario.toLowerCase() === usuario.toLowerCase())) return { error: "usuário já existe" };
-  const u = { id: genId(), usuario, senhaHash: hashPassword(senha), papel: papel === "superadmin" ? "superadmin" : "usuario", ativo: true, whatsapp: "", filtros: null, optInEm: null, criadoEm: Date.now() };
+  const u = { id: genId(), usuario, senhaHash: hashPassword(senha), papel: normalizeRole(papel), ativo: true, whatsapp: "", filtros: null, optInEm: null, criadoEm: Date.now() };
   users.push(u); await persist(u);
   return { user: publicUser(u) };
 }
 async function updateUser(id, patch) {
   const u = getById(id); if (!u) return { error: "usuário não encontrado" };
   const willActive = typeof patch.ativo === "boolean" ? patch.ativo : u.ativo;
-  const willPapel = patch.papel === "superadmin" || patch.papel === "usuario" ? patch.papel : u.papel;
+  // só altera o papel se vier um valor válido no patch; senão preserva o atual (retrocompatível).
+  const willPapel = ROLES.includes(patch.papel) ? patch.papel : u.papel;
   const otherSupers = users.filter((x) => x.id !== id && x.papel === "superadmin" && x.ativo).length;
   if (otherSupers + (willPapel === "superadmin" && willActive ? 1 : 0) < 1) return { error: "precisa de ao menos 1 superadmin ativo" };
   if (typeof patch.ativo === "boolean") u.ativo = patch.ativo;
@@ -130,4 +144,5 @@ async function updateProfile(id, patch) {
 module.exports = {
   init, authenticate, verifyToken, createUser, updateUser, removeUser, getProfile, updateProfile,
   hashPassword, genId, getById, all: () => users, publicList: () => users.map(publicUser),
+  ROLES, normalizeRole, canConfigure,
 };

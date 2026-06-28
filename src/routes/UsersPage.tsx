@@ -5,7 +5,9 @@ import { copyToClipboard } from "../ui/clipboard";
 import { listUsers, createUser, patchUser, deleteUser, getCameraEnroll, getWaStatus, waTest, listRecipients, createRecipient, patchRecipient, deleteRecipient, getNotifSettings, saveNotifSettings, previewNotif, type AdminUser, type WaStatus, type Recipient, type NotifSettings } from "../api";
 
 const TIPO_LABEL: Record<string, string> = { atividade: "Atividade / parada", fadiga: "Operador / fadiga", leitura: "Leitura / expedição", objetos: "Objetos / presença" };
-const PAPEL_OPTS = [{ value: "usuario", label: "Usuário" }, { value: "superadmin", label: "Superadmin" }];
+// Papéis atribuíveis (RBAC Setup × Live — Onda C item 12). "engenheiro" = equipe de configuração
+// (pode editar thresholds/zonas); "usuario" = operador só-visualização; "superadmin" = acesso total.
+const PAPEL_OPTS = [{ value: "usuario", label: "Usuário" }, { value: "engenheiro", label: "Engenheiro" }, { value: "superadmin", label: "Superadmin" }];
 
 // Painel do superadmin: CRUD de usuários. Senha só por hash no servidor — ao criar/resetar,
 // a senha aparece UMA vez aqui para o superadmin repassar (modelo de reset seguro).

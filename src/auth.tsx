@@ -1,20 +1,32 @@
 // Acesso restrito multi-usuário. Login (usuário+senha) é validado no hub (POST /api/login),
 // que devolve um token de sessão assinado + o papel do usuário. O token vai no handshake do
 // socket (auth.token); a senha nunca fica no cliente. O papel habilita áreas (ex.: superadmin).
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { APP_CONFIG } from "./config";
 import { Button, Input, Field } from "./ui";
 
 const KEY = "vp-auth";
-export type Papel = "superadmin" | "usuario";
+// Papéis (RBAC Setup × Live — Onda C item 12):
+//   - "superadmin": acesso total (gestão de usuários/câmeras/notificações + configuração).
+//   - "engenheiro": equipe de configuração/setup — PODE editar thresholds/zonas; NÃO gerencia usuários.
+//   - "usuario":    operador em modo só-visualização — não configura nem gerencia usuários.
+export type Papel = "superadmin" | "engenheiro" | "usuario";
 export type AuthUser = { id: string; usuario: string; papel: Papel };
 type Session = { token: string; user: AuthUser };
+
+// Capacidade de configuração (thresholds/zonas): superadmin OU engenheiro. A onda seguinte
+// (gate da tela de câmera) consome `canConfigure` do contexto para liberar/bloquear a edição.
+export function canConfigurePapel(papel: Papel): boolean {
+  return papel === "superadmin" || papel === "engenheiro";
+}
 
 function readSession(): Session | null {
   try { const s = localStorage.getItem(KEY); return s ? (JSON.parse(s) as Session) : null; } catch { return null; }
 }
 
-type AuthCtx = { token: string; user: AuthUser; logout: (reason?: string) => void };
+// `isSuper`     = papel === "superadmin" (gestão de usuários/admin, como já era).
+// `canConfigure`= superadmin OU engenheiro (capacidade de editar thresholds/zonas — Setup × Live).
+type AuthCtx = { token: string; user: AuthUser; isSuper: boolean; canConfigure: boolean; logout: (reason?: string) => void };
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function useAuth(): AuthCtx {
@@ -30,8 +42,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback((s: Session) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* no-op */ } setError(null); setSession(s); }, []);
   const logout = useCallback((reason?: string) => { try { localStorage.removeItem(KEY); } catch { /* no-op */ } setError(reason ?? null); setSession(null); }, []);
 
-  if (!session) return <LoginScreen initialError={error} onLogin={login} />;
-  return <Ctx.Provider value={{ token: session.token, user: session.user, logout }}>{children}</Ctx.Provider>;
+  const value = useMemo<AuthCtx | null>(() => {
+    if (!session) return null;
+    const papel = session.user.papel;
+    return {
+      token: session.token,
+      user: session.user,
+      isSuper: papel === "superadmin",
+      canConfigure: canConfigurePapel(papel),
+      logout,
+    };
+  }, [session, logout]);
+
+  if (!session || !value) return <LoginScreen initialError={error} onLogin={login} />;
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 function LoginScreen({ initialError, onLogin }: { initialError: string | null; onLogin: (s: Session) => void }) {

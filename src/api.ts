@@ -63,14 +63,19 @@ export function apiSend<T>(method: "POST" | "PATCH" | "DELETE", path: string, bo
   return request<T>(fetch(APP_CONFIG.net.serverUrl + path, { method, headers: headers(true), body: body == null ? undefined : JSON.stringify(body) }));
 }
 
+// Papel do usuário (RBAC Setup × Live — Onda C item 12): superadmin | engenheiro | usuario.
+// Reexporta o tipo canônico de auth.tsx para manter front e API alinhados.
+export type { Papel } from "./auth";
+import type { Papel } from "./auth";
+
 // ── Meu perfil (qualquer usuário) ──
 export type NotifPrefs = { ativo: boolean; somenteCriticos: boolean; tipos: string[] };
-export type MeProfile = { id: string; usuario: string; papel: "superadmin" | "usuario"; whatsapp?: string; filtros?: NotifPrefs | null; optInEm?: number | null };
+export type MeProfile = { id: string; usuario: string; papel: Papel; whatsapp?: string; filtros?: NotifPrefs | null; optInEm?: number | null };
 export const getMe = () => apiGet<MeProfile>("/api/me");
 export const updateMe = (patch: Partial<{ whatsapp: string; filtros: NotifPrefs; optIn: boolean }>) => apiSend<MeProfile>("PATCH", "/api/me", patch);
 
 // ── Usuários (superadmin) ──
-export type AdminUser = { id: string; usuario: string; papel: "superadmin" | "usuario"; ativo: boolean; whatsapp?: string; criadoEm?: number };
+export type AdminUser = { id: string; usuario: string; papel: Papel; ativo: boolean; whatsapp?: string; criadoEm?: number };
 export const listUsers = () => apiGet<AdminUser[]>("/api/users");
 export const createUser = (u: { usuario: string; senha: string; papel: string }) => apiSend<AdminUser>("POST", "/api/users", u);
 export const patchUser = (id: string, patch: Partial<{ ativo: boolean; papel: string; senha: string }>) => apiSend<AdminUser>("PATCH", `/api/users/${id}`, patch);

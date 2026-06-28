@@ -41,6 +41,15 @@ function requireSuper(req, res) {
   if (u.papel !== "superadmin") { json(res, 403, { error: "acesso restrito ao superadmin" }); return null; }
   return u;
 }
+// RBAC Setup × Live (Onda C item 12): devolve o usuário que PODE configurar (superadmin OU
+// engenheiro), ou responde 401/403. Os thresholds/zonas são editados no cliente neste MVP, então
+// nenhum endpoint usa este gate ainda — fica pronto para a onda que mover a configuração ao servidor.
+// eslint-disable-next-line no-unused-vars
+function requireConfigurer(req, res) {
+  const u = requireAuth(req, res); if (!u) return null;
+  if (!users.canConfigure(u.papel)) { json(res, 403, { error: "acesso restrito à equipe de configuração" }); return null; }
+  return u;
+}
 
 const httpServer = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*"); // dev cross-origin; prod é same-origin via nginx
