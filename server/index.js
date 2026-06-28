@@ -42,9 +42,7 @@ function requireSuper(req, res) {
   return u;
 }
 // RBAC Setup × Live (Onda C item 12): devolve o usuário que PODE configurar (superadmin OU
-// engenheiro), ou responde 401/403. Os thresholds/zonas são editados no cliente neste MVP, então
-// nenhum endpoint usa este gate ainda — fica pronto para a onda que mover a configuração ao servidor.
-// eslint-disable-next-line no-unused-vars
+// engenheiro), ou responde 401/403. Usado pelos endpoints de saúde de alarmes (shelve/unshelve).
 function requireConfigurer(req, res) {
   const u = requireAuth(req, res); if (!u) return null;
   if (!users.canConfigure(u.papel)) { json(res, 403, { error: "acesso restrito à equipe de configuração" }); return null; }
@@ -110,6 +108,36 @@ const httpServer = createServer(async (req, res) => {
       if (r.error) return json(res, 404, r);
       io.to("dashboards").emit("alarm-update", r.event);
       return json(res, 200, r.event);
+    }
+
+    // Saúde de alarmes (Onda C, item 14) — expõe a lógica EM MEMÓRIA de alarmPolicy.js.
+    // metrics()/listShelved() são leitura (qualquer usuário autenticado); shelve/unshelve
+    // são ações de configuração (requireConfigurer). NÃO persiste — estado volátil do processo.
+    // Estas rotas vêm ANTES das de :id (ack/forward usam [\w-]+ e não casam "metrics"/"shelves").
+    if (path0 === "/api/alarms/metrics" && req.method === "GET") {
+      if (!requireAuth(req, res)) return;
+      return json(res, 200, alarmPolicy.metrics());
+    }
+    if (path0 === "/api/alarms/shelves") {
+      if (req.method === "GET") {
+        if (!requireAuth(req, res)) return;
+        return json(res, 200, alarmPolicy.listShelved());
+      }
+      if (req.method === "POST") {
+        const me = requireConfigurer(req, res); if (!me) return;
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const key = typeof body.key === "string" ? body.key.trim() : "";
+        if (!key) return json(res, 400, { error: "key é obrigatória (string não vazia)" });
+        const by = me.usuario || me.id;
+        const shelf = alarmPolicy.shelve(key, body.ms, { reason: body.reason, by });
+        return json(res, 201, shelf);
+      }
+    }
+    const mShelf = path0.match(/^\/api\/alarms\/shelves\/(.+)$/);
+    if (mShelf && req.method === "DELETE") {
+      if (!requireConfigurer(req, res)) return;
+      const ok = alarmPolicy.unshelve(decodeURIComponent(mShelf[1]));
+      return json(res, 200, { ok });
     }
 
     // Perfil do próprio usuário (qualquer papel) — WhatsApp + preferências + opt-in

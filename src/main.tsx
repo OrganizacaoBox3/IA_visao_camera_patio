@@ -6,6 +6,7 @@ import { CameraPage } from "./routes/CameraPage";
 import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
 import { ProfilePage } from "./routes/ProfilePage";
+import { AlarmHealthPage } from "./routes/AlarmHealthPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <DashboardPage /> },
       { path: "/relatorio", element: <ReportPage /> },
+      { path: "/alarmes-saude", element: <AlarmHealthPage /> },
       { path: "/usuarios", element: <UsersPage /> },
       { path: "/perfil", element: <ProfilePage /> },
       // Catch-all (404) dentro do shell autenticado: mantém navegação + identidade do produto.

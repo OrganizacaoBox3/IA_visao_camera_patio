@@ -1,0 +1,161 @@
+/* Saúde do sistema de alarmes (ISA-18.2 / EEMUA 191 — racionalização · Onda B).
+   Importado SÓ por AlarmHealthPage.tsx. Reusa os tokens da fundação
+   (var(--state-*)/var(--sp-*)/var(--mono)) — going-gray: base neutra, cor saturada
+   reservada à anormalidade (% crítico acima do alvo). NÃO edita index.css/ui.css. */
+
+.ah-body {
+  padding: var(--sp-4);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* Linha de KPIs de saúde (overview → detalhe). */
+.ah-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+.ah-kpi {
+  background: var(--panel, #0f141b);
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-radius: 10px;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Realce reservado à anormalidade: % crítico acima do alvo EEMUA. */
+.ah-kpi[data-over="1"] {
+  border-color: var(--state-critical-border, #7f1d1d);
+  background: var(--state-critical-bg, #2a1113);
+}
+
+.ah-kpi__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted, #7d8aa0);
+}
+.ah-kpi__value {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text, #e5e7eb);
+  line-height: 1.1;
+}
+.ah-kpi__value[data-over="1"] { color: var(--state-critical-fg, #fecaca); }
+.ah-kpi__sub {
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  font-family: var(--mono);
+}
+.ah-kpi__flag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--state-critical-fg, #fecaca);
+}
+
+/* Barra de distribuição por prioridade (analógica — "nunca número cru"). */
+.ah-dist { display: flex; flex-direction: column; gap: 5px; }
+.ah-dist__bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--state-neutral-bg, #161c24);
+  border: 1px solid var(--state-neutral-border, #1f2937);
+}
+.ah-dist__seg { height: 100%; min-width: 0; transition: width 0.4s ease; }
+.ah-dist__seg[data-prio="critical"] { background: var(--state-critical, #ef4444); }
+.ah-dist__seg[data-prio="high"]     { background: var(--state-warn, #eab308); }
+.ah-dist__seg[data-prio="advisory"] { background: var(--state-neutral-fg, #9aa7b4); }
+
+.ah-dist__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--state-neutral-fg, #9aa7b4);
+}
+.ah-dist__key { display: inline-flex; align-items: center; gap: 5px; }
+.ah-dist__dot { width: 9px; height: 9px; border-radius: 999px; flex: none; }
+.ah-dist__dot[data-prio="critical"] { background: var(--state-critical, #ef4444); }
+.ah-dist__dot[data-prio="high"]     { background: var(--state-warn, #eab308); }
+.ah-dist__dot[data-prio="advisory"] { background: var(--state-neutral-fg, #9aa7b4); }
+.ah-dist__num { color: var(--text, #e5e7eb); font-weight: 600; }
+
+/* Layout 2 colunas (shelves ativos | criar shelve). */
+.ah-cols {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: var(--sp-3);
+  align-items: start;
+}
+@media (max-width: 860px) { .ah-cols { grid-template-columns: 1fr; } }
+
+/* Lista de shelves ativos. */
+.ah-shelves { display: flex; flex-direction: column; gap: 8px; }
+
+.ah-shelve {
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-left-width: 4px;
+  border-left-color: var(--state-warn, #eab308);
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: var(--state-neutral-bg, #161c24);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ah-shelve__top { display: flex; align-items: baseline; gap: 8px; }
+.ah-shelve__key {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text, #e5e7eb);
+  word-break: break-all;
+}
+.ah-shelve__remaining {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--state-warn-fg, #facc15);
+  white-space: nowrap;
+}
+.ah-shelve__meta {
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ah-shelve__actions { display: flex; gap: 6px; }
+
+/* Formulário de criação. */
+.ah-form { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ah-form__hint {
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  line-height: 1.45;
+}
+.ah-form__hint code {
+  font-family: var(--mono);
+  background: var(--state-neutral-bg, #161c24);
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.ah-foot {
+  font-size: 11px;
+  color: var(--text-muted, #7d8aa0);
+  font-family: var(--mono);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ah-foot__dot { color: var(--state-ok, #22c55e); }

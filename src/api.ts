@@ -137,3 +137,44 @@ export function listAlarms(params?: ListAlarmsParams): Promise<AlarmEvent[]> {
 export const ackAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/ack`, by ? { by } : {});
 // POST /api/alarms/:id/forward — marca como forwarded (encaminhado).
 export const forwardAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/forward`, by ? { by } : {});
+
+// ── Saúde do sistema de alarmes (ISA-18.2 / EEMUA 191 — racionalização · Onda B) ──
+// KPIs do PRÓPRIO sistema de alertas (não dos eventos em si): taxa/min, % de críticos vs. o
+// alvo EEMUA (≤5%), contagem por prioridade na janela e na última hora, e shelves ativos.
+// Tudo é só métrica/metadado (LGPD): nunca imagem/frame. Auth: logado (leitura).
+export type AlarmCounts = Record<AlarmPriority, number>;
+export type AlarmMetrics = {
+  now: number;               // epoch ms do relógio do servidor (base p/ calcular tempos)
+  windowMs: number;          // tamanho da janela de avaliação (ms)
+  inWindow: number;          // total de alarmes dentro da janela
+  ratePerMin: number;        // taxa média de alarmes por minuto na janela
+  criticalPct: number;       // % de críticos sobre o total (0–100)
+  criticalTargetPct: number; // alvo de referência (EEMUA 191: ~5%)
+  overTarget: boolean;       // true quando criticalPct excede o alvo (vira ruído/sobrecarga)
+  lastMinute: number;        // alarmes no último minuto
+  lastHour: number;          // alarmes na última hora
+  byPriorityWindow: AlarmCounts; // distribuição por prioridade na janela
+  byPriorityHour: AlarmCounts;   // distribuição por prioridade na última hora
+  shelvedActive: number;     // nº de shelves (silenciamentos) ativos agora
+};
+// GET /api/alarms/metrics — instantâneo de saúde do sistema de alarmes. Auth: logado.
+export const getAlarmMetrics = () => apiGet<AlarmMetrics>("/api/alarms/metrics");
+
+// Shelve = silenciamento TEMPORÁRIO (com expiração automática e registro de quem/por quê) de
+// uma classe de alarme. `key` segue o formato `cameraId|zona|tipo`, com `*` como curinga
+// (ex.: "cam-1|doca-3|fadiga", "cam-1|*|*", "*|*|leitura").
+export type Shelve = {
+  key: string;         // padrão de correspondência cameraId|zona|tipo (curinga *)
+  since: number;       // epoch ms da criação
+  ms: number;          // duração total solicitada (ms)
+  expiresAt: number;   // epoch ms em que volta a alarmar
+  remainingMs: number; // tempo restante até expirar (ms)
+  reason?: string;     // motivo do silenciamento (racionalização/registro)
+  by?: string;         // quem silenciou
+};
+// GET /api/alarms/shelves — shelves ativos. Auth: logado.
+export const listShelves = () => apiGet<Shelve[]>("/api/alarms/shelves");
+// POST /api/alarms/shelves — cria shelve. Auth: perfil de configuração (canConfigure).
+export const createShelve = (s: { key: string; ms?: number; reason?: string }) => apiSend<Shelve>("POST", "/api/alarms/shelves", s);
+// DELETE /api/alarms/shelves/:key — remove shelve (key via encodeURIComponent). Auth: canConfigure.
+export const deleteShelve = (key: string) => apiSend<{ ok: true }>("DELETE", `/api/alarms/shelves/${encodeURIComponent(key)}`);
