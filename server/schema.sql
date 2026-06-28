@@ -77,6 +77,20 @@ create table if not exists app_settings (
   data jsonb not null
 );
 
+-- ── EVENTOS DE ALARME (fila acionável com acknowledge — Onda B) ──────────────
+-- LGPD: SÓ METADADOS — nada de imagens/frames. Campos são texto/ids/timestamps.
+-- priority: advisory | high | critical (calculada pela política em alarmPolicy.js).
+-- state:    new | acknowledged | forwarded (ciclo de vida na central).
+create table if not exists alarm_events (
+  id text primary key,
+  ts bigint not null,
+  camera_id text, camera_label text, zona text, tipo text,
+  priority text default 'advisory',
+  text text,
+  state text default 'new',
+  ack_by text, ack_at bigint
+);
+
 -- ── ÍNDICES (consultas: eventos por ts desc; buckets por hora) ───────────────
 create index if not exists idx_ativ_events_ts on ativ_events (ts desc);
 create index if not exists idx_read_events_ts on read_events (ts desc);
@@ -86,3 +100,4 @@ create index if not exists idx_ativ_buckets_hour on ativ_buckets (hour_start);
 create index if not exists idx_read_buckets_hour on read_buckets (hour_start);
 create index if not exists idx_obj_buckets_hour  on obj_buckets  (hour_start);
 create index if not exists idx_fad_buckets_hour  on fad_buckets  (hour_start);
+create index if not exists idx_alarm_events_ts on alarm_events (ts desc);

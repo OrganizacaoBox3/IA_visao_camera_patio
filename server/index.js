@@ -10,6 +10,7 @@ const whatsapp = require("./whatsapp");
 const dispatch = require("./dispatch");
 const alarmPolicy = require("./alarmPolicy");
 const recipients = require("./recipients");
+const events = require("./events");
 const db = require("./db");
 const pgstore = require("./pgstore");
 const settings = require("./settings");
@@ -71,6 +72,35 @@ const httpServer = createServer(async (req, res) => {
       if (!requireSuper(req, res)) return;
       await pgstore.clear();
       return json(res, 200, { ok: true });
+    }
+
+    // Eventos de alarme — fila acionável com acknowledge (Onda B). Qualquer usuário
+    // autenticado lê/opera (mesmo padrão de auth dos dados/indicadores). SÓ METADADOS.
+    const path0 = req.url ? req.url.split("?")[0] : "";
+    if (path0 === "/api/alarms" && req.method === "GET") {
+      if (!requireAuth(req, res)) return;
+      const q = new URL(req.url, "http://x").searchParams;
+      return json(res, 200, events.query({
+        limit: q.get("limit"), since: q.get("since"), state: q.get("state"), priority: q.get("priority"),
+      }));
+    }
+    const mAck = path0.match(/^\/api\/alarms\/([\w-]+)\/ack$/);
+    if (mAck && req.method === "POST") {
+      const me = requireAuth(req, res); if (!me) return;
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const r = await events.ack(mAck[1], body.by || me.usuario || me.id);
+      if (r.error) return json(res, 404, r);
+      io.to("dashboards").emit("alarm-update", r.event);
+      return json(res, 200, r.event);
+    }
+    const mFwd = path0.match(/^\/api\/alarms\/([\w-]+)\/forward$/);
+    if (mFwd && req.method === "POST") {
+      const me = requireAuth(req, res); if (!me) return;
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const r = await events.forward(mFwd[1], body.by || me.usuario || me.id);
+      if (r.error) return json(res, 404, r);
+      io.to("dashboards").emit("alarm-update", r.event);
+      return json(res, 200, r.event);
     }
 
     // Perfil do próprio usuário (qualquer papel) — WhatsApp + preferências + opt-in
@@ -248,6 +278,15 @@ io.on("connection", (socket) => {
       if (!d) return;
       alerts.notify(d);
       if (d.text) dispatch.dispatchAlert(d.text, d.ts, d.priority);
+      // Onda B: grava o evento de alarme (SÓ METADADOS — LGPD) na fila acionável,
+      // reusando a MESMA decisão da política (priority já calculada). Aditivo:
+      // emite "alarm-event" aos painéis ao vivo sem tocar em frame/cameras/alert.
+      const cam = d.cameraId && d.cameraId !== "_" ? cameras.get(d.cameraId) : null;
+      events.record({
+        ts: d.ts, cameraId: d.cameraId, cameraLabel: cam ? cam.label : undefined,
+        zona: d.zona, tipo: d.tipo, priority: d.priority, text: d.text,
+      }).then((ev) => { if (ev) io.to("dashboards").emit("alarm-event", ev); })
+        .catch((e) => console.error("[alarm-events] falha ao gravar:", e.message));
     });
   }
 });
@@ -256,7 +295,7 @@ io.on("connection", (socket) => {
 // aceitar conexões — assim verifyToken/login já têm os dados em memória.
 (async () => {
   await db.init();
-  await Promise.all([users.init(), recipients.init(), settings.init()]);
+  await Promise.all([users.init(), recipients.init(), settings.init(), events.init()]);
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);
