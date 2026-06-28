@@ -1,0 +1,37 @@
+[
+  {
+    "label": "demo-sintel-hls",
+    "url": "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+    "protocol": "hls",
+    "verified": false,
+    "description": "Sintel (HLS, Akamai/Bitmovin). NAO VERIFICADO — CDN pode variar (fonte: bengarney/list-of-streams). Creative Commons (Blender)."
+  },
+  {
+    "label": "demo-apple-bipbop-hls",
+    "url": "https://devimages.apple.com/iphone/samples/bipbop/bipbopall.m3u8",
+    "protocol": "hls",
+    "verified": false,
+    "description": "Apple BipBop (HLS de referencia). NAO VERIFICADO — clássico da Apple, às vezes só HTTPS. Bom fallback. Sample oficial Apple para desenvolvedores."
+  },
+  {
+    "label": "demo-nasa-tv-hls",
+    "url": "https://nasa-i.akamaihd.net/hls/live/253565/NTV-Public1/master.m3u8",
+    "protocol": "hls",
+    "verified": false,
+    "description": "NASA TV Public (HLS ao vivo). NAO VERIFICADO — endpoint Akamai histórico pode ter mudado; ver player oficial NASA se falhar. Conteúdo público (US gov)."
+  },
+  {
+    "label": "demo-st-malo-mjpeg",
+    "url": "http://webcam.st-malo.com/axis-cgi/mjpg/video.cgi?resolution=352x288",
+    "protocol": "mjpeg",
+    "verified": false,
+    "description": "Webcam pública St-Malo (FR), MJPEG via Axis. NAO VERIFICADO — webcam antiga, pode estar offline. Cena de cidade/orla (pessoas, barcos). Somente visualização — não redistribuir."
+  },
+  {
+    "label": "demo-wowza-legacy-rtsp",
+    "url": "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4",
+    "protocol": "rtsp",
+    "verified": false,
+    "description": "Wowza demo RTSP legado (fallback). NAO VERIFICADO — frequentemente offline. Usar apenas se o Wowza atual cair."
+  }
+]

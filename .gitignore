@@ -1,0 +1,26 @@
+# Logs
+*.log
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# Media de demo pesada (não versionar clipes grandes)
+public/demo/*.mp4
+public/demo/*.webm
+
+# Fontes RTSP reais (podem conter credenciais)
+server/rtsp.sources.json
+
+# Câmeras cadastradas dinamicamente (CRUD em runtime — podem conter credenciais)
+server/cameras.json
+
+# Estado/credenciais de sessão do WhatsApp (Baileys) — nunca versionar
+server/wa-auth/

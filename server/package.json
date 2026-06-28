@@ -1,0 +1,18 @@
+{
+  "name": "visao_patio_hub",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hub de câmeras (socket.io) — relé de frames câmera→dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "pg": "^8.21.0",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.3"
+  }
+}

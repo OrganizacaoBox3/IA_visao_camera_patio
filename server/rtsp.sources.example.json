@@ -1,0 +1,4 @@
+[
+  { "label": "Pátio - Expedição", "url": "rtsp://usuario:senha@10.0.0.50:554/Streaming/Channels/101" },
+  { "label": "Doca - Carga", "url": "rtsp://usuario:senha@10.0.0.51:554/cam/realmonitor?channel=1&subtype=0" }
+]
