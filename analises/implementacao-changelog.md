@@ -102,9 +102,15 @@ Validação: `tsc` + `vite build` + `e2e 3/3` + `node --check` verdes.
 - Concorrência multi-operador é last-write-wins (PUT da lista inteira); sem merge incremental.
 - Tripwires/views só recarregam ao abrir/trocar câmera ou no mount (sem polling/socket) — edições de outro turno aparecem na próxima abertura.
 
+## Onda F — Live-sync e persistência de shelves (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` + `node --check` verdes. Decisões em `analises/decisoes/` (ADR-001..006).
+- **Live-sync (ADR-006)** `index.js`, `DashboardPage.tsx`, `CameraWorkspace.tsx`: hub emite `camcfg-updated {kind:"views"|"tripwires",cameraId}` na sala dashboards após PUT; central recarrega views e propaga `tripwiresRev` por câmera às tiles; CameraWorkspace re-busca tripwires (pulando se em edição local). Last-write-wins.
+- **Persistência de shelves** `alarmPolicy.js`: shelves ativas gravadas atômico em `alarm-shelves.json` (gitignored) e restauradas no init (expiradas descartadas); métricas seguem voláteis por design.
+- **ADRs** `analises/decisoes/`: registro de decisões retroativo + desta rodada (paralelização, LGPD, going-gray, política de alarme, persistência, live-sync).
+
 ## Pendências para evolução futura (não bloqueantes)
-- Shelving/métricas de alarme são voláteis por processo (sem persistência/multi-instância).
-- Sincronização ao vivo (socket) de views/tripwires entre operadores (hoje só on-load).
+- Merge incremental de views/tripwires (hoje last-write-wins) para edição concorrente.
+- Métricas de alarme voláteis por processo (sem coordenação multi-instância).
 - **Validação visual em runtime** (sem ffmpeg/câmera real neste ambiente): só estático + e2e headless até aqui.
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).

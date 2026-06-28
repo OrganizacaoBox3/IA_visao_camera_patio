@@ -36,9 +36,11 @@
 //      duração; enquanto "shelved" a chave é suprimida e o shelve EXPIRA
 //      sozinho. Útil para manutenção/limpeza programada. Funções: shelve(),
 //      unshelve(), listShelved(), isShelved(), shelveKeyFor().
-//      ATENÇÃO: estado puramente EM MEMÓRIA (volátil) — some ao reiniciar o
-//      processo e NÃO é compartilhado entre instâncias. Ligar a endpoints e
-//      persistência fica para outra onda.
+//      PERSISTÊNCIA: as shelves ATIVAS sobrevivem a reinício (gravadas em
+//      server/alarm-shelves.json e restauradas no boot) — manutenção programada
+//      não pode ser "esquecida" por um deploy/restart. Ainda NÃO é compartilhado
+//      entre instâncias (cada processo tem seu arquivo; coordenação multi-
+//      instância via Postgres fica para outra onda, conforme ADR-005).
 //   5) Métricas de taxa / racionalização (EEMUA 191) — contadores em memória
 //      de alarmes EMITIDOS por janela e por prioridade, expostos via metrics()
 //      para uma futura tela de "saúde de alarmes". Loga um aviso (pino) quando
@@ -101,8 +103,38 @@
 //   ALARM_FLAP_COOLDOWN_MS  (default 300000 = 5 min) Duração do cooldown
 //                                            (off-delay) em que a chave é
 //                                            suprimida após detectar chattering.
+//
+//   --- Persistência das shelves (item 7) ---
+//   ALARM_SHELVES_FILE      (default server/alarm-shelves.json) Caminho do JSON
+//                                            local que persiste as shelves ATIVAS.
+// ============================================================================
+//
+// PERSISTÊNCIA (apenas as SHELVES sobrevivem a reinício):
+//   Somente o conjunto de shelves ATIVAS é persistido em disco (JSON local). O
+//   motivo é semântico: um shelve representa uma decisão DELIBERADA do operador
+//   de silenciar um alarme durante manutenção/limpeza programada — essa intenção
+//   precisa sobreviver a deploy/restart/crash; caso contrário um restart no meio
+//   da manutenção ressuscitaria a enxurrada de alertas que o operador silenciou.
+//   As demais estruturas (dedup, floodWin/floodState, flap, emitLog/métricas)
+//   permanecem VOLÁTEIS de propósito: são janelas deslizantes de curtíssimo prazo
+//   e contadores observacionais — após um restart o estado correto é "começar
+//   limpo" (re-derivado naturalmente do fluxo de eventos), e persisti-los só
+//   adicionaria risco de estado obsoleto/corrompido sem benefício operacional.
+//
+//   Arquivo: server/alarm-shelves.json  → é conteúdo de RUNTIME (efêmero,
+//   específico da instância). DEVE entrar no .gitignore (junto de alarms.json,
+//   camcfg.json etc., conforme ADR-005). Não versione este arquivo.
+//
+//   Robustez: a escrita é atômica (grava em arquivo temporário e renomeia por
+//   cima) e shelves expiradas são podadas ANTES de gravar. Toda I/O é envolvida
+//   em try/catch e qualquer falha é apenas logada via pino — uma falha de disco
+//   NUNCA pode derrubar a política de alarmes. A restauração ocorre de forma
+//   preguiçosa/idempotente no require do módulo (não exige mudança em index.js);
+//   há também init() exportado para quem preferir inicialização explícita.
 // ============================================================================
 
+const fs = require("node:fs");
+const path = require("node:path");
 const { classify } = require("./dispatch");
 
 const log = require("pino")({ name: "alarm", level: process.env.ALARM_LOG_LEVEL || "info" });
@@ -116,6 +148,8 @@ const FLOOD_SUMMARY_MS = Number(process.env.ALARM_FLOOD_SUMMARY_MS ?? 60_000);
 // Shelving
 const SHELVE_MAX_MS = Number(process.env.ALARM_SHELVE_MAX_MS ?? 14_400_000);
 const SHELVE_DEFAULT_MS = Number(process.env.ALARM_SHELVE_DEFAULT_MS ?? 1_800_000);
+// Arquivo de RUNTIME para persistir as shelves ativas (deve ser gitignored).
+const SHELVES_FILE = process.env.ALARM_SHELVES_FILE || path.join(__dirname, "alarm-shelves.json");
 
 // Métricas / racionalização
 const RATE_WINDOW_MS = Number(process.env.ALARM_RATE_WINDOW_MS ?? 600_000);
@@ -227,7 +261,8 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
 // SHELVING (ISA-18.2) — silenciar temporariamente uma chave, com expiração.
 // Chave: "cameraId|zona|tipo". Cada segmento aceita "*" como curinga (ex.:
 // "cam-doca-1|*|*" silencia TODA a câmera durante a manutenção). Segmentos são
-// normalizados (trim + lowercase). Estado EM MEMÓRIA (volátil).
+// normalizados (trim + lowercase). Estado em memória, PERSISTIDO em disco
+// (alarm-shelves.json) para sobreviver a reinício.
 // ---------------------------------------------------------------------------
 function normSeg(s) {
   const v = String(s ?? "").trim().toLowerCase();
@@ -242,6 +277,68 @@ function normShelveKey(key) {
   const zona = normSeg(parts[1]);
   const tipo = normSeg(parts[2]);
   return `${cam}|${zona}|${tipo}`;
+}
+
+// --- Persistência das shelves (JSON local, resiliente) ----------------------
+// Só as SHELVES são persistidas (ver cabeçalho). Escrita atômica + try/catch;
+// falha de I/O nunca derruba a política — apenas loga via pino.
+
+// Grava as shelves ATIVAS (poda expiradas antes). Atômico: escreve em .tmp e
+// renomeia por cima, evitando arquivo parcial/corrompido se o processo morrer
+// no meio da escrita.
+function saveShelves() {
+  try {
+    const now = Date.now();
+    const arr = [];
+    for (const [k, info] of shelved) {
+      if (now >= info.expiresAt) { shelved.delete(k); continue; } // poda expiradas
+      arr.push({ key: k, expiresAt: info.expiresAt, since: info.since, ms: info.ms, reason: info.reason, by: info.by });
+    }
+    const tmp = `${SHELVES_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(arr, null, 2));
+    fs.renameSync(tmp, SHELVES_FILE);
+  } catch (e) {
+    log.error({ err: e.message, file: SHELVES_FILE }, "[alarm] falha ao persistir shelves (ignorada)");
+  }
+}
+
+// Lê o JSON, descarta shelves já expiradas e repovoa o Map. Idempotente: pode
+// ser chamada várias vezes (no require e/ou via init()) sem efeito colateral.
+function loadShelves() {
+  try {
+    const raw = fs.readFileSync(SHELVES_FILE, "utf8");
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return;
+    const now = Date.now();
+    let restored = 0, expired = 0;
+    for (const it of arr) {
+      if (!it || typeof it.key !== "string") continue;
+      const k = normShelveKey(it.key);
+      const expiresAt = Number(it.expiresAt);
+      if (!Number.isFinite(expiresAt) || now >= expiresAt) { expired++; continue; } // descarta expiradas
+      shelved.set(k, {
+        expiresAt,
+        since: Number(it.since) || now,
+        ms: Number(it.ms) || (expiresAt - now),
+        reason: String(it.reason ?? ""),
+        by: String(it.by ?? ""),
+      });
+      restored++;
+    }
+    if (restored || expired) log.info({ restored, expired, file: SHELVES_FILE }, "[alarm] shelves restauradas do disco");
+  } catch (e) {
+    // ENOENT (arquivo ainda não existe) é normal no primeiro boot → silencioso.
+    if (e.code !== "ENOENT") log.error({ err: e.message, file: SHELVES_FILE }, "[alarm] falha ao restaurar shelves (ignorada)");
+  }
+}
+
+let _loaded = false;
+// Restauração preguiçosa/idempotente. Chamada no require (não exige init() em
+// index.js) e também exportada como init() para inicialização explícita.
+function init() {
+  if (_loaded) return;
+  _loaded = true;
+  loadShelves();
 }
 
 // Constrói a chave de shelve (não-curinga) a partir de um payload de alerta,
@@ -275,7 +372,8 @@ function isShelved(cameraId, zona, tipo, now = Date.now()) {
 }
 
 /**
- * Silencia temporariamente uma chave de alarme. VOLÁTIL (memória do processo).
+ * Silencia temporariamente uma chave de alarme. PERSISTIDO em disco
+ * (alarm-shelves.json) — sobrevive a reinício do processo.
  * @param {string} key  "cameraId|zona|tipo" (cada segmento aceita "*").
  * @param {number} [ms] Duração; default ALARM_SHELVE_DEFAULT_MS, clamp em
  *                      [1000, ALARM_SHELVE_MAX_MS].
@@ -297,6 +395,7 @@ function shelve(key, ms, opts = {}) {
   };
   shelved.set(k, info);
   log.info({ key: k, ms: dur, by: info.by, reason: info.reason }, "[alarm] shelve aplicado");
+  saveShelves(); // persiste o conjunto alterado (resiliente: nunca lança)
   return Object.assign({ key: k }, info);
 }
 
@@ -304,7 +403,7 @@ function shelve(key, ms, opts = {}) {
 function unshelve(key) {
   const k = normShelveKey(key);
   const had = shelved.delete(k);
-  if (had) log.info({ key: k }, "[alarm] unshelve");
+  if (had) { log.info({ key: k }, "[alarm] unshelve"); saveShelves(); } // persiste só se mudou
   return had;
 }
 
@@ -473,17 +572,23 @@ function evaluate(p) {
   return decision;
 }
 
+// Restauração preguiçosa no require — repovoa as shelves persistidas SEM exigir
+// que index.js chame init(). Idempotente; envolto em try/catch por segurança.
+try { init(); } catch (e) { log.error({ err: e.message }, "[alarm] init() falhou (ignorada)"); }
+
 module.exports = {
   evaluate,
   classify,
   priorityOf,
-  // Shelving (volátil, em memória)
+  // Inicialização explícita opcional (restauração também ocorre no require).
+  init,
+  // Shelving (persistido em disco; ver alarm-shelves.json)
   shelve,
   unshelve,
   listShelved,
   isShelved,
   shelveKeyFor,
-  // Métricas / racionalização
+  // Métricas / racionalização (voláteis — não persistidas por design)
   metrics,
   _state: { dedup, floodWin, floodState, shelved, flap, emitLog },
 };
