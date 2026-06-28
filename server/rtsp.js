@@ -83,6 +83,11 @@ function inputArgs(st) {
     args.push("-i", url);
   } else {
     // HLS (.m3u8), MJPEG ou HTTP(S) genérico / arquivo: ffmpeg autodetecta o formato de entrada.
+    if (/\.m3u8(\?|$)/i.test(String(url))) {
+      // HLS pode referenciar faixas de legenda (webvtt em .mp4) que o demuxer do ffmpeg 7.1+
+      // rejeita pela checagem estrita de extensão. extension_picky=0 desliga essa checagem.
+      args.push("-extension_picky", "0");
+    }
     args.push("-i", url);
   }
   return args;
