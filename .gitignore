@@ -24,3 +24,7 @@ server/cameras.json
 
 # Estado/credenciais de sessão do WhatsApp (Baileys) — nunca versionar
 server/wa-auth/
+
+# Artefatos de teste (Playwright)
+test-results/
+playwright-report/
