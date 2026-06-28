@@ -1,0 +1,84 @@
+/* CONGELAR + CINE-LOOP — controles da revisão de quadros (Onda B).
+   Importado SOMENTE pelo CameraWorkspace. Usa os tokens dark já existentes
+   (var(--cam-*), var(--state-*), var(--sp-*)) p/ coerência; imagem soberana,
+   controles numa barra discreta na borda inferior do palco. */
+
+/* Selo "REVISÃO" no topo do palco — sinaliza que NÃO é o ao vivo. */
+.cine-flag {
+  position: absolute;
+  top: var(--sp-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--state-warn-fg, #fde68a);
+  background: var(--cam-overlay-scrim, rgba(5, 8, 12, 0.7));
+  border: 1px solid var(--state-warn, #eab308);
+  pointer-events: none;
+}
+.cine-flag .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--state-warn, #eab308);
+}
+
+/* Barra de cine (scrubber) ancorada na borda inferior do palco. */
+.cine-bar {
+  position: absolute;
+  left: var(--sp-3);
+  right: 340px; /* deixa o painel lateral (320px) livre */
+  bottom: var(--sp-3);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius, 8px);
+  background: var(--cam-panel-bg, #0e141b);
+  border: 1px solid var(--cam-panel-border, #16202b);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  color: var(--cam-panel-fg, #e6edf3);
+}
+
+.cine-bar .cine-slider {
+  flex: 1;
+  min-width: 80px;
+}
+
+.cine-bar .cine-time {
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  color: var(--cam-overlay-fg, #cbd5e1);
+  min-width: 96px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cine-bar .cine-count {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  color: var(--state-neutral-dim, #5b6b7a);
+  white-space: nowrap;
+}
+
+.cine-bar .cine-spacer {
+  width: 1px;
+  align-self: stretch;
+  background: var(--cam-panel-border, #16202b);
+}
+
+@media (max-width: 980px) {
+  .cine-bar {
+    right: var(--sp-3);
+    bottom: calc(58% + var(--sp-3)); /* acima do drawer que vira faixa inferior */
+    flex-wrap: wrap;
+  }
+}

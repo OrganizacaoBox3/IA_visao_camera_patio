@@ -22,6 +22,8 @@ import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import { loadZones, saveZones, newZoneId, DEFAULT_GRID, ZONE_MODE_LABEL, type Zone, type ZoneMode } from "./zones";
 import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxNorm, anySet, clearMask, containsNorm, type Mask } from "./zoneMask";
 import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
+import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
+import "./camera/cine.css";
 
 const MODO_OPTS = [{ value: "atividade", label: "Atividade" }, { value: "leitura", label: "Leitura" }, { value: "objetos", label: "Objetos" }, { value: "fadiga", label: "Fadiga" }];
 const BRUSH_OPTS = [{ value: "1", label: "1×" }, { value: "2", label: "2×" }, { value: "3", label: "3×" }];
@@ -173,6 +175,12 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers });   // camadas visíveis (lido no rAF)
   const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold);       // limiar global de confiança
   const heatRef = useRef<Float32Array | null>(null);                            // acúmulo do heatmap de ocupação
+  // ── CONGELAR + CINE-LOOP (Onda B) ──
+  // Buffer de quadros EM MEMÓRIA / EFÊMERO (LGPD: nunca vai ao servidor; ver cineBuffer.ts).
+  const cineRef = useRef<CineBuffer | null>(null);
+  if (cineRef.current === null) cineRef.current = new CineBuffer({ maxSeconds: 10, captureWidth: 480 });
+  const reviewRef = useRef(false);   // lido no rAF: em revisão o palco PARA de avançar (mas a inferência de fundo segue)
+  const scrubRef = useRef(0);        // índice do quadro em revisão (lido pelo render de revisão)
 
   const [zones, setZones] = useState<Zone[]>([]);
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
@@ -192,11 +200,21 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
   const [histDataset, setHistDataset] = useState<Dataset | null>(null);
   const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  // CONGELAR + CINE: modo revisão, índice do scrubber e play do cine-loop.
+  const [review, setReview] = useState(false);
+  const [scrubIndex, setScrubIndex] = useState(0);
+  const [cinePlaying, setCinePlaying] = useState(false);
+  const [cineSize, setCineSize] = useState(0);   // nº de quadros no buffer (atualiza o range do slider)
+  const [reviewTip, setReviewTip] = useState<string | null>(null); // aviso quando o buffer está vazio
 
   useEffect(() => { onAlertRef.current = onAlert; }, [onAlert]);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { cfgOpenRef.current = !!cfgZoneId; }, [cfgZoneId]);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
+  useEffect(() => { reviewRef.current = review; }, [review]);
+  useEffect(() => { scrubRef.current = scrubIndex; }, [scrubIndex]);
+  // LGPD: ao desmontar a câmera, descarta TODO o buffer em memória (fecha os bitmaps).
+  useEffect(() => { const cb = cineRef.current; return () => { cb?.dispose(); }; }, []);
   useEffect(() => { zonesRef.current = zones; }, [zones]);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   useEffect(() => { confRef.current = conf; }, [conf]);
@@ -310,6 +328,10 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       lastFrameElRef.current = f.el; lastFrameTsRef.current = f.ts ?? 0;
       const now = performance.now();
       meterRef.current.tick(now);
+      // CINE: alimenta o ring buffer com o MESMO frame que já passou pelo gate (sem decode extra).
+      // Só na câmera aberta (full) e fora da revisão — em revisão o buffer fica congelado/estável.
+      // LGPD: tudo em memória/efêmero; nada é enviado/persistido (ver cineBuffer.ts).
+      if (mode === "full" && !reviewRef.current) cineRef.current?.capture(f.el, f.w, f.h, now, Date.now());
       if (pausedRef.current) return; // ⏸ inspeção: congela o frame (não processa nem redesenha)
       const frameDt = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0; lastFrameAtRef.current = now;
       const zs = zonesRef.current;
@@ -406,7 +428,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       if (sampleFlow) lastFlowAtRef.current = now;
       if (recEmit) { lastRecAtRef.current = now; if (recSamples.length) recordSamples({ cameraId, samples: recSamples }); }
 
-      drawScene(canvas, viewport, f);
+      // Em revisão o palco mostra um quadro do buffer (render dedicado) — NÃO sobrescreve com o ao vivo.
+      // A inferência/alertas de fundo seguem rodando acima (só o desenho do palco para de avançar).
+      if (!reviewRef.current) drawScene(canvas, viewport, f);
 
       if (now - lastUiRef.current > (mode === "full" ? 200 : 500)) {
         lastUiRef.current = now;
@@ -538,6 +562,96 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     if (d?.active) { const x = Math.min(d.sx, d.cx), y = Math.min(d.sy, d.cy); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = "#38bdf8"; ctx.strokeRect(x, y, Math.abs(d.cx - d.sx), Math.abs(d.cy - d.sy)); ctx.setLineDash([]); }
   }
 
+  // ── CONGELAR + CINE-LOOP: render do quadro em revisão ──
+  // Desenha SÓ a imagem do buffer (letterbox idêntico ao ao vivo) + HUD de tempo relativo.
+  // Não reusa os overlays do ao vivo: eles correspondem ao frame corrente, não ao quadro revisado.
+  function drawReviewFrame(canvas: HTMLCanvasElement, viewport: HTMLDivElement, fr: CineFrame) {
+    const dpr = window.devicePixelRatio || 1;
+    const vpW = viewport.clientWidth, vpH = viewport.clientHeight;
+    if (canvas.width !== Math.round(vpW * dpr) || canvas.height !== Math.round(vpH * dpr)) { canvas.width = Math.round(vpW * dpr); canvas.height = Math.round(vpH * dpr); }
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, vpW, vpH);
+    const cr = getContentRect(vpW, vpH, fr.w, fr.h);
+    ctx.drawImage(fr.bmp, cr.x, cr.y, cr.w, cr.h);
+  }
+
+  // Renderiza o quadro selecionado sempre que o índice/modo mudar (e ao redimensionar via tick do loop).
+  useEffect(() => {
+    if (!review) return;
+    const canvas = canvasRef.current, viewport = viewportRef.current;
+    if (!canvas || !viewport) return;
+    const fr = cineRef.current?.get(scrubIndex);
+    if (fr) drawReviewFrame(canvas, viewport, fr);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [review, scrubIndex, cineSize]);
+
+  // Cine-loop (play): avança o scrubber ~12 quadros/s, em loop, sem tocar no buffer.
+  useEffect(() => {
+    if (!review || !cinePlaying) return;
+    let raf = 0; let last = 0;
+    const step = (t: number) => {
+      raf = requestAnimationFrame(step);
+      if (t - last < 80) return; last = t; // ~12 fps de reprodução
+      const n = cineRef.current?.size() ?? 0;
+      if (n <= 1) return;
+      setScrubIndex((i) => (i + 1 >= n ? 0 : i + 1));
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [review, cinePlaying]);
+
+  // Entra em revisão (CONGELAR): trava o palco no último quadro do buffer.
+  function enterReview() {
+    const n = cineRef.current?.size() ?? 0;
+    if (n === 0) { setReviewTip("Sem quadros no buffer ainda — aguarde o vídeo ao vivo."); setTimeout(() => setReviewTip(null), 2500); return; }
+    setReviewTip(null);
+    setCineSize(n);
+    setScrubIndex(n - 1);
+    setCinePlaying(false);
+    setReview(true);
+  }
+  // Volta ao vivo: sai da revisão e limpa o estado de scrub (o buffer segue, efêmero).
+  function exitReview() {
+    setReview(false);
+    setCinePlaying(false);
+    setScrubIndex(0);
+  }
+  function scrubBy(delta: number) {
+    setCinePlaying(false);
+    const n = cineRef.current?.size() ?? 0;
+    if (n === 0) return;
+    setScrubIndex((i) => Math.max(0, Math.min(n - 1, i + delta)));
+  }
+
+  // SNAPSHOT LOCAL — download manual iniciado pelo operador. NUNCA vai ao servidor.
+  // Renderiza o quadro (revisão: do buffer; ao vivo: o frame corrente) numa resolução própria
+  // e dispara um download via canvas.toBlob → <a download>. Ação 100% local (LGPD).
+  function downloadSnapshot() {
+    const fr = review ? cineRef.current?.get(scrubIndex) ?? null : null;
+    const tmp = document.createElement("canvas");
+    let src: CanvasImageSource; let w: number; let h: number; let stampTs: number;
+    if (fr) { src = fr.bmp; w = fr.bmp.width; h = fr.bmp.height; stampTs = fr.wallTs; }
+    else { const f = getFrame(); if (!f) return; src = f.el; w = f.w; h = f.h; stampTs = Date.now(); }
+    tmp.width = w; tmp.height = h;
+    const ctx = tmp.getContext("2d"); if (!ctx) return;
+    ctx.drawImage(src, 0, 0, w, h);
+    tmp.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const d = new Date(stampTs);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      a.href = url;
+      a.download = `${cameraId}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  }
+  // TODO (clipe/GIF): exportar a sequência do buffer como GIF/WebM exigiria um encoder
+  // (sem dependências novas, fora do escopo conservador). Quando implementado, DEVE seguir a
+  // mesma regra: montagem em memória + download LOCAL manual, jamais upload/persistência no servidor.
+
   // ── máscara (blueprint em grade) ──
   function getMask(z: Zone): Mask | null {
     const c = maskCacheRef.current.get(z.id);
@@ -578,7 +692,8 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     patchZone(z.id, bb ? { mask: enc, x: bb.x, y: bb.y, w: bb.w, h: bb.h } : { mask: enc });
   }
   function onDown(e: ReactMouseEvent) {
-    if (mode !== "full") return;
+    if (mode !== "full" || reviewRef.current) return; // em revisão o palco mostra o buffer — sem edição de zona
+
     if (paintZoneId) { paintingRef.current = true; eraseRef.current = e.altKey || e.button === 2 || erase; paintAt(e); return; }
     if (drawMode) { const p = vpPoint(e); drawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y }; }
   }
@@ -650,14 +765,32 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
           <Button onClick={clearActive}>Limpar</Button>
           <Button active onClick={() => setPaintZoneId(null)}>✓ Concluir</Button>
         </>) : (<>
-          <Button active={paused} onClick={() => setPaused((v) => !v)} title="Congela o frame e rotula quem está em cena">{paused ? "▶ Retomar" : "⏸ Pausar"}</Button>
-          <Button active={drawMode} onClick={() => setDrawMode((v) => !v)}>{drawMode ? "Desenhando…" : "✎ Zona"}</Button>
+          <Button active={review} onClick={() => (review ? exitReview() : enterReview())} title="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">{review ? "▶ Ao vivo" : "❄ Congelar"}</Button>
+          <Button active={paused} disabled={review} onClick={() => setPaused((v) => !v)} title="Congela o frame e rotula quem está em cena">{paused ? "▶ Retomar" : "⏸ Pausar"}</Button>
+          <Button active={drawMode} disabled={review} onClick={() => setDrawMode((v) => !v)}>{drawMode ? "Desenhando…" : "✎ Zona"}</Button>
           <IconButton label="Fechar" onClick={onClose}>✕</IconButton>
         </>)}
+        {reviewTip && <span className="muted" style={{ color: "var(--state-warn-fg, #fde68a)" }}>{reviewTip}</span>}
       </header>
 
       <div className={`cam-stage ${drawMode || paintZone ? "draw-cursor" : ""}`} ref={viewportRef} style={{ background: "var(--cam-surface-bg)" }} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onContextMenu={(e) => { if (paintZone) e.preventDefault(); }}>
         <canvas className="overlay" ref={canvasRef} />
+        {review && (<>
+          <div className="cine-flag"><span className="dot" /> REVISÃO · cine-loop (buffer em memória)</div>
+          <div className="cine-bar">
+            <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>‹</IconButton>
+            <IconButton label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"} active={cinePlaying} onClick={() => setCinePlaying((v) => !v)}>{cinePlaying ? "⏸" : "▶"}</IconButton>
+            <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>›</IconButton>
+            <div className="cine-slider">
+              <Slider value={scrubIndex} min={0} max={Math.max(0, cineSize - 1)} step={1} onChange={(v) => { setCinePlaying(false); setScrubIndex(v); }} ariaLabel="Posição no cine-loop" />
+            </div>
+            <span className="cine-time">{cineRef.current ? `${cineRef.current.relativeSeconds(scrubIndex).toFixed(1)}s` : "0.0s"}</span>
+            <span className="cine-count">{cineSize ? scrubIndex + 1 : 0}/{cineSize}</span>
+            <span className="cine-spacer" />
+            <Button onClick={downloadSnapshot} title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">⤓ Snapshot</Button>
+            <Button active onClick={exitReview}>▶ Ao vivo</Button>
+          </div>
+        </>)}
         <aside className="cam-drawer" style={{ background: "var(--cam-panel-bg)", color: "var(--cam-panel-fg)", borderLeftColor: "var(--cam-panel-border)" }}>
           <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
             options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
