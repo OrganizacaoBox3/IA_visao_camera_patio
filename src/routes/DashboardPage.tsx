@@ -9,7 +9,7 @@ import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
 import { Button, IconButton, Switch, Checkbox, Select, Input, Dialog, Tooltip, useToast } from "../ui";
-import { listAlarms, ackAlarm, forwardAlarm, ApiError, type AlarmEvent, type AlarmPriority, type AlarmState } from "../api";
+import { listAlarms, ackAlarm, forwardAlarm, getViews, saveViews, ApiError, type AlarmEvent, type AlarmPriority, type AlarmState, type SavedView } from "../api";
 import "./alarms.css";
 import "./views.css";
 
@@ -25,26 +25,55 @@ function colsFor(n: number): number { return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 
 // ── Views salvas por setor (Onda C · item 11) ──────────────────────────────────────────────
 // Uma "view" é um subconjunto ordenado de câmeras (ex.: "Docas", "Expedição"). A ordem dos ids
 // define a ordem dos tiles. A view especial "Todas" (activeViewId=null) mostra tudo como hoje.
-// Persistência 100% no localStorage (sem backend), por usuário + host do hub — assim cada
-// operador tem suas views e elas não vazam entre instalações/servidores diferentes.
-type SavedView = { id: string; name: string; cameraIds: string[] };
-type ViewsStore = { views: SavedView[]; activeViewId: string | null; autoSurface: boolean };
+//
+// FONTE DAS VIEWS = BACKEND (compartilhada): a LISTA de views agora vive no hub (GET/PUT
+// /api/views, via getViews/saveViews de api.ts) — uma lista global vista por todos os operadores.
+// O tipo `SavedView` é o canônico exportado de api.ts (sem cópia local).
+//
+// PREFERÊNCIAS LOCAIS (não compartilhadas): a view selecionada (`activeViewId`) e o toggle
+// `autoSurface` continuam por operador, no localStorage (chave nova `vp-view-prefs::...`), pois
+// são preferências do posto de trabalho, não estado compartilhado.
+//
+// MIGRAÇÃO (best-effort, única): instalações antigas guardavam a lista de views no localStorage
+// (chave legada `vp-views::user::host`). Na 1ª carga, se o backend vier VAZIO e existirem views
+// legadas, fazemos um upload único delas (saveViews) para não perder o trabalho do operador. A
+// chave legada é preservada como backup (não a apagamos); como o backend passa a ter as views,
+// recargas seguintes leem do backend e a migração não dispara de novo.
+type LegacyViewsStore = { views: SavedView[]; activeViewId: string | null; autoSurface: boolean };
+type ViewPrefs = { activeViewId: string | null; autoSurface: boolean };
 
-function viewsKey(userId: string): string { return `vp-views::${userId}::${APP_CONFIG.net.serverUrl}`; }
+// Chave LEGADA (combinava views + prefs) — só lida para migração/fallback de prefs.
+function legacyViewsKey(userId: string): string { return `vp-views::${userId}::${APP_CONFIG.net.serverUrl}`; }
+// Chave NOVA: só preferências locais do operador (activeViewId + autoSurface).
+function viewPrefsKey(userId: string): string { return `vp-view-prefs::${userId}::${APP_CONFIG.net.serverUrl}`; }
 
-function loadViewsStore(userId: string): ViewsStore {
+// Lê a store legada (combinada). Usada como fonte da migração e como fallback de prefs.
+function loadLegacyStore(userId: string): LegacyViewsStore {
   try {
-    const raw = localStorage.getItem(viewsKey(userId));
+    const raw = localStorage.getItem(legacyViewsKey(userId));
     if (raw) {
-      const p = JSON.parse(raw) as Partial<ViewsStore>;
+      const p = JSON.parse(raw) as Partial<LegacyViewsStore>;
       const views = Array.isArray(p.views)
         ? p.views.filter((v): v is SavedView => !!v && typeof v.id === "string" && typeof v.name === "string" && Array.isArray(v.cameraIds))
         : [];
-      const activeViewId = typeof p.activeViewId === "string" && views.some((v) => v.id === p.activeViewId) ? p.activeViewId : null;
+      const activeViewId = typeof p.activeViewId === "string" ? p.activeViewId : null;
       return { views, activeViewId, autoSurface: !!p.autoSurface };
     }
   } catch { /* no-op */ }
   return { views: [], activeViewId: null, autoSurface: false };
+}
+
+// Carrega as PREFS locais: chave nova primeiro; se ausente, herda da chave legada (continuidade).
+function loadViewPrefs(userId: string): ViewPrefs {
+  try {
+    const raw = localStorage.getItem(viewPrefsKey(userId));
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<ViewPrefs>;
+      return { activeViewId: typeof p.activeViewId === "string" ? p.activeViewId : null, autoSurface: !!p.autoSurface };
+    }
+  } catch { /* no-op */ }
+  const legacy = loadLegacyStore(userId);
+  return { activeViewId: legacy.activeViewId, autoSurface: legacy.autoSurface };
 }
 
 function newViewId(): string { return `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
@@ -82,10 +111,16 @@ export function DashboardPage() {
   const { toast } = useToast();
 
   // ── Views salvas por setor + auto-surface (Onda C · item 11) ──
-  const initialViews = useMemo(() => loadViewsStore(user.id), [user.id]);
-  const [views, setViews] = useState<SavedView[]>(() => initialViews.views);
-  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialViews.activeViewId);
-  const [autoSurface, setAutoSurface] = useState<boolean>(() => initialViews.autoSurface);
+  // Lista de views = backend (compartilhada); activeViewId/autoSurface = prefs locais do operador.
+  const initialPrefs = useMemo(() => loadViewPrefs(user.id), [user.id]);
+  // Fonte da migração: views legadas capturadas EM MEMÓRIA no 1º render (antes de qualquer escrita
+  // de prefs no localStorage), para não perdê-las caso a migração precise rodar depois.
+  const legacyViews = useMemo(() => loadLegacyStore(user.id).views, [user.id]);
+  const [views, setViews] = useState<SavedView[]>([]);
+  const [viewsLoading, setViewsLoading] = useState(true);
+  const migratedRef = useRef(false);
+  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialPrefs.activeViewId);
+  const [autoSurface, setAutoSurface] = useState<boolean>(() => initialPrefs.autoSurface);
   const [viewsMgrOpen, setViewsMgrOpen] = useState(false);
   // Editor do gerenciador: editId = id da view em edição, "new" (criando) ou null (nada aberto).
   const [editId, setEditId] = useState<string | "new" | null>(null);
@@ -142,10 +177,51 @@ export function DashboardPage() {
     });
   }, [cameras]);
 
-  // Persiste views/seleção/auto-surface no localStorage (por usuário + host). Sem backend nesta frente.
+  // Persiste só as PREFS locais (seleção + auto-surface) no localStorage (por usuário + host).
+  // A LISTA de views é compartilhada e vive no backend (ver efeito de carga/migração abaixo).
   useEffect(() => {
-    try { localStorage.setItem(viewsKey(user.id), JSON.stringify({ views, activeViewId, autoSurface })); } catch { /* no-op */ }
-  }, [user.id, views, activeViewId, autoSurface]);
+    try { localStorage.setItem(viewPrefsKey(user.id), JSON.stringify({ activeViewId, autoSurface })); } catch { /* no-op */ }
+  }, [user.id, activeViewId, autoSurface]);
+
+  // Carga inicial das views compartilhadas + migração única do localStorage legado.
+  // • Sucesso com lista → usa o backend como fonte.
+  // • Sucesso VAZIO + views legadas → upload único (saveViews) e adota o resultado salvo.
+  // • Falha → degrada para lista vazia + toast (a central segue funcionando: "Todas as câmeras").
+  useEffect(() => {
+    let alive = true;
+    setViewsLoading(true);
+    getViews()
+      .then(async (remote) => {
+        if (!alive) return;
+        if (remote.length === 0 && legacyViews.length > 0 && !migratedRef.current) {
+          migratedRef.current = true; // garante upload único
+          try {
+            const saved = await saveViews(legacyViews);
+            if (alive) { setViews(saved); toast("Views locais migradas para o servidor (compartilhadas).", "ok"); }
+          } catch (e) {
+            console.error("[views] migração falhou", e);
+            if (alive) toast(e instanceof ApiError ? e.message : "Não foi possível migrar as views locais.", "alert");
+          }
+        } else {
+          setViews(remote);
+        }
+      })
+      .catch((e) => {
+        console.error("[views] carga falhou", e);
+        if (!alive) return;
+        setViews([]); // degrada sem quebrar a central
+        toast(e instanceof ApiError ? e.message : "Não foi possível carregar as views compartilhadas.", "alert");
+      })
+      .finally(() => { if (alive) setViewsLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // activeViewId inválido (view excluída por outro operador, migração falha, etc.) → "Todas".
+  useEffect(() => {
+    if (viewsLoading) return; // espera a lista chegar para não derrubar uma seleção válida
+    if (activeViewId != null && !views.some((v) => v.id === activeViewId)) setActiveViewId(null);
+  }, [viewsLoading, views, activeViewId]);
 
   // No auto-surface, reavalia a ordem a cada 15s para que a recência (decaimento) atualize o ranking
   // mesmo sem novos eventos chegando pelo socket.
@@ -300,23 +376,39 @@ export function DashboardPage() {
       const next = [...prev]; const tmp = next[i]; next[i] = next[j]; next[j] = tmp; return next;
     });
   }
+  // Salva a LISTA inteira no backend (PUT /api/views), otimista com rollback + toast em erro —
+  // mesmo padrão dos alarmes. `prev` é a lista antes da mudança (para reverter se a API falhar).
+  async function persistViews(next: SavedView[], prev: SavedView[], okMsg: string, okVariant: "ok" | "default" = "ok") {
+    setViews(next); // otimista
+    try {
+      const saved = await saveViews(next);
+      setViews(saved); // adota o que o servidor confirmou
+      toast(okMsg, okVariant);
+    } catch (e) {
+      setViews(prev); // rollback
+      toast(e instanceof ApiError ? e.message : "Não foi possível salvar as views.", "alert");
+    }
+  }
   function saveEditView() {
     const name = draftName.trim() || "View sem nome";
+    const prev = views;
     if (editId === "new") {
       const id = newViewId();
-      setViews((prev) => [...prev, { id, name, cameraIds: draftIds }]);
       setActiveViewId(id);
+      setEditId(null);
+      void persistViews([...prev, { id, name, cameraIds: draftIds }], prev, "View salva.");
     } else if (editId) {
-      setViews((prev) => prev.map((v) => (v.id === editId ? { ...v, name, cameraIds: draftIds } : v)));
+      setEditId(null);
+      void persistViews(prev.map((v) => (v.id === editId ? { ...v, name, cameraIds: draftIds } : v)), prev, "View salva.");
+    } else {
+      setEditId(null);
     }
-    setEditId(null);
-    toast("View salva.", "ok");
   }
   function deleteView(id: string) {
-    setViews((prev) => prev.filter((v) => v.id !== id));
+    const prev = views;
     setActiveViewId((cur) => (cur === id ? null : cur));
     if (editId === id) setEditId(null);
-    toast("View excluída.", "default");
+    void persistViews(prev.filter((v) => v.id !== id), prev, "View excluída.", "default");
   }
   const camLabel = (id: string): string => cameras.find((c) => c.id === id)?.label ?? id;
 
@@ -494,13 +586,14 @@ export function DashboardPage() {
         {/* Gerenciador de views por setor (Onda C · item 11) — criar/renomear/excluir + ordenar */}
         <Dialog open={viewsMgrOpen} onOpenChange={(o) => { setViewsMgrOpen(o); if (!o) setEditId(null); }}
           title="Views por setor"
-          description={<>Monte conjuntos de câmeras por setor (ex.: <b>Docas</b>, <b>Expedição</b>) e alterne rápido pelo seletor do cabeçalho. <b>Todas as câmeras</b> é a view padrão. Salvo neste navegador.</>}>
+          description={<>Monte conjuntos de câmeras por setor (ex.: <b>Docas</b>, <b>Expedição</b>) e alterne rápido pelo seletor do cabeçalho. <b>Todas as câmeras</b> é a view padrão. Compartilhadas entre todos os operadores (salvas no servidor).</>}>
           {editId === null ? (
             <div className="views-mgr">
               <div className="views-mgr__row views-mgr__row--all">
                 <div className="views-mgr__name"><b>Todas as câmeras</b><span className="muted">padrão · {cameras.length} câmera(s)</span></div>
               </div>
-              {views.length === 0 && <p className="empty-note">Nenhuma view salva ainda.</p>}
+              {viewsLoading && <p className="empty-note">Carregando views…</p>}
+              {!viewsLoading && views.length === 0 && <p className="empty-note">Nenhuma view salva ainda.</p>}
               {views.map((v) => (
                 <div key={`vrow-${v.id}`} className="views-mgr__row">
                   <div className="views-mgr__name"><b>{v.name}</b><span className="muted">{v.cameraIds.length} câmera(s)</span></div>

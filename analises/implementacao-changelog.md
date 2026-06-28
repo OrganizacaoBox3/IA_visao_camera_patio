@@ -92,9 +92,19 @@ Validação: `tsc` + `vite build` + `e2e 3/3` verdes; contrato de métricas conf
 - **Tela Saúde de alarmes** `src/routes/AlarmHealthPage.tsx` (novo), `alarm-health.css`, `api.ts`, `main.tsx`, `AppShell.tsx`: rota `/alarmes-saude` (link só p/ canConfigure), KPIs glanceable (taxa/min, % crítico com faixa-alvo EEMUA), distribuição por prioridade, gestão de shelves (criar/remover com curinga), auto-refresh 7s.
 - **Export de clipe** `src/camera/clipExport.ts` (novo), `cineBuffer.ts`, `CameraWorkspace.tsx`: "Exportar clipe" no modo revisão via MediaRecorder/WebM (fallback montagem PNG), download local efêmero (LGPD), liberação de recursos.
 
+## Onda E — Persistência de views/tripwires no backend (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` + `node --check` verdes.
+- **Camada de contrato** `server/camcfg.js` (novo), `index.js`, `schema.sql`, `src/api.ts`: store compartilhado (cache+Postgres+fallback JSON `camcfg.json`); `GET/PUT /api/views` (logado), `GET /api/tripwires/:cam` (logado) + `PUT` (perfil de engenharia); client `getViews/saveViews/getTripwires/saveTripwires`.
+- **Views (B-front)** `DashboardPage.tsx`: views compartilhadas via backend (antes localStorage), com migração única best-effort do legado; prefs locais (activeView/autoSurface) seguem em localStorage.
+- **Tripwires (B-front)** `CameraWorkspace.tsx`: tripwires por câmera compartilhados via backend, leitura p/ todos, escrita gated por canConfigure (PUT exige engenharia), migração única best-effort, salvar otimista com rollback.
+
+### "A confirmar" da Onda E
+- Concorrência multi-operador é last-write-wins (PUT da lista inteira); sem merge incremental.
+- Tripwires/views só recarregam ao abrir/trocar câmera ou no mount (sem polling/socket) — edições de outro turno aparecem na próxima abertura.
+
 ## Pendências para evolução futura (não bloqueantes)
-- Persistência de views/tripwires no backend (hoje localStorage) para compartilhar entre operadores/turnos.
 - Shelving/métricas de alarme são voláteis por processo (sem persistência/multi-instância).
+- Sincronização ao vivo (socket) de views/tripwires entre operadores (hoje só on-load).
 - **Validação visual em runtime** (sem ffmpeg/câmera real neste ambiente): só estático + e2e headless até aqui.
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).

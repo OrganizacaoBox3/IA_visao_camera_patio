@@ -21,7 +21,8 @@ import { predictAlertsPerDay } from "./report/predict";
 import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import { loadZones, saveZones, newZoneId, DEFAULT_GRID, ZONE_MODE_LABEL, type Zone, type ZoneMode } from "./zones";
 import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxNorm, anySet, clearMask, containsNorm, type Mask } from "./zoneMask";
-import { createCounter, createOccupancy, inwardNormal, type Tripwire, type Counter, type Occupancy, type TripwireCounts } from "./vision/counting";
+import { createCounter, createOccupancy, inwardNormal, type Counter, type Occupancy, type TripwireCounts } from "./vision/counting";
+import { getTripwires, saveTripwires, ApiError, type Tripwire } from "./api";
 import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
 import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
 import { clipSupport, recordClipWebm, buildMontagePng, triggerDownload, clipFileName, type ClipFrame } from "./camera/clipExport";
@@ -35,12 +36,15 @@ const BRUSH_OPTS = [{ value: "1", label: "1×" }, { value: "2", label: "2×" }, 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
 const HEAT_COLS = 32, HEAT_ROWS = 18;
 
-// ── Tripwires (linhas de contagem com direção) — persistência por câmera ──
-// Espelha o padrão de zones.ts: chave localStorage `vp-tripwires-<id>`, coords normalizadas 0..1.
+// ── Tripwires (linhas de contagem com direção) — fonte: BACKEND (compartilhado por câmera) ──
+// Antes viviam em localStorage (`vp-tripwires-<id>`); AGORA carregam/persistem via api.ts
+// (getTripwires/saveTripwires), compartilhados entre operadores/turnos. Coords normalizadas 0..1.
+// O localStorage permanece SÓ como origem de uma MIGRAÇÃO única best-effort (ver effect de load).
 const tripwireKey = (cameraId: string) => `vp-tripwires-${cameraId}`;
 let twSeq = 0;
 function newTripwireId(cameraId: string) { return `${cameraId}-tw${Date.now().toString(36)}${++twSeq}`; }
-function loadTripwires(cameraId: string): Tripwire[] {
+// Lê linhas LEGADAS do localStorage (somente p/ migração única; validação defensiva do shape).
+function loadLegacyTripwires(cameraId: string): Tripwire[] {
   let raw: unknown = null;
   try { const s = localStorage.getItem(tripwireKey(cameraId)); raw = s ? JSON.parse(s) : null; } catch { raw = null; }
   if (!Array.isArray(raw)) return [];
@@ -52,8 +56,9 @@ function loadTripwires(cameraId: string): Tripwire[] {
   }
   return out;
 }
-function saveTripwires(cameraId: string, wires: Tripwire[]) {
-  try { localStorage.setItem(tripwireKey(cameraId), JSON.stringify(wires)); } catch { /* no-op */ }
+// Remove a chave legada após migração bem-sucedida (best-effort; falha silenciosa).
+function clearLegacyTripwires(cameraId: string) {
+  try { localStorage.removeItem(tripwireKey(cameraId)); } catch { /* no-op */ }
 }
 
 // ── Tokens da FUNDAÇÃO (Onda A) resolvidos p/ o canvas ──
@@ -315,8 +320,30 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     const dom = dominantMode(z); const p = MODE_PRESETS[dom];
     setLayers({ ...p.layers }); setConf(p.confidenceThreshold); setActivePreset(dom);
   }, [cameraId, label]);
-  // Tripwires: carrega as linhas persistidas ao abrir a câmera (somente leitura p/ operador; edição gated).
-  useEffect(() => { setTripwires(loadTripwires(cameraId)); setTripwireMode(false); }, [cameraId]);
+  // Tripwires: carrega do BACKEND ao abrir/trocar a câmera (compartilhado; leitura p/ todos).
+  // Robustez: se o load falhar, degrada p/ lista vazia (contagem/heatmap seguem). Migração única
+  // best-effort: se o backend vier vazio E houver legado em localStorage E o usuário puder configurar
+  // (PUT exige engenharia), sobe o legado uma vez e limpa a chave local. Sem canConfigure, só usa o
+  // backend (nada se perde: o legado permanece no localStorage até alguém com permissão migrar).
+  useEffect(() => {
+    let cancelled = false;
+    setTripwireMode(false);
+    (async () => {
+      let list: Tripwire[] = [];
+      try { list = await getTripwires(cameraId); }
+      catch (e) { console.error("[tripwires] load falhou — degradando p/ lista vazia", e); list = []; }
+      if (cancelled) return;
+      if (list.length === 0 && canConfigure) {
+        const legacy = loadLegacyTripwires(cameraId);
+        if (legacy.length) {
+          try { const saved = await saveTripwires(cameraId, legacy); if (cancelled) return; list = saved; clearLegacyTripwires(cameraId); }
+          catch (e) { if (cancelled) return; console.error("[tripwires] migração best-effort falhou — usando legado nesta sessão", e); list = legacy; }
+        }
+      }
+      if (!cancelled) setTripwires(list);
+    })();
+    return () => { cancelled = true; };
+  }, [cameraId, canConfigure]);
   // Re-set da geometria no counter quando as linhas mudam (preserva contadores por id) + reflete no painel.
   useEffect(() => {
     tripwiresRef.current = tripwires;
@@ -942,12 +969,22 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     const a = { x: cl((d.sx - cr.x) / cr.w), y: cl((d.sy - cr.y) / cr.h) };
     const b = { x: cl((d.cx - cr.x) / cr.w), y: cl((d.cy - cr.y) / cr.h) };
     const w: Tripwire = { id: newTripwireId(cameraId), a, b };
-    setTripwires((p) => persistTw([...p, w]));
+    const prev = tripwires; persistTw([...prev, w], prev);
   }
-  function persistTw(next: Tripwire[]): Tripwire[] { saveTripwires(cameraId, next); return next; }
+  // Persiste no BACKEND de forma OTIMISTA: aplica `next` já, e em erro faz rollback p/ `prev` +
+  // toast (via onAlert). O PUT exige perfil de engenharia no backend; estas ações já estão gated
+  // por canConfigure no front, então um 403 só aparece em borda (ex.: perfil revogado) — tratado.
+  function persistTw(next: Tripwire[], prev: Tripwire[]) {
+    setTripwires(next); // otimista (o counter re-seta via effect; preserva contadores por id)
+    saveTripwires(cameraId, next).catch((e) => {
+      setTripwires(prev); // rollback
+      const msg = e instanceof ApiError ? e.message : "Não foi possível salvar as linhas de contagem.";
+      onAlertRef.current?.(`⚠ ${label}: ${msg}`);
+    });
+  }
   // Inverte a direção (troca a↔b → Entrada↔Saída). O counter preserva contadores por id ao re-setar.
-  function invertTripwire(id: string) { setTripwires((p) => persistTw(p.map((w) => (w.id === id ? { id: w.id, a: w.b, b: w.a } : w)))); }
-  function removeTripwire(id: string) { setTripwires((p) => persistTw(p.filter((w) => w.id !== id))); }
+  function invertTripwire(id: string) { const prev = tripwires; persistTw(prev.map((w) => (w.id === id ? { id: w.id, a: w.b, b: w.a } : w)), prev); }
+  function removeTripwire(id: string) { const prev = tripwires; persistTw(prev.filter((w) => w.id !== id), prev); }
   // Zera os contadores da SESSÃO (geometria mantida); reflete no HUD e no painel.
   function resetCounts() {
     counterRef.current?.reset();
