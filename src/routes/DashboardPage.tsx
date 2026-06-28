@@ -136,12 +136,25 @@ export function DashboardPage() {
   }
 
   // Estado de conexão por câmera (contrato A4). Sem evento `camera-status` → assume "online".
-  function statusInfo(id: string): { dot: string; text: string; fps?: number } {
+  // "Going gray" (Onda A): base neutra/cinza; cor saturada SÓ para anormalidade. Mapa de tokens
+  // (src/index.css · estado→token): online→neutral (operação normal, evita "árvore de natal");
+  // connecting→info (azul, advisory não-crítico); error→critical (vermelho); stopped→neutral-dim
+  // (cinza apagado). dot = realce; border = borda discreta por estado (glanceable à distância).
+  function statusInfo(id: string): { text: string; dot: string; border: string; fps?: number } {
     const s = statuses[id];
-    if (!s) return { dot: "on", text: "online" };
-    const dot = s.state === "online" ? "on" : s.state === "connecting" ? "connecting" : "error";
-    const text = s.state === "online" ? "online" : s.state === "connecting" ? "conectando…" : s.state === "stopped" ? "parada" : "erro";
-    return { dot, text, fps: s.fps };
+    const state = s?.state ?? "online";
+    const text = state === "online" ? "online" : state === "connecting" ? "conectando…" : state === "stopped" ? "parada" : "erro";
+    const dot =
+      state === "connecting" ? "var(--state-info)"
+      : state === "error" ? "var(--state-critical)"
+      : state === "stopped" ? "var(--state-neutral-dim)"
+      : "var(--state-neutral)"; // online (normal) → neutro, sem cor de alarme
+    const border =
+      state === "connecting" ? "var(--state-info-border)"
+      : state === "error" ? "var(--state-critical-border)"
+      : state === "stopped" ? "var(--state-neutral-border)"
+      : "var(--state-neutral-border)";
+    return { text, dot, border, fps: s?.fps };
   }
 
   function renderTile(c: Camera) {
@@ -156,9 +169,10 @@ export function DashboardPage() {
         {inner}
         <span
           title={statuses[c.id]?.lastError || st.text}
-          style={{ position: "absolute", top: 6, left: 6, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", fontSize: 11, background: "rgba(5,8,12,0.7)", color: "#e6edf3", padding: "2px 7px", borderRadius: 999, pointerEvents: "none" }}
+          style={{ position: "absolute", top: 6, left: 6, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", fontSize: 11, background: "var(--cam-overlay-scrim)", color: "var(--cam-overlay-fg)", border: `1px solid ${st.border}`, padding: "2px 7px", borderRadius: 999, pointerEvents: "none" }}
         >
-          <span className={`dot-status ${st.dot}`} />
+          {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
+          <span className="dot-status" style={{ background: st.dot }} />
           {st.text}{st.fps != null ? ` · ${st.fps}fps` : ""}
         </span>
       </div>

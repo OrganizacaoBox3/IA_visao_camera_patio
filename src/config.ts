@@ -55,6 +55,21 @@ export const APP_CONFIG = {
       ((import.meta.env as Record<string, string | undefined>).VITE_DEMO_MODE === "1"),
   },
 
+  // OVERLAY da câmera ao vivo (Onda A — fundação consumida pela Onda 2/CameraWorkspace).
+  //   confidenceThreshold: slider GLOBAL de confiança (0..1) p/ filtrar o que é desenhado.
+  //   layers: toggles das camadas sobre o vídeo (caixas, máscara, zonas, heatmap).
+  // Os casts `as number`/`as boolean` mantêm os tipos largos (não literais) p/ que o
+  // CameraWorkspace possa atualizar os valores em estado/UI sem conflito de tipos.
+  overlay: {
+    confidenceThreshold: 0.5 as number,
+    layers: {
+      boxes: true as boolean,
+      mask: true as boolean,
+      zones: true as boolean,
+      heatmap: false as boolean,
+    },
+  },
+
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS
   // (inferência + decode + draw). Limita CPU/GPU com N câmeras (não roda inferência de todos).
   dashboard: {
@@ -177,3 +192,7 @@ export const APP_CONFIG = {
 } as const;
 
 export type ZoneSeed = (typeof APP_CONFIG.defaultZones)[number];
+
+// Overlay (Onda A) — tipos exportados p/ a Onda 2 (CameraWorkspace) consumir.
+export type OverlayLayers = typeof APP_CONFIG.overlay.layers;
+export type OverlayConfig = typeof APP_CONFIG.overlay;

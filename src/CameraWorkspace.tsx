@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { APP_CONFIG } from "./config";
+import { APP_CONFIG, type OverlayLayers } from "./config";
 import { type FrameSource } from "./frame";
 import { fmtDuration, fmtLimit, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame } from "./vision/detect";
 import { requestInference } from "./vision/scheduler";
-import { AtividadeProcessor, STATE_COLOR, ACTIVITIES, type AtividadeCtx, type ZoneView } from "./processors/atividade";
+import { AtividadeProcessor, ACTIVITIES, type AtividadeCtx, type ZoneView, type ZoneState } from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
 import { FadigaProcessor, type FadigaModelState } from "./processors/fadiga";
@@ -15,14 +15,60 @@ import { type RiskState } from "./fadiga/landmarks";
 import { type FadigaScene } from "./fadiga/draw";
 import { type ObjDetection } from "./objects/detector";
 import { pushRead, pushPass } from "./reading/cluster";
-import { recordSamples, recordAlert, recordReads, recordPass, recordObjectSamples, recordObjectEvent, recordFadigaSamples, recordFadigaEvent, type ZoneSample } from "./report/store";
+import { recordSamples, recordAlert, recordReads, recordPass, recordObjectSamples, recordObjectEvent, recordFadigaSamples, recordFadigaEvent, loadDataset, type ZoneSample } from "./report/store";
+import { type Dataset } from "./report/mock";
+import { predictAlertsPerDay } from "./report/predict";
 import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import { loadZones, saveZones, newZoneId, DEFAULT_GRID, ZONE_MODE_LABEL, type Zone, type ZoneMode } from "./zones";
 import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxNorm, anySet, clearMask, containsNorm, type Mask } from "./zoneMask";
-import { Button, IconButton, Input, Select, Slider, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
+import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
 
 const MODO_OPTS = [{ value: "atividade", label: "Atividade" }, { value: "leitura", label: "Leitura" }, { value: "objetos", label: "Objetos" }, { value: "fadiga", label: "Fadiga" }];
 const BRUSH_OPTS = [{ value: "1", label: "1×" }, { value: "2", label: "2×" }, { value: "3", label: "3×" }];
+
+// Grade do heatmap de ocupação (camada opcional sobre o vídeo).
+const HEAT_COLS = 32, HEAT_ROWS = 18;
+
+// ── Tokens da FUNDAÇÃO (Onda A) resolvidos p/ o canvas ──
+// O canvas precisa de cores literais; lemos as CSS vars de :root (index.css) e cacheamos.
+// Assim a tela de câmera CONSOME os tokens em vez de cores hardcoded ("going gray").
+const _cssCache = new Map<string, string>();
+function cssVar(name: string, fallback: string): string {
+  let v = _cssCache.get(name);
+  if (v === undefined) {
+    try { v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch { v = ""; }
+    if (!v) v = fallback;
+    _cssCache.set(name, v);
+  }
+  return v;
+}
+// Going-gray: estado de ATIVIDADE → token semântico (canvas).
+// ATIVA→neutral · LENTA/OCIOSA→warn · VAZIA→neutral-dim · ALERTA→critical.
+function stateCanvasColor(s: ZoneState): string {
+  switch (s) {
+    case "ALERTA": return cssVar("--state-critical", "#ef4444");
+    case "OCIOSA":
+    case "LENTA": return cssVar("--state-warn", "#eab308");
+    case "VAZIA": return cssVar("--state-neutral-dim", "#5b6b7a");
+    default: return cssVar("--state-neutral", "#64748b"); // ATIVA (normal → neutro)
+  }
+}
+// Mesma semântica p/ inline styles do painel lateral (var() resolvido pelo CSS).
+function stateVar(s: ZoneState): string {
+  switch (s) {
+    case "ALERTA": return "var(--state-critical)";
+    case "OCIOSA":
+    case "LENTA": return "var(--state-warn)";
+    case "VAZIA": return "var(--state-neutral-dim)";
+    default: return "var(--state-neutral)";
+  }
+}
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const s = (h.length === 3 ? h.split("").map((c) => c + c).join("") : h).slice(0, 6);
+  const n = parseInt(s || "000000", 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
 
 // CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
 // Roda o processador de cada zona na sua ROI, compõe o overlay e o painel num lugar só.
@@ -44,13 +90,17 @@ type ZoneResult =
 
 type Holder = { modo: ZoneMode; proc: AtividadeProcessor | LeituraProcessor | ObjetosProcessor | FadigaProcessor };
 
-// risco → cor/rótulo (espelha o RISK_CLS da FadigaView, na linguagem semântica das zonas)
-const RISK_COLOR: Record<RiskState, string> = { OK: "#22c55e", ALERTA_FADIGA: "#eab308", ALERTA_CELULAR: "#eab308", ALERTA_DUPLO: "#ef4444" };
+// risco → cor/rótulo (going-gray: OK normal → neutro; fadiga/celular → warn; duplo → critical)
+function riskCanvasColor(r: RiskState): string {
+  return r === "ALERTA_DUPLO" ? cssVar("--state-critical", "#ef4444")
+    : r === "OK" ? cssVar("--state-neutral", "#64748b")
+    : cssVar("--state-warn", "#eab308");
+}
 const RISK_LABEL: Record<RiskState, string> = { OK: "OK", ALERTA_FADIGA: "Fadiga", ALERTA_CELULAR: "Celular", ALERTA_DUPLO: "Duplo" };
 const RISK_TONE: Record<RiskState, Tone> = { OK: "ok", ALERTA_FADIGA: "warn", ALERTA_CELULAR: "warn", ALERTA_DUPLO: "alert" };
 
 // taxa de leitura → cor (verde ≥95 · âmbar ≥80 · vermelho abaixo). Espelha a semântica do relatório.
-function rateColor(pct: number): string { return pct >= 95 ? "#22c55e" : pct >= 80 ? "#eab308" : "#ef4444"; }
+function rateColor(pct: number): string { return pct >= 95 ? "var(--state-ok)" : pct >= 80 ? "var(--state-warn)" : "var(--state-critical)"; }
 const MODE_TONE: Record<ZoneMode, Tone> = { atividade: "ok", leitura: "info", objetos: "warn", fadiga: "info" };
 
 // Overlay compacto de fadiga DENTRO do retângulo da zona (olhos/boca + bbox de celular).
@@ -70,7 +120,7 @@ function drawFadigaZone(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
     ctx.strokeRect(x + (s.phone.x / vw) * w, y + (s.phone.y / vh) * h, (s.phone.width / vw) * w, (s.phone.height / vh) * h);
   }
 }
-type Track = { id: number; cx: number; cy: number; bbox: [number, number, number, number]; firstSeen: number; lastSeen: number; zone: string | null };
+type Track = { id: number; cx: number; cy: number; bbox: [number, number, number, number]; firstSeen: number; lastSeen: number; zone: string | null; score: number };
 type TimelineItem = { id: number; ts: number; text: string; sev: "info" | "warn" | "high" };
 
 type Props = {
@@ -120,6 +170,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const peakRef = useRef(0);
   const pausedRef = useRef(false);
   const eventIdRef = useRef(0);
+  const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers });   // camadas visíveis (lido no rAF)
+  const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold);       // limiar global de confiança
+  const heatRef = useRef<Float32Array | null>(null);                            // acúmulo do heatmap de ocupação
 
   const [zones, setZones] = useState<Zone[]>([]);
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
@@ -131,15 +184,34 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const [perf, setPerf] = useState({ fps: 0 });
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
-  const [drawerTab, setDrawerTab] = useState<"zonas" | "timeline" | "presenca">("zonas");
+  const [drawerTab, setDrawerTab] = useState<"zonas" | "timeline" | "presenca" | "camadas">("zonas");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
+  // Onda 2: camadas + slider de confiança (estado local; inicia de APP_CONFIG.overlay).
+  const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
+  const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
+  // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
+  const [histDataset, setHistDataset] = useState<Dataset | null>(null);
+  const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
   useEffect(() => { onAlertRef.current = onAlert; }, [onAlert]);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { cfgOpenRef.current = !!cfgZoneId; }, [cfgZoneId]);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { zonesRef.current = zones; }, [zones]);
+  useEffect(() => { layersRef.current = layers; }, [layers]);
+  useEffect(() => { confRef.current = conf; }, [conf]);
   useEffect(() => { const z = loadZones(cameraId, label); setZones(z); }, [cameraId, label]);
+  // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
+  useEffect(() => {
+    const z = cfgZoneId ? zonesRef.current.find((zz) => zz.id === cfgZoneId) : null;
+    if (!z || z.modo !== "atividade") { setHistState("idle"); return; }
+    let cancelled = false;
+    setHistState("loading");
+    loadDataset()
+      .then((ds) => { if (!cancelled) { setHistDataset(ds); setHistState("ready"); } })
+      .catch(() => { if (!cancelled) setHistState("error"); });
+    return () => { cancelled = true; };
+  }, [cfgZoneId]);
   useEffect(() => { ensureDetectClient(); }, []);
   useEffect(() => { const m = holdersRef.current; return () => { m.forEach((h) => h.proc.dispose()); m.clear(); }; }, []);
 
@@ -204,13 +276,14 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     const persons = dets.filter((d) => d.class === "person" && d.score >= P.scoreThreshold).map((d) => ({
       cx: (d.bbox[0] + d.bbox[2] / 2) / vidW, cy: (d.bbox[1] + d.bbox[3] / 2) / vidH,
       bbox: [d.bbox[0] / vidW, d.bbox[1] / vidH, d.bbox[2] / vidW, d.bbox[3] / vidH] as [number, number, number, number],
+      score: d.score,
     }));
     const used = new Set<number>();
     for (const p of persons) {
       let best: Track | null = null; let bestD: number = P.trackMaxDist;
       for (const t of tracksRef.current) { if (used.has(t.id)) continue; const d = Math.hypot(t.cx - p.cx, t.cy - p.cy); if (d < bestD) { bestD = d; best = t; } }
-      if (best) { used.add(best.id); best.cx = p.cx; best.cy = p.cy; best.bbox = p.bbox; best.lastSeen = now; best.zone = zoneAtAtiv(ativ, p.cx, p.cy); }
-      else tracksRef.current.push({ id: ++trackIdRef.current, cx: p.cx, cy: p.cy, bbox: p.bbox, firstSeen: now, lastSeen: now, zone: zoneAtAtiv(ativ, p.cx, p.cy) });
+      if (best) { used.add(best.id); best.cx = p.cx; best.cy = p.cy; best.bbox = p.bbox; best.lastSeen = now; best.zone = zoneAtAtiv(ativ, p.cx, p.cy); best.score = p.score; }
+      else tracksRef.current.push({ id: ++trackIdRef.current, cx: p.cx, cy: p.cy, bbox: p.bbox, firstSeen: now, lastSeen: now, zone: zoneAtAtiv(ativ, p.cx, p.cy), score: p.score });
     }
     tracksRef.current = tracksRef.current.filter((t) => now - t.lastSeen <= P.trackTimeoutMs);
   }
@@ -276,6 +349,17 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       if (ativ.length) updateTracks(dets, ativ, f.w, f.h, now);
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
+
+      // Heatmap de ocupação (camada opcional): acumula a posição das pessoas com decaimento.
+      if (layersRef.current.heatmap) {
+        const heat = heatRef.current ?? (heatRef.current = new Float32Array(HEAT_COLS * HEAT_ROWS));
+        for (let i = 0; i < heat.length; i++) heat[i] *= 0.97;
+        for (const t of tracks) {
+          const c = Math.min(HEAT_COLS - 1, Math.max(0, Math.floor(t.cx * HEAT_COLS)));
+          const rr = Math.min(HEAT_ROWS - 1, Math.max(0, Math.floor(t.cy * HEAT_ROWS)));
+          const k = rr * HEAT_COLS + c; heat[k] = Math.min(6, heat[k] + 0.6);
+        }
+      }
 
       const sampleFlow = now - lastFlowAtRef.current > 500;
       const recEmit = now - lastRecAtRef.current > 3000;
@@ -349,60 +433,95 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
     const detailed = mode === "full";
 
-    // pessoas (tracks anônimos) — Presença
-    ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(56,189,248,0.85)";
-    for (const t of tracksRef.current) {
-      const x = cr.x + t.bbox[0] * cr.w, y = cr.y + t.bbox[1] * cr.h, w = t.bbox[2] * cr.w, h = t.bbox[3] * cr.h;
-      ctx.strokeRect(x, y, w, h);
-      const inspecting = pausedRef.current && detailed;
-      const tag = inspecting ? `Pessoa ${t.id} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}` : `Pessoa ${t.id}`;
-      ctx.font = inspecting ? "bold 12px ui-sans-serif, system-ui" : "10px monospace";
-      const tw = ctx.measureText(tag).width + 8;
-      ctx.fillStyle = "rgba(5,8,12,0.82)"; ctx.fillRect(x, y - 15, tw, 14);
-      ctx.fillStyle = "#bae6fd"; ctx.fillText(tag, x + 4, y - 4);
+    // Heatmap de ocupação (camada) — desenhado sob as geometrias, com ramp warn→critical (tokens).
+    if (layersRef.current.heatmap && heatRef.current) {
+      const heat = heatRef.current;
+      let max = 0; for (let i = 0; i < heat.length; i++) if (heat[i] > max) max = heat[i];
+      if (max > 0.05) {
+        const cw = cr.w / HEAT_COLS, ch = cr.h / HEAT_ROWS;
+        const warn = hexToRgb(cssVar("--state-warn", "#eab308"));
+        const crit = hexToRgb(cssVar("--state-critical", "#ef4444"));
+        for (let rr = 0; rr < HEAT_ROWS; rr++) for (let cc = 0; cc < HEAT_COLS; cc++) {
+          const v = heat[rr * HEAT_COLS + cc] / max; if (v < 0.05) continue;
+          const R = Math.round(warn[0] + (crit[0] - warn[0]) * v);
+          const G = Math.round(warn[1] + (crit[1] - warn[1]) * v);
+          const B = Math.round(warn[2] + (crit[2] - warn[2]) * v);
+          ctx.fillStyle = `rgba(${R},${G},${B},${(0.12 + 0.45 * v).toFixed(3)})`;
+          ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
+        }
+      }
+    }
+
+    // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
+    if (layersRef.current.boxes) {
+      ctx.lineWidth = 1.5;
+      const personStroke = cssVar("--state-info", "#38bdf8");
+      const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
+      const personFg = cssVar("--state-info-fg", "#bae6fd");
+      for (const t of tracksRef.current) {
+        ctx.globalAlpha = t.score < confRef.current ? 0.3 : 1;
+        const x = cr.x + t.bbox[0] * cr.w, y = cr.y + t.bbox[1] * cr.h, w = t.bbox[2] * cr.w, h = t.bbox[3] * cr.h;
+        ctx.strokeStyle = personStroke; ctx.strokeRect(x, y, w, h);
+        const inspecting = pausedRef.current && detailed;
+        const tag = inspecting ? `Pessoa ${t.id} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}` : `Pessoa ${t.id}`;
+        ctx.font = inspecting ? "bold 12px ui-sans-serif, system-ui" : "10px monospace";
+        const tw = ctx.measureText(tag).width + 8;
+        ctx.fillStyle = scrim; ctx.fillRect(x, y - 15, tw, 14);
+        ctx.fillStyle = personFg; ctx.fillText(tag, x + 4, y - 4);
+      }
+      ctx.globalAlpha = 1;
     }
 
     for (const z of zonesRef.current) {
       const x = cr.x + z.x * cr.w, y = cr.y + z.y * cr.h, w = z.w * cr.w, h = z.h * cr.h;
       const r = resultsRef.current.get(z.id);
-      let color = "#94a3b8"; let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
-      if (r?.modo === "atividade") { color = STATE_COLOR[r.view.state]; label2 = `${z.label} · ${r.view.state} · ${r.view.people}p`; }
-      else if (r?.modo === "leitura") { color = "#38bdf8"; label2 = `${z.label} · ${r.lastCode ?? "leitura…"}`; }
+      let color = cssVar("--state-neutral", "#64748b"); let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
+      if (r?.modo === "atividade") { color = stateCanvasColor(r.view.state); label2 = `${z.label} · ${r.view.state} · ${r.view.people}p`; }
+      else if (r?.modo === "leitura") { color = cssVar("--state-info", "#38bdf8"); label2 = `${z.label} · ${r.lastCode ?? "leitura…"}`; }
       else if (r?.modo === "objetos") {
-        color = "#f59e0b";
+        color = cssVar("--state-neutral", "#64748b"); // contagem = operação normal (going-gray); classes mantêm cor categórica
         const parts = Object.entries(r.counts).filter(([, n]) => n > 0).map(([k, n]) => `${objClass(k)?.emoji ?? ""}${n}`);
         label2 = `${z.label} · ${parts.length ? parts.join(" ") : "0"}`;
-        for (const d of r.dets) {
-          const cx = d.bbox[0] + d.bbox[2] / 2, cy = d.bbox[1] + d.bbox[3] / 2;
-          if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
-          const oc = objClass(d.key); const cc = oc?.color ?? "#f59e0b";
-          const bx = cr.x + d.bbox[0] * cr.w, by = cr.y + d.bbox[1] * cr.h;
-          ctx.lineWidth = 1.5; ctx.strokeStyle = cc; ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);
-          if (detailed) { // rótulo da classe acima da bbox (só no modo cheio, p/ não poluir o tile)
-            const tag = `${oc?.emoji ?? ""} ${oc?.label ?? d.key}`;
-            ctx.font = "10px ui-sans-serif, system-ui"; const tw = ctx.measureText(tag).width + 6;
-            ctx.fillStyle = "rgba(5,8,12,0.82)"; ctx.fillRect(bx, by - 13, tw, 12);
-            ctx.fillStyle = cc; ctx.fillText(tag, bx + 3, by - 4);
+        if (layersRef.current.boxes) {
+          const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
+          for (const d of r.dets) {
+            if (d.score < confRef.current) continue; // slider global de confiança filtra detecções
+            const cx = d.bbox[0] + d.bbox[2] / 2, cy = d.bbox[1] + d.bbox[3] / 2;
+            if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
+            const oc = objClass(d.key); const cc = oc?.color ?? color;
+            const bx = cr.x + d.bbox[0] * cr.w, by = cr.y + d.bbox[1] * cr.h;
+            ctx.lineWidth = 1.5; ctx.strokeStyle = cc; ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);
+            if (detailed) { // rótulo da classe acima da bbox (só no modo cheio, p/ não poluir o tile)
+              const tag = `${oc?.emoji ?? ""} ${oc?.label ?? d.key}`;
+              ctx.font = "10px ui-sans-serif, system-ui"; const tw = ctx.measureText(tag).width + 6;
+              ctx.fillStyle = scrim; ctx.fillRect(bx, by - 13, tw, 12);
+              ctx.fillStyle = cc; ctx.fillText(tag, bx + 3, by - 4);
+            }
           }
         }
       }
-      else if (r?.modo === "fadiga") { color = RISK_COLOR[r.risk]; label2 = `${z.label} · ${RISK_LABEL[r.risk]}${r.ear != null ? ` · EAR ${r.ear.toFixed(2)}` : ""}${r.phone ? " · 📱" : ""}`; }
+      else if (r?.modo === "fadiga") { color = riskCanvasColor(r.risk); label2 = `${z.label} · ${RISK_LABEL[r.risk]}${r.ear != null ? ` · EAR ${r.ear.toFixed(2)}` : ""}${r.phone ? " · 📱" : ""}`; }
       const mask = getMask(z);
+      const hasMask = !!(mask && anySet(mask));
       const alerting = r?.modo === "atividade" && r.view.state === "ALERTA";
-      if (mask && anySet(mask)) {
-        // área irregular: pinta as células marcadas na cor do modo
-        const cw = cr.w / mask.cols, ch = cr.h / mask.rows;
-        ctx.fillStyle = color + (alerting ? "3a" : "26");
-        for (let rr = 0; rr < mask.rows; rr++) for (let cc = 0; cc < mask.cols; cc++) if (mask.bits[rr * mask.cols + cc]) ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
-        ctx.lineWidth = alerting ? 2 : 1; ctx.strokeStyle = color; ctx.strokeRect(x, y, w, h); // contorno sutil da bbox
-      } else {
+      if (hasMask && mask) {
+        // área irregular: pinta as células marcadas na cor do modo (camada "máscara")
+        if (layersRef.current.mask) {
+          const cw = cr.w / mask.cols, ch = cr.h / mask.rows;
+          ctx.fillStyle = color + (alerting ? "3a" : "26");
+          for (let rr = 0; rr < mask.rows; rr++) for (let cc = 0; cc < mask.cols; cc++) if (mask.bits[rr * mask.cols + cc]) ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
+        }
+        if (layersRef.current.zones) { ctx.lineWidth = alerting ? 2 : 1; ctx.strokeStyle = color; ctx.strokeRect(x, y, w, h); } // contorno da bbox
+      } else if (layersRef.current.zones) {
         ctx.lineWidth = alerting ? 3 : 2; ctx.strokeStyle = color; ctx.fillStyle = color + "1f";
         ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
       }
-      ctx.font = "bold 11px ui-sans-serif, system-ui"; const tw = ctx.measureText(label2).width + 10;
-      ctx.fillStyle = "rgba(5,8,12,0.8)"; ctx.fillRect(x, y, tw, 17); ctx.fillStyle = color; ctx.fillText(label2, x + 5, y + 12);
-      if (detailed && r?.modo === "atividade" && r.view.state !== "ATIVA" && r.view.state !== "LENTA") { ctx.font = "10px monospace"; ctx.fillStyle = "#cbd5e1"; ctx.fillText(`parada ${fmtDuration(r.view.idleMs)}`, x + 5, y + 28); }
-      if (detailed && r?.modo === "fadiga") drawFadigaZone(ctx, x, y, w, h, r.scene);
+      if (layersRef.current.zones) {
+        ctx.font = "bold 11px ui-sans-serif, system-ui"; const tw = ctx.measureText(label2).width + 10;
+        ctx.fillStyle = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)"); ctx.fillRect(x, y, tw, 17); ctx.fillStyle = color; ctx.fillText(label2, x + 5, y + 12);
+        if (detailed && r?.modo === "atividade" && r.view.state !== "ATIVA" && r.view.state !== "LENTA") { ctx.font = "10px monospace"; ctx.fillStyle = cssVar("--cam-overlay-fg", "#cbd5e1"); ctx.fillText(`parada ${fmtDuration(r.view.idleMs)}`, x + 5, y + 28); }
+      }
+      if (layersRef.current.boxes && detailed && r?.modo === "fadiga") drawFadigaZone(ctx, x, y, w, h, r.scene);
     }
 
     // grade de pintura (ao editar a máscara de uma zona)
@@ -493,14 +612,14 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     const out: { color: string; label: string }[] = [];
     const modes = new Set(zones.map((z) => z.modo));
     if (modes.has("atividade")) {
-      out.push({ color: STATE_COLOR.ATIVA, label: "Ativa" }, { color: STATE_COLOR.LENTA, label: "Lenta" }, { color: STATE_COLOR.OCIOSA, label: "Ociosa" }, { color: STATE_COLOR.ALERTA, label: "Alerta" }, { color: "#38bdf8", label: "Pessoa" });
+      out.push({ color: "var(--state-neutral)", label: "Ativa" }, { color: "var(--state-warn)", label: "Lenta/Ociosa" }, { color: "var(--state-critical)", label: "Alerta" }, { color: "var(--state-info)", label: "Pessoa" });
     }
-    if (modes.has("leitura")) out.push({ color: "#38bdf8", label: "Faixa de leitura" });
+    if (modes.has("leitura")) out.push({ color: "var(--state-info)", label: "Faixa de leitura" });
     if (modes.has("objetos")) {
       const keys = new Set(zones.filter((z) => z.modo === "objetos").flatMap((z) => z.selectedClasses));
       for (const k of keys) { const o = objClass(k); if (o) out.push({ color: o.color, label: o.label }); }
     }
-    if (modes.has("fadiga")) out.push({ color: "#22c55e", label: "OK" }, { color: "#eab308", label: "Alerta" }, { color: "#ef4444", label: "Duplo" });
+    if (modes.has("fadiga")) out.push({ color: "var(--state-neutral)", label: "OK" }, { color: "var(--state-warn)", label: "Alerta" }, { color: "var(--state-critical)", label: "Duplo" });
     return out;
   })();
   const cfgZone = cfgZoneId ? zones.find((z) => z.id === cfgZoneId) ?? null : null;
@@ -537,11 +656,11 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
         </>)}
       </header>
 
-      <div className={`cam-stage ${drawMode || paintZone ? "draw-cursor" : ""}`} ref={viewportRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onContextMenu={(e) => { if (paintZone) e.preventDefault(); }}>
+      <div className={`cam-stage ${drawMode || paintZone ? "draw-cursor" : ""}`} ref={viewportRef} style={{ background: "var(--cam-surface-bg)" }} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onContextMenu={(e) => { if (paintZone) e.preventDefault(); }}>
         <canvas className="overlay" ref={canvasRef} />
-        <aside className="cam-drawer">
-          <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "timeline" | "presenca")} ariaLabel="Aba do painel"
-            options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
+        <aside className="cam-drawer" style={{ background: "var(--cam-panel-bg)", color: "var(--cam-panel-fg)", borderLeftColor: "var(--cam-panel-border)" }}>
+          <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
+            options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
           <div style={{ height: "var(--sp-2)" }} />
           <div className="drawer-body">
             {drawerTab === "zonas" && zones.length === 0 && <p className="empty-note">Use “✎ Zona” para desenhar uma área e escolher o modo.</p>}
@@ -558,12 +677,12 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
 
                 {z.modo === "atividade" && (r?.modo === "atividade" ? (<>
                   <div className="kpis ws-kpis">
-                    <div className="kpi"><div className="v" style={{ color: STATE_COLOR[r.view.state], fontSize: 13 }}>{r.view.state}</div><div className="l">estado</div></div>
+                    <div className="kpi"><div className="v" style={{ color: stateVar(r.view.state), fontSize: 13 }}>{r.view.state}</div><div className="l">estado</div></div>
                     <div className="kpi"><div className="v">{r.view.people}</div><div className="l">pessoas</div></div>
                     <div className="kpi"><div className="v">{fmtDuration(r.view.idleMs)}</div><div className="l">parada</div></div>
                   </div>
                   <div className="zone-flow"><span>Fluxo</span><span className={`flow-chip ${r.view.flowLevel}`}>{r.view.flowLevel}</span><span className="spark">{r.view.flow.map((s, i) => <i key={i} style={{ height: `${Math.max(6, Math.round(s * 100))}%` }} />)}</span></div>
-                  <div className="bar"><i style={{ width: `${Math.round(r.view.motion * 100)}%`, background: STATE_COLOR[r.view.state] }} /></div>
+                  <div className="bar"><i style={{ width: `${Math.round(r.view.motion * 100)}%`, background: stateVar(r.view.state) }} /></div>
                 </>) : <p className="ws-wait">iniciando…</p>)}
 
                 {z.modo === "leitura" && (<>
@@ -617,6 +736,21 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
               </div>
               <p className="empty-note" style={{ marginTop: 8 }}>Pessoas recebem ID efêmero (sem identidade); reseta por sessão.{paused ? " ⏸ Pausado: rótulos com tempo em cena." : ""}</p>
             </>)}
+
+            {drawerTab === "camadas" && (<>
+              {([["boxes", "Caixas / detecções"], ["mask", "Máscara (área pintada)"], ["zones", "Zonas (retângulos)"], ["heatmap", "Heatmap de ocupação"]] as [keyof OverlayLayers, string][]).map(([k, lbl]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid var(--cam-panel-border)" }}>
+                  <span>{lbl}</span>
+                  <Switch checked={layers[k]} onCheckedChange={(v) => setLayers((s) => ({ ...s, [k]: v }))} ariaLabel={lbl} />
+                </div>
+              ))}
+              <div style={{ marginTop: "var(--sp-3)" }}>
+                <Field label={`Confiança mínima · ${Math.round(conf * 100)}%`} hint="Filtra/atenua detecções abaixo do limiar sobre o vídeo (em tempo real).">
+                  <div className="cfg-slider"><span className="ss-end">0</span><Slider value={Math.round(conf * 100)} min={0} max={100} step={5} onChange={(v) => setConf(v / 100)} ariaLabel="Confiança mínima" /><span className="ss-end">100</span></div>
+                </Field>
+              </div>
+              <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>Camadas e confiança valem só nesta sessão (padrões em APP_CONFIG.overlay). Heatmap acumula a presença de pessoas.</p>
+            </>)}
           </div>
         </aside>
       </div>
@@ -652,6 +786,15 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
               </Field>
               <Field label={`Sensibilidade ao movimento · ${z.sensitivity}`} hint="Menor = ignora micro-movimentos; maior = detecta o mínimo.">
                 <div className="cfg-slider"><span className="ss-end">−</span><Slider value={z.sensitivity} min={1} max={10} step={1} onChange={(v) => patchZone(z.id, { sensitivity: v })} ariaLabel="Sensibilidade" /><span className="ss-end">+</span></div>
+                <div style={{ marginTop: "var(--sp-1)", fontSize: 11, color: "var(--text-dim)" }} aria-live="polite">
+                  {histState === "loading" && <span className="muted">estimando alertas/dia…</span>}
+                  {histState === "error" && <span className="muted">histórico indisponível — sem estimativa</span>}
+                  {histState === "ready" && histDataset && (() => {
+                    const p = predictAlertsPerDay(histDataset, z.label, z.sensitivity);
+                    if (p.status === "no-data") return <span className="muted">sem dados suficientes p/ estimar alertas/dia</span>;
+                    return <span>≈ <b style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>{p.perDay}</b> alerta(s)/dia estimados <span className="muted">(base {p.baselinePerDay}/dia · {p.days}d{demoMode ? " · limite curto demo eleva o real" : ""})</span></span>;
+                  })()}
+                </div>
               </Field>
             </>)}
 
