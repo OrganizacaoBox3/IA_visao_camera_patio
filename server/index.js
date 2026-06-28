@@ -8,6 +8,7 @@ const alerts = require("./alerts");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
 const dispatch = require("./dispatch");
+const alarmPolicy = require("./alarmPolicy");
 const recipients = require("./recipients");
 const db = require("./db");
 const pgstore = require("./pgstore");
@@ -240,8 +241,14 @@ io.on("connection", (socket) => {
       if (target) target.emit("capture", { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
     });
 
-    // Andon: alerta do painel → webhook externo + WhatsApp dos usuários elegíveis.
-    socket.on("alert", (p) => { alerts.notify(p); if (p && p.text) dispatch.dispatchAlert(String(p.text), p.ts); });
+    // Andon: alerta do painel → política de alarme (dedup/inundação/prioridade) → webhook + WhatsApp.
+    // A política decide UMA vez e roteia a mesma decisão p/ os dois canais; null = suprimido.
+    socket.on("alert", (p) => {
+      const d = alarmPolicy.evaluate(p);
+      if (!d) return;
+      alerts.notify(d);
+      if (d.text) dispatch.dispatchAlert(d.text, d.ts, d.priority);
+    });
   }
 });
 

@@ -68,9 +68,17 @@ function targets(meta) {
   return [...map.entries()].map(([numero, nome]) => ({ numero, nome }));
 }
 
-function dispatchAlert(text, ts) {
+// priority (advisory|high|critical) é opcional e vem da política de alarmes (alarmPolicy).
+// Quando informado, ele tem precedência sobre a heurística local: "critical" força o
+// cabeçalho de alerta (🔴) e expõe meta.priority p/ futuros consumidores.
+function dispatchAlert(text, ts, priority) {
   if (!text || !whatsapp.enabled() || !whatsapp.status().connected) return;
   const meta = classify(text);
+  if (priority) {
+    meta.priority = priority;
+    if (priority === "critical") meta.critico = true;
+    else if (priority === "advisory" && !text.includes("⚠")) meta.critico = false;
+  }
   const cfg = settings.get();
   if (cfg.tipos[meta.tipo] && cfg.tipos[meta.tipo].ativo === false) return; // tipo desligado pelo superadmin
   const msg = formatWhatsApp(text, meta, ts, cfg); // mensagem profissional (não o texto cru do toast)

@@ -11,8 +11,9 @@ const lastSent = new Map(); // text -> ts (dedup por mensagem)
 
 function andonEnabled() { return !!WEBHOOK_URL; }
 
-async function post(text, ts) {
+async function post(text, ts, priority) {
   const payload = { app: "Visão de Pátio", source: "andon", text, content: text, ts: ts || Date.now() };
+  if (priority) payload.priority = priority; // 3 níveis: advisory|high|critical (alarmPolicy)
   try {
     const res = await fetch(WEBHOOK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!res.ok) console.error(`[andon] webhook respondeu HTTP ${res.status}`);
@@ -31,7 +32,7 @@ function notify(p) {
   if (prev && now - prev < DEDUP_MS) return; // mesmo alerta dentro da janela → ignora
   lastSent.set(text, now);
   if (lastSent.size > 300) for (const [k, t] of lastSent) if (now - t > DEDUP_MS) lastSent.delete(k); // limpa antigos
-  void post(text, p.ts);
+  void post(text, p.ts, p.priority); // priority vem da política de alarmes (alarmPolicy), quando presente
 }
 
 module.exports = { notify, andonEnabled };
