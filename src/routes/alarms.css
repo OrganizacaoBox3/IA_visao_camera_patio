@@ -1,0 +1,145 @@
+/* Fila de alarmes acionável (Onda B · item 7) — estilos da central.
+   Importado SÓ por DashboardPage.tsx. Usa tokens var(--state-*)/var(--sp-*) já existentes
+   (going-gray): base neutra, cor saturada só para prioridade/anormalidade; reconhecidos
+   esmaecidos. NÃO duplica nem edita index.css/ui.css. */
+
+/* Drawer lateral direito sobreposto à central. */
+.alarm-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 92vw);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #0f141b);
+  border-left: 1px solid var(--state-neutral-border, #1f2937);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+}
+
+.alarm-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--state-neutral-border, #1f2937);
+}
+.alarm-drawer__count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--state-warn-fg, #facc15);
+}
+.alarm-drawer__count[data-zero="1"] { color: var(--state-neutral-fg, #9aa7b4); }
+
+.alarm-drawer__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--state-neutral-border, #1f2937);
+  font-size: 12px;
+}
+.alarm-drawer__filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--state-neutral-fg, #9aa7b4);
+}
+
+.alarm-drawer__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.alarm-drawer__empty {
+  color: var(--state-neutral-fg, #9aa7b4);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 8px;
+}
+
+/* Card de alarme: borda esquerda = prioridade (glanceable). */
+.alarm-card {
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: var(--state-neutral-bg, #161c24);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+/* Estado new = destacado; acknowledged/forwarded = esmaecido (going-gray). */
+.alarm-card[data-done="1"] { opacity: 0.55; background: transparent; }
+
+.alarm-card__top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.alarm-card__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: none;
+}
+.alarm-card__prio {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.alarm-card__time {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+}
+.alarm-card__text {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text, #e5e7eb);
+}
+.alarm-card__meta {
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.alarm-card__state {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.alarm-card__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 1px;
+}
+
+/* Badge "novos" no botão do cabeçalho. */
+.alarm-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--state-critical, #ef4444);
+}
+.alarm-badge[data-prio="high"] { background: var(--state-warn, #eab308); color: #1a1500; }
+.alarm-badge[data-prio="advisory"] { background: var(--state-info, #38bdf8); color: #041018; }

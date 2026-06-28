@@ -8,7 +8,9 @@ import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
-import { Button, Switch, Select, Dialog, Tooltip, useToast } from "../ui";
+import { Button, IconButton, Switch, Checkbox, Select, Dialog, Tooltip, useToast } from "../ui";
+import { listAlarms, ackAlarm, forwardAlarm, ApiError, type AlarmEvent, type AlarmPriority, type AlarmState } from "../api";
+import "./alarms.css";
 
 type Camera = { id: string; label: string };
 // Status por câmera vindo do hub (contrato A4 — evento socket `camera-status`). Aditivo: se o hub
@@ -20,7 +22,7 @@ type FrameEntry = { bmp: ImageBitmap | null; w: number; h: number; ts: number; p
 function colsFor(n: number): number { return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4; }
 
 export function DashboardPage() {
-  const { token, logout } = useAuth();
+  const { token, user, logout } = useAuth();
   const socketRef = useRef<Socket | null>(null);
   const framesRef = useRef<Map<string, FrameEntry>>(new Map());
   const gettersRef = useRef<Map<string, () => FrameSource | null>>(new Map());
@@ -40,6 +42,12 @@ export function DashboardPage() {
     return APP_CONFIG.demo.shortLimitDefault;
   });
   const [connected, setConnected] = useState(false);
+  // ── Fila de alarmes acionável (Onda B · item 7) — consome o backend B1 (só metadados, LGPD) ──
+  const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
+  const [alarmsOpen, setAlarmsOpen] = useState(false);
+  const [fPriority, setFPriority] = useState<"all" | AlarmPriority>("all");
+  const [fState, setFState] = useState<"all" | AlarmState>("all");
+  const [hideAcked, setHideAcked] = useState(false); // só filtro de exibição (não apaga no servidor)
   const { toast } = useToast();
 
   useEffect(() => {
@@ -50,6 +58,13 @@ export function DashboardPage() {
     socket.on("connect_error", (err) => { if (err.message === "unauthorized") logout("Sessão expirada. Entre novamente."); });
     socket.on("cameras", (list: Camera[]) => setCameras(list));
     socket.on("camera-status", (s: CameraStatus) => setStatuses((prev) => ({ ...prev, [s.id]: s })));
+    // Alarmes ao vivo (aditivos, B1): novo evento → topo da fila; update → casa por id e substitui.
+    socket.on("alarm-event", (a: AlarmEvent) => setAlarms((prev) => [a, ...prev.filter((x) => x.id !== a.id)]));
+    socket.on("alarm-update", (a: AlarmEvent) => setAlarms((prev) => {
+      let found = false;
+      const next = prev.map((x) => (x.id === a.id ? ((found = true), a) : x));
+      return found ? next : [a, ...next];
+    }));
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w: number; h: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) { f = { bmp: null, w: 0, h: 0, ts: 0, pending: null, decoding: false }; framesRef.current.set(p.id, f); }
@@ -111,6 +126,49 @@ export function DashboardPage() {
   // Lembra a escolha do toggle demo na sessão (evita reativar alertas falsos a cada reload).
   useEffect(() => { try { sessionStorage.setItem("vp-demo-mode", demoMode ? "1" : "0"); } catch { /* no-op */ } }, [demoMode]);
 
+  // Carga inicial da fila de alarmes (ts desc); ao vivo entra pelos sockets acima. Falha não quebra a central.
+  useEffect(() => {
+    let alive = true;
+    listAlarms({ limit: 200 })
+      .then((list) => { if (alive) setAlarms(list); })
+      .catch((e) => { console.error("[alarms] carga inicial falhou", e); });
+    return () => { alive = false; };
+  }, []);
+
+  // Contador de "novos" (estado new) — realce glanceable no cabeçalho. Prioridade máx. entre os novos.
+  const newAlarms = useMemo(() => alarms.filter((a) => a.state === "new"), [alarms]);
+  const newCount = newAlarms.length;
+  const topNewPriority: AlarmPriority = useMemo(
+    () => (newAlarms.some((a) => a.priority === "critical") ? "critical" : newAlarms.some((a) => a.priority === "high") ? "high" : "advisory"),
+    [newAlarms],
+  );
+
+  // Lista visível = filtros de prioridade/estado + "ocultar reconhecidos" (só exibição). Mantém ts desc.
+  const visibleAlarms = useMemo(
+    () => alarms.filter((a) =>
+      (fPriority === "all" || a.priority === fPriority) &&
+      (fState === "all" || a.state === fState) &&
+      (!hideAcked || a.state === "new"),
+    ),
+    [alarms, fPriority, fState, hideAcked],
+  );
+
+  // Ack/forward otimista: reflete o estado já; confirma com a resposta (e o socket `alarm-update` reforça).
+  async function actOnAlarm(a: AlarmEvent, kind: "ack" | "forward") {
+    if (a.state !== "new") return; // já tratado
+    const prevState = a.state;
+    const optimistic: AlarmState = kind === "ack" ? "acknowledged" : "forwarded";
+    setAlarms((prev) => prev.map((x) => (x.id === a.id ? { ...x, state: optimistic, ackBy: user.usuario, ackAt: Date.now() } : x)));
+    try {
+      const updated = await (kind === "ack" ? ackAlarm(a.id, user.usuario) : forwardAlarm(a.id, user.usuario));
+      setAlarms((prev) => prev.map((x) => (x.id === a.id ? updated : x)));
+      toast(kind === "ack" ? "Alarme reconhecido." : "Alarme encaminhado.", "ok");
+    } catch (e) {
+      setAlarms((prev) => prev.map((x) => (x.id === a.id ? { ...x, state: prevState, ackBy: undefined, ackAt: undefined } : x))); // rollback
+      toast(e instanceof ApiError ? e.message : "Não foi possível atualizar o alarme.", "alert");
+    }
+  }
+
   function getterFor(id: string): () => FrameSource | null {
     let g = gettersRef.current.get(id);
     if (!g) {
@@ -157,6 +215,45 @@ export function DashboardPage() {
     return { text, dot, border, fps: s?.fps };
   }
 
+  // Prioridade → token de cor (going-gray): advisory=info(azul), high=warn(amarelo), critical=critical(vermelho).
+  function prioColor(p: AlarmPriority): string {
+    return p === "critical" ? "var(--state-critical)" : p === "high" ? "var(--state-warn)" : "var(--state-info)";
+  }
+  function prioBorder(p: AlarmPriority): string {
+    return p === "critical" ? "var(--state-critical-border)" : p === "high" ? "var(--state-warn-border)" : "var(--state-info-border)";
+  }
+  const PRIO_LABEL: Record<AlarmPriority, string> = { advisory: "informativo", high: "alta", critical: "crítico" };
+  const STATE_LABEL: Record<AlarmState, string> = { new: "novo", acknowledged: "reconhecido", forwarded: "encaminhado" };
+
+  function renderAlarmCard(a: AlarmEvent) {
+    const done = a.state !== "new";
+    const when = new Date(a.ts).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const local = a.cameraLabel || a.cameraId || a.zona;
+    return (
+      <div key={a.id} className="alarm-card" data-done={done ? 1 : 0} style={{ borderLeftColor: prioBorder(a.priority) }}>
+        <div className="alarm-card__top">
+          <span className="alarm-card__dot" style={{ background: prioColor(a.priority) }} />
+          <span className="alarm-card__prio" style={{ color: prioColor(a.priority) }}>{PRIO_LABEL[a.priority]}</span>
+          <span className="alarm-card__time" title={new Date(a.ts).toLocaleString("pt-BR")}>{when}</span>
+        </div>
+        <div className="alarm-card__text">{a.text}</div>
+        <div className="alarm-card__meta">
+          {local && <span>📍 {local}{a.zona && a.zona !== local ? ` · ${a.zona}` : ""}</span>}
+          <span>{a.tipo}</span>
+          <span className="alarm-card__state">
+            {STATE_LABEL[a.state]}{a.ackBy ? ` · ${a.ackBy}` : ""}
+          </span>
+        </div>
+        {!done && (
+          <div className="alarm-card__actions">
+            <Button size="sm" variant="primary" onClick={() => actOnAlarm(a, "ack")} title="Reconhecer (assumir o alarme)">Reconhecer</Button>
+            <Button size="sm" onClick={() => actOnAlarm(a, "forward")} title="Encaminhar a outro operador">Encaminhar</Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderTile(c: Camera) {
     const st = statusInfo(c.id);
     const inner = c.id === openId
@@ -196,6 +293,10 @@ export function DashboardPage() {
             <Button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1} title="Próxima página">›</Button>
           </span>
         )}
+        <Button onClick={() => setAlarmsOpen((o) => !o)} active={alarmsOpen} title="Fila de alarmes (eventos acionáveis)">
+          ▦ Alarmes
+          {newCount > 0 && <span className="alarm-badge" data-prio={topNewPriority} aria-label={`${newCount} novos`}>{newCount}</span>}
+        </Button>
         <span className="dash-stats" aria-live="polite">
           <span className="stat">hub <b>{connected ? "ok" : "off"}</b></span>
           <span className="stat">câmeras <b>{cameras.length}</b></span>
@@ -238,6 +339,30 @@ export function DashboardPage() {
             </div>
           ))}
         </Dialog>
+
+        {/* Fila de alarmes acionável (Onda B · item 7) — drawer lateral, ts desc, ack/forward */}
+        {alarmsOpen && (
+          <aside className="alarm-drawer" aria-label="Fila de alarmes">
+            <header className="alarm-drawer__head">
+              <b>Fila de alarmes</b>
+              <span className="alarm-drawer__count" data-zero={newCount === 0 ? 1 : 0}>{newCount} novo(s)</span>
+              <div className="spacer" />
+              <IconButton label="Fechar fila de alarmes" onClick={() => setAlarmsOpen(false)}>✕</IconButton>
+            </header>
+            <div className="alarm-drawer__filters">
+              <Select value={fPriority} onChange={(v) => setFPriority(v as "all" | AlarmPriority)} ariaLabel="Filtrar por prioridade"
+                options={[{ value: "all", label: "Toda prioridade" }, { value: "critical", label: "Crítico" }, { value: "high", label: "Alta" }, { value: "advisory", label: "Informativo" }]} />
+              <Select value={fState} onChange={(v) => setFState(v as "all" | AlarmState)} ariaLabel="Filtrar por estado"
+                options={[{ value: "all", label: "Todo estado" }, { value: "new", label: "Novos" }, { value: "acknowledged", label: "Reconhecidos" }, { value: "forwarded", label: "Encaminhados" }]} />
+              <label><Checkbox checked={hideAcked} onCheckedChange={setHideAcked} ariaLabel="Ocultar reconhecidos" /> Limpar reconhecidos</label>
+            </div>
+            <div className="alarm-drawer__list">
+              {visibleAlarms.length === 0
+                ? <p className="alarm-drawer__empty">{alarms.length === 0 ? "Nenhum alarme registrado." : "Nenhum alarme para os filtros atuais."}</p>
+                : visibleAlarms.map(renderAlarmCard)}
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );

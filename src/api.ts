@@ -95,3 +95,40 @@ export const listRecipients = () => apiGet<Recipient[]>("/api/recipients");
 export const createRecipient = (r: { nome: string; numero: string; somenteCriticos?: boolean }) => apiSend<Recipient>("POST", "/api/recipients", r);
 export const patchRecipient = (id: string, patch: Partial<{ ativo: boolean; nome: string; numero: string; somenteCriticos: boolean }>) => apiSend<Recipient>("PATCH", `/api/recipients/${id}`, patch);
 export const deleteRecipient = (id: string) => apiSend<{ ok: true }>("DELETE", `/api/recipients/${id}`);
+
+// ── Fila de alarmes acionável (Onda B · item 7) — eventos com acknowledge ──
+// Consome o backend B1 (contrato-eventos-alarme.md). SÓ METADADOS (LGPD): nunca imagem/frame.
+// Eventos ao vivo chegam por socket (`alarm-event`/`alarm-update`); aqui ficam as rotas HTTP.
+export type AlarmPriority = "advisory" | "high" | "critical";
+export type AlarmState = "new" | "acknowledged" | "forwarded";
+// tipo vem da política (atividade|fadiga|leitura|objetos); aceita string p/ ser retrocompatível.
+export type AlarmTipo = "atividade" | "fadiga" | "leitura" | "objetos" | (string & {});
+export type AlarmEvent = {
+  id: string;
+  ts: number;
+  cameraId?: string;
+  cameraLabel?: string;
+  zona?: string;
+  tipo: AlarmTipo;
+  priority: AlarmPriority;
+  text: string;
+  state: AlarmState;
+  ackBy?: string;
+  ackAt?: number;
+};
+export type ListAlarmsParams = { limit?: number; since?: number; state?: AlarmState; priority?: AlarmPriority };
+
+// GET /api/alarms?limit=&since=&state=&priority=  → Array<AlarmEvent> ordenado por ts desc.
+export function listAlarms(params?: ListAlarmsParams): Promise<AlarmEvent[]> {
+  const q = new URLSearchParams();
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.since != null) q.set("since", String(params.since));
+  if (params?.state) q.set("state", params.state);
+  if (params?.priority) q.set("priority", params.priority);
+  const qs = q.toString();
+  return apiGet<AlarmEvent[]>(`/api/alarms${qs ? `?${qs}` : ""}`);
+}
+// POST /api/alarms/:id/ack — marca como acknowledged (by? default = usuário do token).
+export const ackAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/ack`, by ? { by } : {});
+// POST /api/alarms/:id/forward — marca como forwarded (encaminhado).
+export const forwardAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/forward`, by ? { by } : {});

@@ -8,6 +8,7 @@ import {
   type ReadingDataset, type ReadingCell, type ReadingEventRow,
   type ObjectDataset, type ObjectCell, type ObjectEventRow,
   type FadigaDataset, type FadigaCell, type FadigaEventRow,
+  type AlarmEvent, type AlarmPriority, type AlarmState,
 } from "./mock";
 
 const DAY = 86_400_000;
@@ -129,3 +130,18 @@ export async function loadFadigaEvents(): Promise<FadigaEventRow[]> { return fet
 
 // Erro PROPAGADO (antes era engolido) → a UI confirma sucesso ou avisa a falha de "limpar histórico".
 export async function clearAll(): Promise<void> { await apiSend("POST", "/api/data/clear"); }
+
+// ── EVENTOS DE ALARME (consome contrato B1: GET /api/alarms) ──────────────────
+// SÓ METADADOS (sem imagens, LGPD). Erro é PROPAGADO (mesmo padrão dos load* acima):
+// o ReportPage distingue erro de "sem alarmes" no estado da página.
+export type AlarmQuery = { limit?: number; since?: number; state?: AlarmState; priority?: AlarmPriority };
+
+export function loadAlarms(q: AlarmQuery = {}): Promise<AlarmEvent[]> {
+  const p = new URLSearchParams();
+  if (q.limit != null) p.set("limit", String(q.limit));
+  if (q.since != null) p.set("since", String(q.since));
+  if (q.state) p.set("state", q.state);
+  if (q.priority) p.set("priority", q.priority);
+  const qs = p.toString();
+  return apiGet<AlarmEvent[]>(`/api/alarms${qs ? `?${qs}` : ""}`);
+}

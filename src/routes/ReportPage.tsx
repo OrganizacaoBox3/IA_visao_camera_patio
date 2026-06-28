@@ -1,21 +1,34 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   windows, kpis, deltaPct, heatmap, ranking, evolution, insights, fmtMin, shiftOf,
   readingWindows, readingKpis, readingHeatmap, readingRanking, readingByCamera, readingEvolution, readingInsights,
   objectWindows, objectKpis, objectHeatmap, objectPresence, objectRanking, objectByClass, objectEvolution, objectInsights,
   fadigaWindows, fadigaKpis, fadigaHeatmap, fadigaEvolution, fadigaInsights,
+  filterAlarms, alarmKpis, alarmTrend, alarmHeatmap, alarmInsights, alarmDayStart,
   type Period, type Shift, type Filters, type Dataset, type EventRow,
   type ReadingFilters, type ReadingDataset, type ReadingEventRow,
   type ObjectFilters, type ObjectDataset, type ObjectEventRow,
   type FadigaFilters, type FadigaDataset, type FadigaEventRow,
+  type AlarmEvent, type AlarmPriority, type AlarmState, type AlarmWindow,
 } from "../report/mock";
-import { loadDataset, loadEvents, clearAll, loadReadingDataset, loadReadingEvents, loadObjectDataset, loadObjectEvents, loadFadigaDataset, loadFadigaEvents } from "../report/store";
-import { buildCSV, downloadCSVFile, dateStamp, type CsvSection } from "../report/csv";
+import { loadDataset, loadEvents, clearAll, loadReadingDataset, loadReadingEvents, loadObjectDataset, loadObjectEvents, loadFadigaDataset, loadFadigaEvents, loadAlarms } from "../report/store";
+import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
 import { objClass } from "../objects/catalog";
 import { Button, IconButton, Select, SegmentedControl, Skeleton, useToast } from "../ui";
+import "../report/alarms.css";
 
-type Mode = "resumo" | "atividade" | "leitura" | "objetos" | "fadiga";
-const MODE_LABEL: Record<Mode, string> = { resumo: "Resumo executivo", atividade: "Atividade", leitura: "Leitura", objetos: "Objetos", fadiga: "Operador (fadiga)" };
+const ALARM_DAY_MS = 86_400_000;
+const PRIORITY_LABEL: Record<AlarmPriority, string> = { advisory: "Informativo", high: "Alta", critical: "Crítica" };
+const STATE_LABEL: Record<AlarmState, string> = { new: "Novo", acknowledged: "Reconhecido", forwarded: "Encaminhado" };
+function alarmHeatColor(priority: AlarmPriority, v: number, max: number): string {
+  if (v <= 0) return "transparent";
+  const t = 0.18 + Math.min(1, v / max) * 0.82;
+  const rgb = priority === "critical" ? "239, 68, 68" : priority === "high" ? "234, 179, 8" : "56, 189, 248";
+  return `rgba(${rgb}, ${t})`;
+}
+
+type Mode = "resumo" | "atividade" | "leitura" | "objetos" | "fadiga" | "alarmes";
+const MODE_LABEL: Record<Mode, string> = { resumo: "Resumo executivo", atividade: "Atividade", leitura: "Leitura", objetos: "Objetos", fadiga: "Operador (fadiga)", alarmes: "Alarmes" };
 const PERIOD_LABEL: Record<Period, string> = { hoje: "Hoje", "7d": "Últimos 7 dias", "30d": "Últimos 30 dias" };
 const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
 const EMPTY_DS: Dataset = { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() };
@@ -53,6 +66,7 @@ export function ReportPage() {
   const [oEvents, setOEvents] = useState<ObjectEventRow[]>([]);
   const [fds, setFds] = useState<FadigaDataset | null>(null);
   const [fEvents, setFEvents] = useState<FadigaEventRow[]>([]);
+  const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,12 +80,19 @@ export function ReportPage() {
   const [present, setPresent] = useState(false);
   const [tab, setTab] = useState<"quando" | "onde" | "tendencia" | "eventos">("quando");
   const [printedAt, setPrintedAt] = useState("");
+  // Estado compartilhado da ligação RELATÓRIO↔EVENTOS (Onda B, item 8).
+  const [alarmPriority, setAlarmPriority] = useState<AlarmPriority | "Todas">("Todas");
+  const [alarmState, setAlarmState] = useState<AlarmState | "Todos">("Todos");
+  const [alarmWindow, setAlarmWindow] = useState<AlarmWindow | null>(null); // janela de tempo (clique na tendência)
+  const [alarmHour, setAlarmHour] = useState<number | null>(null);          // hora-do-dia (clique no heatmap)
+  const [selAlarm, setSelAlarm] = useState<string | null>(null);           // evento selecionado (destaque bidirecional)
+  const trendRef = useRef<HTMLDivElement | null>(null);
 
   async function refresh() {
     setLoading(true); setError(null);
     try {
-      const [d, e, rd, re, od, oe, fd, fe] = await Promise.all([loadDataset(), loadEvents(), loadReadingDataset(), loadReadingEvents(), loadObjectDataset(), loadObjectEvents(), loadFadigaDataset(), loadFadigaEvents()]);
-      setDs(d); setAllEvents(e); setRds(rd); setREvents(re); setOds(od); setOEvents(oe); setFds(fd); setFEvents(fe);
+      const [d, e, rd, re, od, oe, fd, fe, al] = await Promise.all([loadDataset(), loadEvents(), loadReadingDataset(), loadReadingEvents(), loadObjectDataset(), loadObjectEvents(), loadFadigaDataset(), loadFadigaEvents(), loadAlarms({ limit: 500 })]);
+      setDs(d); setAllEvents(e); setRds(rd); setREvents(re); setOds(od); setOEvents(oe); setFds(fd); setFEvents(fe); setAlarms(al);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Falha ao carregar o histórico.";
       setError(msg); toast(msg, "alert");
@@ -169,14 +190,46 @@ export function ReportPage() {
   const fBocejos = useMemo(() => fevt.filter((e) => e.type === "bocejo").length, [fevt]);
   const ftips = useMemo(() => fadigaInsights(fk, fOccFadiga, fOccCelular), [fk, fOccFadiga, fOccCelular]);
 
+  // ── Alarmes (eventos B1) — sempre computado p/ ordem estável de hooks ──
+  const aFilters = useMemo(() => ({ period, priority: alarmPriority, state: alarmState }), [period, alarmPriority, alarmState]);
+  // Conjunto que respeita só prioridade/estado/período (alimenta os gráficos — sem a janela/hora,
+  // p/ os gráficos não "encolherem" ao clicar neles próprios).
+  const alarmsScoped = useMemo(() => filterAlarms(alarms, aFilters), [alarms, aFilters]);
+  // Lista visível: aplica também a janela de tempo e a hora selecionadas nos gráficos.
+  const alarmsView = useMemo(() => filterAlarms(alarms, aFilters, alarmWindow, alarmHour), [alarms, aFilters, alarmWindow, alarmHour]);
+  const ak = useMemo(() => alarmKpis(alarmsView), [alarmsView]);
+  const aTrend = useMemo(() => alarmTrend(alarmsScoped, 14), [alarmsScoped]);
+  const aHeat = useMemo(() => alarmHeatmap(alarmsScoped), [alarmsScoped]);
+  const aTips = useMemo(() => alarmInsights(alarmKpis(alarmsScoped), aTrend), [alarmsScoped, aTrend]);
+  const selAlarmObj = useMemo(() => alarms.find((e) => e.id === selAlarm) ?? null, [alarms, selAlarm]);
+  const selDay = selAlarmObj ? alarmDayStart(selAlarmObj.ts) : null;
+  const selHour = selAlarmObj ? new Date(selAlarmObj.ts).getHours() : null;
+  function pickDay(dayStart: number, label: string) {
+    setAlarmHour(null); setSelAlarm(null);
+    setAlarmWindow((w) => (w && w.from === dayStart ? null : { from: dayStart, to: dayStart + ALARM_DAY_MS, label }));
+  }
+  function pickHour(h: number) {
+    setAlarmWindow(null); setSelAlarm(null);
+    setAlarmHour((cur) => (cur === h ? null : h));
+  }
+  function pickAlarm(id: string) {
+    setSelAlarm((cur) => (cur === id ? null : id));
+    if (trendRef.current) trendRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  function clearAlarmSel() { setAlarmWindow(null); setAlarmHour(null); setSelAlarm(null); }
+
   const isResumo = mode === "resumo";
   const isReading = mode === "leitura";
   const isObjects = mode === "objetos";
   const isFadiga = mode === "fadiga";
-  const noData = !loading && !error && (isResumo
+  const isAlarmes = mode === "alarmes";
+  // Alarmes tem estado de vazio próprio (dentro da view); não entra no noData genérico.
+  const noData = !loading && !error && !isAlarmes && (isResumo
     ? dataset.cells.length === 0 && rdataset.cells.length === 0 && odataset.cells.length === 0 && fdataset.cells.length === 0
     : isReading ? rdataset.cells.length === 0 : isObjects ? odataset.cells.length === 0 : isFadiga ? fdataset.cells.length === 0 : dataset.cells.length === 0);
-  const lens = isReading
+  const lens = isAlarmes
+    ? `${PERIOD_LABEL[period]} · Prioridade: ${alarmPriority === "Todas" ? "todas" : PRIORITY_LABEL[alarmPriority]} · Estado: ${alarmState === "Todos" ? "todos" : STATE_LABEL[alarmState]}`
+    : isReading
     ? `${PERIOD_LABEL[period]} · ${ponto === "Todos" ? "Todos os pontos" : ponto} · Turno: ${shift === "Todos" ? "todos" : shift}`
     : isObjects
     ? `${PERIOD_LABEL[period]} · ${setor === "Todos" ? "Todos os setores" : setor} · Turno: ${shift === "Todos" ? "todos" : shift}`
@@ -185,7 +238,8 @@ export function ReportPage() {
     : `${PERIOD_LABEL[period]} · ${area === "Todas" ? "Todas as áreas" : area} · Turno: ${shift === "Todos" ? "todos" : shift}`;
 
   const SHIFTS: Shift[] = ["Manhã", "Tarde", "Noite"];
-  const filtroLabel = isReading ? (ponto === "Todos" ? "Todos os pontos" : ponto)
+  const filtroLabel = isAlarmes ? `Prioridade ${alarmPriority === "Todas" ? "todas" : PRIORITY_LABEL[alarmPriority]} · Estado ${alarmState === "Todos" ? "todos" : STATE_LABEL[alarmState]}`
+    : isReading ? (ponto === "Todos" ? "Todos os pontos" : ponto)
     : isObjects ? (setor === "Todos" ? "Todos os setores" : setor)
     : isFadiga ? (posto === "Todos" ? "Todos os postos" : posto)
     : (area === "Todas" ? "Todas as áreas" : area);
@@ -244,6 +298,12 @@ export function ReportPage() {
         ["Tempo em alerta (%)", fk.alertPct], ["Ocorrências de fadiga", fOccFadiga], ["Ocorrências de celular", fOccCelular], ["Bocejos", fBocejos], ["Horário crítico", `${String(fk.peakHour).padStart(2, "0")}h`],
       ] });
       sections.push({ title: `OCORRÊNCIAS (${fevt.length})`, headers: ["Data/hora", "Posto", "Tipo", "Turno"], rows: fevt.map((r) => [new Date(r.ts).toLocaleString("pt-BR"), r.posto, r.type, r.shift]) });
+    } else if (isAlarmes) {
+      sections.push({ title: "INDICADORES", headers: ["Indicador", "Valor"], rows: [
+        ["Total de alarmes", ak.total], ["Críticos", ak.critical], ["Alta", ak.high], ["Informativos", ak.advisory], ["Em aberto (novos)", ak.news],
+      ] });
+      // Reusa o builder de csv.ts (metadados, sem imagens) com a lista já filtrada na tela.
+      sections.push(alarmSection(alarmsView));
     }
 
     downloadCSVFile(`relatorio_${mode}_${period}_${dateStamp(now)}.csv`, buildCSV(sections));
@@ -257,17 +317,20 @@ export function ReportPage() {
       <header className="page-head no-print">
         <h1 className="page-title">Relatório Operacional</h1>
         <SegmentedControl<Mode> value={mode} onChange={setMode} ariaLabel="Modo do relatório" options={[
-          { value: "resumo", label: "Resumo" }, { value: "atividade", label: "Atividade" }, { value: "leitura", label: "Leitura" }, { value: "objetos", label: "Objetos" }, { value: "fadiga", label: "Operador" },
+          { value: "resumo", label: "Resumo" }, { value: "atividade", label: "Atividade" }, { value: "leitura", label: "Leitura" }, { value: "objetos", label: "Objetos" }, { value: "fadiga", label: "Operador" }, { value: "alarmes", label: "Alarmes" },
         ]} />
         <span className="privacy">● indicadores · sem imagens</span>
         <div className="spacer" />
-        <span className="muted" style={{ fontSize: 11 }}>{isReading ? "leitura · código de barras" : isObjects ? "objetos · contagem/presença" : isFadiga ? "operador · fadiga/risco" : "atividade · ocupação/ociosidade"}</span>
+        <span className="muted" style={{ fontSize: 11 }}>{isAlarmes ? "alarmes · fila de eventos (metadados)" : isReading ? "leitura · código de barras" : isObjects ? "objetos · contagem/presença" : isFadiga ? "operador · fadiga/risco" : "atividade · ocupação/ociosidade"}</span>
       </header>
 
       <div className="rep-filters no-print">
         <SegmentedControl<Period> value={period} onChange={setPeriod} ariaLabel="Período" options={(["hoje", "7d", "30d"] as Period[]).map((p) => ({ value: p, label: PERIOD_LABEL[p] }))} />
-        <Select value={shift} onChange={(v) => setShift(v as Shift | "Todos")} ariaLabel="Turno" options={[{ value: "Todos", label: "Turno: todos" }, { value: "Manhã", label: "Manhã" }, { value: "Tarde", label: "Tarde" }, { value: "Noite", label: "Noite" }]} />
-        {isResumo ? null : isReading ? (
+        {!isAlarmes && <Select value={shift} onChange={(v) => setShift(v as Shift | "Todos")} ariaLabel="Turno" options={[{ value: "Todos", label: "Turno: todos" }, { value: "Manhã", label: "Manhã" }, { value: "Tarde", label: "Tarde" }, { value: "Noite", label: "Noite" }]} />}
+        {isAlarmes ? (<>
+          <Select value={alarmPriority} onChange={(v) => setAlarmPriority(v as AlarmPriority | "Todas")} ariaLabel="Prioridade" options={[{ value: "Todas", label: "Prioridade: todas" }, { value: "critical", label: "Crítica" }, { value: "high", label: "Alta" }, { value: "advisory", label: "Informativo" }]} />
+          <Select value={alarmState} onChange={(v) => setAlarmState(v as AlarmState | "Todos")} ariaLabel="Estado" options={[{ value: "Todos", label: "Estado: todos" }, { value: "new", label: "Novo" }, { value: "acknowledged", label: "Reconhecido" }, { value: "forwarded", label: "Encaminhado" }]} />
+        </>) : isResumo ? null : isReading ? (
           <Select value={ponto} onChange={setPonto} ariaLabel="Ponto" options={[{ value: "Todos", label: "Todos os pontos" }, ...rdataset.pontos.map((p) => ({ value: p, label: p }))]} />
         ) : isObjects ? (
           <Select value={setor} onChange={setSetor} ariaLabel="Setor" options={[{ value: "Todos", label: "Todos os setores" }, ...odataset.setores.map((s) => ({ value: s, label: s }))]} />
@@ -625,6 +688,89 @@ export function ReportPage() {
             )}
           </div>
           <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={onClear} disabled={busy} className="linkbtn">limpar histórico</button></div>
+        </>)}
+
+        {!loading && !error && isAlarmes && (<>
+          <div className="rep-lens">Alarmes · <b>{PERIOD_LABEL[period]}</b>{alarmPriority !== "Todas" ? <> · {PRIORITY_LABEL[alarmPriority]}</> : null}{alarmState !== "Todos" ? <> · {STATE_LABEL[alarmState]}</> : null}</div>
+          {alarms.length === 0 ? (
+            <div className="dash-empty">
+              <p><b>Sem alarmes registrados.</b></p>
+              <p>A fila de alarmes aparece aqui conforme a política dispara eventos na Central.</p>
+              <p className="muted">Apenas metadados (hora, câmera/zona, tipo, prioridade, estado) — sem imagens (LGPD).</p>
+            </div>
+          ) : (<>
+            <div className="kpi-row">
+              <div className="kpi big"><div className="v">{ak.total}</div><div className="l">alarmes no período</div></div>
+              <div className="kpi big"><div className="v" style={{ color: ak.critical ? "var(--state-critical)" : undefined }}>{ak.critical}</div><div className="l">críticos</div></div>
+              <div className="kpi big"><div className="v" style={{ color: ak.high ? "var(--state-warn)" : undefined }}>{ak.high}</div><div className="l">alta</div></div>
+              <div className="kpi big"><div className="v" style={{ color: ak.advisory ? "var(--state-info)" : undefined }}>{ak.advisory}</div><div className="l">informativos</div></div>
+              <div className="kpi big"><div className="v" style={{ color: ak.news ? "var(--state-warn)" : undefined }}>{ak.news}</div><div className="l">em aberto</div></div>
+            </div>
+            <section className="insight"><b>🔔 Alarmes</b> {aTips.join(" · ")}</section>
+            <div className="rep-2col" ref={trendRef}>
+              <section className="panel">
+                <h3>Tendência (14 dias) <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>— clique p/ filtrar o dia</span></h3>
+                <div className="evo">{aTrend.bars.map((b) => {
+                  const active = !!((alarmWindow && alarmWindow.from === b.dayStart) || selDay === b.dayStart);
+                  return (
+                    <button type="button" className={`evo-col clk ${active ? "sel" : ""}`} key={b.dayStart} title={`${b.label} · ${b.count} alarme(s)`} onClick={() => pickDay(b.dayStart, b.label)} aria-pressed={active}>
+                      <div className={`evo-bar ${b.critical > 0 ? "crit" : ""}`} style={{ height: `${Math.max(2, Math.round((b.count / aTrend.max) * 100))}%` }} />
+                      <span className="evo-lbl">{b.label}</span>
+                    </button>
+                  );
+                })}</div>
+              </section>
+              <section className="panel">
+                <h3>Quando — prioridade × hora <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>— clique p/ filtrar a hora</span></h3>
+                <div className="heatmap">
+                  <div className="hm-axis"><span /> {HOURS.map((h) => <span key={h} className="hm-h">{h % 2 === 0 ? String(h).padStart(2, "0") : ""}</span>)}</div>
+                  {aHeat.rows.map((row) => (
+                    <div className="hm-row" key={row.priority}>
+                      <span className="hm-area" title={PRIORITY_LABEL[row.priority]}>{PRIORITY_LABEL[row.priority]}</span>
+                      {row.hours.map((v, h) => {
+                        const sel = alarmHour === h || selHour === h;
+                        return <span key={h} className={`hm-cell clk ${sel ? "sel" : ""}`} style={{ background: alarmHeatColor(row.priority, v, aHeat.max) }} title={`${PRIORITY_LABEL[row.priority]} · ${String(h).padStart(2, "0")}h · ${v} alarme(s)`} onClick={() => pickHour(h)} />;
+                      })}
+                    </div>
+                  ))}
+                  <div className="hm-legend"><span>menos</span><i className="hm-scale" /><span>mais alarmes</span></div>
+                </div>
+              </section>
+            </div>
+            <section className="panel panel-events">
+              <div className="alarm-toolbar">
+                <h3 style={{ margin: 0 }}>Eventos ({alarmsView.length})</h3>
+                {(alarmWindow || alarmHour != null) && (
+                  <span className="alarm-windownote">
+                    {alarmWindow ? `Dia ${alarmWindow.label}` : `${String(alarmHour).padStart(2, "0")}h`}
+                    <button className="linkbtn" onClick={clearAlarmSel}>limpar</button>
+                  </span>
+                )}
+              </div>
+              <div className="alarm-list">
+                {alarmsView.map((e) => (
+                  <button type="button" key={e.id} className={`alarm-card prio-${e.priority} ${selAlarm === e.id ? "sel" : ""}`} onClick={() => pickAlarm(e.id)} aria-pressed={selAlarm === e.id}>
+                    <span className="alarm-time">{new Date(e.ts).toLocaleString("pt-BR")}</span>
+                    <span className="alarm-body">
+                      <span className="alarm-text">{e.text}</span>
+                      <span className="alarm-loc">
+                        <span>{e.cameraLabel ?? e.cameraId ?? "câmera —"}</span>
+                        {e.zona ? <><span className="sep">·</span><span>{e.zona}</span></> : null}
+                        <span className="sep">·</span><span>{e.tipo}</span>
+                        {e.ackBy ? <><span className="sep">·</span><span>por {e.ackBy}</span></> : null}
+                      </span>
+                    </span>
+                    <span className="alarm-badges">
+                      <span className={`alarm-badge b-${e.priority}`}>{PRIORITY_LABEL[e.priority]}</span>
+                      <span className={`alarm-badge s-${e.state}`}>{STATE_LABEL[e.state]}</span>
+                    </span>
+                  </button>
+                ))}
+                {alarmsView.length === 0 && <p className="empty-note">Nenhum alarme com os filtros atuais.</p>}
+              </div>
+            </section>
+            <div className="rep-foot">Eventos de alarme (B1) · só metadados, sem imagens (LGPD) · <button onClick={refresh} className="linkbtn">recarregar</button></div>
+          </>)}
         </>)}
       </div>
     </div>
