@@ -1,5 +1,5 @@
 // ============================================================================
-// Política de alarmes (ISA-18.2 / EEMUA 191) — Onda A, item 2
+// Política de alarmes (ISA-18.2 / EEMUA 191) — Onda A, item 2 + Onda C, item 14
 // ----------------------------------------------------------------------------
 // Filtro/agregador aplicado ANTES do envio aos canais (Andon webhook em
 // alerts.js e WhatsApp em dispatch.js). O objetivo é tratar o Andon/WhatsApp
@@ -29,6 +29,24 @@
 //      (marcador ⚠ / falha de feed / resumo de inundação) e classificando o
 //      resto como `high` (atenção) ou `advisory` (informativo).
 //
+// Refinamento "produto maduro" (Onda C, item 14) — camadas ADICIONAIS,
+// retrocompatíveis (a assinatura/retorno de evaluate() não muda):
+//   4) Shelving com expiração (ISA-18.2) — silenciar temporariamente uma chave
+//      de alarme (`cameraId|zona|tipo`, com curinga "*" por segmento) por uma
+//      duração; enquanto "shelved" a chave é suprimida e o shelve EXPIRA
+//      sozinho. Útil para manutenção/limpeza programada. Funções: shelve(),
+//      unshelve(), listShelved(), isShelved(), shelveKeyFor().
+//      ATENÇÃO: estado puramente EM MEMÓRIA (volátil) — some ao reiniciar o
+//      processo e NÃO é compartilhado entre instâncias. Ligar a endpoints e
+//      persistência fica para outra onda.
+//   5) Métricas de taxa / racionalização (EEMUA 191) — contadores em memória
+//      de alarmes EMITIDOS por janela e por prioridade, expostos via metrics()
+//      para uma futura tela de "saúde de alarmes". Loga um aviso (pino) quando
+//      a fração de "critical" excede a meta (default 5%) na janela.
+//   6) Anti-flapping (chattering) — se a MESMA chave re-dispara muitas vezes
+//      numa janela (toggla rápido), aplica um cooldown (off-delay) suprimindo
+//      a chave por um intervalo, evitando "metralhadora" de alertas.
+//
 // Toda supressão/colapso é logada (pino) para observabilidade.
 //
 // ----------------------------------------------------------------------------
@@ -37,7 +55,9 @@
 //   ALARM_POLICY_ENABLED   (default "1")     Liga a política. Se "0"/"false",
 //                                            evaluate só classifica e repassa
 //                                            (comportamento retrocompatível,
-//                                            sem dedup/colapso).
+//                                            sem dedup/colapso/flap). Shelving e
+//                                            métricas continuam ativos (são
+//                                            camadas opt-in/observacionais).
 //   ALARM_DEDUP_MS         (default 60000)   Janela (ms) do dedup temporal por
 //                                            chave lógica. Repetição da mesma
 //                                            chave dentro da janela é suprimida.
@@ -52,6 +72,35 @@
 //                                            câmera (evita repetir o resumo a
 //                                            cada novo alerta da rajada).
 //   ALARM_LOG_LEVEL        (default "info")  Nível do logger pino deste módulo.
+//
+//   --- Shelving (item 4) ---
+//   ALARM_SHELVE_MAX_MS     (default 14400000 = 4 h)  Teto da duração de um
+//                                            shelve (clamp de segurança p/ que
+//                                            ninguém silencie "para sempre").
+//   ALARM_SHELVE_DEFAULT_MS (default 1800000 = 30 min) Duração usada quando
+//                                            shelve() é chamado sem ms.
+//
+//   --- Métricas / racionalização (item 5) ---
+//   ALARM_RATE_WINDOW_MS    (default 600000 = 10 min) Janela usada para taxa e
+//                                            % de críticos (alinha com a métrica
+//                                            EEMUA "pico ≤10 alarmes/10 min").
+//   ALARM_CRITICAL_TARGET_PCT (default 5)    Meta (%) máx. de alarmes "critical"
+//                                            na janela; acima disso loga aviso.
+//   ALARM_RATE_MIN_SAMPLE   (default 10)     Mín. de alarmes na janela antes de
+//                                            avaliar a % de críticos (evita
+//                                            falso positivo com amostra pequena).
+//   ALARM_RATE_WARN_THROTTLE_MS (default 600000) Intervalo mín. entre dois
+//                                            avisos de "% crítico acima da meta".
+//
+//   --- Anti-flapping (item 6) ---
+//   ALARM_FLAP_ENABLED      (default "1")    Liga o anti-chattering.
+//   ALARM_FLAP_WINDOW_MS    (default 600000 = 10 min) Janela de contagem de
+//                                            re-disparos da mesma chave.
+//   ALARM_FLAP_THRESHOLD    (default 5)      Nº de emissões da mesma chave na
+//                                            janela acima do qual entra cooldown.
+//   ALARM_FLAP_COOLDOWN_MS  (default 300000 = 5 min) Duração do cooldown
+//                                            (off-delay) em que a chave é
+//                                            suprimida após detectar chattering.
 // ============================================================================
 
 const { classify } = require("./dispatch");
@@ -64,10 +113,31 @@ const FLOOD_WINDOW_MS = Number(process.env.ALARM_FLOOD_WINDOW_MS ?? 15_000);
 const FLOOD_THRESHOLD = Number(process.env.ALARM_FLOOD_THRESHOLD ?? 8);
 const FLOOD_SUMMARY_MS = Number(process.env.ALARM_FLOOD_SUMMARY_MS ?? 60_000);
 
+// Shelving
+const SHELVE_MAX_MS = Number(process.env.ALARM_SHELVE_MAX_MS ?? 14_400_000);
+const SHELVE_DEFAULT_MS = Number(process.env.ALARM_SHELVE_DEFAULT_MS ?? 1_800_000);
+
+// Métricas / racionalização
+const RATE_WINDOW_MS = Number(process.env.ALARM_RATE_WINDOW_MS ?? 600_000);
+const CRITICAL_TARGET_PCT = Number(process.env.ALARM_CRITICAL_TARGET_PCT ?? 5);
+const RATE_MIN_SAMPLE = Number(process.env.ALARM_RATE_MIN_SAMPLE ?? 10);
+const RATE_WARN_THROTTLE_MS = Number(process.env.ALARM_RATE_WARN_THROTTLE_MS ?? 600_000);
+const RATE_HISTORY_MS = Math.max(RATE_WINDOW_MS, 3_600_000); // retém >=1 h p/ métrica horária
+
+// Anti-flapping
+const FLAP_ENABLED = !/^(0|false|no|off)$/i.test(String(process.env.ALARM_FLAP_ENABLED ?? "1"));
+const FLAP_WINDOW_MS = Number(process.env.ALARM_FLAP_WINDOW_MS ?? 600_000);
+const FLAP_THRESHOLD = Number(process.env.ALARM_FLAP_THRESHOLD ?? 5);
+const FLAP_COOLDOWN_MS = Number(process.env.ALARM_FLAP_COOLDOWN_MS ?? 300_000);
+
 // Estado em memória (limpeza preguiçosa para não crescer sem limite).
 const dedup = new Map(); // logicalKey -> ts do último envio
 const floodWin = new Map(); // cameraId -> array de ts dos alertas recentes
 const floodState = new Map(); // cameraId -> { zonas:Set, lastSummaryTs, n }
+const shelved = new Map(); // shelveKey (normalizada) -> { expiresAt, since, ms, reason }
+const flap = new Map(); // logicalKey -> { fires:[ts...], cooldownUntil }
+const emitLog = []; // [{ ts, priority }] de alarmes EMITIDOS (para metrics())
+let lastRateWarnTs = 0; // throttle do aviso de % crítico
 
 // ---------------------------------------------------------------------------
 // Derivação de chave lógica a partir do payload (com fallback por texto).
@@ -153,10 +223,195 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// SHELVING (ISA-18.2) — silenciar temporariamente uma chave, com expiração.
+// Chave: "cameraId|zona|tipo". Cada segmento aceita "*" como curinga (ex.:
+// "cam-doca-1|*|*" silencia TODA a câmera durante a manutenção). Segmentos são
+// normalizados (trim + lowercase). Estado EM MEMÓRIA (volátil).
+// ---------------------------------------------------------------------------
+function normSeg(s) {
+  const v = String(s ?? "").trim().toLowerCase();
+  return v === "" ? "*" : v; // segmento vazio vira curinga (silencia a dimensão)
+}
+
+// Normaliza uma chave de shelve livre ("cam|zona|tipo", curingas opcionais) em
+// exatamente 3 segmentos. Faltando segmentos → completados com "*".
+function normShelveKey(key) {
+  const parts = String(key ?? "").split("|");
+  const cam = normSeg(parts[0]);
+  const zona = normSeg(parts[1]);
+  const tipo = normSeg(parts[2]);
+  return `${cam}|${zona}|${tipo}`;
+}
+
+// Constrói a chave de shelve (não-curinga) a partir de um payload de alerta,
+// usando a MESMA derivação de cameraId/zona/tipo do evaluate(). Útil para a UI
+// montar a chave a silenciar a partir de um alerta exibido.
+function shelveKeyFor(p) {
+  const text = String((p && p.text) || "").trim();
+  const cameraId = pickCamera(p || {}, text);
+  const zona = pickZona(p || {}, text);
+  const tipo = (p && p.tipo) || (text ? classify(text).tipo : "");
+  return `${normSeg(cameraId)}|${normSeg(zona)}|${normSeg(tipo)}`;
+}
+
+function segMatch(pattern, actual) {
+  return pattern === "*" || pattern === actual;
+}
+
+// Verifica se um alarme (cameraId/zona/tipo) está coberto por algum shelve
+// ativo. Poda os expirados. Retorna a chave de shelve casada ou null.
+function isShelved(cameraId, zona, tipo, now = Date.now()) {
+  if (!shelved.size) return null;
+  const aCam = normSeg(cameraId);
+  const aZona = normSeg(zona);
+  const aTipo = normSeg(tipo);
+  for (const [k, info] of shelved) {
+    if (now >= info.expiresAt) { shelved.delete(k); continue; }
+    const [pCam, pZona, pTipo] = k.split("|");
+    if (segMatch(pCam, aCam) && segMatch(pZona, aZona) && segMatch(pTipo, aTipo)) return k;
+  }
+  return null;
+}
+
+/**
+ * Silencia temporariamente uma chave de alarme. VOLÁTIL (memória do processo).
+ * @param {string} key  "cameraId|zona|tipo" (cada segmento aceita "*").
+ * @param {number} [ms] Duração; default ALARM_SHELVE_DEFAULT_MS, clamp em
+ *                      [1000, ALARM_SHELVE_MAX_MS].
+ * @param {{reason?:string, by?:string}} [opts]
+ * @returns {{key:string, ms:number, since:number, expiresAt:number, reason:string, by:string}}
+ */
+function shelve(key, ms, opts = {}) {
+  const now = Date.now();
+  const k = normShelveKey(key);
+  let dur = Number(ms);
+  if (!Number.isFinite(dur) || dur <= 0) dur = SHELVE_DEFAULT_MS;
+  dur = Math.max(1000, Math.min(dur, SHELVE_MAX_MS));
+  const info = {
+    expiresAt: now + dur,
+    since: now,
+    ms: dur,
+    reason: String(opts.reason ?? ""),
+    by: String(opts.by ?? ""),
+  };
+  shelved.set(k, info);
+  log.info({ key: k, ms: dur, by: info.by, reason: info.reason }, "[alarm] shelve aplicado");
+  return Object.assign({ key: k }, info);
+}
+
+/** Remove um shelve (cancela o silêncio). @returns {boolean} havia shelve. */
+function unshelve(key) {
+  const k = normShelveKey(key);
+  const had = shelved.delete(k);
+  if (had) log.info({ key: k }, "[alarm] unshelve");
+  return had;
+}
+
+/** Lista os shelves ATIVOS (poda expirados). @returns {Array} */
+function listShelved() {
+  const now = Date.now();
+  const out = [];
+  for (const [k, info] of shelved) {
+    if (now >= info.expiresAt) { shelved.delete(k); continue; }
+    out.push({ key: k, since: info.since, ms: info.ms, expiresAt: info.expiresAt, remainingMs: info.expiresAt - now, reason: info.reason, by: info.by });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// ANTI-FLAPPING (chattering) — se a MESMA chave re-emite muitas vezes na janela,
+// entra em cooldown (off-delay) e é suprimida até o cooldown passar. Opera sobre
+// EMISSÕES que já passaram pelo dedup. Retorna true se deve SUPRIMIR.
+// ---------------------------------------------------------------------------
+function flapSuppress(key, now) {
+  if (!FLAP_ENABLED) return false;
+  let st = flap.get(key);
+  if (!st) { st = { fires: [], cooldownUntil: 0 }; flap.set(key, st); }
+  if (now < st.cooldownUntil) {
+    log.debug({ key, cooldownMs: st.cooldownUntil - now }, "[alarm] flap: chave em cooldown — suprimida");
+    return true;
+  }
+  while (st.fires.length && now - st.fires[0] > FLAP_WINDOW_MS) st.fires.shift();
+  st.fires.push(now);
+  if (st.fires.length > FLAP_THRESHOLD) {
+    st.cooldownUntil = now + FLAP_COOLDOWN_MS;
+    st.fires.length = 0;
+    log.warn({ key, janelaMs: FLAP_WINDOW_MS, limite: FLAP_THRESHOLD, cooldownMs: FLAP_COOLDOWN_MS }, "[alarm] flapping detectado — cooldown aplicado");
+    return true; // já suprime o disparo que estourou o limite
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// MÉTRICAS / RACIONALIZAÇÃO (EEMUA 191). Conta alarmes EMITIDOS (não os
+// suprimidos) por janela e por prioridade. Avisa se % crítico > meta.
+// ---------------------------------------------------------------------------
+function pruneEmitLog(now) {
+  while (emitLog.length && now - emitLog[0].ts > RATE_HISTORY_MS) emitLog.shift();
+}
+
+function recordEmit(priority, now) {
+  emitLog.push({ ts: now, priority });
+  pruneEmitLog(now);
+  // Avalia a meta de % crítico na janela (com throttle do aviso).
+  let inWin = 0, crit = 0;
+  for (let i = emitLog.length - 1; i >= 0; i--) {
+    if (now - emitLog[i].ts > RATE_WINDOW_MS) break;
+    inWin++;
+    if (emitLog[i].priority === "critical") crit++;
+  }
+  if (inWin >= RATE_MIN_SAMPLE) {
+    const pct = (crit / inWin) * 100;
+    if (pct > CRITICAL_TARGET_PCT && now - lastRateWarnTs >= RATE_WARN_THROTTLE_MS) {
+      lastRateWarnTs = now;
+      log.warn({ criticalPct: Number(pct.toFixed(1)), metaPct: CRITICAL_TARGET_PCT, janelaMs: RATE_WINDOW_MS, amostra: inWin }, "[alarm] % de alarmes críticos acima da meta (EEMUA 191)");
+    }
+  }
+}
+
+/**
+ * Snapshot da saúde do sistema de alarmes (para futura tela). Em memória.
+ * @returns {{now:number, windowMs:number, inWindow:number, ratePerMin:number,
+ *   criticalPct:number, criticalTargetPct:number, overTarget:boolean,
+ *   lastMinute:number, lastHour:number, byPriorityWindow:object,
+ *   byPriorityHour:object, shelvedActive:number}}
+ */
+function metrics() {
+  const now = Date.now();
+  pruneEmitLog(now);
+  const winP = { advisory: 0, high: 0, critical: 0 };
+  const hourP = { advisory: 0, high: 0, critical: 0 };
+  let inWin = 0, lastMin = 0, lastHour = 0;
+  for (const e of emitLog) {
+    const age = now - e.ts;
+    if (age <= 3_600_000) { lastHour++; if (hourP[e.priority] != null) hourP[e.priority]++; }
+    if (age <= 60_000) lastMin++;
+    if (age <= RATE_WINDOW_MS) { inWin++; if (winP[e.priority] != null) winP[e.priority]++; }
+  }
+  const ratePerMin = Number((inWin / (RATE_WINDOW_MS / 60_000)).toFixed(2));
+  const criticalPct = inWin ? Number(((winP.critical / inWin) * 100).toFixed(1)) : 0;
+  return {
+    now,
+    windowMs: RATE_WINDOW_MS,
+    inWindow: inWin,
+    ratePerMin,
+    criticalPct,
+    criticalTargetPct: CRITICAL_TARGET_PCT,
+    overTarget: inWin >= RATE_MIN_SAMPLE && criticalPct > CRITICAL_TARGET_PCT,
+    lastMinute: lastMin,
+    lastHour,
+    byPriorityWindow: winP,
+    byPriorityHour: hourP,
+    shelvedActive: listShelved().length,
+  };
+}
+
 // Limpeza preguiçosa dos mapas para evitar crescimento ilimitado.
 function gc(now) {
   if (dedup.size > 1000) for (const [k, t] of dedup) if (now - t > DEDUP_MS) dedup.delete(k);
   if (floodWin.size > 500) for (const [k, w] of floodWin) if (!w.length || now - w[w.length - 1] > FLOOD_WINDOW_MS) floodWin.delete(k);
+  if (flap.size > 1000) for (const [k, st] of flap) if (now >= st.cooldownUntil && (!st.fires.length || now - st.fires[st.fires.length - 1] > FLAP_WINDOW_MS)) flap.delete(k);
 }
 
 /**
@@ -173,12 +428,25 @@ function evaluate(p) {
   const meta = classify(text);
   const priority = priorityOf(text, meta);
 
-  // Política desligada → só classifica e repassa (retrocompatível).
-  if (!ENABLED) return makeDecision(text, ts, priority, { tipo: meta.tipo, critico: meta.critico });
-
   const cameraId = pickCamera(p, text);
   const zona = pickZona(p, text);
   const tipo = p.tipo || meta.tipo;
+
+  // 0) Shelving — silêncio temporário (manutenção). Camada anterior a tudo;
+  //    vale mesmo com a política desligada (é uma ação explícita do operador).
+  const sk = isShelved(cameraId, zona, tipo, now);
+  if (sk) {
+    log.debug({ key: sk, cameraId, zona, tipo }, "[alarm] shelved: alerta suprimido (silêncio temporário)");
+    return null;
+  }
+
+  // Política desligada → só classifica e repassa (retrocompatível),
+  // contabilizando a emissão para as métricas.
+  if (!ENABLED) {
+    recordEmit(priority, now);
+    return makeDecision(text, ts, priority, { tipo: meta.tipo, critico: meta.critico });
+  }
+
   // Chave lógica: cameraId|zona|tipo. Sem zona identificável, usa o corpo da
   // mensagem para não colapsar mensagens distintas (mantém o dedup conservador).
   const zonaKey = zona || pickBody(p, text);
@@ -193,8 +461,29 @@ function evaluate(p) {
   dedup.set(key, now);
   gc(now);
 
+  // 1b) Anti-flapping — suprime chattering da mesma chave (off-delay/cooldown).
+  if (flapSuppress(key, now)) return null;
+
   // 2) Supressão de inundação por câmera (+ priorização já calculada).
-  return applyFlood(cameraId, zona, text, ts, priority, now, meta);
+  const decision = applyFlood(cameraId, zona, text, ts, priority, now, meta);
+
+  // 3) Métricas: contabiliza apenas alarmes EMITIDOS (decisão não-nula).
+  if (decision) recordEmit(decision.priority, now);
+
+  return decision;
 }
 
-module.exports = { evaluate, classify, priorityOf, _state: { dedup, floodWin, floodState } };
+module.exports = {
+  evaluate,
+  classify,
+  priorityOf,
+  // Shelving (volátil, em memória)
+  shelve,
+  unshelve,
+  listShelved,
+  isShelved,
+  shelveKeyFor,
+  // Métricas / racionalização
+  metrics,
+  _state: { dedup, floodWin, floodState, shelved, flap, emitLog },
+};
