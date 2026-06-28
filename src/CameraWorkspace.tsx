@@ -24,6 +24,7 @@ import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxN
 import { createCounter, createOccupancy, inwardNormal, type Tripwire, type Counter, type Occupancy, type TripwireCounts } from "./vision/counting";
 import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
 import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
+import { clipSupport, recordClipWebm, buildMontagePng, triggerDownload, clipFileName, type ClipFrame } from "./camera/clipExport";
 import { MetricCell, type Band, type MetricState } from "./components/Sparkline";
 import { useAuth } from "./auth";
 import "./camera/cine.css";
@@ -289,6 +290,11 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   const [cinePlaying, setCinePlaying] = useState(false);
   const [cineSize, setCineSize] = useState(0);   // nº de quadros no buffer (atualiza o range do slider)
   const [reviewTip, setReviewTip] = useState<string | null>(null); // aviso quando o buffer está vazio
+  // EXPORT DE CLIPE (local): estado da geração + progresso (0..100) p/ desabilitar/rotular o botão.
+  const [clipState, setClipState] = useState<"idle" | "working" | "error">("idle");
+  const [clipPct, setClipPct] = useState(0);
+  const clipBusyRef = useRef(false);          // trava reentrância (1 export por vez)
+  const clipUrlRef = useRef<string | null>(null); // object URL do último download (revogado no cleanup)
 
   useEffect(() => { onAlertRef.current = onAlert; }, [onAlert]);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
@@ -296,8 +302,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { reviewRef.current = review; }, [review]);
   useEffect(() => { scrubRef.current = scrubIndex; }, [scrubIndex]);
-  // LGPD: ao desmontar a câmera, descarta TODO o buffer em memória (fecha os bitmaps).
-  useEffect(() => { const cb = cineRef.current; return () => { cb?.dispose(); }; }, []);
+  // LGPD: ao desmontar a câmera, descarta TODO o buffer em memória (fecha os bitmaps)
+  // e revoga qualquer object URL de export pendente (sem vazar memória).
+  useEffect(() => { const cb = cineRef.current; return () => { cb?.dispose(); if (clipUrlRef.current) { URL.revokeObjectURL(clipUrlRef.current); clipUrlRef.current = null; } }; }, []);
   useEffect(() => { zonesRef.current = zones; }, [zones]);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   useEffect(() => { confRef.current = conf; }, [conf]);
@@ -778,10 +785,12 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
     setReview(true);
   }
   // Volta ao vivo: sai da revisão e limpa o estado de scrub (o buffer segue, efêmero).
+  // Libera também o object URL do último export (memória).
   function exitReview() {
     setReview(false);
     setCinePlaying(false);
     setScrubIndex(0);
+    if (clipUrlRef.current) { URL.revokeObjectURL(clipUrlRef.current); clipUrlRef.current = null; }
   }
   function scrubBy(delta: number) {
     setCinePlaying(false);
@@ -814,9 +823,50 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
       URL.revokeObjectURL(url);
     }, "image/png");
   }
-  // TODO (clipe/GIF): exportar a sequência do buffer como GIF/WebM exigiria um encoder
-  // (sem dependências novas, fora do escopo conservador). Quando implementado, DEVE seguir a
-  // mesma regra: montagem em memória + download LOCAL manual, jamais upload/persistência no servidor.
+  // EXPORT DE CLIPE LOCAL — a partir dos quadros do buffer (janela atual de revisão).
+  // Abordagem: MediaRecorder sobre canvas.captureStream desenhando os quadros do buffer na
+  // taxa do cine-loop → Blob WebM. Fallback gracioso (sem deps): um único PNG em grade
+  // (montagem de quadros-chave) quando MediaRecorder/WebM não está disponível.
+  // LGPD: tudo montado EM MEMÓRIA; o resultado é SEMPRE um DOWNLOAD LOCAL manual
+  // (<a download>) nomeado por câmera + timestamp. NADA é enviado/persistido no servidor.
+  async function exportClip() {
+    if (clipBusyRef.current) return;             // 1 export por vez (botão também desabilita)
+    const snap = cineRef.current?.framesSnapshot() ?? [];
+    if (snap.length === 0) { setReviewTip("Sem quadros no buffer ainda — aguarde o vídeo ao vivo."); setTimeout(() => setReviewTip(null), 2500); return; }
+    // Achata os quadros p/ o exportador (apenas desenha os bitmaps; NÃO os fecha — o buffer é dono).
+    const frames: ClipFrame[] = snap.map((fr) => ({ img: fr.bmp, dw: fr.bmp.width, dh: fr.bmp.height, ts: fr.ts }));
+    const stampTs = snap[snap.length - 1].wallTs;
+    const onProgress = (done: number, total: number) => setClipPct(total ? Math.round((done / total) * 100) : 0);
+
+    clipBusyRef.current = true;
+    setClipState("working");
+    setClipPct(0);
+    try {
+      let blob: Blob; let ext: string;
+      if (clipSupport() === "webm") {
+        blob = await recordClipWebm(frames, { fps: 12, onProgress });
+        ext = "webm";
+      } else {
+        blob = await buildMontagePng(frames, { onProgress });
+        ext = "png";
+        setReviewTip("Clipe (vídeo) não suportado neste navegador — exportada uma montagem PNG dos quadros-chave.");
+        setTimeout(() => setReviewTip(null), 4000);
+      }
+      // download LOCAL manual (LGPD); revoga a URL anterior e agenda a desta.
+      if (clipUrlRef.current) URL.revokeObjectURL(clipUrlRef.current);
+      const url = triggerDownload(blob, clipFileName(cameraId, stampTs, ext));
+      clipUrlRef.current = url;
+      setTimeout(() => { if (clipUrlRef.current === url) { URL.revokeObjectURL(url); clipUrlRef.current = null; } }, 60000);
+      setClipState("idle");
+    } catch {
+      setClipState("error");
+      setReviewTip("Falha ao exportar o clipe neste navegador.");
+      setTimeout(() => { setReviewTip(null); setClipState("idle"); }, 4000);
+    } finally {
+      clipBusyRef.current = false;
+      setClipPct(0);
+    }
+  }
 
   // ── máscara (blueprint em grade) ──
   function getMask(z: Zone): Mask | null {
@@ -999,7 +1049,8 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
             <span className="cine-time">{cineRef.current ? `${cineRef.current.relativeSeconds(scrubIndex).toFixed(1)}s` : "0.0s"}</span>
             <span className="cine-count">{cineSize ? scrubIndex + 1 : 0}/{cineSize}</span>
             <span className="cine-spacer" />
-            <Button onClick={downloadSnapshot} title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">⤓ Snapshot</Button>
+            <Button onClick={downloadSnapshot} disabled={clipState === "working"} title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">⤓ Snapshot</Button>
+            <Button onClick={exportClip} disabled={clipState === "working"} title="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar.">{clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}</Button>
             <Button active onClick={exitReview}>▶ Ao vivo</Button>
           </div>
         </>)}

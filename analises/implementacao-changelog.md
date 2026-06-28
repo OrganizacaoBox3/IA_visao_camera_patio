@@ -86,10 +86,16 @@ Validação: `tsc` + `vite build` + `e2e 3/3` verdes.
 - alarmPolicy: shelving/métricas voláteis por processo (sem persistência/multi-instância); endpoints de shelve/metrics ainda não expostos no index.js.
 - RBAC: coluna `papel` é texto livre (sem CHECK no schema) — "engenheiro" persiste sem migração.
 
+## Onda D — Saúde de alarmes + export de clipe (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` verdes; contrato de métricas conferido.
+- **Endpoints de alarme** `server/index.js`: `GET /api/alarms/metrics`, `GET /api/alarms/shelves` (logado), `POST /api/alarms/shelves`, `DELETE /api/alarms/shelves/:key` (perfil de engenharia via requireConfigurer), ligando a lógica já existente de `alarmPolicy.js`.
+- **Tela Saúde de alarmes** `src/routes/AlarmHealthPage.tsx` (novo), `alarm-health.css`, `api.ts`, `main.tsx`, `AppShell.tsx`: rota `/alarmes-saude` (link só p/ canConfigure), KPIs glanceable (taxa/min, % crítico com faixa-alvo EEMUA), distribuição por prioridade, gestão de shelves (criar/remover com curinga), auto-refresh 7s.
+- **Export de clipe** `src/camera/clipExport.ts` (novo), `cineBuffer.ts`, `CameraWorkspace.tsx`: "Exportar clipe" no modo revisão via MediaRecorder/WebM (fallback montagem PNG), download local efêmero (LGPD), liberação de recursos.
+
 ## Pendências para evolução futura (não bloqueantes)
-- Expor endpoints de shelve/metrics de alarme + tela de saúde de alarmes.
 - Persistência de views/tripwires no backend (hoje localStorage) para compartilhar entre operadores/turnos.
-- Exportar clipe/GIF do cine-loop (hoje só snapshot PNG).
+- Shelving/métricas de alarme são voláteis por processo (sem persistência/multi-instância).
+- **Validação visual em runtime** (sem ffmpeg/câmera real neste ambiente): só estático + e2e headless até aqui.
 - Estilos inline de status/pager na Dashboard → promover a classes CSS.
 - Confirmar key de scheduler para câmeras de fadiga/"operador" (hoje só `:atividade` é priorizada).
 - Validar feeds demo com ffmpeg instalado (`winget install Gyan.FFmpeg`).

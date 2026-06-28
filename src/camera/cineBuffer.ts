@@ -108,6 +108,17 @@ export class CineBuffer {
     return this.frames.length ? this.frames[this.frames.length - 1] : null;
   }
 
+  /**
+   * Snapshot ORDENADO (FIFO, do mais antigo ao mais recente) dos quadros atuais —
+   * SOMENTE p/ a EXPORTAÇÃO LOCAL do clipe (ver clipExport.ts). Devolve uma cópia
+   * RASA do array (mesmos ImageBitmap): o chamador apenas LÊ/DESENHA os bitmaps e
+   * NUNCA deve fechá-los — o buffer continua dono e os fecha no evict()/clear().
+   * O encapsulamento e o FIFO/.close() internos ficam intactos.
+   */
+  framesSnapshot(): readonly CineFrame[] {
+    return this.frames.slice();
+  }
+
   /** Tempo relativo (segundos, negativo) do quadro i em relação ao mais recente. */
   relativeSeconds(i: number): number {
     const last = this.latest();
