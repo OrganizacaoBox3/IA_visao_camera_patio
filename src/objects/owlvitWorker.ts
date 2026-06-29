@@ -2,7 +2,7 @@
 // Worker de detecção ZERO-SHOT (OWL-ViT via transformers.js) — roda FORA da main thread.
 // Detecta objetos por TEXTO (candidate labels), então a "lista de objetos" é só configuração.
 // Recebe pixels RGBA (transferable) + rótulos; devolve [{label, score, box}].
-import { pipeline, RawImage, env } from "@xenova/transformers";
+import { pipeline, RawImage, env } from "@huggingface/transformers";
 
 // Usa modelos remotos (HuggingFace CDN) — cacheados pelo navegador após o 1º download.
 env.allowLocalModels = false;
