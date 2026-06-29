@@ -3,7 +3,17 @@
 > Leitura do projeto inteiro pela lente do `CLAUDE.md` (doutrina de `../agentes/`). Consolida 5 auditorias
 > (`01`–`05` nesta pasta). Evidência (E) × inferência (I); `⚠️` = a confirmar. *Nada foi alterado nesta análise.*
 
-## Veredito geral: 🟡 **Fundamentos sólidos, com bloqueadores P0 de segurança e verificação**
+## ✅ Status de execução (atualizado) — retrofit R0–R3 aplicado
+Implementado e validado (`npm run verify` verde + `e2e 7/7` + 68 unit tests):
+- **R0 (segredos):** `.service`/`users.json` desversionados + purgados do histórico git; `.claude/settings.json` (deny) ; `npm audit` 9→4. **Pendência humana:** rotacionar senha PG + `AUTH_SECRET` expostos.
+- **R1 (sensores):** ESLint+Prettier, `npm run verify`, pre-push hook, CI, **68 unit tests** das lógicas puras. Onda 0 fechada.
+- **R2 (arquitetura):** `CameraWorkspace` −528 linhas (hooks em `src/camera/`); `AlarmEvent` unificado em `src/types/alarm.ts`; grid morto removido.
+- **R3 (UI):** going-gray unificado (`--state-*` fonte única); scroll horizontal heatmap/matriz; e2e cobre Tabs/AlertDialog.
+- **Resíduos não-bloqueantes:** ~18 warnings de lint a baixar; 4 vulns transitivas de `@xenova/transformers` (fix breaking); `CameraWorkspace` ainda grande (~2341 linhas — extração futura opcional).
+
+> Veredito original abaixo (pré-retrofit), preservado para histórico.
+
+## Veredito geral (pré-retrofit): 🟡 **Fundamentos sólidos, com bloqueadores P0 de segurança e verificação**
 O projeto está **acima da média** em arquitetura, contratos e privacidade — mas **não pode ser chamado de "saudável"
 hoje** porque viola invariantes do próprio `CLAUDE.md` em **segredos versionados** e tem **zero verificação
 automatizada além de tsc/build/e2e**. A boa notícia: a dívida é **concentrada e endereçável**, não difusa.
