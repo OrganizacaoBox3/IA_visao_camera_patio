@@ -108,6 +108,17 @@ Validação: `tsc` + `vite build` + `e2e 3/3` + `node --check` verdes. Decisões
 - **Persistência de shelves** `alarmPolicy.js`: shelves ativas gravadas atômico em `alarm-shelves.json` (gitignored) e restauradas no init (expiradas descartadas); métricas seguem voláteis por design.
 - **ADRs** `analises/decisoes/`: registro de decisões retroativo + desta rodada (paralelização, LGPD, going-gray, política de alarme, persistência, live-sync).
 
+## Onda G — Migração para Radix primitives (implementada)
+Validação: `tsc` + `vite build` + `e2e 3/3` verdes. Plano em `analises/frontend-radix/`, decisão em ADR-007.
+- **Fase 0 (fundação)** `package.json`, `src/ui/*`: instala `@radix-ui/react-alert-dialog`, `react-slot`, `react-toggle`; cria wrappers `Tabs`, `ScrollArea`, `DropdownMenu`, `AlertDialog`, `Toggle`/`ToggleGroup`; padroniza `forwardRef`+`asChild`; hex→tokens em `ui.css`.
+- **Fase 1 (telas, 8 frentes paralelas)**: CameraWorkspace/FadigaView (drawer→Tabs, modos→Toggle, listas→ScrollArea, title→Tooltip; casca fullscreen preservada), Dashboard (drawer de alarmes→Dialog, grid responsivo, ScrollArea), Report (abas→Tabs, ScrollArea, limpar histórico→AlertDialog), Users (window.confirm→AlertDialog, seções→Tabs, ScrollArea), Profile (chips→ToggleGroup), AlarmHealth (ScrollArea, AlertDialog), AppShell+main (ConfirmProvider, Tooltips).
+- **Fase 2 (responsividade)** `index.css`, `ui.css`, `index.html`: `100dvh`, `viewport-fit=cover`+safe-area, container queries para painéis laterais, `min-width` em tabelas, alvos de toque ≥44px, breakpoints canônicos (sm640/md900/lg1200).
+
+### "A confirmar" da Onda G
+- Grid do Dashboard usa dois mecanismos (data-cols desktop + media queries mobile) — unificar em `--dash-cols` é follow-up.
+- Drawer de alarmes usa CSS `:has()` (baseline 2023+).
+- Ampliar e2e para cobrir Tabs/AlertDialog (hoje cobre Select-em-Dialog).
+
 ## Pendências para evolução futura (não bloqueantes)
 - Merge incremental de views/tripwires (hoje last-write-wins) para edição concorrente.
 - Métricas de alarme voláteis por processo (sem coordenação multi-instância).
