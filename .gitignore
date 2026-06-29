@@ -37,3 +37,7 @@ server/camcfg.json
 
 # Shelves de alarme persistidas (runtime)
 server/alarm-shelves.json
+
+# Segredos / runtime que NÃO devem ser versionados (R0)
+deploy/visao-hub.service
+server/users.json

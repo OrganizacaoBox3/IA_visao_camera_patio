@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./server/wa-auth/**)",
+      "Read(./server/users.json)",
+      "Read(./server/cameras.json)",
+      "Read(./server/alarms.json)",
+      "Read(./server/camcfg.json)",
+      "Read(./server/alarm-shelves.json)",
+      "Read(./server/rtsp.sources.json)",
+      "Read(./deploy/visao-hub.service)"
+    ]
+  }
+}

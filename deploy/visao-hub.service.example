@@ -1,0 +1,36 @@
+# systemd unit — hub de câmeras (socket.io) do Visão de Pátio. (EXEMPLO — sem segredos)
+# Copie para visao-hub.service (gitignored) e preencha os segredos via EnvironmentFile.
+# Instalar:
+#   sudo cp deploy/visao-hub.service /etc/systemd/system/visao-hub.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now visao-hub
+# Logs:  journalctl -u visao-hub -f
+[Unit]
+Description=Visao de Patio - hub de cameras (socket.io)
+After=network.target
+
+[Service]
+Type=simple
+User=visao
+WorkingDirectory=/var/www/visao-patio
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+Environment=HOST=127.0.0.1
+Environment=PORT=8091
+Environment=NODE_ENV=production
+# SEGREDOS fora do unit versionado: aponte para um arquivo só-root, NÃO versionado.
+#   sudo install -m 600 -o root -g root /dev/null /etc/visao-patio.env
+#   # edite /etc/visao-patio.env com AUTH_SECRET, PG*, etc. (ver chaves abaixo)
+EnvironmentFile=/etc/visao-patio.env
+# Chaves esperadas em /etc/visao-patio.env (NÃO coloque valores reais aqui):
+#   AUTH_SECRET=<segredo aleatório longo e único>
+#   PGHOST=<host>  PGPORT=5432  PGUSER=<user>  PGPASSWORD=<senha>  PGDATABASE=visao_computacional
+#   # Opcionais: SUPERADMIN_USER, SUPERADMIN_PASSWORD, CAMERA_TOKEN,
+#   #            ALERT_WEBHOOK_URL, ALERT_DEDUP_MS, WHATSAPP_ENABLED, RTSP_SOURCES, RTSP_FPS, RTSP_WIDTH
+# Hardening básico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
