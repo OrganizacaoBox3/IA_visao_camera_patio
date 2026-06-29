@@ -11,3 +11,9 @@ export { Dialog } from "./Dialog";
 export { ToastProvider, useToast, type ToastTone } from "./Toast";
 export { Badge, Spinner, Skeleton, SkeletonText, Alert, EmptyState, KpiCard, type Tone } from "./misc";
 export { PageHeader } from "./PageHeader";
+// ── Wrappers Radix adicionados na Fase 0 ──
+export { Tabs, TabsContent, type TabItem } from "./Tabs";
+export { ScrollArea, type ScrollAreaProps } from "./ScrollArea";
+export { DropdownMenu, type DropdownItem } from "./DropdownMenu";
+export { AlertDialog, ConfirmProvider, useConfirm, type AlertDialogVariant, type ConfirmOptions } from "./AlertDialog";
+export { Toggle, ToggleGroup, ToggleGroupItem, type ToggleGroupOption } from "./Toggle";
