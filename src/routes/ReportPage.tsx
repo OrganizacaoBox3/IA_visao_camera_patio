@@ -258,17 +258,16 @@ export function ReportPage() {
 
   // ── Atividade (sempre computado p/ ordem estável de hooks) ──
   const dataset = ds ?? EMPTY_DS;
-  const fA: Filters = { period, shift, area };
-  const { current: aCur, previous: aPrev } = useMemo(
-    () => windows(dataset, fA),
-    [dataset, period, shift, area],
-  );
+  // Filtros memorizados (identidade estável p/ entrarem nas deps dos memos sem recomputar a cada
+  // render): só mudam quando period/shift/area mudam — mesmo gatilho dos campos primitivos de antes.
+  const fA = useMemo<Filters>(() => ({ period, shift, area }), [period, shift, area]);
+  const { current: aCur, previous: aPrev } = useMemo(() => windows(dataset, fA), [dataset, fA]);
   const k = useMemo(() => kpis(aCur), [aCur]);
   const kPrev = useMemo(() => kpis(aPrev), [aPrev]);
   const areasForHeat = area === "Todas" ? dataset.areas : [area];
   const hm = useMemo(() => heatmap(aCur, areasForHeat), [aCur, area]); // eslint-disable-line react-hooks/exhaustive-deps
   const rank = useMemo(() => ranking(aCur, dataset.areas), [aCur, dataset.areas]);
-  const evo = useMemo(() => evolution(dataset, fA, 14), [dataset, period, shift, area]);
+  const evo = useMemo(() => evolution(dataset, fA, 14), [dataset, fA]);
   const evt = useMemo(() => {
     const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
     return allEvents
@@ -304,10 +303,10 @@ export function ReportPage() {
 
   // ── Leitura ──
   const rdataset = rds ?? EMPTY_RDS;
-  const fR: ReadingFilters = { period, shift, ponto };
+  const fR = useMemo<ReadingFilters>(() => ({ period, shift, ponto }), [period, shift, ponto]);
   const { current: rCur, previous: rPrev } = useMemo(
     () => readingWindows(rdataset, fR),
-    [rdataset, period, shift, ponto],
+    [rdataset, fR],
   );
   const rk = useMemo(() => readingKpis(rCur), [rCur]);
   const rkPrev = useMemo(() => readingKpis(rPrev), [rPrev]);
@@ -318,7 +317,7 @@ export function ReportPage() {
     () => readingByCamera(rCur, rdataset.cameraLabels),
     [rCur, rdataset.cameraLabels],
   );
-  const revo = useMemo(() => readingEvolution(rdataset, fR, 14), [rdataset, period, shift, ponto]);
+  const revo = useMemo(() => readingEvolution(rdataset, fR, 14), [rdataset, fR]);
   const revt = useMemo(() => {
     const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
     return rEvents
@@ -339,11 +338,8 @@ export function ReportPage() {
 
   // ── Objetos ──
   const odataset = ods ?? EMPTY_ODS;
-  const fO: ObjectFilters = { period, shift, setor };
-  const { current: oCur } = useMemo(
-    () => objectWindows(odataset, fO),
-    [odataset, period, shift, setor],
-  );
+  const fO = useMemo<ObjectFilters>(() => ({ period, shift, setor }), [period, shift, setor]);
+  const { current: oCur } = useMemo(() => objectWindows(odataset, fO), [odataset, fO]);
   const ok = useMemo(() => objectKpis(oCur), [oCur]);
   const ohm = useMemo(() => objectHeatmap(oCur, odataset.classes), [oCur, odataset.classes]);
   const opres = useMemo(
@@ -352,7 +348,7 @@ export function ReportPage() {
   );
   const orank = useMemo(() => objectRanking(oCur, odataset.setores), [oCur, odataset.setores]);
   const obyClass = useMemo(() => objectByClass(oCur, odataset.classes), [oCur, odataset.classes]);
-  const oevo = useMemo(() => objectEvolution(odataset, fO, 14), [odataset, period, shift, setor]);
+  const oevo = useMemo(() => objectEvolution(odataset, fO, 14), [odataset, fO]);
   const oevt = useMemo(() => {
     const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
     return oEvents
@@ -370,14 +366,11 @@ export function ReportPage() {
 
   // ── Fadiga ──
   const fdataset = fds ?? EMPTY_FDS;
-  const fF: FadigaFilters = { period, shift, posto };
-  const { current: fCur } = useMemo(
-    () => fadigaWindows(fdataset, fF),
-    [fdataset, period, shift, posto],
-  );
+  const fF = useMemo<FadigaFilters>(() => ({ period, shift, posto }), [period, shift, posto]);
+  const { current: fCur } = useMemo(() => fadigaWindows(fdataset, fF), [fdataset, fF]);
   const fk = useMemo(() => fadigaKpis(fCur), [fCur]);
   const fhm = useMemo(() => fadigaHeatmap(fCur), [fCur]);
-  const fevo = useMemo(() => fadigaEvolution(fdataset, fF, 14), [fdataset, period, shift, posto]);
+  const fevo = useMemo(() => fadigaEvolution(fdataset, fF, 14), [fdataset, fF]);
   const fevt = useMemo(() => {
     const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
     return fEvents

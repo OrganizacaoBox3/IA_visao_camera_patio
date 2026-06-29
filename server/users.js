@@ -153,9 +153,9 @@ async function init() {
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 function publicUser(u) {
-  const { senhaHash, ...r } = u;
+  const { senhaHash: _senhaHash, ...r } = u; // omite o hash de senha do objeto público
   return r;
-} // eslint-disable-line no-unused-vars
+}
 function getById(id) {
   return users.find((x) => x.id === id) || null;
 }

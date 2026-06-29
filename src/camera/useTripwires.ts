@@ -24,7 +24,7 @@ function newTripwireId(cameraId: string) {
 }
 // Lê linhas LEGADAS do localStorage (somente p/ migração única; validação defensiva do shape).
 function loadLegacyTripwires(cameraId: string): Tripwire[] {
-  let raw: unknown = null;
+  let raw: unknown;
   try {
     const s = localStorage.getItem(tripwireKey(cameraId));
     raw = s ? JSON.parse(s) : null;
@@ -105,7 +105,7 @@ export function useTripwires({
     let cancelled = false;
     setTripwireMode(false);
     (async () => {
-      let list: Tripwire[] = [];
+      let list: Tripwire[];
       try {
         list = await getTripwires(cameraId);
       } catch (e) {

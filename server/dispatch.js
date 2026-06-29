@@ -31,8 +31,8 @@ const FADIGA_DETALHE = {
 function formatWhatsApp(text, meta, ts, s = settings.get()) {
   const tcfg = (s.tipos && s.tipos[meta.tipo]) || {};
   let body = String(text || "")
-    .replace(/^[\s⚠️!]+/, "")
-    .trim(); // remove o "⚠ " inicial
+    .replace(/^(?:[\s!]|\u26A0|\uFE0F)+/u, "")
+    .trim(); // remove o "⚠ " inicial (⚠=U+26A0, ️=U+FE0F variation selector)
   let local = "";
   const i = body.indexOf(": ");
   if (i > 0 && i < 60) {

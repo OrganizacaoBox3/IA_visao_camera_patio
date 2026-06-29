@@ -69,7 +69,7 @@ export function saveZones(cameraId: string, zones: Zone[]) {
 
 // Carrega as zonas da câmera, migrando o formato antigo (modo-de-câmera + zonas só de atividade).
 export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
-  let raw: unknown = null;
+  let raw: unknown;
   try {
     const s = localStorage.getItem(key(cameraId));
     raw = s ? JSON.parse(s) : null;

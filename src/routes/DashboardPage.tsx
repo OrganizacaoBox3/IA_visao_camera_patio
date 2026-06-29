@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { setInferencePriority } from "../vision/scheduler";
@@ -196,6 +196,30 @@ export function DashboardPage() {
   // novos eventos socket). Só roda quando o modo está ligado.
   const [surfaceTick, setSurfaceTick] = useState(0);
 
+  // Decodifica o frame mais recente em ImageBitmap (assíncrono, fora da main thread); mantém só o último.
+  // Estável (useCallback []): só toca `framesRef`/`activeIdsRef` (refs estáveis); a recursão usa o nome
+  // da própria função (não a const externa). Identidade fixa → entra nas deps dos efeitos sem religá-los.
+  const drainDecode = useCallback(function drainDecode(id: string) {
+    const f = framesRef.current.get(id);
+    if (!f || f.decoding || !f.pending) return;
+    const buf = f.pending;
+    f.pending = null;
+    f.decoding = true;
+    createImageBitmap(new Blob([buf], { type: "image/jpeg" }))
+      .then((bmp) => {
+        const old = f.bmp;
+        f.bmp = bmp;
+        f.w = bmp.width;
+        f.h = bmp.height;
+        if (old) old.close();
+      })
+      .catch(() => {})
+      .finally(() => {
+        f.decoding = false;
+        if (f.pending) drainDecode(id);
+      });
+  }, []);
+
   useEffect(() => {
     const socket = io(APP_CONFIG.net.serverUrl, {
       transports: ["websocket"],
@@ -203,6 +227,9 @@ export function DashboardPage() {
       query: { role: "dashboard" },
     });
     socketRef.current = socket;
+    // Cópia local do Map de frames (estável) p/ usar no cleanup sem ler `framesRef.current` lá
+    // (evita o aviso de ref que "pode ter mudado"); é o mesmo Map, então fecha todos os bitmaps.
+    const frames = framesRef.current;
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
     socket.on("connect_error", (err) => {
@@ -260,31 +287,9 @@ export function DashboardPage() {
     );
     return () => {
       socket.disconnect();
-      framesRef.current.forEach((f) => f.bmp?.close());
+      frames.forEach((f) => f.bmp?.close());
     };
-  }, [token, logout]);
-
-  // Decodifica o frame mais recente em ImageBitmap (assíncrono, fora da main thread); mantém só o último.
-  function drainDecode(id: string) {
-    const f = framesRef.current.get(id);
-    if (!f || f.decoding || !f.pending) return;
-    const buf = f.pending;
-    f.pending = null;
-    f.decoding = true;
-    createImageBitmap(new Blob([buf], { type: "image/jpeg" }))
-      .then((bmp) => {
-        const old = f.bmp;
-        f.bmp = bmp;
-        f.w = bmp.width;
-        f.h = bmp.height;
-        if (old) old.close();
-      })
-      .catch(() => {})
-      .finally(() => {
-        f.decoding = false;
-        if (f.pending) drainDecode(id);
-      });
-  }
+  }, [token, logout, drainDecode]);
 
   // garante uma config carregada por câmera (default = atividade → retrocompatível)
   useEffect(() => {
@@ -457,7 +462,7 @@ export function DashboardPage() {
       const f = framesRef.current.get(id);
       if (f?.pending && !f.decoding) drainDecode(id);
     });
-  }, [pageCameras, openId]);
+  }, [pageCameras, openId, drainDecode]);
 
   // Eleva a prioridade da câmera ABERTA na fila do scheduler de inferência (A1). As tiles pedem
   // "low" e a câmera aberta (full) já pede "high"; aqui reforçamos a key na transição de abertura.
