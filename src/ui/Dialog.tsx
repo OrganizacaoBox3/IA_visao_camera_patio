@@ -2,6 +2,20 @@ import * as RDialog from "@radix-ui/react-dialog";
 import { forwardRef, type ReactNode, type ElementRef } from "react";
 import { IconButton } from "./Button";
 
+// Radix dismissa só a camada de cima no ESC, mas no pointerdown-fora o Dialog
+// avaliaria o MESMO evento e fecharia junto com o Select/Menu aberto. Não dá pra
+// consultar o DOM no onInteractOutside: o Radix já dismissou (removeu) o Select
+// antes dele rodar. Então capturamos no pointerdown (fase de captura, ANTES do
+// Radix) se havia uma camada sobreposta aberta naquele instante.
+let layerOpenAtPointerDown = false;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "pointerdown",
+    () => { layerOpenAtPointerDown = !!document.querySelector('[role="listbox"],[role="menu"]'); },
+    true,
+  );
+}
+
 // Diálogo acessível (foco preso, ESC fecha, ARIA). `trigger` opcional (controlado por open/onOpenChange).
 // `forwardRef` encaminha p/ o Content (DOM) para foco/medição programática.
 export const Dialog = forwardRef<ElementRef<typeof RDialog.Content>, {
@@ -13,7 +27,8 @@ export const Dialog = forwardRef<ElementRef<typeof RDialog.Content>, {
       {trigger && <RDialog.Trigger asChild>{trigger}</RDialog.Trigger>}
       <RDialog.Portal>
         <RDialog.Overlay className="ui-overlay" />
-        <RDialog.Content ref={ref} className="ui-dialog" aria-describedby={description ? undefined : "ui-dialog-no-desc"}>
+        <RDialog.Content ref={ref} className="ui-dialog" aria-describedby={description ? undefined : "ui-dialog-no-desc"}
+          onInteractOutside={(e) => { if (layerOpenAtPointerDown) e.preventDefault(); }}>
           <div className="ui-dialog-head">
             <RDialog.Title className="ui-dialog-title">{title}</RDialog.Title>
             <RDialog.Close asChild><IconButton label="Fechar">✕</IconButton></RDialog.Close>

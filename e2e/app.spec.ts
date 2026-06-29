@@ -63,3 +63,53 @@ test("regressão: Select funciona no modal '⚙ Câmeras' do dashboard", async (
   await opt.click();
   await expect(tipo).toContainText(/Operador/i);
 });
+
+// BUG relatado: abrir um Select e fechá-lo (ESC ou clique fora) estava FECHANDO O MODAL.
+// O Radix deve dismissar só a camada de cima (o Select), mantendo o Dialog aberto.
+test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashboard)", async ({ page, context }) => {
+  await login(page);
+  await connectCamera(context, page);
+
+  await page.getByRole("button", { name: /Câmeras/i }).click();
+  const dlg = page.getByRole("dialog");
+  await expect(dlg).toBeVisible();
+  const tipo = dlg.getByLabel("Tipo da câmera");
+
+  // 1) ESC fecha só o Select
+  await tipo.click();
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("option")).toHaveCount(0); // select fechou
+  await expect(dlg).toBeVisible();                        // dialog continua aberto
+
+  // 2) clique no OVERLAY com o Select aberto deve fechar só o Select (Radix:
+  //    Select tem disableOutsidePointerEvents → blinda o Dialog na 1ª interação).
+  //    Usa locator CSS porque o Select aberto deixa o resto aria-hidden.
+  await tipo.click();
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await page.locator(".ui-overlay").click({ position: { x: 5, y: 5 } });
+  await expect(page.getByRole("option")).toHaveCount(0); // select fechou
+  await expect(page.locator(".ui-dialog")).toBeVisible(); // dialog NÃO deve fechar
+
+  // 3) sem Select aberto, clicar no overlay DEVE fechar o dialog (dismiss normal preservado)
+  await page.locator(".ui-overlay").click({ position: { x: 5, y: 5 } });
+  await expect(page.locator(".ui-dialog")).toHaveCount(0);
+});
+
+test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config de zona)", async ({ page, context }) => {
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await page.getByRole("button", { name: "Configurar zona" }).first().click();
+  const dlg = page.getByRole("dialog");
+  await expect(dlg).toBeVisible();
+
+  const modo = dlg.getByLabel("Modo da zona");
+  await modo.click();
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("option")).toHaveCount(0); // select fechou
+  await expect(dlg).toBeVisible();                        // dialog de zona continua
+  // e a câmera fullscreen (overlay) continua aberta
+  await expect(page.locator(".cam")).toBeVisible();
+});
