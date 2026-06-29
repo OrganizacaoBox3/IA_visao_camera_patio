@@ -12,7 +12,6 @@ import {
   sensitivityFactor,
   type AtividadeCtx,
   type ZoneView,
-  type ZoneState,
 } from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
@@ -62,11 +61,8 @@ import {
   createCounter,
   createOccupancy,
   inwardNormal,
-  type Counter,
   type Occupancy,
-  type TripwireCounts,
 } from "./vision/counting";
-import { getTripwires, saveTripwires, ApiError, type Tripwire } from "./api";
 import {
   Button,
   IconButton,
@@ -85,17 +81,32 @@ import {
   Field,
   type Tone,
 } from "./ui";
-import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
-import {
-  clipSupport,
-  recordClipWebm,
-  buildMontagePng,
-  triggerDownload,
-  clipFileName,
-  type ClipFrame,
-} from "./camera/clipExport";
-import { MetricCell, type Band, type MetricState } from "./components/Sparkline";
+import { useCineLoop } from "./camera/useCineLoop";
+import { useTripwires } from "./camera/useTripwires";
+import { MetricCell } from "./components/Sparkline";
 import { useAuth } from "./auth";
+import {
+  getContentRect,
+  cssVar,
+  stateCanvasColor,
+  stateVar,
+  hexToRgb,
+  riskCanvasColor,
+  drawFadigaZone,
+} from "./camera/draw";
+import {
+  OCC_HI,
+  EAR_HI,
+  NOREAD_BAND,
+  RATE_BAND,
+  OCC_BAND,
+  stateToMetric,
+  riskToMetric,
+  rateToMetric,
+  noReadMetric,
+  occMetric,
+  useTelemetry,
+} from "./camera/useTelemetry";
 import "./camera/cine.css";
 
 const MODO_OPTS = [
@@ -114,119 +125,11 @@ const BRUSH_OPTS = [
 const HEAT_COLS = 32,
   HEAT_ROWS = 18;
 
-// ── Tripwires (linhas de contagem com direção) — fonte: BACKEND (compartilhado por câmera) ──
-// Antes viviam em localStorage (`vp-tripwires-<id>`); AGORA carregam/persistem via api.ts
-// (getTripwires/saveTripwires), compartilhados entre operadores/turnos. Coords normalizadas 0..1.
-// O localStorage permanece SÓ como origem de uma MIGRAÇÃO única best-effort (ver effect de load).
-const tripwireKey = (cameraId: string) => `vp-tripwires-${cameraId}`;
-let twSeq = 0;
-function newTripwireId(cameraId: string) {
-  return `${cameraId}-tw${Date.now().toString(36)}${++twSeq}`;
-}
-// Lê linhas LEGADAS do localStorage (somente p/ migração única; validação defensiva do shape).
-function loadLegacyTripwires(cameraId: string): Tripwire[] {
-  let raw: unknown = null;
-  try {
-    const s = localStorage.getItem(tripwireKey(cameraId));
-    raw = s ? JSON.parse(s) : null;
-  } catch {
-    raw = null;
-  }
-  if (!Array.isArray(raw)) return [];
-  const out: Tripwire[] = [];
-  for (const w of raw as Partial<Tripwire>[]) {
-    if (!w || typeof w.id !== "string" || !w.a || !w.b) continue;
-    if (
-      typeof w.a.x !== "number" ||
-      typeof w.a.y !== "number" ||
-      typeof w.b.x !== "number" ||
-      typeof w.b.y !== "number"
-    )
-      continue;
-    out.push({ id: w.id, a: { x: w.a.x, y: w.a.y }, b: { x: w.b.x, y: w.b.y } });
-  }
-  return out;
-}
-// Remove a chave legada após migração bem-sucedida (best-effort; falha silenciosa).
-function clearLegacyTripwires(cameraId: string) {
-  try {
-    localStorage.removeItem(tripwireKey(cameraId));
-  } catch {
-    /* no-op */
-  }
-}
-
-// ── Tokens da FUNDAÇÃO (Onda A) resolvidos p/ o canvas ──
-// O canvas precisa de cores literais; lemos as CSS vars de :root (index.css) e cacheamos.
-// Assim a tela de câmera CONSOME os tokens em vez de cores hardcoded ("going gray").
-const _cssCache = new Map<string, string>();
-function cssVar(name: string, fallback: string): string {
-  let v = _cssCache.get(name);
-  if (v === undefined) {
-    try {
-      v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    } catch {
-      v = "";
-    }
-    if (!v) v = fallback;
-    _cssCache.set(name, v);
-  }
-  return v;
-}
-// Going-gray: estado de ATIVIDADE → token semântico (canvas).
-// ATIVA→neutral · LENTA/OCIOSA→warn · VAZIA→neutral-dim · ALERTA→critical.
-function stateCanvasColor(s: ZoneState): string {
-  switch (s) {
-    case "ALERTA":
-      return cssVar("--state-critical", "#ef4444");
-    case "OCIOSA":
-    case "LENTA":
-      return cssVar("--state-warn", "#eab308");
-    case "VAZIA":
-      return cssVar("--state-neutral-dim", "#5b6b7a");
-    default:
-      return cssVar("--state-neutral", "#64748b"); // ATIVA (normal → neutro)
-  }
-}
-// Mesma semântica p/ inline styles do painel lateral (var() resolvido pelo CSS).
-function stateVar(s: ZoneState): string {
-  switch (s) {
-    case "ALERTA":
-      return "var(--state-critical)";
-    case "OCIOSA":
-    case "LENTA":
-      return "var(--state-warn)";
-    case "VAZIA":
-      return "var(--state-neutral-dim)";
-    default:
-      return "var(--state-neutral)";
-  }
-}
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  const s = (
-    h.length === 3
-      ? h
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : h
-  ).slice(0, 6);
-  const n = parseInt(s || "000000", 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
+// Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
 // CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
 // Roda o processador de cada zona na sua ROI, compõe o overlay e o painel num lugar só.
-
-type Rect = { x: number; y: number; w: number; h: number };
-function getContentRect(vpW: number, vpH: number, vidW: number, vidH: number): Rect {
-  if (!vidW || !vidH) return { x: 0, y: 0, w: vpW, h: vpH };
-  const s = Math.min(vpW / vidW, vpH / vidH);
-  const w = vidW * s,
-    h = vidH * s;
-  return { x: (vpW - w) / 2, y: (vpH - h) / 2, w, h };
-}
+// Helpers puros de geometria/cor/desenho ficam em ./camera/draw; telemetria em ./camera/useTelemetry.
 
 // resultado por zona guardado p/ desenho + painel
 type ZoneResult =
@@ -254,14 +157,7 @@ type Holder = {
   proc: AtividadeProcessor | LeituraProcessor | ObjetosProcessor | FadigaProcessor;
 };
 
-// risco → cor/rótulo (going-gray: OK normal → neutro; fadiga/celular → warn; duplo → critical)
-function riskCanvasColor(r: RiskState): string {
-  return r === "ALERTA_DUPLO"
-    ? cssVar("--state-critical", "#ef4444")
-    : r === "OK"
-      ? cssVar("--state-neutral", "#64748b")
-      : cssVar("--state-warn", "#eab308");
-}
+// risco → rótulo/tone (cor de canvas via riskCanvasColor em ./camera/draw)
 const RISK_LABEL: Record<RiskState, string> = {
   OK: "OK",
   ALERTA_FADIGA: "Fadiga",
@@ -283,47 +179,7 @@ const MODE_TONE: Record<ZoneMode, Tone> = {
   fadiga: "info",
 };
 
-// ── TELEMETRIA "NUNCA NÚMERO CRU" (Onda B item 10) ───────────────────────────────────────
-// Cada indicador numérico do painel lateral vira valor + sparkline + FAIXA-ALVO (banda verde/
-// aceitável), com realce quando fora da faixa (tokens --state-warn / --state-critical). As
-// faixas-alvo DERIVAM dos thresholds já existentes; premissas documentadas abaixo:
-//
-//  • Movimento (atividade): unidades de view.motion (= min(1, motionEMA/(motionActiveRatio·6))).
-//    A zona vira ATIVA quando motionEMA > motionActiveRatio·sf, i.e. view.motion > sf/6.
-//    Faixa-alvo = [sf/6, 1] (movimento saudável). Abaixo = LENTA/parada → warn/critical (estado).
-//  • Ocupação (atividade): faixa-alvo = [1, OCC_HI] pessoas (zona guarnecida, sem superlotar).
-//    Acima de OCC_HI = warn. OCC_HI é heurístico (não há ocupação-alvo por zona ainda) — A CONFIRMAR.
-//  • Taxa de leitura: faixa-alvo = [95, 100]% (via rateToMetric: ≥95 ok, ≥80 warn, abaixo
-//    critical — alinhado a reading.rateAlertPct=80).
-//  • No-reads: faixa-alvo = [0, 0] (ideal é zero). >0 = warn, ≥NOREAD_CRIT = critical.
-//  • Lidas/min e Total de objetos: SEM faixa-alvo fixa (depende da linha/cena) → só valor +
-//    tendência. A CONFIRMAR se houver meta de throughput por ponto/cena.
-//  • EAR (fadiga): faixa-alvo = [eyesClosedEarThreshold, EAR_HI] (olhos abertos). Abaixo do
-//    limiar de olhos fechados = sinal de fadiga → realce conforme o RISCO da zona.
-const HIST_LEN = 32; // tamanho do ring buffer por indicador (sparkline)
-const OCC_HI = 8; // teto heurístico de ocupação por zona — A CONFIRMAR
-const EAR_HI = 0.45; // teto de escala do EAR p/ a sparkline
-const NOREAD_CRIT = 3; // no-reads: ≥ isto vira critical (1..2 = warn)
-
-// estado da zona/risco/taxa → estado da MÉTRICA (cor da telemetria, tokens --state-*)
-function stateToMetric(s: ZoneState): MetricState {
-  return s === "ALERTA" ? "critical" : s === "ATIVA" ? "ok" : "warn";
-}
-function riskToMetric(r: RiskState): MetricState {
-  return r === "ALERTA_DUPLO" ? "critical" : r === "OK" ? "ok" : "warn";
-}
-function rateToMetric(pct: number): MetricState {
-  return pct >= 95 ? "ok" : pct >= 80 ? "warn" : "critical";
-}
-function noReadMetric(n: number): MetricState {
-  return n >= NOREAD_CRIT ? "critical" : n > 0 ? "warn" : "ok";
-}
-function occMetric(n: number): MetricState {
-  return n > OCC_HI ? "warn" : "ok";
-} // baixa ocupação não "grita" (zona pode estar legitimamente vazia)
-const NOREAD_BAND: Band = { lo: 0, hi: 0 };
-const RATE_BAND: Band = { lo: 95, hi: 100 };
-const OCC_BAND: Band = { lo: 1, hi: OCC_HI };
+// Telemetria "nunca número cru" (constantes/bandas/metric fns/useTelemetry) em ./camera/useTelemetry.
 
 // MODO-COMO-PRESET: o workspace tem N zonas (cada uma com seu modo), mas overlays/confiança
 // são GLOBAIS da sessão. O "preset ativo" segue o modo PREDOMINANTE entre as zonas
@@ -339,51 +195,7 @@ function dominantMode(zs: Zone[]): ModeKey {
   );
 }
 
-// Overlay compacto de fadiga DENTRO do retângulo da zona (olhos/boca + bbox de celular).
-// Landmarks são normalizados ao recorte → mapeados direto no rect da zona. (Mesh completo fica na câmera dedicada.)
-const FAD_LEFT = APP_CONFIG.fadiga.eyeIndices.left,
-  FAD_RIGHT = APP_CONFIG.fadiga.eyeIndices.right,
-  FAD_MOUTH = APP_CONFIG.fadiga.mouthIndices.draw;
-function drawFadigaZone(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  s: FadigaScene,
-) {
-  const lm = s.landmarks;
-  if (lm && lm.length) {
-    ctx.fillStyle = "rgba(56,189,248,0.95)";
-    for (const idx of [...FAD_LEFT, ...FAD_RIGHT]) {
-      const p = lm[idx];
-      if (!p) continue;
-      ctx.beginPath();
-      ctx.arc(x + p.x * w, y + p.y * h, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = s.yawnDetected ? "rgba(248,113,113,0.95)" : "rgba(251,191,36,0.95)";
-    for (const idx of FAD_MOUTH) {
-      const p = lm[idx];
-      if (!p) continue;
-      ctx.beginPath();
-      ctx.arc(x + p.x * w, y + p.y * h, 2.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  if (s.phone) {
-    const vw = s.videoWidth || w,
-      vh = s.videoHeight || h;
-    ctx.strokeStyle = "rgba(250,204,21,0.95)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(
-      x + (s.phone.x / vw) * w,
-      y + (s.phone.y / vh) * h,
-      (s.phone.width / vw) * w,
-      (s.phone.height / vh) * h,
-    );
-  }
-}
+// Overlay compacto de fadiga DENTRO da zona (drawFadigaZone) em ./camera/draw.
 type Track = {
   id: number;
   cx: number;
@@ -470,37 +282,38 @@ export function CameraWorkspace({
   const eventIdRef = useRef(0);
   const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers }); // camadas visíveis (lido no rAF)
   const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold); // limiar global de confiança
-  // Tripwires + ocupação (Onda C item 13): counter/occupancy da lib pura counting.ts (criados sob demanda no rAF).
-  const counterRef = useRef<Counter | null>(null);
+  // Ocupação (Onda C item 13): heatmap da lib pura counting.ts (criado sob demanda no rAF).
+  // Os tripwires/counter vivem no hook ./camera/useTripwires (ver abaixo).
   const occRef = useRef<Occupancy | null>(null);
-  const tripwiresRef = useRef<Tripwire[]>([]); // lido no rAF (desenho + setTripwires)
-  const twCountsRef = useRef<Record<string, TripwireCounts>>({}); // snapshot p/ o HUD no canvas (sem alocar por frame)
-  const twDrawRef = useRef<{
-    active: boolean;
-    sx: number;
-    sy: number;
-    cx: number;
-    cy: number;
-  } | null>(null); // linha em traçado (viewport px)
-  const tripwireModeRef = useRef(false); // espelha tripwireMode p/ checagem fresca dentro do re-sync assíncrono
-  const liveSyncCamRef = useRef<string | null>(null); // câmera já "armada" p/ re-sync (pula a 1ª execução por câmera — o load inicial já buscou)
   // Telemetria lateral (Onda B item 10): ring buffer leve por zona/indicador, alimentado pelo
-  // loop já existente na cadência de UI (sem custo extra de inferência). Map<zoneId, {key: série}>.
-  const histRef = useRef<Map<string, Record<string, number[]>>>(new Map());
-  // ── CONGELAR + CINE-LOOP (Onda B) ──
+  // loop já existente na cadência de UI (sem custo extra de inferência). Hook em ./camera/useTelemetry.
+  const { pushHist, hist, clearZone } = useTelemetry();
+  // ── CONGELAR + CINE-LOOP (Onda B) ── hook dedicado (./camera/useCineLoop).
   // Buffer de quadros EM MEMÓRIA / EFÊMERO (LGPD: nunca vai ao servidor; ver cineBuffer.ts).
-  const cineRef = useRef<CineBuffer | null>(null);
-  if (cineRef.current === null)
-    cineRef.current = new CineBuffer({ maxSeconds: 10, captureWidth: 480 });
-  const reviewRef = useRef(false); // lido no rAF: em revisão o palco PARA de avançar (mas a inferência de fundo segue)
-  const scrubRef = useRef(0); // índice do quadro em revisão (lido pelo render de revisão)
+  // Expõe estado/handlers p/ o JSX + `cineRef`/`reviewRef`/`captureFrame` p/ o rAF principal.
+  const {
+    review,
+    scrubIndex,
+    cinePlaying,
+    cineSize,
+    reviewTip,
+    clipState,
+    clipPct,
+    setScrubIndex,
+    setCinePlaying,
+    enterReview,
+    exitReview,
+    scrubBy,
+    downloadSnapshot,
+    exportClip,
+    captureFrame,
+    cineRef,
+    reviewRef,
+  } = useCineLoop({ mode, cameraId, getFrame, canvasRef, viewportRef });
 
   const [zones, setZones] = useState<Zone[]>([]);
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
   const [drawMode, setDrawMode] = useState(false);
-  const [tripwires, setTripwires] = useState<Tripwire[]>([]);
-  const [tripwireMode, setTripwireMode] = useState(false); // editor de linha ativo (gated por canConfigure)
-  const [twCounts, setTwCounts] = useState<Record<string, TripwireCounts>>({}); // contadores in/out p/ o painel lateral
   const [paintZoneId, setPaintZoneId] = useState<string | null>(null);
   const [brush, setBrush] = useState(2);
   const [erase, setErase] = useState(false);
@@ -520,17 +333,39 @@ export function CameraWorkspace({
   // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
   const [histDataset, setHistDataset] = useState<Dataset | null>(null);
   const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  // CONGELAR + CINE: modo revisão, índice do scrubber e play do cine-loop.
-  const [review, setReview] = useState(false);
-  const [scrubIndex, setScrubIndex] = useState(0);
-  const [cinePlaying, setCinePlaying] = useState(false);
-  const [cineSize, setCineSize] = useState(0); // nº de quadros no buffer (atualiza o range do slider)
-  const [reviewTip, setReviewTip] = useState<string | null>(null); // aviso quando o buffer está vazio
-  // EXPORT DE CLIPE (local): estado da geração + progresso (0..100) p/ desabilitar/rotular o botão.
-  const [clipState, setClipState] = useState<"idle" | "working" | "error">("idle");
-  const [clipPct, setClipPct] = useState(0);
-  const clipBusyRef = useRef(false); // trava reentrância (1 export por vez)
-  const clipUrlRef = useRef<string | null>(null); // object URL do último download (revogado no cleanup)
+
+  // ── Tripwires (linhas de contagem) ── hook dedicado (./camera/useTripwires).
+  // Estado/refs/editor + ciclo de vida (load/migração/sync ADR-006 + fiação do counter).
+  // O rAF principal cria/atualiza `counterRef`; o desenho lê `tripwiresRef`/`twCountsRef`/`twDrawRef`;
+  // os handlers de ponteiro leem `tripwireMode`/`twDrawRef` e chamam `commitTripwire`.
+  const {
+    tripwires,
+    tripwireMode,
+    twCounts,
+    setTripwireMode,
+    setTwCounts,
+    counterRef,
+    tripwiresRef,
+    twCountsRef,
+    twDrawRef,
+    commitTripwire,
+    invertTripwire,
+    removeTripwire,
+    resetCounts,
+    toggleTripwireMode,
+  } = useTripwires({
+    cameraId,
+    label,
+    canConfigure,
+    tripwiresRev,
+    getFrame,
+    viewportRef,
+    onAlertRef,
+    onEnterEditMode: () => {
+      setDrawMode(false);
+      setPaintZoneId(null);
+    },
+  });
 
   useEffect(() => {
     onAlertRef.current = onAlert;
@@ -544,24 +379,6 @@ export function CameraWorkspace({
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
-  useEffect(() => {
-    reviewRef.current = review;
-  }, [review]);
-  useEffect(() => {
-    scrubRef.current = scrubIndex;
-  }, [scrubIndex]);
-  // LGPD: ao desmontar a câmera, descarta TODO o buffer em memória (fecha os bitmaps)
-  // e revoga qualquer object URL de export pendente (sem vazar memória).
-  useEffect(() => {
-    const cb = cineRef.current;
-    return () => {
-      cb?.dispose();
-      if (clipUrlRef.current) {
-        URL.revokeObjectURL(clipUrlRef.current);
-        clipUrlRef.current = null;
-      }
-    };
-  }, []);
   useEffect(() => {
     zonesRef.current = zones;
   }, [zones]);
@@ -582,94 +399,7 @@ export function CameraWorkspace({
     setConf(p.confidenceThreshold);
     setActivePreset(dom);
   }, [cameraId, label]);
-  // Tripwires: carrega do BACKEND ao abrir/trocar a câmera (compartilhado; leitura p/ todos).
-  // Robustez: se o load falhar, degrada p/ lista vazia (contagem/heatmap seguem). Migração única
-  // best-effort: se o backend vier vazio E houver legado em localStorage E o usuário puder configurar
-  // (PUT exige engenharia), sobe o legado uma vez e limpa a chave local. Sem canConfigure, só usa o
-  // backend (nada se perde: o legado permanece no localStorage até alguém com permissão migrar).
-  useEffect(() => {
-    let cancelled = false;
-    setTripwireMode(false);
-    (async () => {
-      let list: Tripwire[] = [];
-      try {
-        list = await getTripwires(cameraId);
-      } catch (e) {
-        console.error("[tripwires] load falhou — degradando p/ lista vazia", e);
-        list = [];
-      }
-      if (cancelled) return;
-      if (list.length === 0 && canConfigure) {
-        const legacy = loadLegacyTripwires(cameraId);
-        if (legacy.length) {
-          try {
-            const saved = await saveTripwires(cameraId, legacy);
-            if (cancelled) return;
-            list = saved;
-            clearLegacyTripwires(cameraId);
-          } catch (e) {
-            if (cancelled) return;
-            console.error(
-              "[tripwires] migração best-effort falhou — usando legado nesta sessão",
-              e,
-            );
-            list = legacy;
-          }
-        }
-      }
-      if (!cancelled) setTripwires(list);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [cameraId, canConfigure]);
-  useEffect(() => {
-    tripwireModeRef.current = tripwireMode;
-  }, [tripwireMode]);
-  // SYNC AO VIVO last-write-wins (ADR-006): re-busca os tripwires quando a central sinaliza
-  // (prop `tripwiresRev` incrementada após `camcfg-updated {kind:"tripwires", cameraId}`).
-  // Retrocompatível: se a prop NÃO vier (undefined), sai cedo e nada muda — segue carregando
-  // só ao abrir/trocar a câmera (effect acima). Sem dependências novas.
-  useEffect(() => {
-    if (tripwiresRev === undefined) return; // central não passou a prop → comportamento atual preservado
-    // Pula a PRIMEIRA execução para cada câmera: o effect de load acima já buscou (e pode estar
-    // migrando o legado). Evita double-fetch e a corrida de sobrescrever a migração. Só reage a
-    // INCREMENTOS reais de tripwiresRev depois que a câmera está montada/carregada.
-    if (liveSyncCamRef.current !== cameraId) {
-      liveSyncCamRef.current = cameraId;
-      return;
-    }
-    // NÃO sobrescrever edição local em curso: se o editor de linha está ativo (tripwireMode) ou há
-    // uma linha sendo traçada (twDrawRef), PULA o re-fetch para não descartar trabalho não salvo
-    // (ADR-006: "re-fetch é pulado durante edição local"). A central segue incrementando; o próximo
-    // sinal após concluir/cancelar a edição traz o estado mais recente.
-    if (tripwireModeRef.current || twDrawRef.current?.active) return;
-    let cancelled = false;
-    (async () => {
-      let list: Tripwire[];
-      try {
-        list = await getTripwires(cameraId);
-      } catch (e) {
-        console.error("[tripwires] re-sync ao vivo falhou — mantendo lista atual", e);
-        return;
-      } // erro gracioso: não quebra a tela
-      if (cancelled) return; // guard de corrida (troca rápida de câmera)
-      if (tripwireModeRef.current || twDrawRef.current?.active) return; // usuário entrou em edição durante o fetch → não sobrescreve
-      setTripwires(list); // o counter re-seta + painel via effect [tripwires]
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [cameraId, tripwiresRev]);
-  // Re-set da geometria no counter quando as linhas mudam (preserva contadores por id) + reflete no painel.
-  useEffect(() => {
-    tripwiresRef.current = tripwires;
-    if (counterRef.current) {
-      counterRef.current.setTripwires(tripwires);
-      twCountsRef.current = counterRef.current.counts();
-    }
-    setTwCounts(counterRef.current ? counterRef.current.counts() : {});
-  }, [tripwires]);
+  // Tripwires: load/migração/sync ao vivo + re-set do counter → hook ./camera/useTripwires.
   // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
   useEffect(() => {
     const z = cfgZoneId ? zonesRef.current.find((zz) => zz.id === cfgZoneId) : null;
@@ -868,22 +598,6 @@ export function CameraWorkspace({
     );
   }
 
-  // Telemetria: empurra uma amostra no ring buffer do indicador (mantém só HIST_LEN pontos).
-  function pushHist(zoneId: string, key: string, val: number) {
-    let m = histRef.current.get(zoneId);
-    if (!m) {
-      m = {};
-      histRef.current.set(zoneId, m);
-    }
-    const arr = m[key] ?? (m[key] = []);
-    arr.push(val);
-    if (arr.length > HIST_LEN) arr.shift();
-  }
-  // Série recente de um indicador (vazio se ainda não houver amostras).
-  function hist(zoneId: string, key: string): number[] {
-    return histRef.current.get(zoneId)?.[key] ?? [];
-  }
-
   useEffect(() => {
     let stopped = false;
     const loop = () => {
@@ -908,8 +622,7 @@ export function CameraWorkspace({
       // CINE: alimenta o ring buffer com o MESMO frame que já passou pelo gate (sem decode extra).
       // Só na câmera aberta (full) e fora da revisão — em revisão o buffer fica congelado/estável.
       // LGPD: tudo em memória/efêmero; nada é enviado/persistido (ver cineBuffer.ts).
-      if (mode === "full" && !reviewRef.current)
-        cineRef.current?.capture(f.el, f.w, f.h, now, Date.now());
+      captureFrame(f.el, f.w, f.h, now, Date.now());
       if (pausedRef.current) return; // ⏸ inspeção: congela o frame (não processa nem redesenha)
       const frameDt = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0;
       lastFrameAtRef.current = now;
@@ -1431,190 +1144,8 @@ export function CameraWorkspace({
     }
   }
 
-  // ── CONGELAR + CINE-LOOP: render do quadro em revisão ──
-  // Desenha SÓ a imagem do buffer (letterbox idêntico ao ao vivo) + HUD de tempo relativo.
-  // Não reusa os overlays do ao vivo: eles correspondem ao frame corrente, não ao quadro revisado.
-  function drawReviewFrame(canvas: HTMLCanvasElement, viewport: HTMLDivElement, fr: CineFrame) {
-    const dpr = window.devicePixelRatio || 1;
-    const vpW = viewport.clientWidth,
-      vpH = viewport.clientHeight;
-    if (canvas.width !== Math.round(vpW * dpr) || canvas.height !== Math.round(vpH * dpr)) {
-      canvas.width = Math.round(vpW * dpr);
-      canvas.height = Math.round(vpH * dpr);
-    }
-    const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, vpW, vpH);
-    const cr = getContentRect(vpW, vpH, fr.w, fr.h);
-    ctx.drawImage(fr.bmp, cr.x, cr.y, cr.w, cr.h);
-  }
-
-  // Renderiza o quadro selecionado sempre que o índice/modo mudar (e ao redimensionar via tick do loop).
-  useEffect(() => {
-    if (!review) return;
-    const canvas = canvasRef.current,
-      viewport = viewportRef.current;
-    if (!canvas || !viewport) return;
-    const fr = cineRef.current?.get(scrubIndex);
-    if (fr) drawReviewFrame(canvas, viewport, fr);
-  }, [review, scrubIndex, cineSize]);
-
-  // Cine-loop (play): avança o scrubber ~12 quadros/s, em loop, sem tocar no buffer.
-  useEffect(() => {
-    if (!review || !cinePlaying) return;
-    let raf = 0;
-    let last = 0;
-    const step = (t: number) => {
-      raf = requestAnimationFrame(step);
-      if (t - last < 80) return;
-      last = t; // ~12 fps de reprodução
-      const n = cineRef.current?.size() ?? 0;
-      if (n <= 1) return;
-      setScrubIndex((i) => (i + 1 >= n ? 0 : i + 1));
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [review, cinePlaying]);
-
-  // Entra em revisão (CONGELAR): trava o palco no último quadro do buffer.
-  function enterReview() {
-    const n = cineRef.current?.size() ?? 0;
-    if (n === 0) {
-      setReviewTip("Sem quadros no buffer ainda — aguarde o vídeo ao vivo.");
-      setTimeout(() => setReviewTip(null), 2500);
-      return;
-    }
-    setReviewTip(null);
-    setCineSize(n);
-    setScrubIndex(n - 1);
-    setCinePlaying(false);
-    setReview(true);
-  }
-  // Volta ao vivo: sai da revisão e limpa o estado de scrub (o buffer segue, efêmero).
-  // Libera também o object URL do último export (memória).
-  function exitReview() {
-    setReview(false);
-    setCinePlaying(false);
-    setScrubIndex(0);
-    if (clipUrlRef.current) {
-      URL.revokeObjectURL(clipUrlRef.current);
-      clipUrlRef.current = null;
-    }
-  }
-  function scrubBy(delta: number) {
-    setCinePlaying(false);
-    const n = cineRef.current?.size() ?? 0;
-    if (n === 0) return;
-    setScrubIndex((i) => Math.max(0, Math.min(n - 1, i + delta)));
-  }
-
-  // SNAPSHOT LOCAL — download manual iniciado pelo operador. NUNCA vai ao servidor.
-  // Renderiza o quadro (revisão: do buffer; ao vivo: o frame corrente) numa resolução própria
-  // e dispara um download via canvas.toBlob → <a download>. Ação 100% local (LGPD).
-  function downloadSnapshot() {
-    const fr = review ? (cineRef.current?.get(scrubIndex) ?? null) : null;
-    const tmp = document.createElement("canvas");
-    let src: CanvasImageSource;
-    let w: number;
-    let h: number;
-    let stampTs: number;
-    if (fr) {
-      src = fr.bmp;
-      w = fr.bmp.width;
-      h = fr.bmp.height;
-      stampTs = fr.wallTs;
-    } else {
-      const f = getFrame();
-      if (!f) return;
-      src = f.el;
-      w = f.w;
-      h = f.h;
-      stampTs = Date.now();
-    }
-    tmp.width = w;
-    tmp.height = h;
-    const ctx = tmp.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(src, 0, 0, w, h);
-    tmp.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      const d = new Date(stampTs);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      a.href = url;
-      a.download = `${cameraId}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }, "image/png");
-  }
-  // EXPORT DE CLIPE LOCAL — a partir dos quadros do buffer (janela atual de revisão).
-  // Abordagem: MediaRecorder sobre canvas.captureStream desenhando os quadros do buffer na
-  // taxa do cine-loop → Blob WebM. Fallback gracioso (sem deps): um único PNG em grade
-  // (montagem de quadros-chave) quando MediaRecorder/WebM não está disponível.
-  // LGPD: tudo montado EM MEMÓRIA; o resultado é SEMPRE um DOWNLOAD LOCAL manual
-  // (<a download>) nomeado por câmera + timestamp. NADA é enviado/persistido no servidor.
-  async function exportClip() {
-    if (clipBusyRef.current) return; // 1 export por vez (botão também desabilita)
-    const snap = cineRef.current?.framesSnapshot() ?? [];
-    if (snap.length === 0) {
-      setReviewTip("Sem quadros no buffer ainda — aguarde o vídeo ao vivo.");
-      setTimeout(() => setReviewTip(null), 2500);
-      return;
-    }
-    // Achata os quadros p/ o exportador (apenas desenha os bitmaps; NÃO os fecha — o buffer é dono).
-    const frames: ClipFrame[] = snap.map((fr) => ({
-      img: fr.bmp,
-      dw: fr.bmp.width,
-      dh: fr.bmp.height,
-      ts: fr.ts,
-    }));
-    const stampTs = snap[snap.length - 1].wallTs;
-    const onProgress = (done: number, total: number) =>
-      setClipPct(total ? Math.round((done / total) * 100) : 0);
-
-    clipBusyRef.current = true;
-    setClipState("working");
-    setClipPct(0);
-    try {
-      let blob: Blob;
-      let ext: string;
-      if (clipSupport() === "webm") {
-        blob = await recordClipWebm(frames, { fps: 12, onProgress });
-        ext = "webm";
-      } else {
-        blob = await buildMontagePng(frames, { onProgress });
-        ext = "png";
-        setReviewTip(
-          "Clipe (vídeo) não suportado neste navegador — exportada uma montagem PNG dos quadros-chave.",
-        );
-        setTimeout(() => setReviewTip(null), 4000);
-      }
-      // download LOCAL manual (LGPD); revoga a URL anterior e agenda a desta.
-      if (clipUrlRef.current) URL.revokeObjectURL(clipUrlRef.current);
-      const url = triggerDownload(blob, clipFileName(cameraId, stampTs, ext));
-      clipUrlRef.current = url;
-      setTimeout(() => {
-        if (clipUrlRef.current === url) {
-          URL.revokeObjectURL(url);
-          clipUrlRef.current = null;
-        }
-      }, 60000);
-      setClipState("idle");
-    } catch {
-      setClipState("error");
-      setReviewTip("Falha ao exportar o clipe neste navegador.");
-      setTimeout(() => {
-        setReviewTip(null);
-        setClipState("idle");
-      }, 4000);
-    } finally {
-      clipBusyRef.current = false;
-      setClipPct(0);
-    }
-  }
+  // Cine-loop / revisão / snapshot / export de clipe → hook ./camera/useCineLoop
+  // (render do quadro de revisão, play, enterReview/exitReview/scrubBy, downloadSnapshot, exportClip).
 
   // ── máscara (blueprint em grade) ──
   function getMask(z: Zone): Mask | null {
@@ -1745,72 +1276,14 @@ export function CameraWorkspace({
     };
     setZones((p) => persist([...p, nz]));
   }
-  // ── editor de tripwires (linhas de contagem) — distinto do editor de zonas ──
-  function commitTripwire() {
-    const d = twDrawRef.current;
-    twDrawRef.current = null;
-    if (!d) return;
-    if (Math.hypot(d.cx - d.sx, d.cy - d.sy) < 20) return; // linha muito curta → ignora (evita clique acidental)
-    const f = getFrame(),
-      viewport = viewportRef.current;
-    if (!f || !viewport) return;
-    const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
-    const cl = (v: number) => Math.max(0, Math.min(1, v));
-    const a = { x: cl((d.sx - cr.x) / cr.w), y: cl((d.sy - cr.y) / cr.h) };
-    const b = { x: cl((d.cx - cr.x) / cr.w), y: cl((d.cy - cr.y) / cr.h) };
-    const w: Tripwire = { id: newTripwireId(cameraId), a, b };
-    const prev = tripwires;
-    persistTw([...prev, w], prev);
-  }
-  // Persiste no BACKEND de forma OTIMISTA: aplica `next` já, e em erro faz rollback p/ `prev` +
-  // toast (via onAlert). O PUT exige perfil de engenharia no backend; estas ações já estão gated
-  // por canConfigure no front, então um 403 só aparece em borda (ex.: perfil revogado) — tratado.
-  function persistTw(next: Tripwire[], prev: Tripwire[]) {
-    setTripwires(next); // otimista (o counter re-seta via effect; preserva contadores por id)
-    saveTripwires(cameraId, next).catch((e) => {
-      setTripwires(prev); // rollback
-      const msg =
-        e instanceof ApiError ? e.message : "Não foi possível salvar as linhas de contagem.";
-      onAlertRef.current?.(`⚠ ${label}: ${msg}`);
-    });
-  }
-  // Inverte a direção (troca a↔b → Entrada↔Saída). O counter preserva contadores por id ao re-setar.
-  function invertTripwire(id: string) {
-    const prev = tripwires;
-    persistTw(
-      prev.map((w) => (w.id === id ? { id: w.id, a: w.b, b: w.a } : w)),
-      prev,
-    );
-  }
-  function removeTripwire(id: string) {
-    const prev = tripwires;
-    persistTw(
-      prev.filter((w) => w.id !== id),
-      prev,
-    );
-  }
-  // Zera os contadores da SESSÃO (geometria mantida); reflete no HUD e no painel.
-  function resetCounts() {
-    counterRef.current?.reset();
-    twCountsRef.current = counterRef.current ? counterRef.current.counts() : {};
-    setTwCounts(counterRef.current ? counterRef.current.counts() : {});
-  }
+  // Editor de tripwires (commitTripwire/invertTripwire/removeTripwire/resetCounts/toggleTripwireMode)
+  // → hook ./camera/useTripwires. O onUp acima chama `commitTripwire` ao soltar uma linha traçada.
   // Modos de edição mutuamente exclusivos (não conflitar tripwire × zona × pintura).
   function toggleDrawMode() {
     setDrawMode((v) => {
       const nv = !v;
       if (nv) {
         setTripwireMode(false);
-        setPaintZoneId(null);
-      }
-      return nv;
-    });
-  }
-  function toggleTripwireMode() {
-    setTripwireMode((v) => {
-      const nv = !v;
-      if (nv) {
-        setDrawMode(false);
         setPaintZoneId(null);
       }
       return nv;
@@ -1843,7 +1316,7 @@ export function CameraWorkspace({
     cropsRef.current.delete(id);
     resultsRef.current.delete(id);
     maskCacheRef.current.delete(id);
-    histRef.current.delete(id);
+    clearZone(id);
     if (paintZoneId === id) setPaintZoneId(null);
     setZones((p) => persist(p.filter((z) => z.id !== id)));
   }
