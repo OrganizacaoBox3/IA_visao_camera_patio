@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
+import { Tooltip } from "../ui";
 
 // Token do nó de câmera: ?key=<CAMERA_TOKEN> (enrolamento de dispositivo) ou, em fallback,
 // a sessão de um humano logado no mesmo navegador. Câmera não exige login humano.
@@ -110,7 +111,11 @@ export function CameraPage() {
             ? (hubConnected ? "transmitindo ao hub" : "câmera ok · reconectando ao hub…")
             : status === "connecting" ? "conectando…" : status === "denied" ? "câmera negada" : "erro"}
         </span>
-        {profile && <span className="muted" title="Perfil de captura definido pela central">· {profile}</span>}
+        {profile && (
+          <Tooltip content="Perfil de captura definido pela central">
+            <span className="muted">· {profile}</span>
+          </Tooltip>
+        )}
       </div>
       <div className="cam-node-hint">Nó de câmera · processamento e controles ficam na central</div>
       {!isSecureCameraContext() && <div className="cam-node-err">Sem HTTPS: a câmera pode ser bloqueada fora de localhost. Use HTTPS para acesso externo.</div>}

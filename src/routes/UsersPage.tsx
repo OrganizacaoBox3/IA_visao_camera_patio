@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Button, IconButton, Input, Field, Select, Switch, CheckboxRow, SegmentedControl, EmptyState, Alert, Skeleton, useToast } from "../ui";
+import { Button, IconButton, Input, Field, Select, Switch, CheckboxRow, Tabs, TabsContent, ScrollArea, AlertDialog, EmptyState, Alert, Skeleton, useToast } from "../ui";
 import { copyToClipboard } from "../ui/clipboard";
 import { listUsers, createUser, patchUser, deleteUser, getCameraEnroll, getWaStatus, waTest, listRecipients, createRecipient, patchRecipient, deleteRecipient, getNotifSettings, saveNotifSettings, previewNotif, type AdminUser, type WaStatus, type Recipient, type NotifSettings } from "../api";
 
@@ -36,6 +36,8 @@ export function UsersPage() {
   const [preview, setPreview] = useState<Record<string, string> | null>(null);
   const [notifMsg, setNotifMsg] = useState<string | null>(null);
   const [secao, setSecao] = useState<"usuarios" | "notificacoes" | "cameras">("usuarios");
+  // Confirmação destrutiva centralizada (substitui window.confirm) — Radix AlertDialog controlado.
+  const [confirmRemove, setConfirmRemove] = useState<{ title: string; description: string; run: () => void } | null>(null);
 
   async function refresh() {
     setLoading(true); setErr(null);
@@ -83,6 +85,9 @@ export function UsersPage() {
     try { await deleteRecipient(id); await refreshDests(); toast("Destinatário removido.", "ok"); }
     catch (e) { toast(e instanceof Error ? e.message : "Falha ao remover destinatário.", "alert"); }
   }
+  function requestDeleteDest(d: Recipient) {
+    setConfirmRemove({ title: "Remover destinatário?", description: `"${d.nome || d.numero}" deixará de receber os alertas do WhatsApp.`, run: () => onDeleteDest(d.id) });
+  }
   async function onCopyEnroll() {
     if (!enrollUrl) return;
     const ok = await copyToClipboard(enrollUrl);
@@ -121,8 +126,11 @@ export function UsersPage() {
     try { await patchUser(u.id, { senha }); setReveal({ usuario: u.usuario, senha }); toast("Senha redefinida.", "ok"); }
     catch (e) { const m = e instanceof Error ? e.message : "Falha ao resetar."; setErr(m); toast(m, "alert"); }
   }
-  async function onDelete(u: AdminUser) {
-    if (!confirm(`Remover o usuário "${u.usuario}"?`)) return;
+  function onDelete(u: AdminUser) {
+    // window.confirm → AlertDialog (variant danger): só remove ao confirmar.
+    setConfirmRemove({ title: "Remover usuário?", description: `O usuário "${u.usuario}" será removido permanentemente.`, run: () => doDeleteUser(u) });
+  }
+  async function doDeleteUser(u: AdminUser) {
     setErr(null);
     try { await deleteUser(u.id); await refresh(); toast("Usuário removido.", "ok"); }
     catch (e) { const m = e instanceof Error ? e.message : "Falha ao remover."; setErr(m); toast(m, "alert"); }
@@ -145,10 +153,13 @@ export function UsersPage() {
         )}
         {err && <Alert tone="alert">{err}</Alert>}
 
-        <SegmentedControl value={secao} onChange={(v) => setSecao(v as typeof secao)} ariaLabel="Seção de administração"
-          options={[{ value: "usuarios", label: "Usuários" }, { value: "notificacoes", label: "Notificações" }, { value: "cameras", label: "Câmeras" }]} />
+        <Tabs
+          items={[{ value: "usuarios", label: "Usuários" }, { value: "notificacoes", label: "Notificações" }, { value: "cameras", label: "Câmeras" }]}
+          value={secao} onValueChange={(v) => setSecao(v as typeof secao)} ariaLabel="Seção de administração"
+        >
 
-        <section className="panel" hidden={secao !== "cameras"}>
+        <TabsContent value="cameras">
+        <section className="panel">
           <h3>Câmeras — link de enrolamento</h3>
           {enrollUrl ? (
             <div className="enroll">
@@ -160,8 +171,10 @@ export function UsersPage() {
             <p className="meta-text muted">Defina <code>CAMERA_TOKEN</code> no hub (systemd) para gerar o link de enrolamento. Sem ele, a câmera usa a sessão de um usuário logado no mesmo navegador.</p>
           )}
         </section>
+        </TabsContent>
 
-        <section className="panel" hidden={secao !== "notificacoes"}>
+        <TabsContent value="notificacoes">
+        <section className="panel">
           <h3>WhatsApp (andon) {wa && <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />}</h3>
           {!wa || !wa.enabled ? (
             <p className="meta-text muted">Desligado. Defina <code>WHATSAPP_ENABLED=1</code> no hub (systemd) e pareie aqui. Use um número dedicado (Baileys é não-oficial).</p>
@@ -185,7 +198,7 @@ export function UsersPage() {
         </section>
 
         {notif && (
-          <section className="panel" hidden={secao !== "notificacoes"}>
+          <section className="panel">
             <h3>Mensagens & alertas</h3>
             <p className="meta-text muted">Defina o que cada notificação envia. Vale para todos os destinatários.</p>
             <div className="users-new">
@@ -223,7 +236,7 @@ export function UsersPage() {
           </section>
         )}
 
-        <section className="panel" hidden={secao !== "notificacoes"}>
+        <section className="panel">
           <h3>Destinatários do WhatsApp ({dests.length})</h3>
           <p className="meta-text muted">Números avulsos que recebem os alertas (além dos usuários que cadastram o próprio número em "Meu perfil"). Você é responsável pelo consentimento (LGPD).</p>
           <form className="users-new" onSubmit={onAddDest}>
@@ -232,7 +245,7 @@ export function UsersPage() {
             <CheckboxRow id="chk-dest-crit" checked={novoDest.somenteCriticos} onCheckedChange={(v) => setNovoDest((d) => ({ ...d, somenteCriticos: v }))}>só críticos</CheckboxRow>
             <Button variant="primary" type="submit" disabled={novoDest.numero.replace(/\D/g, "").length < 10}>Adicionar</Button>
           </form>
-          <div className="rtable-wrap" style={{ marginTop: "var(--sp-2)" }}>
+          <ScrollArea orientation="both" style={{ maxHeight: 320, marginTop: "var(--sp-2)" }}>
             <table className="rtable">
               <thead><tr><th>Nome</th><th>Número</th><th>Filtro</th><th>Status</th><th>Ações</th></tr></thead>
               <tbody>
@@ -242,16 +255,18 @@ export function UsersPage() {
                     <td className="mono">{d.numero}</td>
                     <td><div className="cell-toggle"><Switch checked={d.somenteCriticos} onCheckedChange={(v) => onPatchDest(d.id, { somenteCriticos: v })} ariaLabel="só críticos" /><span>{d.somenteCriticos ? "só críticos" : "todos"}</span></div></td>
                     <td><div className="cell-toggle"><Switch checked={d.ativo} onCheckedChange={(v) => onPatchDest(d.id, { ativo: v })} ariaLabel="ativo" /><span>{d.ativo ? "Ativo" : "Inativo"}</span></div></td>
-                    <td><Button variant="danger" size="sm" onClick={() => onDeleteDest(d.id)}>Remover</Button></td>
+                    <td><Button variant="danger" size="sm" onClick={() => requestDeleteDest(d)}>Remover</Button></td>
                   </tr>
                 ))}
                 {dests.length === 0 && <tr><td colSpan={5} className="empty-note">Nenhum destinatário avulso.</td></tr>}
               </tbody>
             </table>
-          </div>
+          </ScrollArea>
         </section>
+        </TabsContent>
 
-        <section className="panel" hidden={secao !== "usuarios"}>
+        <TabsContent value="usuarios">
+        <section className="panel">
           <h3>Novo usuário</h3>
           <form className="users-new" onSubmit={onCreate}>
             <Input placeholder="Usuário" value={novo.usuario} onChange={(e) => setNovo((n) => ({ ...n, usuario: e.target.value }))} />
@@ -264,9 +279,9 @@ export function UsersPage() {
           </form>
         </section>
 
-        <section className="panel panel-events" hidden={secao !== "usuarios"}>
+        <section className="panel panel-events">
           <h3>{loading ? "Carregando…" : `${rows.length} usuário(s)`}</h3>
-          <div className="rtable-wrap">
+          <ScrollArea orientation="both" style={{ maxHeight: 460 }}>
             <table className="rtable">
               <thead><tr><th>Usuário</th><th>Papel</th><th>Status</th><th>Ações</th></tr></thead>
               <tbody>
@@ -285,8 +300,21 @@ export function UsersPage() {
                 {!loading && rows.length === 0 && <tr><td colSpan={4} className="empty-note">Nenhum usuário.</td></tr>}
               </tbody>
             </table>
-          </div>
+          </ScrollArea>
         </section>
+        </TabsContent>
+
+        </Tabs>
+
+        <AlertDialog
+          open={!!confirmRemove}
+          onOpenChange={(o) => { if (!o) setConfirmRemove(null); }}
+          title={confirmRemove?.title ?? ""}
+          description={confirmRemove?.description}
+          confirmLabel="Remover"
+          variant="danger"
+          onConfirm={() => confirmRemove?.run()}
+        />
       </div>
     </div>
   );

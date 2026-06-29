@@ -8,7 +8,7 @@ import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
-import { Button, IconButton, Switch, Checkbox, Select, Input, Dialog, Tooltip, useToast } from "../ui";
+import { Button, IconButton, Switch, Checkbox, Select, Input, Dialog, Tooltip, ScrollArea, useToast } from "../ui";
 import { listAlarms, ackAlarm, forwardAlarm, getViews, saveViews, ApiError, type AlarmEvent, type AlarmPriority, type AlarmState, type SavedView } from "../api";
 import "./alarms.css";
 import "./views.css";
@@ -481,7 +481,7 @@ export function DashboardPage() {
         <div className="alarm-card__top">
           <span className="alarm-card__dot" style={{ background: prioColor(a.priority) }} />
           <span className="alarm-card__prio" style={{ color: prioColor(a.priority) }}>{PRIO_LABEL[a.priority]}</span>
-          <span className="alarm-card__time" title={new Date(a.ts).toLocaleString("pt-BR")}>{when}</span>
+          <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}><span className="alarm-card__time">{when}</span></Tooltip>
         </div>
         <div className="alarm-card__text">{a.text}</div>
         <div className="alarm-card__meta">
@@ -493,8 +493,8 @@ export function DashboardPage() {
         </div>
         {!done && (
           <div className="alarm-card__actions">
-            <Button size="sm" variant="primary" onClick={() => actOnAlarm(a, "ack")} title="Reconhecer (assumir o alarme)">Reconhecer</Button>
-            <Button size="sm" onClick={() => actOnAlarm(a, "forward")} title="Encaminhar a outro operador">Encaminhar</Button>
+            <Tooltip content="Reconhecer (assumir o alarme)"><Button size="sm" variant="primary" onClick={() => actOnAlarm(a, "ack")}>Reconhecer</Button></Tooltip>
+            <Tooltip content="Encaminhar a outro operador"><Button size="sm" onClick={() => actOnAlarm(a, "forward")}>Encaminhar</Button></Tooltip>
           </div>
         )}
       </div>
@@ -511,14 +511,15 @@ export function DashboardPage() {
     return (
       <div key={`wrap-${c.id}`} style={{ position: "relative", display: "grid", minHeight: 0 }}>
         {inner}
-        <span
-          title={statuses[c.id]?.lastError || st.text}
-          style={{ position: "absolute", top: 6, left: 6, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", fontSize: 11, background: "var(--cam-overlay-scrim)", color: "var(--cam-overlay-fg)", border: `1px solid ${st.border}`, padding: "2px 7px", borderRadius: 999, pointerEvents: "none" }}
-        >
-          {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
-          <span className="dot-status" style={{ background: st.dot }} />
-          {st.text}{st.fps != null ? ` · ${st.fps}fps` : ""}
-        </span>
+        <Tooltip content={statuses[c.id]?.lastError || st.text}>
+          <span
+            style={{ position: "absolute", top: 6, left: 6, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", fontSize: 11, background: "var(--cam-overlay-scrim)", color: "var(--cam-overlay-fg)", border: `1px solid ${st.border}`, padding: "2px 7px", borderRadius: 999 }}
+          >
+            {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
+            <span className="dot-status" style={{ background: st.dot }} />
+            {st.text}{st.fps != null ? ` · ${st.fps}fps` : ""}
+          </span>
+        </Tooltip>
       </div>
     );
   }
@@ -533,26 +534,28 @@ export function DashboardPage() {
           <Select value={activeView ? activeView.id : "__all__"} onChange={pickView} ariaLabel="View por setor"
             options={[{ value: "__all__", label: "Todas as câmeras" }, ...views.map((v) => ({ value: v.id, label: v.name }))]} />
         </span>
-        <Button onClick={() => setViewsMgrOpen(true)} title="Criar, renomear ou excluir views por setor">▤ Views</Button>
+        <Tooltip content="Criar, renomear ou excluir views por setor"><Button onClick={() => setViewsMgrOpen(true)}>▤ Views</Button></Tooltip>
         <Tooltip content="Prioriza as câmeras com mais atividade recente (alarmes + fps) na 1ª página.">
           <span className="switch"><Switch checked={autoSurface} onCheckedChange={setAutoSurface} ariaLabel="Auto-destaque das câmeras ativas" /> Auto-destaque</span>
         </Tooltip>
         <Tooltip content="Encurta o limite p/ demonstrar ao vivo. Tempo exibido é real.">
           <span className="switch"><Switch checked={demoMode} onCheckedChange={setDemoMode} ariaLabel="Limite curto (10s)" /> Limite curto (10s)</span>
         </Tooltip>
-        <Button onClick={() => setShowConfig(true)} title="Definir o tipo de cada câmera (área × operador)">⚙ Câmeras</Button>
+        <Tooltip content="Definir o tipo de cada câmera (área × operador)"><Button onClick={() => setShowConfig(true)}>⚙ Câmeras</Button></Tooltip>
         <a className="ui-btn" href={camNodeUrl} target="_blank" rel="noreferrer">+ Nó de câmera</a>
         {pageCount > 1 && (
           <span className="switch" style={{ gap: 4 }} aria-label="Paginação de feeds">
-            <Button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page <= 0} title="Página anterior">‹</Button>
+            <Tooltip content="Página anterior"><Button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page <= 0}>‹</Button></Tooltip>
             <span className="muted">{page + 1}/{pageCount}</span>
-            <Button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1} title="Próxima página">›</Button>
+            <Tooltip content="Próxima página"><Button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1}>›</Button></Tooltip>
           </span>
         )}
-        <Button onClick={() => setAlarmsOpen((o) => !o)} active={alarmsOpen} title="Fila de alarmes (eventos acionáveis)">
-          ▦ Alarmes
-          {newCount > 0 && <span className="alarm-badge" data-prio={topNewPriority} aria-label={`${newCount} novos`}>{newCount}</span>}
-        </Button>
+        <Tooltip content="Fila de alarmes (eventos acionáveis)">
+          <Button onClick={() => setAlarmsOpen((o) => !o)} active={alarmsOpen}>
+            ▦ Alarmes
+            {newCount > 0 && <span className="alarm-badge" data-prio={topNewPriority} aria-label={`${newCount} novos`}>{newCount}</span>}
+          </Button>
+        </Tooltip>
         <span className="dash-stats" aria-live="polite">
           <span className="stat">hub <b>{connected ? "ok" : "off"}</b></span>
           <span className="stat">câmeras <b>{cameras.length}</b></span>
@@ -575,7 +578,7 @@ export function DashboardPage() {
             <Button onClick={() => setActiveViewId(null)}>Ver todas as câmeras</Button>
           </div>
         ) : (
-          <div className="dash-grid" style={{ gridTemplateColumns: `repeat(${colsFor(pageCameras.length)}, 1fr)` }}>
+          <div className="dash-grid" data-cols={colsFor(pageCameras.length)}>
             {pageCameras.map(renderTile)}
           </div>
         )}
@@ -616,8 +619,8 @@ export function DashboardPage() {
               {views.map((v) => (
                 <div key={`vrow-${v.id}`} className="views-mgr__row">
                   <div className="views-mgr__name"><b>{v.name}</b><span className="muted">{v.cameraIds.length} câmera(s)</span></div>
-                  <Button size="sm" onClick={() => startEditView(v)} title="Editar câmeras, ordem e nome">Editar</Button>
-                  <Button size="sm" variant="danger" onClick={() => deleteView(v.id)} title="Excluir esta view">Excluir</Button>
+                  <Tooltip content="Editar câmeras, ordem e nome"><Button size="sm" onClick={() => startEditView(v)}>Editar</Button></Tooltip>
+                  <Tooltip content="Excluir esta view"><Button size="sm" variant="danger" onClick={() => deleteView(v.id)}>Excluir</Button></Tooltip>
                 </div>
               ))}
               <div className="views-mgr__foot">
@@ -635,27 +638,39 @@ export function DashboardPage() {
                 <span className="ui-label">Câmeras na view (ordem dos tiles)</span>
                 {draftIds.length === 0
                   ? <p className="empty-note">Adicione câmeras da lista abaixo.</p>
-                  : draftIds.map((id, i) => (
-                    <div key={`sel-${id}`} className="views-editor__item">
-                      <span className="views-editor__pos">{i + 1}</span>
-                      <span className="views-editor__lbl">{camLabel(id)}</span>
-                      <IconButton label="Subir" onClick={() => moveDraftCam(id, -1)} disabled={i === 0}>↑</IconButton>
-                      <IconButton label="Descer" onClick={() => moveDraftCam(id, 1)} disabled={i === draftIds.length - 1}>↓</IconButton>
-                      <IconButton label="Remover da view" onClick={() => toggleDraftCam(id)}>✕</IconButton>
-                    </div>
-                  ))}
+                  : (
+                    <ScrollArea className="views-editor__scroll">
+                      <div className="views-editor__items">
+                        {draftIds.map((id, i) => (
+                          <div key={`sel-${id}`} className="views-editor__item">
+                            <span className="views-editor__pos">{i + 1}</span>
+                            <span className="views-editor__lbl">{camLabel(id)}</span>
+                            <IconButton label="Subir" onClick={() => moveDraftCam(id, -1)} disabled={i === 0}>↑</IconButton>
+                            <IconButton label="Descer" onClick={() => moveDraftCam(id, 1)} disabled={i === draftIds.length - 1}>↓</IconButton>
+                            <IconButton label="Remover da view" onClick={() => toggleDraftCam(id)}>✕</IconButton>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  )}
               </div>
 
               <div className="views-editor__col">
                 <span className="ui-label">Câmeras disponíveis</span>
                 {cameras.filter((c) => !draftIds.includes(c.id)).length === 0
                   ? <p className="empty-note">Todas as câmeras conectadas já estão na view.</p>
-                  : cameras.filter((c) => !draftIds.includes(c.id)).map((c) => (
-                    <div key={`av-${c.id}`} className="views-editor__item">
-                      <span className="views-editor__lbl">{c.label}</span>
-                      <Button size="sm" onClick={() => toggleDraftCam(c.id)} title="Adicionar à view">+ Adicionar</Button>
-                    </div>
-                  ))}
+                  : (
+                    <ScrollArea className="views-editor__scroll">
+                      <div className="views-editor__items">
+                        {cameras.filter((c) => !draftIds.includes(c.id)).map((c) => (
+                          <div key={`av-${c.id}`} className="views-editor__item">
+                            <span className="views-editor__lbl">{c.label}</span>
+                            <Tooltip content="Adicionar à view"><Button size="sm" onClick={() => toggleDraftCam(c.id)}>+ Adicionar</Button></Tooltip>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  )}
               </div>
 
               <div className="views-mgr__foot">
@@ -666,29 +681,28 @@ export function DashboardPage() {
           )}
         </Dialog>
 
-        {/* Fila de alarmes acionável (Onda B · item 7) — drawer lateral, ts desc, ack/forward */}
-        {alarmsOpen && (
-          <aside className="alarm-drawer" aria-label="Fila de alarmes">
-            <header className="alarm-drawer__head">
-              <b>Fila de alarmes</b>
-              <span className="alarm-drawer__count" data-zero={newCount === 0 ? 1 : 0}>{newCount} novo(s)</span>
-              <div className="spacer" />
-              <IconButton label="Fechar fila de alarmes" onClick={() => setAlarmsOpen(false)}>✕</IconButton>
-            </header>
-            <div className="alarm-drawer__filters">
-              <Select value={fPriority} onChange={(v) => setFPriority(v as "all" | AlarmPriority)} ariaLabel="Filtrar por prioridade"
-                options={[{ value: "all", label: "Toda prioridade" }, { value: "critical", label: "Crítico" }, { value: "high", label: "Alta" }, { value: "advisory", label: "Informativo" }]} />
-              <Select value={fState} onChange={(v) => setFState(v as "all" | AlarmState)} ariaLabel="Filtrar por estado"
-                options={[{ value: "all", label: "Todo estado" }, { value: "new", label: "Novos" }, { value: "acknowledged", label: "Reconhecidos" }, { value: "forwarded", label: "Encaminhados" }]} />
-              <label><Checkbox checked={hideAcked} onCheckedChange={setHideAcked} ariaLabel="Ocultar reconhecidos" /> Limpar reconhecidos</label>
-            </div>
+        {/* Fila de alarmes acionável (Onda B · item 7) — drawer/sheet via Dialog (Radix):
+            foco preso, ESC e portal "de graça"; o .ui-dialog é reposicionado como sheet
+            lateral (e bottom-sheet no mobile) em alarms.css, escopado por :has(.alarm-drawer__list)
+            para não afetar os demais diálogos. Toda a lógica (filtros, ack/forward otimista,
+            contador) é preservada. */}
+        <Dialog open={alarmsOpen} onOpenChange={setAlarmsOpen}
+          title={<>Fila de alarmes <span className="alarm-drawer__count" data-zero={newCount === 0 ? 1 : 0}>{newCount} novo(s)</span></>}>
+          <div className="alarm-drawer__filters">
+            <Select value={fPriority} onChange={(v) => setFPriority(v as "all" | AlarmPriority)} ariaLabel="Filtrar por prioridade"
+              options={[{ value: "all", label: "Toda prioridade" }, { value: "critical", label: "Crítico" }, { value: "high", label: "Alta" }, { value: "advisory", label: "Informativo" }]} />
+            <Select value={fState} onChange={(v) => setFState(v as "all" | AlarmState)} ariaLabel="Filtrar por estado"
+              options={[{ value: "all", label: "Todo estado" }, { value: "new", label: "Novos" }, { value: "acknowledged", label: "Reconhecidos" }, { value: "forwarded", label: "Encaminhados" }]} />
+            <label><Checkbox checked={hideAcked} onCheckedChange={setHideAcked} ariaLabel="Ocultar reconhecidos" /> Limpar reconhecidos</label>
+          </div>
+          <ScrollArea className="alarm-drawer__scroll">
             <div className="alarm-drawer__list">
               {visibleAlarms.length === 0
                 ? <p className="alarm-drawer__empty">{alarms.length === 0 ? "Nenhum alarme registrado." : "Nenhum alarme para os filtros atuais."}</p>
                 : visibleAlarms.map(renderAlarmCard)}
             </div>
-          </aside>
-        )}
+          </ScrollArea>
+        </Dialog>
       </div>
     </div>
   );

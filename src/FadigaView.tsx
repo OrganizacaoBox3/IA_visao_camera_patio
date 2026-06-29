@@ -7,7 +7,7 @@ import { FadigaProcessor, type FadigaModelState, type FadigaCounters, type Fadig
 import { loadFadigaThresholds, saveFadigaThresholds, FADIGA_DEFAULT_THRESHOLDS, FADIGA_THRESHOLD_FIELDS } from "./fadiga/calibration";
 import { type FadigaSamplePayload, type FadigaEvent } from "./report/store";
 import { FrameMeter } from "./telemetry";
-import { Button, IconButton, Slider } from "./ui";
+import { Button, IconButton, Slider, Toggle, ToggleGroup, ScrollArea, Tooltip } from "./ui";
 
 // Modo FADIGA (casca fina): pipeline (Face/Hand/coco) + motor de risco vivem em FadigaProcessor;
 // aqui ficam só feed/overlay, painel, beep e telemetria.
@@ -141,19 +141,21 @@ export function FadigaView({ label, getFrame, mode, onOpen, onClose, onAlert, on
   // ── TILE ──
   if (mode === "tile") {
     return (
-      <div className={`tile fadiga-tile ${RISK_CLS[risk]}`} onClick={onOpen} title="Abrir monitor do operador">
-        <div className="viewport tile-vp" ref={viewportRef}>
-          <canvas ref={canvasRef} />
-          <div className="tile-badges">
-            <span className={`tb ${status.cls}`}>● {status.txt}</span>
-            {phone && <span className="tb ALERTA">📱</span>}
+      <Tooltip content="Abrir monitor do operador">
+        <div className={`tile fadiga-tile ${RISK_CLS[risk]}`} onClick={onOpen}>
+          <div className="viewport tile-vp" ref={viewportRef}>
+            <canvas ref={canvasRef} />
+            <div className="tile-badges">
+              <span className={`tb ${status.cls}`}>● {status.txt}</span>
+              {phone && <span className="tb ALERTA">📱</span>}
+            </div>
+          </div>
+          <div className="tile-foot">
+            <span className="tile-name">{label}</span>
+            <span className="tile-meta">EAR {ear == null ? "--" : ear.toFixed(2)} · {signal !== "SEM_SINAL" ? signal : `${handCount} mão(s)`}</span>
           </div>
         </div>
-        <div className="tile-foot">
-          <span className="tile-name">{label}</span>
-          <span className="tile-meta">EAR {ear == null ? "--" : ear.toFixed(2)} · {signal !== "SEM_SINAL" ? signal : `${handCount} mão(s)`}</span>
-        </div>
-      </div>
+      </Tooltip>
     );
   }
 
@@ -170,6 +172,7 @@ export function FadigaView({ label, getFrame, mode, onOpen, onClose, onAlert, on
       <div className="cam-stage" ref={viewportRef}>
         <canvas className="overlay" ref={canvasRef} />
         <aside className="cam-drawer">
+          <ScrollArea style={{ flex: 1, minHeight: 0 }}>
           <div className="read-now">
             <div className="obj-total">Risco: <b style={{ color: risk === "OK" ? "var(--ok)" : risk === "ALERTA_DUPLO" ? "var(--alert)" : "var(--idle)" }}>{RISK_LABEL[risk]}</b>{ack && <span className="flow-chip Baixo" style={{ marginLeft: 8 }}>✋ reconhecido</span>}</div>
             <div className="read-now-meta">
@@ -193,12 +196,22 @@ export function FadigaView({ label, getFrame, mode, onOpen, onClose, onAlert, on
 
           <div className="read-flow-h">Controles</div>
           <div className="fadiga-controls">
-            <Button active={muted} onClick={() => setMuted((m) => !m)} title="Liga/desliga o alarme sonoro">{muted ? "🔇 Som off" : "🔊 Som on"}</Button>
+            <Tooltip content="Liga/desliga o alarme sonoro">
+              <Toggle pressed={muted} onPressedChange={setMuted} aria-label="Liga/desliga o alarme sonoro">{muted ? "🔇 Som off" : "🔊 Som on"}</Toggle>
+            </Tooltip>
             <div className="cfg-classes">
               <span className="cfg-classes-lbl">Detecções</span>
-              {DETECTORS.map(([k, lbl]) => (
-                <button key={k} className={`cfg-chip ${flags[k] ? "on" : ""}`} onClick={() => setFlags((prev) => ({ ...prev, [k]: !prev[k] }))} title={`Liga/desliga ${lbl}`}>{lbl}</button>
-              ))}
+              <ToggleGroup
+                type="multiple"
+                ariaLabel="Detecções"
+                value={DETECTORS.filter(([k]) => flags[k]).map(([k]) => k)}
+                onValueChange={(vals) => setFlags((prev) => {
+                  const next = { ...prev };
+                  for (const [k] of DETECTORS) next[k] = vals.includes(k);
+                  return next;
+                })}
+                items={DETECTORS.map(([k, lbl]) => ({ value: k, label: lbl, ariaLabel: `Liga/desliga ${lbl}` }))}
+              />
             </div>
             <p className="fadiga-hint">👍 durante um alerta silencia o episódio até voltar a OK.</p>
           </div>
@@ -206,14 +219,17 @@ export function FadigaView({ label, getFrame, mode, onOpen, onClose, onAlert, on
           <div className="read-flow-h">Calibração</div>
           <div className="fadiga-calib">
             {FADIGA_THRESHOLD_FIELDS.map((fld) => (
-              <div key={fld.key} className="calib-row" title={fld.hint}>
-                <span className="calib-lbl">{fld.label}</span>
-                <span className="calib-val">{fld.fmt(thresholds[fld.key])}</span>
-                <Slider value={thresholds[fld.key]} min={fld.min} max={fld.max} step={fld.step} onChange={(v) => setThresholds((t) => ({ ...t, [fld.key]: v }))} ariaLabel={fld.label} />
-              </div>
+              <Tooltip key={fld.key} content={fld.hint}>
+                <div className="calib-row">
+                  <span className="calib-lbl">{fld.label}</span>
+                  <span className="calib-val">{fld.fmt(thresholds[fld.key])}</span>
+                  <Slider value={thresholds[fld.key]} min={fld.min} max={fld.max} step={fld.step} onChange={(v) => setThresholds((t) => ({ ...t, [fld.key]: v }))} ariaLabel={fld.label} />
+                </div>
+              </Tooltip>
             ))}
             <Button onClick={() => setThresholds({ ...FADIGA_DEFAULT_THRESHOLDS })}>↺ Restaurar padrão</Button>
           </div>
+          </ScrollArea>
         </aside>
       </div>
 

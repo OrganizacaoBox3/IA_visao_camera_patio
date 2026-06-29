@@ -23,7 +23,7 @@ import { loadZones, saveZones, newZoneId, DEFAULT_GRID, ZONE_MODE_LABEL, type Zo
 import { decodeMask, encodeMask, maskFromRect, paintBrush, cellAtNorm, maskBBoxNorm, anySet, clearMask, containsNorm, type Mask } from "./zoneMask";
 import { createCounter, createOccupancy, inwardNormal, type Counter, type Occupancy, type TripwireCounts } from "./vision/counting";
 import { getTripwires, saveTripwires, ApiError, type Tripwire } from "./api";
-import { Button, IconButton, Input, Select, Slider, Switch, SegmentedControl, Dialog, Badge, Field, type Tone } from "./ui";
+import { Button, IconButton, Input, Select, Slider, Switch, Tabs, TabsContent, ScrollArea, Toggle, ToggleGroup, Tooltip, Dialog, Badge, Field, type Tone } from "./ui";
 import { CineBuffer, type CineFrame } from "./camera/cineBuffer";
 import { clipSupport, recordClipWebm, buildMontagePng, triggerDownload, clipFileName, type ClipFrame } from "./camera/clipExport";
 import { MetricCell, type Band, type MetricState } from "./components/Sparkline";
@@ -1097,10 +1097,18 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
           <Button onClick={clearActive}>Limpar</Button>
           <Button active onClick={() => setPaintZoneId(null)}>✓ Concluir</Button>
         </>) : (<>
-          <Button active={review} onClick={() => (review ? exitReview() : enterReview())} title="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">{review ? "▶ Ao vivo" : "❄ Congelar"}</Button>
-          <Button active={paused} disabled={review} onClick={() => setPaused((v) => !v)} title="Congela o frame e rotula quem está em cena">{paused ? "▶ Retomar" : "⏸ Pausar"}</Button>
-          <Button active={drawMode} disabled={review || !canConfigure} onClick={toggleDrawMode} title={canConfigure ? "Desenhar uma nova zona sobre o vídeo" : "Requer perfil de engenharia"}>{drawMode ? "Desenhando…" : "✎ Zona"}</Button>
-          <Button active={tripwireMode} disabled={review || !canConfigure} onClick={toggleTripwireMode} title={canConfigure ? "Desenhar uma linha de contagem (clique em A e arraste até B)" : "Requer perfil de engenharia"}>{tripwireMode ? "Traçando…" : "⇄ Linha"}</Button>
+          <Tooltip content="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">
+            <Toggle pressed={review} onPressedChange={(v) => (v ? enterReview() : exitReview())}>{review ? "▶ Ao vivo" : "❄ Congelar"}</Toggle>
+          </Tooltip>
+          <Tooltip content="Congela o frame e rotula quem está em cena">
+            <Toggle pressed={paused} disabled={review} onPressedChange={(v) => setPaused(v)}>{paused ? "▶ Retomar" : "⏸ Pausar"}</Toggle>
+          </Tooltip>
+          <Tooltip content={canConfigure ? "Desenhar uma nova zona sobre o vídeo" : "Requer perfil de engenharia"}>
+            <Toggle pressed={drawMode} disabled={review || !canConfigure} onPressedChange={() => toggleDrawMode()}>{drawMode ? "Desenhando…" : "✎ Zona"}</Toggle>
+          </Tooltip>
+          <Tooltip content={canConfigure ? "Desenhar uma linha de contagem (clique em A e arraste até B)" : "Requer perfil de engenharia"}>
+            <Toggle pressed={tripwireMode} disabled={review || !canConfigure} onPressedChange={() => toggleTripwireMode()}>{tripwireMode ? "Traçando…" : "⇄ Linha"}</Toggle>
+          </Tooltip>
           <IconButton label="Fechar" onClick={onClose}>✕</IconButton>
         </>)}
         {reviewTip && <span className="muted" style={{ color: "var(--state-warn-fg, #fde68a)" }}>{reviewTip}</span>}
@@ -1112,7 +1120,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
           <div className="cine-flag"><span className="dot" /> REVISÃO · cine-loop (buffer em memória)</div>
           <div className="cine-bar">
             <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>‹</IconButton>
-            <IconButton label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"} active={cinePlaying} onClick={() => setCinePlaying((v) => !v)}>{cinePlaying ? "⏸" : "▶"}</IconButton>
+            <Tooltip content={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}>
+              <Toggle aria-label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"} pressed={cinePlaying} onPressedChange={(v) => setCinePlaying(v)}>{cinePlaying ? "⏸" : "▶"}</Toggle>
+            </Tooltip>
             <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>›</IconButton>
             <div className="cine-slider">
               <Slider value={scrubIndex} min={0} max={Math.max(0, cineSize - 1)} step={1} onChange={(v) => { setCinePlaying(false); setScrubIndex(v); }} ariaLabel="Posição no cine-loop" />
@@ -1126,19 +1136,25 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
           </div>
         </>)}
         <aside className="cam-drawer" style={{ background: "var(--cam-panel-bg)", color: "var(--cam-panel-fg)", borderLeftColor: "var(--cam-panel-border)" }}>
-          <SegmentedControl value={drawerTab} onChange={(v) => setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
-            options={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "linhas", label: `Linhas (${tripwires.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]} />
-          <div style={{ height: "var(--sp-2)" }} />
-          <div className="drawer-body">
-            {drawerTab === "zonas" && zones.length === 0 && <p className="empty-note">{canConfigure ? "Use “✎ Zona” para desenhar uma área e escolher o modo." : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}</p>}
-            {drawerTab === "zonas" && zones.map((z) => { const r = panel.get(z.id); const st = r?.modo === "atividade" ? r.view.state : "ATIVA"; return (
+          <Tabs className="drawer-tabs" value={drawerTab} onValueChange={(v) => setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")} ariaLabel="Aba do painel"
+            items={[{ value: "zonas", label: `Zonas (${zones.length})` }, { value: "linhas", label: `Linhas (${tripwires.length})` }, { value: "camadas", label: "Camadas" }, { value: "timeline", label: "Timeline" }, { value: "presenca", label: "Presença" }]}>
+            <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
+              <TabsContent value="zonas">
+            {zones.length === 0 && <p className="empty-note">{canConfigure ? "Use “✎ Zona” para desenhar uma área e escolher o modo." : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}</p>}
+            {zones.map((z) => { const r = panel.get(z.id); const st = r?.modo === "atividade" ? r.view.state : "ATIVA"; return (
               <div key={z.id} className={`zone ${st}`}>
                 <div className="row">
                   <span className="zone-head"><b className="zone-name" title={z.label}>{z.label}</b><Badge tone={MODE_TONE[z.modo]}>{ZONE_MODE_LABEL[z.modo]}</Badge></span>
                   <span className="zone-tools">
-                    <button className="del" disabled={!canConfigure} title={canConfigure ? "Configurar zona (modo e parâmetros)" : "Configuração requer perfil de engenharia"} aria-label="Configurar zona" onClick={() => canConfigure && setCfgZoneId(z.id)}>⚙</button>
-                    <button className={`del ${paintZoneId === z.id ? "on" : ""}`} disabled={!canConfigure} title={canConfigure ? "Pintar a área (blueprint em grade)" : "Edição requer perfil de engenharia"} aria-label="Pintar área" onClick={() => canConfigure && (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))}>🖌</button>
-                    <button className="del" disabled={!canConfigure} title={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"} aria-label="Remover zona" onClick={() => canConfigure && removeZone(z.id)}>✕</button>
+                    <Tooltip content={canConfigure ? "Configurar zona (modo e parâmetros)" : "Configuração requer perfil de engenharia"}>
+                      <button className="del" disabled={!canConfigure} aria-label="Configurar zona" onClick={() => canConfigure && setCfgZoneId(z.id)}>⚙</button>
+                    </Tooltip>
+                    <Tooltip content={canConfigure ? "Pintar a área (blueprint em grade)" : "Edição requer perfil de engenharia"}>
+                      <button className={`del ${paintZoneId === z.id ? "on" : ""}`} disabled={!canConfigure} aria-label="Pintar área" onClick={() => canConfigure && (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))}>🖌</button>
+                    </Tooltip>
+                    <Tooltip content={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"}>
+                      <button className="del" disabled={!canConfigure} aria-label="Remover zona" onClick={() => canConfigure && removeZone(z.id)}>✕</button>
+                    </Tooltip>
                   </span>
                 </div>
 
@@ -1193,14 +1209,15 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                 </>)}
               </div>
             ); })}
-            {drawerTab === "zonas" && legend.length > 0 && (
+            {legend.length > 0 && (
               <div className="ws-legend">
                 <div className="ws-legend-title">Legenda do overlay</div>
                 <div className="ws-legend-items">{legend.map((e, i) => (<span key={i} className="leg"><i style={{ background: e.color }} />{e.label}</span>))}</div>
               </div>
             )}
+              </TabsContent>
 
-            {drawerTab === "linhas" && (<>
+              <TabsContent value="linhas">
               <div className="row" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-2)" }}>
                 <Button size="sm" active={tripwireMode} disabled={!canConfigure} onClick={toggleTripwireMode} title={canConfigure ? "Clique em A e arraste até B sobre o vídeo" : "Edição requer perfil de engenharia"}>{tripwireMode ? "Traçando…" : "⇄ Nova linha"}</Button>
                 <Button size="sm" onClick={resetCounts} title="Zera os contadores in/out desta sessão (geometria mantida)">↺ Zerar contagem</Button>
@@ -1211,8 +1228,12 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                   <div className="row">
                     <span className="zone-head"><b className="zone-name">Linha {i + 1}</b><Badge tone="info">contagem</Badge></span>
                     <span className="zone-tools">
-                      <button className="del" disabled={!canConfigure} title={canConfigure ? "Inverter direção (troca Entrada↔Saída)" : "Edição requer perfil de engenharia"} aria-label="Inverter direção" onClick={() => canConfigure && invertTripwire(w.id)}>⇄</button>
-                      <button className="del" disabled={!canConfigure} title={canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"} aria-label="Remover linha" onClick={() => canConfigure && removeTripwire(w.id)}>✕</button>
+                      <Tooltip content={canConfigure ? "Inverter direção (troca Entrada↔Saída)" : "Edição requer perfil de engenharia"}>
+                        <button className="del" disabled={!canConfigure} aria-label="Inverter direção" onClick={() => canConfigure && invertTripwire(w.id)}>⇄</button>
+                      </Tooltip>
+                      <Tooltip content={canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"}>
+                        <button className="del" disabled={!canConfigure} aria-label="Remover linha" onClick={() => canConfigure && removeTripwire(w.id)}>✕</button>
+                      </Tooltip>
                     </span>
                   </div>
                   <div className="kpis ws-kpis">
@@ -1222,22 +1243,22 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                 </div>
               ); })}
               <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) — depende de ao menos uma zona de Atividade ativa p/ detectar pessoas. Contadores são por sessão.</p>
-            </>)}
+              </TabsContent>
 
-            {drawerTab === "timeline" && (timeline.length === 0
+              <TabsContent value="timeline">{timeline.length === 0
               ? <p className="empty-note">Sem eventos.</p>
-              : <ul className="tl">{timeline.map((e) => (<li key={e.id}><span className={`dot ${e.sev}`} /><span className="t">{clock(new Date(e.ts))}</span><span>{e.text}</span></li>))}</ul>)}
+              : <ul className="tl">{timeline.map((e) => (<li key={e.id}><span className={`dot ${e.sev}`} /><span className="t">{clock(new Date(e.ts))}</span><span>{e.text}</span></li>))}</ul>}</TabsContent>
 
-            {drawerTab === "presenca" && (<>
+              <TabsContent value="presenca">
               <div className="kpis">
                 <div className="kpi"><div className="v">{presence.now}</div><div className="l">agora</div></div>
                 <div className="kpi"><div className="v">{presence.peak}</div><div className="l">pico</div></div>
                 <div className="kpi"><div className="v">{fmtDuration(presence.dwell)}</div><div className="l">permanência</div></div>
               </div>
               <p className="empty-note" style={{ marginTop: 8 }}>Pessoas recebem ID efêmero (sem identidade); reseta por sessão.{paused ? " ⏸ Pausado: rótulos com tempo em cena." : ""}</p>
-            </>)}
+              </TabsContent>
 
-            {drawerTab === "camadas" && (<>
+              <TabsContent value="camadas">
               {activePresetDef && (
                 <div style={{ marginBottom: "var(--sp-3)", padding: "var(--sp-2)", borderRadius: 8, border: "1px solid var(--cam-panel-border)", background: "var(--cam-surface-bg)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", marginBottom: 4 }}>
@@ -1270,8 +1291,9 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
                 </Field>
               </div>
               <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>Camadas e confiança seguem o preset do modo ativo; ajustes manuais valem só nesta sessão e sobrepõem o preset (padrões em APP_CONFIG.overlay / MODE_PRESETS). Heatmap acumula a presença de pessoas.</p>
-            </>)}
-          </div>
+              </TabsContent>
+            </ScrollArea>
+          </Tabs>
         </aside>
       </div>
 
@@ -1326,10 +1348,10 @@ export function CameraWorkspace({ cameraId, label, getFrame, mode, demoMode = tr
 
             {z.modo === "objetos" && (
               <Field label="Classes a contar" hint="Toque para incluir/excluir cada objeto.">
-                <div className="ws-cfg ws-chips">{OBJECT_CATALOG.map((o) => { const on = z.selectedClasses.includes(o.key); return (
-                  <button key={o.key} type="button" className={`cfg-chip ${on ? "on" : ""}`} style={on ? { borderColor: o.color, color: o.color } : undefined}
-                    onClick={() => patchZone(z.id, { selectedClasses: on ? z.selectedClasses.filter((k) => k !== o.key) : [...z.selectedClasses, o.key] })}>{o.emoji} {o.label}</button>
-                ); })}</div>
+                <ToggleGroup type="multiple" className="ws-cfg ws-chips" ariaLabel="Classes a contar"
+                  value={z.selectedClasses}
+                  onValueChange={(vals) => patchZone(z.id, { selectedClasses: vals })}
+                  items={OBJECT_CATALOG.map((o) => ({ value: o.key, label: <>{o.emoji} {o.label}</>, ariaLabel: o.label }))} />
               </Field>
             )}
 

@@ -3,6 +3,7 @@ import { useAuth } from "../auth";
 import { Sparkline } from "../components/Sparkline";
 import {
   PageHeader, Button, Field, Input, Select, Alert, Spinner, EmptyState, useToast,
+  ScrollArea, AlertDialog, Tooltip,
 } from "../ui";
 import {
   getAlarmMetrics, listShelves, createShelve, deleteShelve,
@@ -62,6 +63,7 @@ export function AlarmHealthPage() {
   const [fBusy, setFBusy] = useState(false);
   const [fErr, setFErr] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null); // shelve aguardando confirmação de remoção
 
   const load = useCallback(async (cancelled: () => boolean) => {
     try {
@@ -187,28 +189,30 @@ export function AlarmHealthPage() {
                 ) : shelves.length === 0 ? (
                   <EmptyState>Nenhum alarme silenciado. Os alertas seguem o fluxo normal.</EmptyState>
                 ) : (
-                  <div className="ah-shelves">
-                    {shelves.map((s) => (
-                      <div className="ah-shelve" key={s.key}>
-                        <div className="ah-shelve__top">
-                          <span className="ah-shelve__key">{s.key}</span>
-                          <span className="ah-shelve__remaining">⏳ {fmtDuration(s.remainingMs)}</span>
-                        </div>
-                        <div className="ah-shelve__meta">
-                          {s.reason && <span>motivo: {s.reason}</span>}
-                          {s.by && <span>por: {s.by}</span>}
-                          <span>expira: {new Date(s.expiresAt).toLocaleTimeString("pt-BR")}</span>
-                        </div>
-                        {canConfigure && (
-                          <div className="ah-shelve__actions">
-                            <Button variant="danger" size="sm" disabled={removing === s.key} onClick={() => void onRemove(s.key)}>
-                              {removing === s.key ? "Removendo…" : "Remover"}
-                            </Button>
+                  <ScrollArea className="ah-shelves-scroll" style={{ maxHeight: 360 }}>
+                    <div className="ah-shelves">
+                      {shelves.map((s) => (
+                        <div className="ah-shelve" key={s.key}>
+                          <div className="ah-shelve__top">
+                            <span className="ah-shelve__key">{s.key}</span>
+                            <span className="ah-shelve__remaining">⏳ {fmtDuration(s.remainingMs)}</span>
                           </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                          <div className="ah-shelve__meta">
+                            {s.reason && <span>motivo: {s.reason}</span>}
+                            {s.by && <span>por: {s.by}</span>}
+                            <span>expira: {new Date(s.expiresAt).toLocaleTimeString("pt-BR")}</span>
+                          </div>
+                          {canConfigure && (
+                            <div className="ah-shelve__actions">
+                              <Button variant="danger" size="sm" disabled={removing === s.key} onClick={() => setConfirmKey(s.key)}>
+                                {removing === s.key ? "Removendo…" : "Remover"}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 )}
               </section>
 
@@ -243,6 +247,20 @@ export function AlarmHealthPage() {
             </div>
 
             <div className="ah-foot">Sessão: {user.usuario} · papel {user.papel}{canConfigure ? "" : " (somente leitura)"}.</div>
+
+            {/* Confirmação destrutiva da remoção de shelve (controlada via AlertDialog). */}
+            <AlertDialog
+              open={confirmKey !== null}
+              onOpenChange={(o) => { if (!o) setConfirmKey(null); }}
+              title="Remover shelve?"
+              description={confirmKey
+                ? <>O silenciamento <code>{confirmKey}</code> será removido e os alertas correspondentes voltam ao fluxo normal.</>
+                : undefined}
+              confirmLabel="Remover"
+              cancelLabel="Cancelar"
+              variant="danger"
+              onConfirm={() => { const k = confirmKey; setConfirmKey(null); if (k) void onRemove(k); }}
+            />
           </>
         ) : null}
       </div>
@@ -260,7 +278,11 @@ function PriorityDist({ counts }: { counts: AlarmCounts }) {
           ? PRIOS.map((p) => {
               const v = counts[p] || 0;
               if (v <= 0) return null;
-              return <span key={p} className="ah-dist__seg" data-prio={p} style={{ width: `${(v / total) * 100}%` }} />;
+              return (
+                <Tooltip key={p} content={`${PRIO_LABEL[p]}: ${v} (${Math.round((v / total) * 100)}%)`}>
+                  <span className="ah-dist__seg" data-prio={p} style={{ width: `${(v / total) * 100}%` }} />
+                </Tooltip>
+              );
             })
           : null}
       </div>

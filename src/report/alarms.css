@@ -4,6 +4,23 @@
 
 .alarm-list { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
 
+/* ── Migração Radix (Fase 1) — Tabs/ScrollArea no ReportPage ── */
+/* Tabs.Root ocupa o espaço restante do .rep-body (flex column) e deixa o painel ativo rolar. */
+.rep-tabs { flex: 1; min-height: 0; }
+/* Tabelas de eventos/leituras/ocorrências dentro de ScrollArea (rolagem vertical estilizada). */
+.rep-tablescroll { max-height: 420px; }
+/* Matriz Setor × Classe: rolagem vertical + horizontal (muitas colunas de classe). */
+.rep-matrixscroll { max-height: 420px; }
+/* Lista longa de cards de alarme (até 500) rolável dentro do card. */
+.alarm-list-scroll { max-height: 520px; }
+/* O .rep-foot é irmão do Tabs no fluxo; ScrollArea não deve impedir a impressão. */
+@media print {
+  .rep-tabs, .rep-tablescroll, .rep-matrixscroll, .alarm-list-scroll { overflow: visible; max-height: none; }
+  .rep-tablescroll [data-radix-scroll-area-viewport],
+  .rep-matrixscroll [data-radix-scroll-area-viewport],
+  .alarm-list-scroll [data-radix-scroll-area-viewport] { overflow: visible !important; }
+}
+
 .alarm-card {
   display: grid; grid-template-columns: auto 1fr auto; gap: var(--sp-2, 8px);
   align-items: start; text-align: left; width: 100%;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Button, Input, Field, CheckboxRow, Alert, useToast } from "../ui";
+import { Button, Input, Field, CheckboxRow, Alert, ToggleGroup, useToast } from "../ui";
 import { getMe, updateMe, type MeProfile, type NotifPrefs } from "../api";
 
 // "Meu perfil": o próprio usuário cadastra o WhatsApp que recebe os alertas + preferências + opt-in.
@@ -30,10 +30,6 @@ export function ProfilePage() {
       setPrefs(m.filtros ?? DEFAULT_PREFS);
     }).catch((e) => setErr(e instanceof Error ? e.message : "falha ao carregar"));
   }, []);
-
-  function toggleTipo(k: string) {
-    setPrefs((p) => ({ ...p, tipos: p.tipos.includes(k) ? p.tipos.filter((t) => t !== k) : [...p.tipos, k] }));
-  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null); setStatus(null);
@@ -69,11 +65,14 @@ export function ProfilePage() {
 
           <div className="prof-tipos">
             <span className="cfg-classes-lbl">Tipos (vazio = todos)</span>
-            <div className="cfg-classes">
-              {TIPOS.map((t) => (
-                <button type="button" key={t.key} className={`cfg-chip ${prefs.tipos.includes(t.key) ? "on" : ""}`} onClick={() => toggleTipo(t.key)}>{t.label}</button>
-              ))}
-            </div>
+            <ToggleGroup
+              type="multiple"
+              className="cfg-classes"
+              ariaLabel="Tipos de alerta"
+              value={prefs.tipos}
+              onValueChange={(tipos) => setPrefs((p) => ({ ...p, tipos }))}
+              items={TIPOS.map((t) => ({ value: t.key, label: t.label }))}
+            />
           </div>
 
           <div className="prof-actions">

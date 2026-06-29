@@ -82,3 +82,17 @@
     flex-wrap: wrap;
   }
 }
+
+/* Toggle (Radix) do play/pause do cine-loop com porte de ícone na barra. */
+.cine-bar .ui-toggle { padding: 0 var(--sp-2); min-width: var(--ui-ctrl-h); }
+
+/* ── Drawer migrado p/ Radix Tabs + ScrollArea (Fase 1) ──
+   O .cam-drawer é flex column de altura definida; Tabs.Root e a ScrollArea
+   precisam crescer (flex:1; min-height:0) para a viewport rolável ter altura.
+   A rolagem/padding vivem na viewport do ScrollArea (não no Root), preservando
+   as scrollbars do Radix. As 5 abas podem quebrar linha em painel estreito. */
+.cam-drawer .drawer-tabs { flex: 1; min-height: 0; }
+.cam-drawer .drawer-tabs .ui-tablist { flex-wrap: wrap; }
+.cam-drawer .drawer-scroll { flex: 1; min-height: 0; }
+.cam-drawer .drawer-scroll .drawer-scroll-vp { padding: var(--sp-3); box-sizing: border-box; }
+.cam-drawer .drawer-tabs .ui-tabpanel { min-height: 0; }

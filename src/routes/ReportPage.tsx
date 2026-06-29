@@ -14,7 +14,7 @@ import {
 import { loadDataset, loadEvents, clearAll, loadReadingDataset, loadReadingEvents, loadObjectDataset, loadObjectEvents, loadFadigaDataset, loadFadigaEvents, loadAlarms } from "../report/store";
 import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
 import { objClass } from "../objects/catalog";
-import { Button, IconButton, Select, SegmentedControl, Skeleton, useToast } from "../ui";
+import { Button, IconButton, Select, SegmentedControl, Skeleton, useToast, Tabs, TabsContent, ScrollArea, AlertDialog } from "../ui";
 import "../report/alarms.css";
 
 const ALARM_DAY_MS = 86_400_000;
@@ -79,6 +79,7 @@ export function ReportPage() {
   const [posto, setPosto] = useState<string | "Todos">("Todos");
   const [present, setPresent] = useState(false);
   const [tab, setTab] = useState<"quando" | "onde" | "tendencia" | "eventos">("quando");
+  const [confirmClear, setConfirmClear] = useState(false); // AlertDialog de "limpar histórico"
   const [printedAt, setPrintedAt] = useState("");
   // Estado compartilhado da ligação RELATÓRIO↔EVENTOS (Onda B, item 8).
   const [alarmPriority, setAlarmPriority] = useState<AlarmPriority | "Todas">("Todas");
@@ -431,9 +432,8 @@ export function ReportPage() {
             <div className="kpi big"><div className="v" style={{ color: "var(--ok)" }}>{k.activePct}%</div><div className="l">tempo ativo</div></div>
           </div>
           <section className="insight"><b>💡 Oportunidades</b> {tips.join(" · ")}</section>
-          <SegmentedControl value={tab} onChange={(v) => setTab(v as typeof tab)} ariaLabel="Seção" options={[{ value: "quando", label: "Quando para" }, { value: "onde", label: "Onde para" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Eventos (${evt.length})` }]} />
-          <div className="rep-tabpanel">
-            {tab === "quando" && (
+          <Tabs className="rep-tabs" ariaLabel="Seção" value={tab} onValueChange={(v) => setTab(v as typeof tab)} items={[{ value: "quando", label: "Quando para" }, { value: "onde", label: "Onde para" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Eventos (${evt.length})` }]}>
+            <TabsContent value="quando" className="rep-tabpanel">
               <section className="panel">
                 <h3>Quando para — horários críticos</h3>
                 <div className="heatmap">
@@ -447,8 +447,8 @@ export function ReportPage() {
                   <div className="hm-legend"><span>menos</span><i className="hm-scale" /><span>mais ocioso</span></div>
                 </div>
               </section>
-            )}
-            {tab === "onde" && (
+            </TabsContent>
+            <TabsContent value="onde" className="rep-tabpanel">
               <div className="rep-2col">
                 <section className="panel">
                   <h3>Por área</h3>
@@ -461,8 +461,8 @@ export function ReportPage() {
                   {byAtiv.rows.map((r) => (<div className="rank-row" key={r.atividade}><div className="rank-head"><span>{r.atividade}</span><span className="rank-val">{fmtMin(r.idleMin)} · {r.alerts} alertas</span></div><div className="rank-bar"><i style={{ width: `${Math.round((r.idleMin / byAtiv.max) * 100)}%` }} /></div></div>))}
                 </section>
               </div>
-            )}
-            {tab === "tendencia" && (
+            </TabsContent>
+            <TabsContent value="tendencia" className="rep-tabpanel">
               <div className="rep-2col">
                 <section className="panel">
                   <h3>Tendência (14 dias)</h3>
@@ -473,11 +473,11 @@ export function ReportPage() {
                   {(["Manhã", "Tarde", "Noite"] as Shift[]).map((s) => (<div className="rank-row" key={s}><div className="rank-head"><span>{s}</span><span className="rank-val">{fmtMin(byShiftA.m[s])}</span></div><div className="rank-bar"><i style={{ width: `${Math.round((byShiftA.m[s] / byShiftA.max) * 100)}%` }} /></div></div>))}
                 </section>
               </div>
-            )}
-            {tab === "eventos" && (
+            </TabsContent>
+            <TabsContent value="eventos" className="rep-tabpanel">
               <section className="panel panel-events">
                 <h3>Eventos — alertas no período ({evt.length})</h3>
-                <div className="rtable-wrap">
+                <ScrollArea className="rep-tablescroll">
                   <table className="rtable">
                     <thead><tr><th>Data / hora</th><th>Área</th><th>Câmera</th><th>Duração</th><th>Turno</th></tr></thead>
                     <tbody>
@@ -485,11 +485,11 @@ export function ReportPage() {
                       {evt.length === 0 && <tr><td colSpan={5} className="empty-note">Nenhum alerta no período.</td></tr>}
                     </tbody>
                   </table>
-                </div>
+                </ScrollArea>
               </section>
-            )}
-          </div>
-          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={onClear} disabled={busy} className="linkbtn">limpar histórico</button></div>
+            </TabsContent>
+          </Tabs>
+          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">limpar histórico</button></div>
         </>)}
 
         {!loading && !error && !noData && isReading && (<>
@@ -502,9 +502,8 @@ export function ReportPage() {
             <div className="kpi big"><div className="v">{String(rk.peakHour).padStart(2, "0")}h</div><div className="l">horário de pico</div></div>
           </div>
           <section className="insight"><b>💡 Leitura</b> {rtips.join(" · ")}</section>
-          <SegmentedControl value={tab} onChange={(v) => setTab(v as typeof tab)} ariaLabel="Seção" options={[{ value: "quando", label: "Quando lê" }, { value: "onde", label: "Onde lê" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Leituras (${revt.length})` }]} />
-          <div className="rep-tabpanel">
-            {tab === "quando" && (
+          <Tabs className="rep-tabs" ariaLabel="Seção" value={tab} onValueChange={(v) => setTab(v as typeof tab)} items={[{ value: "quando", label: "Quando lê" }, { value: "onde", label: "Onde lê" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Leituras (${revt.length})` }]}>
+            <TabsContent value="quando" className="rep-tabpanel">
               <section className="panel">
                 <h3>Quando lê — volume por hora</h3>
                 <div className="heatmap">
@@ -518,8 +517,8 @@ export function ReportPage() {
                   <div className="hm-legend"><span>menos</span><i className="hm-scale read" /><span>mais volume</span></div>
                 </div>
               </section>
-            )}
-            {tab === "onde" && (
+            </TabsContent>
+            <TabsContent value="onde" className="rep-tabpanel">
               <div className="rep-2col">
                 <section className="panel">
                   <h3>Por ponto</h3>
@@ -532,8 +531,8 @@ export function ReportPage() {
                   {byCam.rows.map((r) => (<div className="rank-row" key={r.camera}><div className="rank-head"><span>{r.camera}</span><span className="rank-val">{r.reads.toLocaleString("pt-BR")} leituras</span></div><div className="rank-bar"><i className="read" style={{ width: `${Math.round((r.reads / byCam.max) * 100)}%` }} /></div></div>))}
                 </section>
               </div>
-            )}
-            {tab === "tendencia" && (
+            </TabsContent>
+            <TabsContent value="tendencia" className="rep-tabpanel">
               <div className="rep-2col">
                 <section className="panel">
                   <h3>Tendência (14 dias)</h3>
@@ -544,11 +543,11 @@ export function ReportPage() {
                   {(["Manhã", "Tarde", "Noite"] as Shift[]).map((s) => (<div className="rank-row" key={s}><div className="rank-head"><span>{s}</span><span className="rank-val">{byShiftR.m[s].toLocaleString("pt-BR")} caixas</span></div><div className="rank-bar"><i className="read" style={{ width: `${Math.round((byShiftR.m[s] / byShiftR.max) * 100)}%` }} /></div></div>))}
                 </section>
               </div>
-            )}
-            {tab === "eventos" && (
+            </TabsContent>
+            <TabsContent value="eventos" className="rep-tabpanel">
               <section className="panel panel-events">
                 <h3>Leituras — códigos no período ({revt.length})</h3>
-                <div className="rtable-wrap">
+                <ScrollArea className="rep-tablescroll">
                   <table className="rtable">
                     <thead><tr><th>Data / hora</th><th>Ponto</th><th>Código</th><th>Câmeras</th><th>Turno</th></tr></thead>
                     <tbody>
@@ -556,11 +555,11 @@ export function ReportPage() {
                       {revt.length === 0 && <tr><td colSpan={5} className="empty-note">Nenhuma leitura no período.</td></tr>}
                     </tbody>
                   </table>
-                </div>
+                </ScrollArea>
               </section>
-            )}
-          </div>
-          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={onClear} disabled={busy} className="linkbtn">limpar histórico</button></div>
+            </TabsContent>
+          </Tabs>
+          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">limpar histórico</button></div>
         </>)}
 
         {!loading && !error && !noData && isObjects && (<>
@@ -573,9 +572,8 @@ export function ReportPage() {
             <div className="kpi big"><div className="v" style={{ color: oLoads ? "var(--idle)" : undefined }}>{oLoads}</div><div className="l">carregamentos</div></div>
           </div>
           <section className="insight"><b>💡 Objetos</b> {otips.join(" · ")}</section>
-          <SegmentedControl value={tab} onChange={(v) => setTab(v as typeof tab)} ariaLabel="Seção" options={[{ value: "quando", label: "Quando" }, { value: "onde", label: "Setor × Classe" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Eventos (${oevt.length})` }]} />
-          <div className="rep-tabpanel">
-            {tab === "quando" && (
+          <Tabs className="rep-tabs" ariaLabel="Seção" value={tab} onValueChange={(v) => setTab(v as typeof tab)} items={[{ value: "quando", label: "Quando" }, { value: "onde", label: "Setor × Classe" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Eventos (${oevt.length})` }]}>
+            <TabsContent value="quando" className="rep-tabpanel">
               <section className="panel">
                 <h3>Quando — contagem média por hora</h3>
                 <div className="heatmap">
@@ -589,12 +587,12 @@ export function ReportPage() {
                   <div className="hm-legend"><span>menos</span><i className="hm-scale read" /><span>mais objetos</span></div>
                 </div>
               </section>
-            )}
-            {tab === "onde" && (
+            </TabsContent>
+            <TabsContent value="onde" className="rep-tabpanel">
               <div className="rep-2col">
                 <section className="panel">
                   <h3>Presença por Setor × Classe (% do tempo)</h3>
-                  <div className="obj-matrix-wrap">
+                  <ScrollArea className="rep-matrixscroll" orientation="both">
                     <table className="obj-matrix">
                       <thead><tr><th>Setor</th>{odataset.classes.map((cl) => <th key={cl} title={cl}>{objClass(cl)?.emoji ?? cl}</th>)}</tr></thead>
                       <tbody>
@@ -604,7 +602,7 @@ export function ReportPage() {
                         {presSetores.length === 0 && <tr><td colSpan={odataset.classes.length + 1} className="empty-note">Sem dados.</td></tr>}
                       </tbody>
                     </table>
-                  </div>
+                  </ScrollArea>
                 </section>
                 <section className="panel">
                   <h3>Por setor (média em cena)</h3>
@@ -614,17 +612,17 @@ export function ReportPage() {
                   {obyClass.rows.map((r) => (<div className="rank-row" key={r.classe}><div className="rank-head"><span>{classLabel(r.classe)}</span><span className="rank-val">média {r.avg}</span></div><div className="rank-bar"><i className="read" style={{ width: `${Math.round((r.avg / obyClass.max) * 100)}%` }} /></div></div>))}
                 </section>
               </div>
-            )}
-            {tab === "tendencia" && (
+            </TabsContent>
+            <TabsContent value="tendencia" className="rep-tabpanel">
               <section className="panel">
                 <h3>Tendência (14 dias) — objetos médios/dia</h3>
                 <div className="evo">{oevo.bars.map((b) => (<div className="evo-col" key={b.dayIndex} title={`${b.label} · ${b.avg} em média`}><div className="evo-bar read" style={{ height: `${Math.max(2, Math.round((b.avg / oevo.max) * 100))}%` }} /><span className="evo-lbl">{b.label}</span></div>))}</div>
               </section>
-            )}
-            {tab === "eventos" && (
+            </TabsContent>
+            <TabsContent value="eventos" className="rep-tabpanel">
               <section className="panel panel-events">
                 <h3>Eventos — presença e carregamentos ({oevt.length})</h3>
-                <div className="rtable-wrap">
+                <ScrollArea className="rep-tablescroll">
                   <table className="rtable">
                     <thead><tr><th>Data / hora</th><th>Tipo</th><th>Setor</th><th>Classe</th><th>Turno</th></tr></thead>
                     <tbody>
@@ -632,11 +630,11 @@ export function ReportPage() {
                       {oevt.length === 0 && <tr><td colSpan={5} className="empty-note">Nenhum evento no período.</td></tr>}
                     </tbody>
                   </table>
-                </div>
+                </ScrollArea>
               </section>
-            )}
-          </div>
-          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={onClear} disabled={busy} className="linkbtn">limpar histórico</button></div>
+            </TabsContent>
+          </Tabs>
+          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">limpar histórico</button></div>
         </>)}
 
         {!loading && !error && !noData && isFadiga && (<>
@@ -649,33 +647,35 @@ export function ReportPage() {
             <div className="kpi big"><div className="v">{String(fk.peakHour).padStart(2, "0")}h</div><div className="l">horário crítico</div></div>
           </div>
           <section className="insight"><b>💡 Operador</b> {ftips.join(" · ")}</section>
-          <SegmentedControl value={tab} onChange={(v) => setTab(v as typeof tab)} ariaLabel="Seção" options={[{ value: "quando", label: "Quando" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Ocorrências (${fevt.length})` }]} />
-          <div className="rep-tabpanel">
-            {(tab === "quando" || tab === "onde") && (
-              <section className="panel">
-                <h3>Quando — tempo de risco por hora (min)</h3>
-                <div className="heatmap">
-                  <div className="hm-axis"><span /> {HOURS.map((h) => <span key={h} className="hm-h">{h % 2 === 0 ? String(h).padStart(2, "0") : ""}</span>)}</div>
-                  {fhm.rows.map((row) => (
-                    <div className="hm-row" key={row.label}>
-                      <span className="hm-area" title={row.label}>{row.label}</span>
-                      {row.hours.map((v, h) => <span key={h} className="hm-cell" style={{ background: heatColor(v, fhm.max) }} title={`${row.label} · ${String(h).padStart(2, "0")}h · ${v} min`} />)}
-                    </div>
-                  ))}
-                  <div className="hm-legend"><span>menos</span><i className="hm-scale" /><span>mais risco</span></div>
-                </div>
-              </section>
-            )}
-            {tab === "tendencia" && (
+          <Tabs className="rep-tabs" ariaLabel="Seção" value={tab} onValueChange={(v) => setTab(v as typeof tab)} items={[{ value: "quando", label: "Quando" }, { value: "tendencia", label: "Tendência" }, { value: "eventos", label: `Ocorrências (${fevt.length})` }]}>
+            {/* "quando" e "onde" (fallback p/ estado herdado de outro modo) mostram o mesmo heatmap. */}
+            {(["quando", "onde"] as const).map((v) => (
+              <TabsContent key={v} value={v} className="rep-tabpanel">
+                <section className="panel">
+                  <h3>Quando — tempo de risco por hora (min)</h3>
+                  <div className="heatmap">
+                    <div className="hm-axis"><span /> {HOURS.map((h) => <span key={h} className="hm-h">{h % 2 === 0 ? String(h).padStart(2, "0") : ""}</span>)}</div>
+                    {fhm.rows.map((row) => (
+                      <div className="hm-row" key={row.label}>
+                        <span className="hm-area" title={row.label}>{row.label}</span>
+                        {row.hours.map((v2, h) => <span key={h} className="hm-cell" style={{ background: heatColor(v2, fhm.max) }} title={`${row.label} · ${String(h).padStart(2, "0")}h · ${v2} min`} />)}
+                      </div>
+                    ))}
+                    <div className="hm-legend"><span>menos</span><i className="hm-scale" /><span>mais risco</span></div>
+                  </div>
+                </section>
+              </TabsContent>
+            ))}
+            <TabsContent value="tendencia" className="rep-tabpanel">
               <section className="panel">
                 <h3>Tendência (14 dias) — % do tempo em alerta</h3>
                 <div className="evo">{fevo.bars.map((b) => (<div className="evo-col" key={b.dayIndex} title={`${b.label} · ${b.pct}% em alerta`}><div className="evo-bar" style={{ height: `${Math.max(2, Math.round((b.pct / fevo.max) * 100))}%` }} /><span className="evo-lbl">{b.label}</span></div>))}</div>
               </section>
-            )}
-            {tab === "eventos" && (
+            </TabsContent>
+            <TabsContent value="eventos" className="rep-tabpanel">
               <section className="panel panel-events">
                 <h3>Ocorrências de risco ({fevt.length})</h3>
-                <div className="rtable-wrap">
+                <ScrollArea className="rep-tablescroll">
                   <table className="rtable">
                     <thead><tr><th>Data / hora</th><th>Posto</th><th>Tipo</th><th>Turno</th></tr></thead>
                     <tbody>
@@ -683,11 +683,11 @@ export function ReportPage() {
                       {fevt.length === 0 && <tr><td colSpan={4} className="empty-note">Nenhuma ocorrência no período.</td></tr>}
                     </tbody>
                   </table>
-                </div>
+                </ScrollArea>
               </section>
-            )}
-          </div>
-          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={onClear} disabled={busy} className="linkbtn">limpar histórico</button></div>
+            </TabsContent>
+          </Tabs>
+          <div className="rep-foot">Histórico (Postgres) · indicadores agregados, sem imagens · <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">limpar histórico</button></div>
         </>)}
 
         {!loading && !error && isAlarmes && (<>
@@ -747,6 +747,7 @@ export function ReportPage() {
                   </span>
                 )}
               </div>
+              <ScrollArea className="alarm-list-scroll">
               <div className="alarm-list">
                 {alarmsView.map((e) => (
                   <button type="button" key={e.id} className={`alarm-card prio-${e.priority} ${selAlarm === e.id ? "sel" : ""}`} onClick={() => pickAlarm(e.id)} aria-pressed={selAlarm === e.id}>
@@ -768,11 +769,24 @@ export function ReportPage() {
                 ))}
                 {alarmsView.length === 0 && <p className="empty-note">Nenhum alarme com os filtros atuais.</p>}
               </div>
+              </ScrollArea>
             </section>
             <div className="rep-foot">Eventos de alarme (B1) · só metadados, sem imagens (LGPD) · <button onClick={refresh} className="linkbtn">recarregar</button></div>
           </>)}
         </>)}
       </div>
+
+      <AlertDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        variant="danger"
+        title="Limpar todo o histórico?"
+        description="Esta ação apaga permanentemente todos os indicadores, eventos e alarmes registrados no histórico (Postgres). Não é possível desfazer."
+        confirmLabel="Limpar histórico"
+        cancelLabel="Cancelar"
+        onConfirm={onClear}
+        busy={busy}
+      />
     </div>
   );
 }

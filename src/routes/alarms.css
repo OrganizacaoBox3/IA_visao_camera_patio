@@ -3,31 +3,69 @@
    (going-gray): base neutra, cor saturada só para prioridade/anormalidade; reconhecidos
    esmaecidos. NÃO duplica nem edita index.css/ui.css. */
 
-/* Drawer lateral direito sobreposto à central. */
-.alarm-drawer {
-  position: fixed;
+/* Drawer/sheet de alarmes via <Dialog> (Radix): o foco preso, ESC e portal vêm do wrapper.
+   Aqui apenas REPOSICIONAMOS aquele .ui-dialog específico como sheet lateral, escopando por
+   :has(.alarm-drawer__list) para NÃO afetar os demais diálogos (config/views) nem editar ui/*. */
+.ui-dialog:has(.alarm-drawer__list) {
   top: 0;
   right: 0;
   bottom: 0;
+  left: auto;
+  transform: none;
   width: min(380px, 92vw);
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel, #0f141b);
+  max-width: 92vw;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border: none;
   border-left: 1px solid var(--state-neutral-border, #1f2937);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+  animation: alarm-drawer-in 0.18s ease;
+}
+@keyframes alarm-drawer-in {
+  from { transform: translateX(16px); opacity: 0.6; }
+  to { transform: none; opacity: 1; }
+}
+/* O corpo do diálogo vira coluna flexível para a lista (ScrollArea) ocupar a altura restante. */
+.ui-dialog:has(.alarm-drawer__list) .ui-dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+/* ScrollArea da fila preenche o espaço restante abaixo dos filtros. */
+.alarm-drawer__scroll {
+  flex: 1;
+  min-height: 0;
+}
+/* Variante mobile: bottom-sheet (paridade com .cam-drawer do CameraWorkspace em @640px). */
+@media (max-width: 640px) {
+  .ui-dialog:has(.alarm-drawer__list) {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-width: none;
+    height: 62%;
+    border-left: none;
+    border-top: 1px solid var(--state-neutral-border, #1f2937);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  }
+  @keyframes alarm-drawer-in {
+    from { transform: translateY(16px); opacity: 0.6; }
+    to { transform: none; opacity: 1; }
+  }
 }
 
-.alarm-drawer__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--state-neutral-border, #1f2937);
-}
+/* Contador "N novo(s)" no título do diálogo. */
 .alarm-drawer__count {
+  margin-left: 8px;
   font-family: var(--mono);
   font-size: 12px;
+  font-weight: 400;
   color: var(--state-warn-fg, #facc15);
 }
 .alarm-drawer__count[data-zero="1"] { color: var(--state-neutral-fg, #9aa7b4); }
@@ -48,10 +86,8 @@
   color: var(--state-neutral-fg, #9aa7b4);
 }
 
+/* Conteúdo da fila (dentro do viewport da ScrollArea — a rolagem é da ScrollArea). */
 .alarm-drawer__list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;

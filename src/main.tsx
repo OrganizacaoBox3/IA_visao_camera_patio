@@ -10,13 +10,15 @@ import { AlarmHealthPage } from "./routes/AlarmHealthPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { TooltipProvider, ToastProvider } from "./ui";
+import { TooltipProvider, ToastProvider, ConfirmProvider } from "./ui";
 import "./index.css";
 
 const router = createBrowserRouter([
   {
     // Painel humano: gateado por login (AuthProvider). O Outlet renderiza as páginas dentro do contexto.
-    element: <AuthProvider><AppShell /></AuthProvider>,
+    // ConfirmProvider fica DENTRO da árvore autenticada (só monta quando AuthProvider libera os children),
+    // habilitando useConfirm() (confirmações via AlertDialog) nas páginas do shell. Aditivo; não altera rotas.
+    element: <AuthProvider><ConfirmProvider><AppShell /></ConfirmProvider></AuthProvider>,
     children: [
       { path: "/", element: <DashboardPage /> },
       { path: "/relatorio", element: <ReportPage /> },

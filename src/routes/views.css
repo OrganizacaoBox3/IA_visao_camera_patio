@@ -5,6 +5,18 @@
 /* Seletor de view no cabeçalho — discreto (largura contida p/ não dominar a barra). */
 .view-picker .ui-select { min-width: 150px; }
 
+/* ── Grade responsiva do dashboard (correção F1-c) ─────────────────────────────────────────
+   A contagem de colunas vem do data-cols (não mais de um style inline), para que os media
+   queries de index.css (@900px → 2 col, @640px → 1 col) voltem a valer em telas estreitas.
+   Estas regras atuam SÓ acima de 900px (desktop); abaixo, o index.css assume o controle.
+   (A Fase 2 consolidará media/container queries no index.css.) */
+@media (min-width: 901px) {
+  .dash-grid[data-cols="1"] { grid-template-columns: 1fr; }
+  .dash-grid[data-cols="2"] { grid-template-columns: repeat(2, 1fr); }
+  .dash-grid[data-cols="3"] { grid-template-columns: repeat(3, 1fr); }
+  .dash-grid[data-cols="4"] { grid-template-columns: repeat(4, 1fr); }
+}
+
 /* ── Gerenciador de views (dentro do Dialog) ── */
 .views-mgr {
   display: flex;
@@ -53,11 +65,16 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--state-neutral-border, #1f2937);
   border-radius: 8px;
+}
+/* A rolagem das listas do editor passou para a ScrollArea (a coluna não rola mais). */
+.views-editor__scroll { max-height: 200px; }
+.views-editor__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .views-editor__item {
