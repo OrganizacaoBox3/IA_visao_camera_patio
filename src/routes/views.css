@@ -7,11 +7,11 @@
   min-width: 150px;
 }
 
-/* ── Grade responsiva do dashboard (correção F1-c) ─────────────────────────────────────────
-   A contagem de colunas vem do data-cols (não mais de um style inline), para que os media
-   queries de index.css (@900px → 2 col, @640px → 1 col) voltem a valer em telas estreitas.
-   Estas regras atuam SÓ acima de 900px (desktop); abaixo, o index.css assume o controle.
-   (A Fase 2 consolidará media/container queries no index.css.) */
+/* ── Grade responsiva do dashboard — MECANISMO ÚNICO (going-gray R2.3) ──────────────────────
+   A contagem de colunas no DESKTOP vem do atributo [data-cols="N"] (N = colsFor(), escrito por
+   DashboardPage), nunca de style inline nem da extinta var(--dash-cols) (removida do index.css).
+   Estas regras atuam SÓ acima de 900px (desktop); abaixo, o index.css assume o controle via media
+   queries (@900px → 2 col, @640px → 1 col). Fallback estático (3 col) fica na base .dash-grid. */
 @media (min-width: 901px) {
   .dash-grid[data-cols="1"] {
     grid-template-columns: 1fr;

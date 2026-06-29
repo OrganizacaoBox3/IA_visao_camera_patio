@@ -169,7 +169,7 @@
 }
 .ui-input[aria-invalid="true"],
 .ui-textarea[aria-invalid="true"] {
-  border-color: var(--alert);
+  border-color: var(--state-critical);
 }
 
 .ui-field {
@@ -187,7 +187,7 @@
 }
 .ui-err {
   font-size: 11px;
-  color: var(--alert);
+  color: var(--state-critical);
 }
 
 /* ── Select (Radix) ─────────────────────────────────────── */
@@ -357,17 +357,17 @@
   border: 1px solid var(--border-soft);
 }
 .ui-badge--ok {
-  color: var(--ok);
+  color: var(--state-ok);
   background: var(--state-ok-bg);
   border-color: transparent;
 }
 .ui-badge--warn {
-  color: var(--idle);
+  color: var(--state-warn);
   background: var(--state-warn-bg);
   border-color: transparent;
 }
 .ui-badge--alert {
-  color: var(--alert);
+  color: var(--state-critical);
   background: var(--state-critical-bg);
   border-color: transparent;
 }
@@ -712,10 +712,10 @@
   animation: ui-toast-in 0.18s ease;
 }
 .ui-toast--alert {
-  border-left-color: var(--alert);
+  border-left-color: var(--state-critical);
 }
 .ui-toast--ok {
-  border-left-color: var(--ok);
+  border-left-color: var(--state-ok);
 }
 @keyframes ui-toast-in {
   from {
@@ -800,16 +800,16 @@
   align-items: center;
 }
 .ui-alert--ok {
-  border-left-color: var(--ok);
+  border-left-color: var(--state-ok);
   background: var(--state-ok-bg);
 }
 .ui-alert--alert {
-  border-left-color: var(--alert);
+  border-left-color: var(--state-critical);
   background: var(--state-critical-bg);
   color: var(--state-critical-fg);
 }
 .ui-alert--warn {
-  border-left-color: var(--idle);
+  border-left-color: var(--state-warn);
   background: var(--state-warn-bg);
 }
 .ui-alert--info {

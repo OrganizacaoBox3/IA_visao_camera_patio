@@ -8,10 +8,16 @@
   --text-dim: #9aa7b4;
   --text-muted: #5b6b7a;
   --accent: #38bdf8;
-  --ok: #22c55e;
-  --idle: #eab308;
-  --empty: #64748b;
-  --alert: #ef4444;
+  /* Tokens de estado LEGADOS → agora ALIASES dos --state-* (going-gray R3.1).
+     A FONTE ÚNICA da verdade são os --state-* (definidos abaixo). Estes nomes
+     antigos permanecem APENAS por compatibilidade: ReportPage/FadigaView/UsersPage
+     ainda referenciam var(--ok|--idle|--alert) e não fazem parte desta frente.
+     Sem hex duplicado aqui — cada alias só encaminha para o token semântico.
+     (forward-ref de var() é resolvido no uso, então referenciar --state-* aqui é ok.) */
+  --ok: var(--state-ok);
+  --idle: var(--state-warn);
+  --empty: var(--state-neutral-dim);
+  --alert: var(--state-critical);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   /* Escala de espaçamento (padronização) */
@@ -43,7 +49,7 @@
      md  ≤ 900px  → Tablet: rail vira ícones; painéis laterais empilham/encolhem
                     (imagem soberana); grades densas → 2 colunas.
      lg  ≤ 1200px → Desktop estreito: densidade máxima da grade do dashboard
-                    (até 4 col via --dash-cols); reduções finas.
+                    (até 4 col via [data-cols] em views.css); reduções finas.
 
    Onde o layout reage à largura do PRÓPRIO container (e não da viewport),
    prefira container queries (@container) — ver .side / .cam-drawer abaixo.
@@ -75,17 +81,18 @@
 
    Cada estado tem 3 papéis: «-fg» (texto/ícone/borda saturada · contraste AA
    sobre os fundos escuros --panel / --panel-2), «-bg» (tint de fundo escuro)
-   e «-border». Os hues canônicos reaproveitam os tokens-base legados
-   (--ok / --idle / --empty / --alert / --accent) — aqui apenas ganham nomes
-   SEMÂNTICOS estáveis, sem remover nem alterar as variáveis existentes.
+   e «-border». Estes --state-* são a FONTE ÚNICA da verdade do design de cor
+   (going-gray R3.1): os tokens legados --ok/--idle/--empty/--alert agora são
+   apenas ALIASES destes (ver topo do arquivo), e os tints hex que antes
+   duplicavam os -bg/-border foram substituídos por var(--state-*) nas classes.
    ════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* Hue canônico (dot/borda/realce). Reaproveita os tokens-base legados. */
-  --state-neutral: #64748b; /* = --empty  (cinza neutro) */
-  --state-ok: #22c55e; /* = --ok     (verde)        */
-  --state-info: #38bdf8; /* = --accent (azul advisory)*/
-  --state-warn: #eab308; /* = --idle   (amarelo)      */
-  --state-critical: #ef4444; /* = --alert  (vermelho)     */
+  /* Hue canônico (dot/borda/realce). Fonte única; --accent permanece à parte. */
+  --state-neutral: #64748b; /* cinza neutro (operação normal)   */
+  --state-ok: #22c55e; /* verde (confirmação pontual)      */
+  --state-info: #38bdf8; /* = --accent (azul advisory)       */
+  --state-warn: #eab308; /* amarelo (atenção/ociosa)         */
+  --state-critical: #ef4444; /* vermelho (ação imediata)         */
 
   /* Foreground — texto/ícone (contraste AA sobre --panel/--panel-2) */
   --state-neutral-fg: #9aa7b4; /* = --text-dim   */
@@ -210,9 +217,9 @@ textarea:focus {
 }
 .privacy {
   font-size: 11px;
-  color: var(--ok);
-  border: 1px solid #14532d;
-  background: #0c1f15;
+  color: var(--state-ok);
+  border: 1px solid var(--state-ok-border);
+  background: var(--state-ok-bg);
   padding: 3px 8px;
   border-radius: 999px;
 }
@@ -383,16 +390,16 @@ label.file input {
   border-left: 3px solid var(--border);
 }
 .zone.OK {
-  border-left-color: var(--ok);
+  border-left-color: var(--state-ok);
 }
 .zone.OCIOSA {
-  border-left-color: var(--idle);
+  border-left-color: var(--state-warn);
 }
 .zone.VAZIA {
-  border-left-color: var(--empty);
+  border-left-color: var(--state-neutral-dim);
 }
 .zone.ALERTA {
-  border-left-color: var(--alert);
+  border-left-color: var(--state-critical);
   animation: pulse 1.1s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -419,20 +426,20 @@ label.file input {
   border-radius: 4px;
 }
 .badge.OK {
-  color: var(--ok);
-  background: #0c1f15;
+  color: var(--state-ok);
+  background: var(--state-ok-bg);
 }
 .badge.OCIOSA {
-  color: var(--idle);
-  background: #211c08;
+  color: var(--state-warn);
+  background: var(--state-warn-bg);
 }
 .badge.VAZIA {
-  color: var(--empty);
-  background: #161c24;
+  color: var(--state-neutral-dim);
+  background: var(--state-neutral-bg);
 }
 .badge.ALERTA {
-  color: var(--alert);
-  background: #2a1113;
+  color: var(--state-critical);
+  background: var(--state-critical-bg);
 }
 .zone .meta {
   display: flex;
@@ -466,7 +473,7 @@ label.file input {
   background: none;
 }
 .zone .del:hover {
-  color: var(--alert);
+  color: var(--state-critical);
 }
 
 /* Timeline */
@@ -496,13 +503,13 @@ label.file input {
   flex: none;
 }
 .tl .dot.info {
-  background: var(--ok);
+  background: var(--state-ok);
 }
 .tl .dot.warn {
-  background: var(--idle);
+  background: var(--state-warn);
 }
 .tl .dot.high {
-  background: var(--alert);
+  background: var(--state-critical);
 }
 .empty-note {
   color: var(--text-muted);
@@ -515,9 +522,9 @@ label.file input {
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 8px;
-  background: #2a1113;
-  border: 1px solid #7f1d1d;
-  color: #fecaca;
+  background: var(--state-critical-bg);
+  border: 1px solid var(--state-critical-border);
+  color: var(--state-critical-fg);
   font-size: 12px;
 }
 .alert-banner b {
@@ -538,15 +545,15 @@ label.file input {
   overflow: auto;
   background: #05080c;
 }
-/* Grade do dashboard: densidade dirigida pela CONTAGEM de câmeras via a custom
-   property --dash-cols (definida pela Fase 1; colsFor() limita a 4 = densidade
-   "lg"). Fallback 3 col. minmax(0,1fr) impede que um tile largo estoure a
-   coluna. As media queries md/sm abaixo (de classe, não inline) sobrepõem o
-   COUNT no tablet/mobile — por isso a Fase 1 removeu o gridTemplateColumns
-   inline, que antes anulava estas regras. */
+/* Grade do dashboard — UM mecanismo só (going-gray R2.3): a densidade no desktop
+   vem do atributo [data-cols="N"] (N = colsFor(), 1..4) escrito por DashboardPage,
+   com as regras em views.css (@min-width:901px). No tablet/mobile, as media queries
+   md/sm abaixo assumem (2 col / 1 col). A regra base aqui é só o FALLBACK estático
+   (3 col) quando data-cols está ausente. minmax(0,1fr) impede que um tile largo
+   estoure a coluna. (O antigo --dash-cols era morto — nunca era atribuído; removido.) */
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(var(--dash-cols, 3), minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-auto-rows: minmax(150px, 1fr);
   gap: var(--sp-3);
   padding: var(--sp-3);
@@ -581,8 +588,8 @@ label.file input {
   border-color: var(--accent);
 }
 .tile.alerting {
-  border-color: var(--alert);
-  box-shadow: 0 0 0 1px var(--alert);
+  border-color: var(--state-critical);
+  box-shadow: 0 0 0 1px var(--state-critical);
 }
 .tile-vp {
   position: relative;
@@ -612,7 +619,7 @@ label.file input {
   border-radius: 999px;
 }
 .tile-badges .tb.alert {
-  color: #fecaca;
+  color: var(--state-critical-fg);
   background: rgba(127, 29, 29, 0.8);
 }
 .tile-foot {
@@ -701,24 +708,28 @@ label.file input {
   position: absolute;
   bottom: 40px;
   left: 12px;
-  color: #fca5a5;
+  color: var(--state-critical-fg); /* going-gray: erro do nó → token crítico */
   font-size: 12px;
 }
+/* Status do nó /camera (going-gray R3.1) — mesma linguagem da central (statusInfo
+   em DashboardPage): operação normal = neutro (não verde), advisory = azul,
+   anormalidade = vermelho. O dot das tiles da central define a cor inline (st.dot),
+   então estas regras valem só para o nó /camera. */
 .dot-status {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--text-muted);
+  background: var(--state-neutral-dim);
 }
 .dot-status.on {
-  background: var(--ok);
+  background: var(--state-neutral); /* transmitindo = operação normal → neutro */
 }
 .dot-status.connecting {
-  background: var(--idle);
+  background: var(--state-info); /* advisory não-crítico → azul */
 }
 .dot-status.denied,
 .dot-status.error {
-  background: var(--alert);
+  background: var(--state-critical); /* anormalidade → vermelho */
 }
 .muted {
   color: var(--text-muted);
@@ -807,10 +818,10 @@ label.file input {
   font-weight: 600;
 }
 .delta.good {
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .delta.bad {
-  color: var(--alert);
+  color: var(--state-critical);
 }
 .delta.muted {
   color: var(--text-muted);
@@ -979,13 +990,13 @@ label.file input {
 
 /* Insight */
 .insight {
-  background: #0c1f15;
-  border: 1px solid #14532d;
+  background: var(--state-ok-bg);
+  border: 1px solid var(--state-ok-border);
   border-radius: 10px;
   padding: 12px 14px;
 }
 .insight b {
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .insight ul {
   margin: 8px 0 0;
@@ -1212,7 +1223,7 @@ label.file input {
   text-align: center;
 }
 .rail-foot {
-  color: var(--ok);
+  color: var(--state-ok);
   text-align: center;
   padding: var(--sp-2);
 }
@@ -1271,13 +1282,13 @@ button.rail-item {
   vertical-align: middle;
 }
 .wa-dot.on {
-  background: var(--ok);
+  background: var(--state-ok);
 }
 .wa-dot.wait {
-  background: var(--idle);
+  background: var(--state-warn);
 }
 .wa-dot.off {
-  background: var(--empty);
+  background: var(--state-neutral-dim);
 }
 .wa-qr img {
   background: #fff;
@@ -1338,7 +1349,7 @@ button.rail-item {
   white-space: pre-wrap;
   font-family: var(--sans);
   font-size: 12px;
-  background: #0c1f15;
+  background: var(--state-ok-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: var(--sp-2);
@@ -1346,8 +1357,8 @@ button.rail-item {
   color: var(--text);
 }
 .users-reveal {
-  background: #0c1f15;
-  border: 1px solid var(--ok);
+  background: var(--state-ok-bg);
+  border: 1px solid var(--state-ok);
   color: var(--text);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius-sm);
@@ -1358,15 +1369,15 @@ button.rail-item {
 }
 .users-reveal code {
   font-family: var(--mono);
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .users-reveal.err {
   background: #2a1416;
-  border-color: var(--alert);
+  border-color: var(--state-critical);
 }
 .users-reveal.err,
 .users-reveal.err code {
-  color: #fecaca;
+  color: var(--state-critical-fg);
 }
 
 /* Resumo executivo (relatório) */
@@ -1475,10 +1486,10 @@ button.rail-item {
   color: var(--text-muted);
 }
 .prof-state.on {
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .prof-ok {
-  color: var(--ok);
+  color: var(--state-ok);
   font-size: 12px;
   margin: 0;
 }
@@ -1519,7 +1530,7 @@ button.rail-item {
 }
 /* inputs/botão do login agora usam os átomos (ui-input/ui-btn) */
 .login-err {
-  color: var(--alert);
+  color: var(--state-critical);
   font-size: 12px;
   text-align: center;
   margin: 0;
@@ -1825,16 +1836,16 @@ button.rail-item {
   border-radius: 999px;
 }
 .flow-chip.Alto {
-  color: var(--ok);
-  background: #0c1f15;
+  color: var(--state-ok);
+  background: var(--state-ok-bg);
 }
 .flow-chip.Médio {
-  color: var(--idle);
-  background: #211c08;
+  color: var(--state-warn);
+  background: var(--state-warn-bg);
 }
 .flow-chip.Baixo {
-  color: var(--empty);
-  background: #161c24;
+  color: var(--state-neutral-dim);
+  background: var(--state-neutral-bg);
 }
 .spark {
   flex: 1;
@@ -1884,8 +1895,8 @@ button.rail-item {
   font-family: var(--mono);
 }
 .badge.ATIVA {
-  color: var(--ok);
-  background: #0c1f15;
+  color: var(--state-ok);
+  background: var(--state-ok-bg);
 }
 
 /* central em modo misto: rola internamente */
@@ -1957,7 +1968,7 @@ button.rail-item {
   font-weight: 600;
 }
 .ponto-kpis .no-read b {
-  color: var(--alert);
+  color: var(--state-critical);
 }
 .ponto-rate {
   font-family: var(--mono);
@@ -1965,13 +1976,13 @@ button.rail-item {
   font-size: 14px;
 }
 .ponto-rate.ATIVA {
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .ponto-rate.OCIOSA {
-  color: var(--idle);
+  color: var(--state-warn);
 }
 .ponto-rate.ALERTA {
-  color: var(--alert);
+  color: var(--state-critical);
 }
 .ponto-rate.VAZIA {
   color: var(--text-muted);
@@ -2000,23 +2011,23 @@ button.rail-item {
 }
 /* mesma linguagem de cor semântica dos chips .badge.* (token + tint escuro) */
 .tile-badges .tb.ATIVA {
-  color: var(--ok);
-  background: #0c1f15;
+  color: var(--state-ok);
+  background: var(--state-ok-bg);
 }
 .tile-badges .tb.OCIOSA {
-  color: var(--idle);
-  background: #211c08;
+  color: var(--state-warn);
+  background: var(--state-warn-bg);
 }
 .tile-badges .tb.VAZIA {
-  color: var(--empty);
-  background: #161c24;
+  color: var(--state-neutral-dim);
+  background: var(--state-neutral-bg);
 }
 .tile-badges .tb.ALERTA {
-  color: var(--alert);
-  background: #2a1113;
+  color: var(--state-critical);
+  background: var(--state-critical-bg);
 }
 .read-tile.ALERTA {
-  border-color: var(--alert);
+  border-color: var(--state-critical);
 }
 /* flash quando uma caixa passa no ROI (F4) */
 .read-tile.passing {
@@ -2300,7 +2311,7 @@ button.rail-item {
   font-family: var(--mono);
 }
 .obj-matrix td.on {
-  color: var(--ok);
+  color: var(--state-ok);
 }
 .obj-matrix td.off {
   color: var(--text-muted);
@@ -2478,10 +2489,10 @@ button.rail-item {
 
 /* ── Modo FADIGA (operador) ─────────────────────────────── */
 .fadiga-tile.ALERTA {
-  border-color: var(--alert);
+  border-color: var(--state-critical);
 }
 .fadiga-tile.OCIOSA {
-  border-color: var(--idle);
+  border-color: var(--state-warn);
 }
 .fadiga-signals {
   padding: 0 var(--sp-3) var(--sp-3);
@@ -2500,7 +2511,7 @@ button.rail-item {
   color: var(--text);
 }
 .fs-row span.on {
-  color: var(--idle);
+  color: var(--state-warn);
 }
 .fadiga-controls {
   padding: 0 var(--sp-3) var(--sp-3);
