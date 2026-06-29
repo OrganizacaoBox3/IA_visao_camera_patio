@@ -49,24 +49,46 @@ async function init() {
     try {
       const r = await db.query("select data from app_settings where id='notif'");
       if (r.rows.length) cur = normalize(r.rows[0].data);
-      else await db.query("insert into app_settings (id,data) values ('notif',$1) on conflict (id) do nothing", [JSON.stringify(cur)]);
+      else
+        await db.query(
+          "insert into app_settings (id,data) values ('notif',$1) on conflict (id) do nothing",
+          [JSON.stringify(cur)],
+        );
       usingPg = true;
       console.log("[settings] notificações do Postgres");
       return;
-    } catch (e) { console.error("[settings] Postgres indisponível, usando JSON:", e.message); }
+    } catch (e) {
+      console.error("[settings] Postgres indisponível, usando JSON:", e.message);
+    }
   }
   usingPg = false;
-  try { cur = normalize(JSON.parse(fs.readFileSync(FILE, "utf8"))); } catch { cur = normalize(DEFAULTS); }
+  try {
+    cur = normalize(JSON.parse(fs.readFileSync(FILE, "utf8")));
+  } catch {
+    cur = normalize(DEFAULTS);
+  }
 }
 
-function get() { return cur; }
+function get() {
+  return cur;
+}
 async function update(patch) {
   cur = normalize(patch);
   if (usingPg) {
-    try { await db.query("insert into app_settings (id,data) values ('notif',$1) on conflict (id) do update set data=excluded.data", [JSON.stringify(cur)]); }
-    catch (e) { console.error("[settings] falha ao salvar no PG:", e.message); }
+    try {
+      await db.query(
+        "insert into app_settings (id,data) values ('notif',$1) on conflict (id) do update set data=excluded.data",
+        [JSON.stringify(cur)],
+      );
+    } catch (e) {
+      console.error("[settings] falha ao salvar no PG:", e.message);
+    }
   } else {
-    try { fs.writeFileSync(FILE, JSON.stringify(cur, null, 2)); } catch (e) { console.error("[settings] falha ao salvar:", e.message); }
+    try {
+      fs.writeFileSync(FILE, JSON.stringify(cur, null, 2));
+    } catch (e) {
+      console.error("[settings] falha ao salvar:", e.message);
+    }
   }
   return cur;
 }

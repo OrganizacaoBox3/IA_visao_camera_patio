@@ -18,7 +18,13 @@ const router = createBrowserRouter([
     // Painel humano: gateado por login (AuthProvider). O Outlet renderiza as páginas dentro do contexto.
     // ConfirmProvider fica DENTRO da árvore autenticada (só monta quando AuthProvider libera os children),
     // habilitando useConfirm() (confirmações via AlertDialog) nas páginas do shell. Aditivo; não altera rotas.
-    element: <AuthProvider><ConfirmProvider><AppShell /></ConfirmProvider></AuthProvider>,
+    element: (
+      <AuthProvider>
+        <ConfirmProvider>
+          <AppShell />
+        </ConfirmProvider>
+      </AuthProvider>
+    ),
     children: [
       { path: "/", element: <DashboardPage /> },
       { path: "/relatorio", element: <ReportPage /> },
@@ -35,6 +41,10 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById("app")!).render(
   <ErrorBoundary>
-    <TooltipProvider><ToastProvider><RouterProvider router={router} /></ToastProvider></TooltipProvider>
-  </ErrorBoundary>
+    <TooltipProvider>
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
+    </TooltipProvider>
+  </ErrorBoundary>,
 );

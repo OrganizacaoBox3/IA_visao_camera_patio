@@ -5,22 +5,29 @@
 
 import { APP_CONFIG } from "../config";
 
-export type ReadEvent = { cameraId: string; cameraLabel: string; ponto: string; code: string; format: string; ts: number };
+export type ReadEvent = {
+  cameraId: string;
+  cameraLabel: string;
+  ponto: string;
+  code: string;
+  format: string;
+  ts: number;
+};
 export type CameraRef = { cameraId: string; cameraLabel: string };
 
 export type PontoSnapshot = {
   ponto: string;
-  boxesRecent: number;       // caixas distintas na janela recente
-  perMin: number;            // throughput (caixas/min) na janela recente
-  multiReads: number;        // caixas lidas por +1 câmera na janela
-  passages: number;          // passagens físicas de caixa (motion deduplicado por ponto)
-  noReads: number;           // passagens sem leitura = max(0, passages - boxes)
-  readRatePct: number;       // taxa de leitura = boxes/passages (0..100; 100 se sem passagens)
+  boxesRecent: number; // caixas distintas na janela recente
+  perMin: number; // throughput (caixas/min) na janela recente
+  multiReads: number; // caixas lidas por +1 câmera na janela
+  passages: number; // passagens físicas de caixa (motion deduplicado por ponto)
+  noReads: number; // passagens sem leitura = max(0, passages - boxes)
+  readRatePct: number; // taxa de leitura = boxes/passages (0..100; 100 se sem passagens)
   lastCode: string | null;
   lastFormat: string | null;
   lastTs: number;
   perCamera: { cameraId: string; cameraLabel: string; reads: number }[]; // contribuição (caixas em que a câmera participou)
-  recentCodes: { code: string; ts: number; cameras: string[] }[];        // fluxo ao vivo (mais recente primeiro)
+  recentCodes: { code: string; ts: number; cameras: string[] }[]; // fluxo ao vivo (mais recente primeiro)
 };
 
 export type PassEvent = { cameraId: string; ponto: string; ts: number };
@@ -41,17 +48,29 @@ const labelByCamera = new Map<string, string>();
 export function pushRead(ev: ReadEvent): PushResult {
   labelByCamera.set(ev.cameraId, ev.cameraLabel);
   let boxes = boxesByPonto.get(ev.ponto);
-  if (!boxes) { boxes = []; boxesByPonto.set(ev.ponto, boxes); }
+  if (!boxes) {
+    boxes = [];
+    boxesByPonto.set(ev.ponto, boxes);
+  }
 
   // mesma caixa = mesmo código no ponto dentro da janela de dedup (qualquer câmera)
   const open = boxes.find((b) => b.code === ev.code && ev.ts - b.lastTs <= R.dedupWindowMs);
-  let newBox = false, becameMulti = false;
+  let newBox = false,
+    becameMulti = false;
   if (open) {
     const before = open.cameras.size;
-    open.lastTs = ev.ts; open.cameras.add(ev.cameraId); open.format = ev.format || open.format;
+    open.lastTs = ev.ts;
+    open.cameras.add(ev.cameraId);
+    open.format = ev.format || open.format;
     becameMulti = before === 1 && open.cameras.size === 2; // 2ª câmera confirmou a mesma caixa
   } else {
-    boxes.push({ code: ev.code, firstTs: ev.ts, lastTs: ev.ts, format: ev.format, cameras: new Set([ev.cameraId]) });
+    boxes.push({
+      code: ev.code,
+      firstTs: ev.ts,
+      lastTs: ev.ts,
+      format: ev.format,
+      cameras: new Set([ev.cameraId]),
+    });
     newBox = true;
   }
 
@@ -64,7 +83,10 @@ export function pushRead(ev: ReadEvent): PushResult {
 // várias câmeras veem a MESMA caixa passar → uma passagem só.
 export function pushPass(ev: PassEvent): PassResult {
   let passes = passesByPonto.get(ev.ponto);
-  if (!passes) { passes = []; passesByPonto.set(ev.ponto, passes); }
+  if (!passes) {
+    passes = [];
+    passesByPonto.set(ev.ponto, passes);
+  }
   const last = passes.length ? passes[passes.length - 1] : -Infinity;
   const newPassage = ev.ts - last > R.dedupWindowMs; // mesma janela = mesma caixa passando
   if (newPassage) passes.push(ev.ts);
@@ -75,9 +97,15 @@ export function pushPass(ev: PassEvent): PassResult {
 function prune(ponto: string, now: number): void {
   const cutoff = now - R.recentWindowMs;
   const boxes = boxesByPonto.get(ponto);
-  if (boxes) { const keep = boxes.filter((b) => b.lastTs >= cutoff); if (keep.length !== boxes.length) boxesByPonto.set(ponto, keep); }
+  if (boxes) {
+    const keep = boxes.filter((b) => b.lastTs >= cutoff);
+    if (keep.length !== boxes.length) boxesByPonto.set(ponto, keep);
+  }
   const passes = passesByPonto.get(ponto);
-  if (passes) { const keep = passes.filter((t) => t >= cutoff); if (keep.length !== passes.length) passesByPonto.set(ponto, keep); }
+  if (passes) {
+    const keep = passes.filter((t) => t >= cutoff);
+    if (keep.length !== passes.length) passesByPonto.set(ponto, keep);
+  }
 }
 
 // Snapshot p/ a UI. `members` = câmeras atribuídas ao ponto na central (mostra contribuição 0 p/ quem não leu).
@@ -97,7 +125,8 @@ export function snapshot(ponto: string, members: CameraRef[], now: number): Pont
   const windowMin = R.recentWindowMs / 60_000;
   const passages = (passesByPonto.get(ponto) ?? []).length;
   const noReads = Math.max(0, passages - boxes.length);
-  const readRatePct = passages > 0 ? Math.min(100, Math.round((boxes.length / passages) * 100)) : 100;
+  const readRatePct =
+    passages > 0 ? Math.min(100, Math.round((boxes.length / passages) * 100)) : 100;
 
   return {
     ponto,
@@ -110,9 +139,18 @@ export function snapshot(ponto: string, members: CameraRef[], now: number): Pont
     lastCode: last ? last.code : null,
     lastFormat: last ? last.format : null,
     lastTs: last ? last.lastTs : 0,
-    perCamera: members.map((m) => ({ cameraId: m.cameraId, cameraLabel: labelByCamera.get(m.cameraId) ?? m.cameraLabel, reads: perCameraMap.get(m.cameraId) ?? 0 })),
-    recentCodes: boxes.slice(0, 12).map((b) => ({ code: b.code, ts: b.lastTs, cameras: [...b.cameras] })),
+    perCamera: members.map((m) => ({
+      cameraId: m.cameraId,
+      cameraLabel: labelByCamera.get(m.cameraId) ?? m.cameraLabel,
+      reads: perCameraMap.get(m.cameraId) ?? 0,
+    })),
+    recentCodes: boxes
+      .slice(0, 12)
+      .map((b) => ({ code: b.code, ts: b.lastTs, cameras: [...b.cameras] })),
   };
 }
 
-export function resetCluster(): void { boxesByPonto.clear(); passesByPonto.clear(); }
+export function resetCluster(): void {
+  boxesByPonto.clear();
+  passesByPonto.clear();
+}

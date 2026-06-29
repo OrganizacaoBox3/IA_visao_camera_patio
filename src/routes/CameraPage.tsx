@@ -9,7 +9,11 @@ import { Tooltip } from "../ui";
 function cameraToken(): string | null {
   const key = new URLSearchParams(location.search).get("key");
   if (key) return key;
-  try { return JSON.parse(localStorage.getItem("vp-auth") || "null")?.token ?? null; } catch { return null; }
+  try {
+    return JSON.parse(localStorage.getItem("vp-auth") || "null")?.token ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Nó de câmera: apresenta APENAS o feed (sem controles) e envia frames ao hub.
@@ -32,7 +36,8 @@ export function CameraPage() {
     idRef.current = saved || (crypto.randomUUID ? crypto.randomUUID() : `cam-${Date.now()}`);
     sessionStorage.setItem("camId", idRef.current);
   }
-  const name = new URLSearchParams(location.search).get("name") || `Câmera ${idRef.current.slice(0, 4)}`;
+  const name =
+    new URLSearchParams(location.search).get("name") || `Câmera ${idRef.current.slice(0, 4)}`;
 
   useEffect(() => {
     let alive = true;
@@ -41,9 +46,14 @@ export function CameraPage() {
     (async () => {
       try {
         const stream = await acquireCameraStream(); // contexto seguro + escada de constraints + erros granulares
-        if (!alive) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (!alive) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         streamRef.current = stream;
-        const v = videoRef.current!; v.srcObject = stream; await v.play();
+        const v = videoRef.current!;
+        v.srcObject = stream;
+        await v.play();
         setStatus("on");
       } catch (e) {
         const kind = e instanceof CameraAcquireError ? e.kind : "error";
@@ -52,12 +62,24 @@ export function CameraPage() {
         return;
       }
 
-      const socket = io(APP_CONFIG.net.serverUrl, { transports: ["websocket"], auth: { token: cameraToken() }, query: { role: "camera", id: idRef.current, label: name } });
+      const socket = io(APP_CONFIG.net.serverUrl, {
+        transports: ["websocket"],
+        auth: { token: cameraToken() },
+        query: { role: "camera", id: idRef.current, label: name },
+      });
       socketRef.current = socket;
       // Status do nó reflete o socket REAL: só "transmitindo" quando conectado; senão "reconectando".
       socket.on("connect", () => setHubConnected(true));
       socket.on("disconnect", () => setHubConnected(false));
-      socket.on("connect_error", (err) => { setHubConnected(false); if (err.message === "unauthorized") { setStatus("error"); setError("Dispositivo não autorizado. Abra pelo link de enrolamento (com a chave) ou faça login no painel."); } });
+      socket.on("connect_error", (err) => {
+        setHubConnected(false);
+        if (err.message === "unauthorized") {
+          setStatus("error");
+          setError(
+            "Dispositivo não autorizado. Abra pelo link de enrolamento (com a chave) ou faça login no painel.",
+          );
+        }
+      });
 
       // Perfil de captura — pode ser elevado pela central (modo leitura = alta resolução).
       let frameWidth: number = APP_CONFIG.net.frameWidth;
@@ -66,27 +88,52 @@ export function CameraPage() {
 
       let encoding = false; // descarta frame se o encode anterior ainda não terminou (evita backlog)
       const sendFrame = () => {
-        const v = videoRef.current, c = canvasRef.current;
+        const v = videoRef.current,
+          c = canvasRef.current;
         if (!v || !c || v.readyState < 2 || !v.videoWidth || encoding) return;
-        const w = frameWidth, h = Math.round((frameWidth * v.videoHeight) / v.videoWidth);
-        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+        const w = frameWidth,
+          h = Math.round((frameWidth * v.videoHeight) / v.videoWidth);
+        if (c.width !== w || c.height !== h) {
+          c.width = w;
+          c.height = h;
+        }
         const ctx = c.getContext("2d")!;
         ctx.drawImage(v, 0, 0, w, h);
         encoding = true;
         // JPEG BINÁRIO (não base64): ~⅓ menor e sem custo de string no transporte.
-        c.toBlob((blob) => {
-          if (!blob) { encoding = false; return; }
-          blob.arrayBuffer().then((buf) => { socket.emit("frame", { buf, w, h, ts: Date.now() }); }).finally(() => { encoding = false; });
-        }, "image/jpeg", jpegQuality);
+        c.toBlob(
+          (blob) => {
+            if (!blob) {
+              encoding = false;
+              return;
+            }
+            blob
+              .arrayBuffer()
+              .then((buf) => {
+                socket.emit("frame", { buf, w, h, ts: Date.now() });
+              })
+              .finally(() => {
+                encoding = false;
+              });
+          },
+          "image/jpeg",
+          jpegQuality,
+        );
       };
-      const startTimer = () => { if (timer) clearInterval(timer); timer = window.setInterval(sendFrame, Math.round(1000 / frameFps)); };
+      const startTimer = () => {
+        if (timer) clearInterval(timer);
+        timer = window.setInterval(sendFrame, Math.round(1000 / frameFps));
+      };
       startTimer();
 
       // A central pode pedir um perfil de captura (ex.: leitura de código → alta resolução).
       socket.on("capture", (cfg: { width?: number; quality?: number; fps?: number }) => {
         if (cfg?.width) frameWidth = cfg.width;
         if (cfg?.quality) jpegQuality = cfg.quality;
-        if (cfg?.fps && cfg.fps !== frameFps) { frameFps = cfg.fps; startTimer(); }
+        if (cfg?.fps && cfg.fps !== frameFps) {
+          frameFps = cfg.fps;
+          startTimer();
+        }
         setProfile(`${frameWidth}px · q${Math.round(jpegQuality * 100)}`);
       });
     })();
@@ -104,12 +151,20 @@ export function CameraPage() {
       <video ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} style={{ display: "none" }} />
       <div className="cam-node-badge">
-        <span className={`dot-status ${status === "on" ? (hubConnected ? "on" : "connecting") : status}`} />
+        <span
+          className={`dot-status ${status === "on" ? (hubConnected ? "on" : "connecting") : status}`}
+        />
         <b>{name}</b>
         <span className="muted">
           {status === "on"
-            ? (hubConnected ? "transmitindo ao hub" : "câmera ok · reconectando ao hub…")
-            : status === "connecting" ? "conectando…" : status === "denied" ? "câmera negada" : "erro"}
+            ? hubConnected
+              ? "transmitindo ao hub"
+              : "câmera ok · reconectando ao hub…"
+            : status === "connecting"
+              ? "conectando…"
+              : status === "denied"
+                ? "câmera negada"
+                : "erro"}
         </span>
         {profile && (
           <Tooltip content="Perfil de captura definido pela central">
@@ -118,7 +173,11 @@ export function CameraPage() {
         )}
       </div>
       <div className="cam-node-hint">Nó de câmera · processamento e controles ficam na central</div>
-      {!isSecureCameraContext() && <div className="cam-node-err">Sem HTTPS: a câmera pode ser bloqueada fora de localhost. Use HTTPS para acesso externo.</div>}
+      {!isSecureCameraContext() && (
+        <div className="cam-node-err">
+          Sem HTTPS: a câmera pode ser bloqueada fora de localhost. Use HTTPS para acesso externo.
+        </div>
+      )}
       {error && <div className="cam-node-err">{error}</div>}
     </div>
   );

@@ -5,10 +5,18 @@ export type SelectOption = { value: string; label: ReactNode };
 
 // Wrapper do Radix Select com API por array (cobre os dezenas de <select> do app, DRY).
 // `forwardRef` encaminha p/ o Trigger (DOM) → compõe com Tooltip/DropdownMenu.
-export const Select = forwardRef<ElementRef<typeof RSelect.Trigger>, {
-  value: string; onChange: (v: string) => void; options: SelectOption[];
-  placeholder?: string; ariaLabel?: string; className?: string; disabled?: boolean;
-}>(function Select({ value, onChange, options, placeholder, ariaLabel, className, disabled }, ref) {
+export const Select = forwardRef<
+  ElementRef<typeof RSelect.Trigger>,
+  {
+    value: string;
+    onChange: (v: string) => void;
+    options: SelectOption[];
+    placeholder?: string;
+    ariaLabel?: string;
+    className?: string;
+    disabled?: boolean;
+  }
+>(function Select({ value, onChange, options, placeholder, ariaLabel, className, disabled }, ref) {
   return (
     <RSelect.Root value={value} onValueChange={onChange} disabled={disabled}>
       <RSelect.Trigger ref={ref} className={`ui-select ${className ?? ""}`} aria-label={ariaLabel}>

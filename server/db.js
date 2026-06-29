@@ -12,7 +12,9 @@ types.setTypeParser(20, (v) => (v === null ? null : Number(v)));
 const DBNAME = process.env.PGDATABASE || process.env.VISAO_DB || "";
 let pool = null;
 
-function configured() { return !!(process.env.DATABASE_URL || (process.env.PGHOST && DBNAME)); }
+function configured() {
+  return !!(process.env.DATABASE_URL || (process.env.PGHOST && DBNAME));
+}
 
 function getPool() {
   if (!pool) {
@@ -31,13 +33,18 @@ function getPool() {
   return pool;
 }
 
-function query(text, params) { return getPool().query(text, params); }
+function query(text, params) {
+  return getPool().query(text, params);
+}
 
 // Esquema completo vem de server/schema.sql (fonte única; idempotente). LGPD: só indicadores.
 const SCHEMA = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
 
 async function init() {
-  if (!configured()) { console.log("[db] Postgres NÃO configurado (defina PGDATABASE + PG* ou DATABASE_URL)"); return false; }
+  if (!configured()) {
+    console.log("[db] Postgres NÃO configurado (defina PGDATABASE + PG* ou DATABASE_URL)");
+    return false;
+  }
   try {
     await query(SCHEMA);
     console.log(`[db] Postgres ok (schema garantido) · db=${DBNAME || "via DATABASE_URL"}`);

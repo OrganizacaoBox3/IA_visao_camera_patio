@@ -7,26 +7,28 @@ const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ")
 const Root = forwardRef<ElementRef<typeof RTabs.Root>, ComponentPropsWithoutRef<typeof RTabs.Root>>(
   function TabsRoot({ className, ...rest }, ref) {
     return <RTabs.Root ref={ref} className={cx("ui-tabs", className)} {...rest} />;
-  }
+  },
 );
 
 const List = forwardRef<ElementRef<typeof RTabs.List>, ComponentPropsWithoutRef<typeof RTabs.List>>(
   function TabsList({ className, ...rest }, ref) {
     return <RTabs.List ref={ref} className={cx("ui-tablist", className)} {...rest} />;
-  }
+  },
 );
 
-const Trigger = forwardRef<ElementRef<typeof RTabs.Trigger>, ComponentPropsWithoutRef<typeof RTabs.Trigger>>(
-  function TabsTrigger({ className, ...rest }, ref) {
-    return <RTabs.Trigger ref={ref} className={cx("ui-tab", className)} {...rest} />;
-  }
-);
+const Trigger = forwardRef<
+  ElementRef<typeof RTabs.Trigger>,
+  ComponentPropsWithoutRef<typeof RTabs.Trigger>
+>(function TabsTrigger({ className, ...rest }, ref) {
+  return <RTabs.Trigger ref={ref} className={cx("ui-tab", className)} {...rest} />;
+});
 
-const Content = forwardRef<ElementRef<typeof RTabs.Content>, ComponentPropsWithoutRef<typeof RTabs.Content>>(
-  function TabsContentBase({ className, ...rest }, ref) {
-    return <RTabs.Content ref={ref} className={cx("ui-tabpanel", className)} {...rest} />;
-  }
-);
+const Content = forwardRef<
+  ElementRef<typeof RTabs.Content>,
+  ComponentPropsWithoutRef<typeof RTabs.Content>
+>(function TabsContentBase({ className, ...rest }, ref) {
+  return <RTabs.Content ref={ref} className={cx("ui-tabpanel", className)} {...rest} />;
+});
 
 export type TabItem = { value: string; label: ReactNode; disabled?: boolean };
 
@@ -43,12 +45,29 @@ type TabsProps = {
 };
 
 // ── Alto nível — render da barra de abas a partir de `items`; painéis vêm como children ──
-function TabsComponent({ items, value, defaultValue, onValueChange, ariaLabel, orientation, className, children }: TabsProps) {
+function TabsComponent({
+  items,
+  value,
+  defaultValue,
+  onValueChange,
+  ariaLabel,
+  orientation,
+  className,
+  children,
+}: TabsProps) {
   return (
-    <Root value={value} defaultValue={defaultValue} onValueChange={onValueChange} orientation={orientation} className={className}>
+    <Root
+      value={value}
+      defaultValue={defaultValue}
+      onValueChange={onValueChange}
+      orientation={orientation}
+      className={className}
+    >
       <List aria-label={ariaLabel}>
         {items.map((it) => (
-          <Trigger key={it.value} value={it.value} disabled={it.disabled}>{it.label}</Trigger>
+          <Trigger key={it.value} value={it.value} disabled={it.disabled}>
+            {it.label}
+          </Trigger>
         ))}
       </List>
       {children}

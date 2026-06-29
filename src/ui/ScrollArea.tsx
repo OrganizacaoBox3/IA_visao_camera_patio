@@ -14,25 +14,30 @@ export type ScrollAreaProps = {
 } & Omit<ComponentPropsWithoutRef<typeof RScrollArea.Root>, "type" | "children" | "className">;
 
 // Área rolável com scrollbar estilizada (cross-browser) preservando rolagem nativa por teclado/touch.
-export const ScrollArea = forwardRef<ElementRef<typeof RScrollArea.Root>, ScrollAreaProps>(function ScrollArea(
-  { children, orientation = "vertical", type = "hover", className, viewportClassName, ...rest }, ref
-) {
-  const vertical = orientation === "vertical" || orientation === "both";
-  const horizontal = orientation === "horizontal" || orientation === "both";
-  return (
-    <RScrollArea.Root ref={ref} type={type} className={cx("ui-scroll", className)} {...rest}>
-      <RScrollArea.Viewport className={cx("ui-scroll-vp", viewportClassName)}>{children}</RScrollArea.Viewport>
-      {vertical && (
-        <RScrollArea.Scrollbar orientation="vertical" className="ui-scrollbar">
-          <RScrollArea.Thumb className="ui-scroll-thumb" />
-        </RScrollArea.Scrollbar>
-      )}
-      {horizontal && (
-        <RScrollArea.Scrollbar orientation="horizontal" className="ui-scrollbar">
-          <RScrollArea.Thumb className="ui-scroll-thumb" />
-        </RScrollArea.Scrollbar>
-      )}
-      {orientation === "both" && <RScrollArea.Corner className="ui-scroll-corner" />}
-    </RScrollArea.Root>
-  );
-});
+export const ScrollArea = forwardRef<ElementRef<typeof RScrollArea.Root>, ScrollAreaProps>(
+  function ScrollArea(
+    { children, orientation = "vertical", type = "hover", className, viewportClassName, ...rest },
+    ref,
+  ) {
+    const vertical = orientation === "vertical" || orientation === "both";
+    const horizontal = orientation === "horizontal" || orientation === "both";
+    return (
+      <RScrollArea.Root ref={ref} type={type} className={cx("ui-scroll", className)} {...rest}>
+        <RScrollArea.Viewport className={cx("ui-scroll-vp", viewportClassName)}>
+          {children}
+        </RScrollArea.Viewport>
+        {vertical && (
+          <RScrollArea.Scrollbar orientation="vertical" className="ui-scrollbar">
+            <RScrollArea.Thumb className="ui-scroll-thumb" />
+          </RScrollArea.Scrollbar>
+        )}
+        {horizontal && (
+          <RScrollArea.Scrollbar orientation="horizontal" className="ui-scrollbar">
+            <RScrollArea.Thumb className="ui-scroll-thumb" />
+          </RScrollArea.Scrollbar>
+        )}
+        {orientation === "both" && <RScrollArea.Corner className="ui-scroll-corner" />}
+      </RScrollArea.Root>
+    );
+  },
+);

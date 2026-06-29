@@ -8,13 +8,22 @@ export class FrameMeter {
   private _avg = 0;
   private readonly window: number;
 
-  constructor(rollingSamples = 24) { this.window = rollingSamples; }
+  constructor(rollingSamples = 24) {
+    this.window = rollingSamples;
+  }
 
   /** Chame 1×/frame no loop (now = performance.now()). Atualiza o FPS a cada ~1s. */
   tick(now: number): void {
     this.frames++;
-    if (this.lastAt === 0) { this.lastAt = now; return; }
-    if (now - this.lastAt >= 1000) { this._fps = (this.frames * 1000) / (now - this.lastAt); this.frames = 0; this.lastAt = now; }
+    if (this.lastAt === 0) {
+      this.lastAt = now;
+      return;
+    }
+    if (now - this.lastAt >= 1000) {
+      this._fps = (this.frames * 1000) / (now - this.lastAt);
+      this.frames = 0;
+      this.lastAt = now;
+    }
   }
 
   /** Empilhe a latência (ms) de uma inferência/decodificação. */
@@ -25,6 +34,10 @@ export class FrameMeter {
     this._avg = this.lat.reduce((a, b) => a + b, 0) / this.lat.length;
   }
 
-  get fps(): number { return this._fps; }
-  get avgProcMs(): number { return this._avg; }
+  get fps(): number {
+    return this._fps;
+  }
+  get avgProcMs(): number {
+    return this._avg;
+  }
 }

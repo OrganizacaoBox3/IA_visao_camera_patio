@@ -1,0 +1,17 @@
+dist
+node_modules
+test-results
+playwright-report
+coverage
+package-lock.json
+server/package-lock.json
+server/wa-auth
+visao_computacional_mvp
+# Runtime/segredos e dados (não formatar)
+server/users.json
+*.local
+# Documentação / artefatos longos
+docs
+docs-regenerada
+analises
+*.pdf

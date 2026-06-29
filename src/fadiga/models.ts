@@ -4,9 +4,11 @@
 import { FaceLandmarker, FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { APP_CONFIG } from "../config";
 
-let filesetPromise: Promise<Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>> | null = null;
+let filesetPromise: Promise<Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>> | null =
+  null;
 function fileset() {
-  if (!filesetPromise) filesetPromise = FilesetResolver.forVisionTasks(APP_CONFIG.fadiga.mediapipeWasmUrl);
+  if (!filesetPromise)
+    filesetPromise = FilesetResolver.forVisionTasks(APP_CONFIG.fadiga.mediapipeWasmUrl);
   return filesetPromise;
 }
 

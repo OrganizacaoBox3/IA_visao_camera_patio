@@ -23,8 +23,12 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="error-card">
           <div className="login-brand">▣ Visão de Pátio</div>
           <h1 className="error-title">Algo deu errado</h1>
-          <p className="error-sub">Encontramos um problema inesperado ao exibir esta tela. Recarregar costuma resolver.</p>
-          <button className="ui-btn ui-btn--primary" onClick={() => window.location.reload()}>Recarregar</button>
+          <p className="error-sub">
+            Encontramos um problema inesperado ao exibir esta tela. Recarregar costuma resolver.
+          </p>
+          <button className="ui-btn ui-btn--primary" onClick={() => window.location.reload()}>
+            Recarregar
+          </button>
         </div>
       </div>
     );

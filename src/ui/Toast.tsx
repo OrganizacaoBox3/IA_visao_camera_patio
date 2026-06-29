@@ -15,14 +15,22 @@ export function useToast(): Ctx {
 let seq = 0;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Item[]>([]);
-  const toast = useCallback((msg: string, tone: ToastTone = "default") => { setItems((p) => [...p, { id: ++seq, msg, tone }]); }, []);
+  const toast = useCallback((msg: string, tone: ToastTone = "default") => {
+    setItems((p) => [...p, { id: ++seq, msg, tone }]);
+  }, []);
   const remove = (id: number) => setItems((p) => p.filter((x) => x.id !== id));
   return (
     <ToastCtx.Provider value={{ toast }}>
       <RToast.Provider duration={5000} swipeDirection="down">
         {children}
         {items.map((it) => (
-          <RToast.Root key={it.id} className={`ui-toast ${it.tone !== "default" ? `ui-toast--${it.tone}` : ""}`} onOpenChange={(o) => { if (!o) remove(it.id); }}>
+          <RToast.Root
+            key={it.id}
+            className={`ui-toast ${it.tone !== "default" ? `ui-toast--${it.tone}` : ""}`}
+            onOpenChange={(o) => {
+              if (!o) remove(it.id);
+            }}
+          >
             <RToast.Description>{it.msg}</RToast.Description>
           </RToast.Root>
         ))}

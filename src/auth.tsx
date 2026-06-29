@@ -21,12 +21,23 @@ export function canConfigurePapel(papel: Papel): boolean {
 }
 
 function readSession(): Session | null {
-  try { const s = localStorage.getItem(KEY); return s ? (JSON.parse(s) as Session) : null; } catch { return null; }
+  try {
+    const s = localStorage.getItem(KEY);
+    return s ? (JSON.parse(s) as Session) : null;
+  } catch {
+    return null;
+  }
 }
 
 // `isSuper`     = papel === "superadmin" (gestão de usuários/admin, como já era).
 // `canConfigure`= superadmin OU engenheiro (capacidade de editar thresholds/zonas — Setup × Live).
-type AuthCtx = { token: string; user: AuthUser; isSuper: boolean; canConfigure: boolean; logout: (reason?: string) => void };
+type AuthCtx = {
+  token: string;
+  user: AuthUser;
+  isSuper: boolean;
+  canConfigure: boolean;
+  logout: (reason?: string) => void;
+};
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function useAuth(): AuthCtx {
@@ -39,8 +50,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(() => readSession());
   const [error, setError] = useState<string | null>(null);
 
-  const login = useCallback((s: Session) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* no-op */ } setError(null); setSession(s); }, []);
-  const logout = useCallback((reason?: string) => { try { localStorage.removeItem(KEY); } catch { /* no-op */ } setError(reason ?? null); setSession(null); }, []);
+  const login = useCallback((s: Session) => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(s));
+    } catch {
+      /* no-op */
+    }
+    setError(null);
+    setSession(s);
+  }, []);
+  const logout = useCallback((reason?: string) => {
+    try {
+      localStorage.removeItem(KEY);
+    } catch {
+      /* no-op */
+    }
+    setError(reason ?? null);
+    setSession(null);
+  }, []);
 
   const value = useMemo<AuthCtx | null>(() => {
     if (!session) return null;
@@ -58,7 +85,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-function LoginScreen({ initialError, onLogin }: { initialError: string | null; onLogin: (s: Session) => void }) {
+function LoginScreen({
+  initialError,
+  onLogin,
+}: {
+  initialError: string | null;
+  onLogin: (s: Session) => void;
+}) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,16 +100,25 @@ function LoginScreen({ initialError, onLogin }: { initialError: string | null; o
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!usuario.trim() || !senha) return;
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
       const res = await fetch(`${APP_CONFIG.net.serverUrl}/api/login`, {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ usuario: usuario.trim(), senha }),
       });
-      if (!res.ok) { setErr("Usuário ou senha inválidos."); setBusy(false); return; }
+      if (!res.ok) {
+        setErr("Usuário ou senha inválidos.");
+        setBusy(false);
+        return;
+      }
       const data = (await res.json()) as Session;
       onLogin(data);
-    } catch { setErr("Não foi possível conectar ao servidor."); setBusy(false); }
+    } catch {
+      setErr("Não foi possível conectar ao servidor.");
+      setBusy(false);
+    }
   }
 
   return (
@@ -85,12 +127,27 @@ function LoginScreen({ initialError, onLogin }: { initialError: string | null; o
         <div className="login-brand">▣ Visão de Pátio</div>
         <p className="login-sub">Acesso restrito</p>
         <Field label="Usuário" htmlFor="login-user">
-          <Input id="login-user" type="text" autoFocus autoComplete="username" value={usuario} onChange={(e) => setUsuario(e.target.value)} />
+          <Input
+            id="login-user"
+            type="text"
+            autoFocus
+            autoComplete="username"
+            value={usuario}
+            onChange={(e) => setUsuario(e.target.value)}
+          />
         </Field>
         <Field label="Senha" htmlFor="login-pass" error={err ?? undefined}>
-          <Input id="login-pass" type="password" autoComplete="current-password" value={senha} onChange={(e) => setSenha(e.target.value)} />
+          <Input
+            id="login-pass"
+            type="password"
+            autoComplete="current-password"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+          />
         </Field>
-        <Button variant="primary" block type="submit" disabled={busy || !usuario.trim() || !senha}>{busy ? "Entrando…" : "Entrar"}</Button>
+        <Button variant="primary" block type="submit" disabled={busy || !usuario.trim() || !senha}>
+          {busy ? "Entrando…" : "Entrar"}
+        </Button>
       </form>
     </div>
   );

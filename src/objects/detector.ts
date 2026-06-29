@@ -12,7 +12,9 @@ export type ObjDetection = { key: string; score: number; bbox: [number, number, 
 export type ObjBackend = "carregando" | "coco" | "owlvit" | "indisponível";
 
 let backend: ObjBackend = "carregando";
-export function objectBackend(): ObjBackend { return backend; }
+export function objectBackend(): ObjBackend {
+  return backend;
+}
 
 // ── coco-ssd (andaime) ──
 let cocoReady = false;
@@ -21,7 +23,11 @@ let cocoReady = false;
 let worker: Worker | null = null;
 let owlvitReady = false;
 let reqId = 0;
-type WorkerDet = { label: string; score: number; box: { xmin: number; ymin: number; xmax: number; ymax: number } };
+type WorkerDet = {
+  label: string;
+  score: number;
+  box: { xmin: number; ymin: number; xmax: number; ymax: number };
+};
 const pending = new Map<number, (d: WorkerDet[]) => void>();
 let rasterCanvas: HTMLCanvasElement | null = null;
 
@@ -30,34 +36,65 @@ function initWorker() {
     worker = new Worker(new URL("./owlvitWorker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent<{ type: string; id?: number; dets?: WorkerDet[] }>) => {
       const m = e.data;
-      if (m.type === "ready") { owlvitReady = true; backend = "owlvit"; return; }
-      if (m.type === "error") { worker = null; return; } // mantém coco como fallback
-      if (m.type === "result" && typeof m.id === "number") { const cb = pending.get(m.id); if (cb) { pending.delete(m.id); cb(m.dets ?? []); } }
+      if (m.type === "ready") {
+        owlvitReady = true;
+        backend = "owlvit";
+        return;
+      }
+      if (m.type === "error") {
+        worker = null;
+        return;
+      } // mantém coco como fallback
+      if (m.type === "result" && typeof m.id === "number") {
+        const cb = pending.get(m.id);
+        if (cb) {
+          pending.delete(m.id);
+          cb(m.dets ?? []);
+        }
+      }
     };
-    worker.onerror = () => { worker = null; };
+    worker.onerror = () => {
+      worker = null;
+    };
     worker.postMessage({ type: "init", model: APP_CONFIG.objects.model });
-  } catch { worker = null; }
+  } catch {
+    worker = null;
+  }
 }
 
 export async function ensureObjectDetector(): Promise<void> {
-  if (!worker && !owlvitReady) initWorker();          // dispara o carregamento do OWL-ViT
-  try { await loadDetector(); cocoReady = true; if (backend === "carregando") backend = "coco"; }
-  catch { if (!owlvitReady) backend = "indisponível"; }
+  if (!worker && !owlvitReady) initWorker(); // dispara o carregamento do OWL-ViT
+  try {
+    await loadDetector();
+    cocoReady = true;
+    if (backend === "carregando") backend = "coco";
+  } catch {
+    if (!owlvitReady) backend = "indisponível";
+  }
 }
 
 // candidate labels p/ o OWL-ViT a partir das classes selecionadas + mapa label→chave
 function labelsFor(classes: string[]): { labels: string[]; toKey: Map<string, string> } {
-  const labels: string[] = []; const toKey = new Map<string, string>();
+  const labels: string[] = [];
+  const toKey = new Map<string, string>();
   for (const c of OBJECT_CATALOG) {
     if (!classes.includes(c.key)) continue;
-    for (const p of c.prompts) { if (!toKey.has(p)) { labels.push(p); toKey.set(p, c.key); } }
+    for (const p of c.prompts) {
+      if (!toKey.has(p)) {
+        labels.push(p);
+        toKey.set(p, c.key);
+      }
+    }
   }
   return { labels, toKey };
 }
 
 export async function detectObjects(
   el: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement | ImageBitmap,
-  w: number, h: number, classes: string[], minScore: number,
+  w: number,
+  h: number,
+  classes: string[],
+  minScore: number,
 ): Promise<ObjDetection[]> {
   if (backend === "carregando") await ensureObjectDetector();
 
@@ -68,7 +105,10 @@ export async function detectObjects(
     const pw = Math.min(w, APP_CONFIG.objects.procWidth);
     const ph = Math.max(1, Math.round((pw * h) / w));
     if (!rasterCanvas) rasterCanvas = document.createElement("canvas");
-    if (rasterCanvas.width !== pw || rasterCanvas.height !== ph) { rasterCanvas.width = pw; rasterCanvas.height = ph; }
+    if (rasterCanvas.width !== pw || rasterCanvas.height !== ph) {
+      rasterCanvas.width = pw;
+      rasterCanvas.height = ph;
+    }
     const ctx = rasterCanvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return [];
     ctx.drawImage(el, 0, 0, pw, ph);
@@ -76,13 +116,30 @@ export async function detectObjects(
     const id = ++reqId;
     const dets = await new Promise<WorkerDet[]>((resolve) => {
       pending.set(id, resolve);
-      worker!.postMessage({ type: "detect", id, rgba: img.data.buffer, w: pw, h: ph, labels, threshold: APP_CONFIG.objects.threshold }, [img.data.buffer]);
+      worker!.postMessage(
+        {
+          type: "detect",
+          id,
+          rgba: img.data.buffer,
+          w: pw,
+          h: ph,
+          labels,
+          threshold: APP_CONFIG.objects.threshold,
+        },
+        [img.data.buffer],
+      );
     });
     const out: ObjDetection[] = [];
     for (const d of dets) {
-      const key = toKey.get(d.label); if (!key) continue;
-      const x = d.box.xmin / pw, y = d.box.ymin / ph;
-      out.push({ key, score: d.score, bbox: [x, y, (d.box.xmax - d.box.xmin) / pw, (d.box.ymax - d.box.ymin) / ph] });
+      const key = toKey.get(d.label);
+      if (!key) continue;
+      const x = d.box.xmin / pw,
+        y = d.box.ymin / ph;
+      out.push({
+        key,
+        score: d.score,
+        bbox: [x, y, (d.box.xmax - d.box.xmin) / pw, (d.box.ymax - d.box.ymin) / ph],
+      });
     }
     return out;
   }
@@ -94,8 +151,13 @@ export async function detectObjects(
     const out: ObjDetection[] = [];
     for (const d of res) {
       if (d.score < minScore) continue;
-      const k = keyForCoco(d.class); if (!k || !classes.includes(k)) continue;
-      out.push({ key: k, score: d.score, bbox: [d.bbox[0] / w, d.bbox[1] / h, d.bbox[2] / w, d.bbox[3] / h] });
+      const k = keyForCoco(d.class);
+      if (!k || !classes.includes(k)) continue;
+      out.push({
+        key: k,
+        score: d.score,
+        bbox: [d.bbox[0] / w, d.bbox[1] / h, d.bbox[2] / w, d.bbox[3] / h],
+      });
     }
     return out;
   }

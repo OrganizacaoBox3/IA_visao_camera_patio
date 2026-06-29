@@ -201,7 +201,11 @@ function pickZona(p, text) {
 // Prioridade em 3 níveis. critical é reservado (mantém o % baixo, meta ≤5%).
 function priorityOf(text, meta) {
   if (meta.critico) return "critical"; // marcador ⚠ no texto
-  if (/\boffline\b|sem[\s-]?sinal|sem[\s-]?conex|feed\s+caiu|c[âa]mera.*(caiu|fora)|desconect|timeout|falha/i.test(text)) {
+  if (
+    /\boffline\b|sem[\s-]?sinal|sem[\s-]?conex|feed\s+caiu|c[âa]mera.*(caiu|fora)|desconect|timeout|falha/i.test(
+      text,
+    )
+  ) {
     return "high";
   }
   if (/parad|parou|risco|fadiga|sonol/i.test(text)) return "high";
@@ -223,10 +227,19 @@ function makeDecision(text, ts, priority, extra) {
 // ---------------------------------------------------------------------------
 function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
   // Sem câmera identificável não dá para agrupar com segurança → repassa.
-  if (cameraId === "_") return makeDecision(text, ts, priority, { cameraId, zona, tipo: meta.tipo, critico: meta.critico });
+  if (cameraId === "_")
+    return makeDecision(text, ts, priority, {
+      cameraId,
+      zona,
+      tipo: meta.tipo,
+      critico: meta.critico,
+    });
 
   let win = floodWin.get(cameraId);
-  if (!win) { win = []; floodWin.set(cameraId, win); }
+  if (!win) {
+    win = [];
+    floodWin.set(cameraId, win);
+  }
   while (win.length && now - win[0] > FLOOD_WINDOW_MS) win.shift(); // poda janela
   win.push(now);
 
@@ -234,12 +247,20 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
 
   if (!flooding) {
     if (floodState.has(cameraId)) floodState.delete(cameraId); // episódio encerrado
-    return makeDecision(text, ts, priority, { cameraId, zona, tipo: meta.tipo, critico: meta.critico });
+    return makeDecision(text, ts, priority, {
+      cameraId,
+      zona,
+      tipo: meta.tipo,
+      critico: meta.critico,
+    });
   }
 
   // Em inundação: colapsa.
   let st = floodState.get(cameraId);
-  if (!st) { st = { zonas: new Set(), lastSummaryTs: 0, n: 0 }; floodState.set(cameraId, st); }
+  if (!st) {
+    st = { zonas: new Set(), lastSummaryTs: 0, n: 0 };
+    floodState.set(cameraId, st);
+  }
   if (zona) st.zonas.add(zona);
   st.n++;
 
@@ -249,8 +270,18 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
     // (a janela inclui os alertas que passaram antes do colapso disparar).
     const nZonas = Math.max(st.zonas.size, win.length);
     const resumo = `⚠ ${cameraId}: rajada de alertas — ${nZonas} zona(s) afetada(s) (possível queda de feed)`;
-    log.warn({ cameraId, zonas: nZonas, suprimidos: st.n, janelaMs: FLOOD_WINDOW_MS }, "[alarm] inundação colapsada em resumo");
-    return makeDecision(resumo, ts, maxPriority(priority, "critical"), { cameraId, zona: "*", tipo: meta.tipo, critico: true, summary: true, count: nZonas });
+    log.warn(
+      { cameraId, zonas: nZonas, suprimidos: st.n, janelaMs: FLOOD_WINDOW_MS },
+      "[alarm] inundação colapsada em resumo",
+    );
+    return makeDecision(resumo, ts, maxPriority(priority, "critical"), {
+      cameraId,
+      zona: "*",
+      tipo: meta.tipo,
+      critico: true,
+      summary: true,
+      count: nZonas,
+    });
   }
 
   log.debug({ cameraId, suprimidos: st.n }, "[alarm] alerta suprimido (inundação ativa)");
@@ -265,7 +296,9 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
 // (alarm-shelves.json) para sobreviver a reinício.
 // ---------------------------------------------------------------------------
 function normSeg(s) {
-  const v = String(s ?? "").trim().toLowerCase();
+  const v = String(s ?? "")
+    .trim()
+    .toLowerCase();
   return v === "" ? "*" : v; // segmento vazio vira curinga (silencia a dimensão)
 }
 
@@ -291,14 +324,27 @@ function saveShelves() {
     const now = Date.now();
     const arr = [];
     for (const [k, info] of shelved) {
-      if (now >= info.expiresAt) { shelved.delete(k); continue; } // poda expiradas
-      arr.push({ key: k, expiresAt: info.expiresAt, since: info.since, ms: info.ms, reason: info.reason, by: info.by });
+      if (now >= info.expiresAt) {
+        shelved.delete(k);
+        continue;
+      } // poda expiradas
+      arr.push({
+        key: k,
+        expiresAt: info.expiresAt,
+        since: info.since,
+        ms: info.ms,
+        reason: info.reason,
+        by: info.by,
+      });
     }
     const tmp = `${SHELVES_FILE}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(arr, null, 2));
     fs.renameSync(tmp, SHELVES_FILE);
   } catch (e) {
-    log.error({ err: e.message, file: SHELVES_FILE }, "[alarm] falha ao persistir shelves (ignorada)");
+    log.error(
+      { err: e.message, file: SHELVES_FILE },
+      "[alarm] falha ao persistir shelves (ignorada)",
+    );
   }
 }
 
@@ -310,25 +356,34 @@ function loadShelves() {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return;
     const now = Date.now();
-    let restored = 0, expired = 0;
+    let restored = 0,
+      expired = 0;
     for (const it of arr) {
       if (!it || typeof it.key !== "string") continue;
       const k = normShelveKey(it.key);
       const expiresAt = Number(it.expiresAt);
-      if (!Number.isFinite(expiresAt) || now >= expiresAt) { expired++; continue; } // descarta expiradas
+      if (!Number.isFinite(expiresAt) || now >= expiresAt) {
+        expired++;
+        continue;
+      } // descarta expiradas
       shelved.set(k, {
         expiresAt,
         since: Number(it.since) || now,
-        ms: Number(it.ms) || (expiresAt - now),
+        ms: Number(it.ms) || expiresAt - now,
         reason: String(it.reason ?? ""),
         by: String(it.by ?? ""),
       });
       restored++;
     }
-    if (restored || expired) log.info({ restored, expired, file: SHELVES_FILE }, "[alarm] shelves restauradas do disco");
+    if (restored || expired)
+      log.info({ restored, expired, file: SHELVES_FILE }, "[alarm] shelves restauradas do disco");
   } catch (e) {
     // ENOENT (arquivo ainda não existe) é normal no primeiro boot → silencioso.
-    if (e.code !== "ENOENT") log.error({ err: e.message, file: SHELVES_FILE }, "[alarm] falha ao restaurar shelves (ignorada)");
+    if (e.code !== "ENOENT")
+      log.error(
+        { err: e.message, file: SHELVES_FILE },
+        "[alarm] falha ao restaurar shelves (ignorada)",
+      );
   }
 }
 
@@ -364,7 +419,10 @@ function isShelved(cameraId, zona, tipo, now = Date.now()) {
   const aZona = normSeg(zona);
   const aTipo = normSeg(tipo);
   for (const [k, info] of shelved) {
-    if (now >= info.expiresAt) { shelved.delete(k); continue; }
+    if (now >= info.expiresAt) {
+      shelved.delete(k);
+      continue;
+    }
     const [pCam, pZona, pTipo] = k.split("|");
     if (segMatch(pCam, aCam) && segMatch(pZona, aZona) && segMatch(pTipo, aTipo)) return k;
   }
@@ -403,7 +461,10 @@ function shelve(key, ms, opts = {}) {
 function unshelve(key) {
   const k = normShelveKey(key);
   const had = shelved.delete(k);
-  if (had) { log.info({ key: k }, "[alarm] unshelve"); saveShelves(); } // persiste só se mudou
+  if (had) {
+    log.info({ key: k }, "[alarm] unshelve");
+    saveShelves();
+  } // persiste só se mudou
   return had;
 }
 
@@ -412,8 +473,19 @@ function listShelved() {
   const now = Date.now();
   const out = [];
   for (const [k, info] of shelved) {
-    if (now >= info.expiresAt) { shelved.delete(k); continue; }
-    out.push({ key: k, since: info.since, ms: info.ms, expiresAt: info.expiresAt, remainingMs: info.expiresAt - now, reason: info.reason, by: info.by });
+    if (now >= info.expiresAt) {
+      shelved.delete(k);
+      continue;
+    }
+    out.push({
+      key: k,
+      since: info.since,
+      ms: info.ms,
+      expiresAt: info.expiresAt,
+      remainingMs: info.expiresAt - now,
+      reason: info.reason,
+      by: info.by,
+    });
   }
   return out;
 }
@@ -426,9 +498,15 @@ function listShelved() {
 function flapSuppress(key, now) {
   if (!FLAP_ENABLED) return false;
   let st = flap.get(key);
-  if (!st) { st = { fires: [], cooldownUntil: 0 }; flap.set(key, st); }
+  if (!st) {
+    st = { fires: [], cooldownUntil: 0 };
+    flap.set(key, st);
+  }
   if (now < st.cooldownUntil) {
-    log.debug({ key, cooldownMs: st.cooldownUntil - now }, "[alarm] flap: chave em cooldown — suprimida");
+    log.debug(
+      { key, cooldownMs: st.cooldownUntil - now },
+      "[alarm] flap: chave em cooldown — suprimida",
+    );
     return true;
   }
   while (st.fires.length && now - st.fires[0] > FLAP_WINDOW_MS) st.fires.shift();
@@ -436,7 +514,10 @@ function flapSuppress(key, now) {
   if (st.fires.length > FLAP_THRESHOLD) {
     st.cooldownUntil = now + FLAP_COOLDOWN_MS;
     st.fires.length = 0;
-    log.warn({ key, janelaMs: FLAP_WINDOW_MS, limite: FLAP_THRESHOLD, cooldownMs: FLAP_COOLDOWN_MS }, "[alarm] flapping detectado — cooldown aplicado");
+    log.warn(
+      { key, janelaMs: FLAP_WINDOW_MS, limite: FLAP_THRESHOLD, cooldownMs: FLAP_COOLDOWN_MS },
+      "[alarm] flapping detectado — cooldown aplicado",
+    );
     return true; // já suprime o disparo que estourou o limite
   }
   return false;
@@ -454,7 +535,8 @@ function recordEmit(priority, now) {
   emitLog.push({ ts: now, priority });
   pruneEmitLog(now);
   // Avalia a meta de % crítico na janela (com throttle do aviso).
-  let inWin = 0, crit = 0;
+  let inWin = 0,
+    crit = 0;
   for (let i = emitLog.length - 1; i >= 0; i--) {
     if (now - emitLog[i].ts > RATE_WINDOW_MS) break;
     inWin++;
@@ -464,7 +546,15 @@ function recordEmit(priority, now) {
     const pct = (crit / inWin) * 100;
     if (pct > CRITICAL_TARGET_PCT && now - lastRateWarnTs >= RATE_WARN_THROTTLE_MS) {
       lastRateWarnTs = now;
-      log.warn({ criticalPct: Number(pct.toFixed(1)), metaPct: CRITICAL_TARGET_PCT, janelaMs: RATE_WINDOW_MS, amostra: inWin }, "[alarm] % de alarmes críticos acima da meta (EEMUA 191)");
+      log.warn(
+        {
+          criticalPct: Number(pct.toFixed(1)),
+          metaPct: CRITICAL_TARGET_PCT,
+          janelaMs: RATE_WINDOW_MS,
+          amostra: inWin,
+        },
+        "[alarm] % de alarmes críticos acima da meta (EEMUA 191)",
+      );
     }
   }
 }
@@ -481,12 +571,20 @@ function metrics() {
   pruneEmitLog(now);
   const winP = { advisory: 0, high: 0, critical: 0 };
   const hourP = { advisory: 0, high: 0, critical: 0 };
-  let inWin = 0, lastMin = 0, lastHour = 0;
+  let inWin = 0,
+    lastMin = 0,
+    lastHour = 0;
   for (const e of emitLog) {
     const age = now - e.ts;
-    if (age <= 3_600_000) { lastHour++; if (hourP[e.priority] != null) hourP[e.priority]++; }
+    if (age <= 3_600_000) {
+      lastHour++;
+      if (hourP[e.priority] != null) hourP[e.priority]++;
+    }
     if (age <= 60_000) lastMin++;
-    if (age <= RATE_WINDOW_MS) { inWin++; if (winP[e.priority] != null) winP[e.priority]++; }
+    if (age <= RATE_WINDOW_MS) {
+      inWin++;
+      if (winP[e.priority] != null) winP[e.priority]++;
+    }
   }
   const ratePerMin = Number((inWin / (RATE_WINDOW_MS / 60_000)).toFixed(2));
   const criticalPct = inWin ? Number(((winP.critical / inWin) * 100).toFixed(1)) : 0;
@@ -509,8 +607,16 @@ function metrics() {
 // Limpeza preguiçosa dos mapas para evitar crescimento ilimitado.
 function gc(now) {
   if (dedup.size > 1000) for (const [k, t] of dedup) if (now - t > DEDUP_MS) dedup.delete(k);
-  if (floodWin.size > 500) for (const [k, w] of floodWin) if (!w.length || now - w[w.length - 1] > FLOOD_WINDOW_MS) floodWin.delete(k);
-  if (flap.size > 1000) for (const [k, st] of flap) if (now >= st.cooldownUntil && (!st.fires.length || now - st.fires[st.fires.length - 1] > FLAP_WINDOW_MS)) flap.delete(k);
+  if (floodWin.size > 500)
+    for (const [k, w] of floodWin)
+      if (!w.length || now - w[w.length - 1] > FLOOD_WINDOW_MS) floodWin.delete(k);
+  if (flap.size > 1000)
+    for (const [k, st] of flap)
+      if (
+        now >= st.cooldownUntil &&
+        (!st.fires.length || now - st.fires[st.fires.length - 1] > FLAP_WINDOW_MS)
+      )
+        flap.delete(k);
 }
 
 /**
@@ -535,7 +641,10 @@ function evaluate(p) {
   //    vale mesmo com a política desligada (é uma ação explícita do operador).
   const sk = isShelved(cameraId, zona, tipo, now);
   if (sk) {
-    log.debug({ key: sk, cameraId, zona, tipo }, "[alarm] shelved: alerta suprimido (silêncio temporário)");
+    log.debug(
+      { key: sk, cameraId, zona, tipo },
+      "[alarm] shelved: alerta suprimido (silêncio temporário)",
+    );
     return null;
   }
 
@@ -574,7 +683,11 @@ function evaluate(p) {
 
 // Restauração preguiçosa no require — repovoa as shelves persistidas SEM exigir
 // que index.js chame init(). Idempotente; envolto em try/catch por segurança.
-try { init(); } catch (e) { log.error({ err: e.message }, "[alarm] init() falhou (ignorada)"); }
+try {
+  init();
+} catch (e) {
+  log.error({ err: e.message }, "[alarm] init() falhou (ignorada)");
+}
 
 module.exports = {
   evaluate,

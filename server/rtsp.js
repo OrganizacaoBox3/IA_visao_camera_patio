@@ -18,11 +18,11 @@ const SOI = Buffer.from([0xff, 0xd8]); // início de JPEG
 const EOI = Buffer.from([0xff, 0xd9]); // fim de JPEG
 
 // Reconexão: backoff exponencial com teto. Health-check derruba stream congelado.
-const BASE_DELAY = Number(process.env.RTSP_RECONNECT_BASE_MS ?? 2000);  // 1ª espera
-const MAX_DELAY = Number(process.env.RTSP_RECONNECT_MAX_MS ?? 30000);   // teto do backoff
-const MAX_RETRIES = Number(process.env.RTSP_MAX_RETRIES ?? 0);          // 0 = ilimitado (delay já é limitado)
-const STALE_MS = Number(process.env.RTSP_STALE_MS ?? 15000);           // sem frame por tanto tempo = congelado
-const STATUS_MS = Number(process.env.RTSP_STATUS_MS ?? 5000);          // cadência do refresh de fps/status
+const BASE_DELAY = Number(process.env.RTSP_RECONNECT_BASE_MS ?? 2000); // 1ª espera
+const MAX_DELAY = Number(process.env.RTSP_RECONNECT_MAX_MS ?? 30000); // teto do backoff
+const MAX_RETRIES = Number(process.env.RTSP_MAX_RETRIES ?? 0); // 0 = ilimitado (delay já é limitado)
+const STALE_MS = Number(process.env.RTSP_STALE_MS ?? 15000); // sem frame por tanto tempo = congelado
+const STATUS_MS = Number(process.env.RTSP_STATUS_MS ?? 5000); // cadência do refresh de fps/status
 
 // Contexto do hub (injetado em startRtspIngestion). Permite add/remove em runtime.
 let ctx = null; // { io, cameras, broadcast }
@@ -45,19 +45,29 @@ function loadSources() {
     try {
       const arr = JSON.parse(fs.readFileSync(file, "utf8"));
       if (Array.isArray(arr)) return arr.filter((s) => s && s.url);
-    } catch (e) { console.error("[rtsp] rtsp.sources.json inválido:", e.message); }
+    } catch (e) {
+      console.error("[rtsp] rtsp.sources.json inválido:", e.message);
+    }
   }
   const env = process.env.RTSP_SOURCES;
   if (env) {
-    return env.split(";").map((s) => s.trim()).filter(Boolean).map((s, i) => {
-      const j = s.indexOf("=");
-      return j < 0 ? { label: `RTSP ${i + 1}`, url: s } : { label: s.slice(0, j).trim(), url: s.slice(j + 1).trim() };
-    });
+    return env
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s, i) => {
+        const j = s.indexOf("=");
+        return j < 0
+          ? { label: `RTSP ${i + 1}`, url: s }
+          : { label: s.slice(0, j).trim(), url: s.slice(j + 1).trim() };
+      });
   }
   return [];
 }
 
-function redact(url) { return String(url).replace(/\/\/([^@/]+)@/, "//***@"); }
+function redact(url) {
+  return String(url).replace(/\/\/([^@/]+)@/, "//***@");
+}
 
 /** Extrai JPEGs completos (FFD8..FFD9) do buffer; devolve o resto (parcial). */
 function drainFrames(buf, onFrame) {
@@ -96,7 +106,12 @@ function inputArgs(st) {
 function emitStatus(st) {
   if (!ctx) return;
   ctx.io.to("dashboards").emit("camera-status", {
-    id: st.id, state: st.state, fps: st.fps, lastError: st.lastError || null, label: st.label, kind: "rtsp",
+    id: st.id,
+    state: st.state,
+    fps: st.fps,
+    lastError: st.lastError || null,
+    label: st.label,
+    kind: "rtsp",
   });
 }
 
@@ -112,8 +127,13 @@ function spawnFfmpeg(st) {
   const args = [
     ...inputArgs(st),
     "-an",
-    "-vf", `fps=${st.cfg.fps},scale=${st.cfg.width}:-2`,
-    "-f", "mjpeg", "-q:v", String(st.cfg.quality), "pipe:1",
+    "-vf",
+    `fps=${st.cfg.fps},scale=${st.cfg.width}:-2`,
+    "-f",
+    "mjpeg",
+    "-q:v",
+    String(st.cfg.quality),
+    "pipe:1",
   ];
   const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
   st.proc = proc;
@@ -121,7 +141,9 @@ function spawnFfmpeg(st) {
   proc.on("error", (e) => {
     if (e.code === "ENOENT") {
       // ffmpeg ausente é um problema global; não adianta reconectar. Marca erro e mantém a câmera listada.
-      console.error("[rtsp] ffmpeg não encontrado no PATH. Instale o ffmpeg para ingestão RTSP. (câmeras de navegador seguem funcionando)");
+      console.error(
+        "[rtsp] ffmpeg não encontrado no PATH. Instale o ffmpeg para ingestão RTSP. (câmeras de navegador seguem funcionando)",
+      );
       st.stopped = true;
       st.lastError = "ffmpeg não encontrado no PATH";
       setState(st, "error");
@@ -130,13 +152,18 @@ function spawnFfmpeg(st) {
       console.error(`[rtsp:${st.id}] erro:`, e.message);
     }
   });
-  proc.stderr.on("data", () => { /* logs verbosos do ffmpeg — silenciados */ });
+  proc.stderr.on("data", () => {
+    /* logs verbosos do ffmpeg — silenciados */
+  });
   proc.stdout.on("data", (chunk) => {
     st.buf = Buffer.concat([st.buf, chunk]);
     st.buf = drainFrames(st.buf, (jpeg) => {
       st.lastFrameAt = Date.now();
       st.frameCount++;
-      if (st.state !== "online") { st.attempt = 0; setState(st, "online"); } // 1º frame após (re)conexão = online
+      if (st.state !== "online") {
+        st.attempt = 0;
+        setState(st, "online");
+      } // 1º frame após (re)conexão = online
       // JPEG binário (mesmo formato dos nós webcam) — socket.io entrega como ArrayBuffer no cliente.
       ctx.io.to("dashboards").emit("frame", { id: st.id, buf: jpeg, ts: Date.now() });
     });
@@ -149,12 +176,16 @@ function spawnFfmpeg(st) {
       st.stopped = true;
       st.lastError = `desistiu após ${st.attempt - 1} tentativas`;
       setState(st, "error");
-      console.error(`[rtsp:${st.id}] desistindo após ${st.attempt - 1} tentativas (defina RTSP_MAX_RETRIES=0 p/ ilimitado)`);
+      console.error(
+        `[rtsp:${st.id}] desistindo após ${st.attempt - 1} tentativas (defina RTSP_MAX_RETRIES=0 p/ ilimitado)`,
+      );
       return;
     }
     const delay = Math.min(BASE_DELAY * 2 ** (st.attempt - 1), MAX_DELAY);
     setState(st, "connecting");
-    console.warn(`[rtsp:${st.id}] stream caiu (code=${code}) — reconectando em ${delay}ms (tentativa ${st.attempt})`);
+    console.warn(
+      `[rtsp:${st.id}] stream caiu (code=${code}) — reconectando em ${delay}ms (tentativa ${st.attempt})`,
+    );
     st.buf = Buffer.alloc(0);
     st.reconnectTimer = setTimeout(() => spawnFfmpeg(st), delay);
   });
@@ -176,7 +207,13 @@ function startTimer(st) {
       st.fps = 0;
       setState(st, "error");
       console.warn(`[rtsp:${st.id}] congelado (${STALE_MS}ms sem frame) — reiniciando ffmpeg`);
-      if (st.proc) { try { st.proc.kill("SIGKILL"); } catch { /* ignore */ } }
+      if (st.proc) {
+        try {
+          st.proc.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
     } else {
       emitStatus(st); // refresh periódico de fps p/ a UI
     }
@@ -185,7 +222,10 @@ function startTimer(st) {
 
 /** Adiciona/inicia uma fonte em runtime. src: { id, label, url, transport?, fps?, width?, quality? } */
 function addSource(src) {
-  if (!ctx) { console.error("[rtsp] addSource antes de startRtspIngestion"); return null; }
+  if (!ctx) {
+    console.error("[rtsp] addSource antes de startRtspIngestion");
+    return null;
+  }
   if (!src || !src.url) return null;
   const id = String(src.id || `rtsp-${streams.size + 1}`);
   if (streams.has(id)) removeSource(id); // restart implícito se já existia
@@ -231,7 +271,14 @@ function removeSource(id) {
   st.stopped = true;
   if (st.reconnectTimer) clearTimeout(st.reconnectTimer);
   if (st.statusTimer) clearInterval(st.statusTimer);
-  if (st.proc) { try { st.proc.kill("SIGKILL"); } catch { /* ignore */ } st.proc = null; }
+  if (st.proc) {
+    try {
+      st.proc.kill("SIGKILL");
+    } catch {
+      /* ignore */
+    }
+    st.proc = null;
+  }
   streams.delete(st.id);
   if (ctx) {
     ctx.cameras.delete(st.id);
@@ -253,7 +300,12 @@ function restartSource(src) {
 /** Snapshot do status de todas as fontes RTSP (para enviar a um dashboard que acabou de conectar). */
 function statuses() {
   return [...streams.values()].map((st) => ({
-    id: st.id, state: st.state, fps: st.fps, lastError: st.lastError || null, label: st.label, kind: "rtsp",
+    id: st.id,
+    state: st.state,
+    fps: st.fps,
+    lastError: st.lastError || null,
+    label: st.label,
+    kind: "rtsp",
   }));
 }
 
@@ -262,16 +314,30 @@ function startRtspIngestion({ io, cameras, broadcast, dynamicSources = [] }) {
   ctx = { io, cameras, broadcast };
 
   const legacy = loadSources();
-  legacy.forEach((src, i) => addSource({ id: `rtsp-${i + 1}`, label: src.label || `IP ${i + 1}`, url: src.url }));
+  legacy.forEach((src, i) =>
+    addSource({ id: `rtsp-${i + 1}`, label: src.label || `IP ${i + 1}`, url: src.url }),
+  );
 
   let dyn = 0;
   for (const src of dynamicSources) {
-    if (src && src.enabled !== false) { addSource(src); dyn++; }
+    if (src && src.enabled !== false) {
+      addSource(src);
+      dyn++;
+    }
   }
 
   if (!legacy.length && !dyn) {
-    console.log("[rtsp] nenhuma fonte RTSP configurada (rtsp.sources.json, env RTSP_SOURCES ou cameras.json).");
+    console.log(
+      "[rtsp] nenhuma fonte RTSP configurada (rtsp.sources.json, env RTSP_SOURCES ou cameras.json).",
+    );
   }
 }
 
-module.exports = { startRtspIngestion, addSource, removeSource, restartSource, statuses, loadSources };
+module.exports = {
+  startRtspIngestion,
+  addSource,
+  removeSource,
+  restartSource,
+  statuses,
+  loadSources,
+};

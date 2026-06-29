@@ -1,0 +1,28 @@
+name: CI
+
+# Gate de verificação na nuvem (reforço do pre-push local). Ver CLAUDE.md §6.
+# Vermelho não entra: roda lint + typecheck + build + test em cada push/PR.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: Verify (lint + typecheck + build + test)
+        run: npm run verify

@@ -1,7 +1,17 @@
 import { type ReactNode } from "react";
 
 // Cabeçalho de página padrão: título como <h1> (hierarquia de leitura correta) + ações à direita.
-export function PageHeader({ title, subtitle, children, className }: { title: ReactNode; subtitle?: ReactNode; children?: ReactNode; className?: string }) {
+export function PageHeader({
+  title,
+  subtitle,
+  children,
+  className,
+}: {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}) {
   return (
     <header className={`page-head ${className ?? ""}`}>
       <div className="page-head-titles">

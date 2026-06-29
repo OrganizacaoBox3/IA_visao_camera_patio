@@ -3,11 +3,17 @@
 import { APP_CONFIG } from "./config";
 
 function token(): string | null {
-  try { const s = localStorage.getItem("vp-auth"); return s ? JSON.parse(s).token : null; } catch { return null; }
+  try {
+    const s = localStorage.getItem("vp-auth");
+    return s ? JSON.parse(s).token : null;
+  } catch {
+    return null;
+  }
 }
 function headers(json = false): Record<string, string> {
   const h: Record<string, string> = {};
-  const t = token(); if (t) h.Authorization = `Bearer ${t}`;
+  const t = token();
+  if (t) h.Authorization = `Bearer ${t}`;
   if (json) h["content-type"] = "application/json";
   return h;
 }
@@ -39,7 +45,12 @@ function friendlyStatus(status: number): string {
 async function parse(res: Response) {
   if (res.ok) return res.status === 204 ? null : res.json();
   let serverMsg: string | null = null;
-  try { const e = await res.json(); if (e?.error) serverMsg = String(e.error); } catch { /* sem corpo */ }
+  try {
+    const e = await res.json();
+    if (e?.error) serverMsg = String(e.error);
+  } catch {
+    /* sem corpo */
+  }
   const friendly = serverMsg ?? friendlyStatus(res.status);
   const detail = serverMsg ?? `HTTP ${res.status}`;
   console.error(`[api] ${res.status} ${res.url} — ${detail}`); // detalhe técnico só no console
@@ -52,15 +63,29 @@ function request<T>(p: Promise<Response>): Promise<T> {
   return p.then(parse).catch((e) => {
     if (e instanceof ApiError) throw e;
     console.error("[api] erro de rede", e);
-    throw new ApiError(0, e instanceof Error ? e.message : String(e), "Não foi possível conectar ao servidor. Verifique a conexão e tente novamente.");
+    throw new ApiError(
+      0,
+      e instanceof Error ? e.message : String(e),
+      "Não foi possível conectar ao servidor. Verifique a conexão e tente novamente.",
+    );
   });
 }
 
 export function apiGet<T>(path: string): Promise<T> {
   return request<T>(fetch(APP_CONFIG.net.serverUrl + path, { headers: headers() }));
 }
-export function apiSend<T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
-  return request<T>(fetch(APP_CONFIG.net.serverUrl + path, { method, headers: headers(true), body: body == null ? undefined : JSON.stringify(body) }));
+export function apiSend<T>(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  return request<T>(
+    fetch(APP_CONFIG.net.serverUrl + path, {
+      method,
+      headers: headers(true),
+      body: body == null ? undefined : JSON.stringify(body),
+    }),
+  );
 }
 
 // Papel do usuário (RBAC Setup × Live — Onda C item 12): superadmin | engenheiro | usuario.
@@ -70,15 +95,35 @@ import type { Papel } from "./auth";
 
 // ── Meu perfil (qualquer usuário) ──
 export type NotifPrefs = { ativo: boolean; somenteCriticos: boolean; tipos: string[] };
-export type MeProfile = { id: string; usuario: string; papel: Papel; whatsapp?: string; filtros?: NotifPrefs | null; optInEm?: number | null };
+export type MeProfile = {
+  id: string;
+  usuario: string;
+  papel: Papel;
+  whatsapp?: string;
+  filtros?: NotifPrefs | null;
+  optInEm?: number | null;
+};
 export const getMe = () => apiGet<MeProfile>("/api/me");
-export const updateMe = (patch: Partial<{ whatsapp: string; filtros: NotifPrefs; optIn: boolean }>) => apiSend<MeProfile>("PATCH", "/api/me", patch);
+export const updateMe = (
+  patch: Partial<{ whatsapp: string; filtros: NotifPrefs; optIn: boolean }>,
+) => apiSend<MeProfile>("PATCH", "/api/me", patch);
 
 // ── Usuários (superadmin) ──
-export type AdminUser = { id: string; usuario: string; papel: Papel; ativo: boolean; whatsapp?: string; criadoEm?: number };
+export type AdminUser = {
+  id: string;
+  usuario: string;
+  papel: Papel;
+  ativo: boolean;
+  whatsapp?: string;
+  criadoEm?: number;
+};
 export const listUsers = () => apiGet<AdminUser[]>("/api/users");
-export const createUser = (u: { usuario: string; senha: string; papel: string }) => apiSend<AdminUser>("POST", "/api/users", u);
-export const patchUser = (id: string, patch: Partial<{ ativo: boolean; papel: string; senha: string }>) => apiSend<AdminUser>("PATCH", `/api/users/${id}`, patch);
+export const createUser = (u: { usuario: string; senha: string; papel: string }) =>
+  apiSend<AdminUser>("POST", "/api/users", u);
+export const patchUser = (
+  id: string,
+  patch: Partial<{ ativo: boolean; papel: string; senha: string }>,
+) => apiSend<AdminUser>("PATCH", `/api/users/${id}`, patch);
 export const deleteUser = (id: string) => apiSend<{ ok: true }>("DELETE", `/api/users/${id}`);
 export const getCameraEnroll = () => apiGet<{ token: string | null }>("/api/camera-enroll");
 
@@ -89,17 +134,37 @@ export const waTest = (numero: string) => apiSend<{ ok: true }>("POST", "/api/wa
 
 // ── Configuração de notificações (superadmin) ──
 export type NotifTipo = { ativo: boolean; titulo: string; instrucao: string };
-export type NotifSettings = { marca: string; incluirLocal: boolean; incluirHora: boolean; incluirRodape: boolean; tipos: Record<string, NotifTipo> };
+export type NotifSettings = {
+  marca: string;
+  incluirLocal: boolean;
+  incluirHora: boolean;
+  incluirRodape: boolean;
+  tipos: Record<string, NotifTipo>;
+};
 export const getNotifSettings = () => apiGet<NotifSettings>("/api/notif-settings");
-export const saveNotifSettings = (s: NotifSettings) => apiSend<NotifSettings>("PATCH", "/api/notif-settings", s);
-export const previewNotif = (s: NotifSettings) => apiSend<Record<string, string>>("POST", "/api/notif-preview", s);
+export const saveNotifSettings = (s: NotifSettings) =>
+  apiSend<NotifSettings>("PATCH", "/api/notif-settings", s);
+export const previewNotif = (s: NotifSettings) =>
+  apiSend<Record<string, string>>("POST", "/api/notif-preview", s);
 
 // ── Destinatários WhatsApp (superadmin) ──
-export type Recipient = { id: string; nome: string; numero: string; ativo: boolean; somenteCriticos: boolean; tipos: string[] };
+export type Recipient = {
+  id: string;
+  nome: string;
+  numero: string;
+  ativo: boolean;
+  somenteCriticos: boolean;
+  tipos: string[];
+};
 export const listRecipients = () => apiGet<Recipient[]>("/api/recipients");
-export const createRecipient = (r: { nome: string; numero: string; somenteCriticos?: boolean }) => apiSend<Recipient>("POST", "/api/recipients", r);
-export const patchRecipient = (id: string, patch: Partial<{ ativo: boolean; nome: string; numero: string; somenteCriticos: boolean }>) => apiSend<Recipient>("PATCH", `/api/recipients/${id}`, patch);
-export const deleteRecipient = (id: string) => apiSend<{ ok: true }>("DELETE", `/api/recipients/${id}`);
+export const createRecipient = (r: { nome: string; numero: string; somenteCriticos?: boolean }) =>
+  apiSend<Recipient>("POST", "/api/recipients", r);
+export const patchRecipient = (
+  id: string,
+  patch: Partial<{ ativo: boolean; nome: string; numero: string; somenteCriticos: boolean }>,
+) => apiSend<Recipient>("PATCH", `/api/recipients/${id}`, patch);
+export const deleteRecipient = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/recipients/${id}`);
 
 // ── Fila de alarmes acionável (Onda B · item 7) — eventos com acknowledge ──
 // Consome o backend B1 (contrato-eventos-alarme.md). SÓ METADADOS (LGPD): nunca imagem/frame.
@@ -121,7 +186,12 @@ export type AlarmEvent = {
   ackBy?: string;
   ackAt?: number;
 };
-export type ListAlarmsParams = { limit?: number; since?: number; state?: AlarmState; priority?: AlarmPriority };
+export type ListAlarmsParams = {
+  limit?: number;
+  since?: number;
+  state?: AlarmState;
+  priority?: AlarmPriority;
+};
 
 // GET /api/alarms?limit=&since=&state=&priority=  → Array<AlarmEvent> ordenado por ts desc.
 export function listAlarms(params?: ListAlarmsParams): Promise<AlarmEvent[]> {
@@ -134,9 +204,11 @@ export function listAlarms(params?: ListAlarmsParams): Promise<AlarmEvent[]> {
   return apiGet<AlarmEvent[]>(`/api/alarms${qs ? `?${qs}` : ""}`);
 }
 // POST /api/alarms/:id/ack — marca como acknowledged (by? default = usuário do token).
-export const ackAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/ack`, by ? { by } : {});
+export const ackAlarm = (id: string, by?: string) =>
+  apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/ack`, by ? { by } : {});
 // POST /api/alarms/:id/forward — marca como forwarded (encaminhado).
-export const forwardAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/forward`, by ? { by } : {});
+export const forwardAlarm = (id: string, by?: string) =>
+  apiSend<AlarmEvent>("POST", `/api/alarms/${encodeURIComponent(id)}/forward`, by ? { by } : {});
 
 // ── Saúde do sistema de alarmes (ISA-18.2 / EEMUA 191 — racionalização · Onda B) ──
 // KPIs do PRÓPRIO sistema de alertas (não dos eventos em si): taxa/min, % de críticos vs. o
@@ -144,18 +216,18 @@ export const forwardAlarm = (id: string, by?: string) => apiSend<AlarmEvent>("PO
 // Tudo é só métrica/metadado (LGPD): nunca imagem/frame. Auth: logado (leitura).
 export type AlarmCounts = Record<AlarmPriority, number>;
 export type AlarmMetrics = {
-  now: number;               // epoch ms do relógio do servidor (base p/ calcular tempos)
-  windowMs: number;          // tamanho da janela de avaliação (ms)
-  inWindow: number;          // total de alarmes dentro da janela
-  ratePerMin: number;        // taxa média de alarmes por minuto na janela
-  criticalPct: number;       // % de críticos sobre o total (0–100)
+  now: number; // epoch ms do relógio do servidor (base p/ calcular tempos)
+  windowMs: number; // tamanho da janela de avaliação (ms)
+  inWindow: number; // total de alarmes dentro da janela
+  ratePerMin: number; // taxa média de alarmes por minuto na janela
+  criticalPct: number; // % de críticos sobre o total (0–100)
   criticalTargetPct: number; // alvo de referência (EEMUA 191: ~5%)
-  overTarget: boolean;       // true quando criticalPct excede o alvo (vira ruído/sobrecarga)
-  lastMinute: number;        // alarmes no último minuto
-  lastHour: number;          // alarmes na última hora
+  overTarget: boolean; // true quando criticalPct excede o alvo (vira ruído/sobrecarga)
+  lastMinute: number; // alarmes no último minuto
+  lastHour: number; // alarmes na última hora
   byPriorityWindow: AlarmCounts; // distribuição por prioridade na janela
-  byPriorityHour: AlarmCounts;   // distribuição por prioridade na última hora
-  shelvedActive: number;     // nº de shelves (silenciamentos) ativos agora
+  byPriorityHour: AlarmCounts; // distribuição por prioridade na última hora
+  shelvedActive: number; // nº de shelves (silenciamentos) ativos agora
 };
 // GET /api/alarms/metrics — instantâneo de saúde do sistema de alarmes. Auth: logado.
 export const getAlarmMetrics = () => apiGet<AlarmMetrics>("/api/alarms/metrics");
@@ -164,27 +236,35 @@ export const getAlarmMetrics = () => apiGet<AlarmMetrics>("/api/alarms/metrics")
 // uma classe de alarme. `key` segue o formato `cameraId|zona|tipo`, com `*` como curinga
 // (ex.: "cam-1|doca-3|fadiga", "cam-1|*|*", "*|*|leitura").
 export type Shelve = {
-  key: string;         // padrão de correspondência cameraId|zona|tipo (curinga *)
-  since: number;       // epoch ms da criação
-  ms: number;          // duração total solicitada (ms)
-  expiresAt: number;   // epoch ms em que volta a alarmar
+  key: string; // padrão de correspondência cameraId|zona|tipo (curinga *)
+  since: number; // epoch ms da criação
+  ms: number; // duração total solicitada (ms)
+  expiresAt: number; // epoch ms em que volta a alarmar
   remainingMs: number; // tempo restante até expirar (ms)
-  reason?: string;     // motivo do silenciamento (racionalização/registro)
-  by?: string;         // quem silenciou
+  reason?: string; // motivo do silenciamento (racionalização/registro)
+  by?: string; // quem silenciou
 };
 // GET /api/alarms/shelves — shelves ativos. Auth: logado.
 export const listShelves = () => apiGet<Shelve[]>("/api/alarms/shelves");
 // POST /api/alarms/shelves — cria shelve. Auth: perfil de configuração (canConfigure).
-export const createShelve = (s: { key: string; ms?: number; reason?: string }) => apiSend<Shelve>("POST", "/api/alarms/shelves", s);
+export const createShelve = (s: { key: string; ms?: number; reason?: string }) =>
+  apiSend<Shelve>("POST", "/api/alarms/shelves", s);
 // DELETE /api/alarms/shelves/:key — remove shelve (key via encodeURIComponent). Auth: canConfigure.
-export const deleteShelve = (key: string) => apiSend<{ ok: true }>("DELETE", `/api/alarms/shelves/${encodeURIComponent(key)}`);
+export const deleteShelve = (key: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/alarms/shelves/${encodeURIComponent(key)}`);
 
 // ── Config COMPARTILHADA das câmeras (views + tripwires) — antes em localStorage ──
 // Centraliza o que os operadores configuravam localmente, para partilhar entre turnos.
 // SÓ geometria/ids/nomes (LGPD). apiSend não tem "PUT"; usamos fetch direto pelo mesmo
 // caminho (auth/erro via request()), mantendo retrocompatibilidade do client existente.
 function apiPut<T>(path: string, body: unknown): Promise<T> {
-  return request<T>(fetch(APP_CONFIG.net.serverUrl + path, { method: "PUT", headers: headers(true), body: JSON.stringify(body) }));
+  return request<T>(
+    fetch(APP_CONFIG.net.serverUrl + path, {
+      method: "PUT",
+      headers: headers(true),
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 // VIEWS — layouts salvos do dashboard (lista global). { id, name, cameraIds[] }.
@@ -197,7 +277,9 @@ export const saveViews = (views: SavedView[]) => apiPut<SavedView[]>("/api/views
 // TRIPWIRES — linhas de contagem por câmera. coords NORMALIZADAS 0..1.
 export type Tripwire = { id: string; a: { x: number; y: number }; b: { x: number; y: number } };
 // GET /api/tripwires/:cameraId → Tripwire[]. Auth: qualquer usuário autenticado.
-export const getTripwires = (cameraId: string) => apiGet<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`);
+export const getTripwires = (cameraId: string) =>
+  apiGet<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`);
 // PUT /api/tripwires/:cameraId {tripwires} → substitui as linhas; responde a lista salva.
 // Auth: perfil de configuração (engenharia) — coerente com o gate de edição no front.
-export const saveTripwires = (cameraId: string, tripwires: Tripwire[]) => apiPut<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`, { tripwires });
+export const saveTripwires = (cameraId: string, tripwires: Tripwire[]) =>
+  apiPut<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`, { tripwires });

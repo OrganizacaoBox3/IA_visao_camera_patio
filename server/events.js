@@ -44,7 +44,10 @@ const PRIORITIES = new Set(["advisory", "high", "critical"]);
 let list = [];
 let usingPg = false;
 
-const clean = (s) => { const v = String(s == null ? "" : s).trim(); return v || undefined; };
+const clean = (s) => {
+  const v = String(s == null ? "" : s).trim();
+  return v || undefined;
+};
 
 // Monta um registro de alarme só com METADADOS (sem imagem/frame).
 function build(e) {
@@ -65,8 +68,11 @@ function build(e) {
 
 // ── Persistência ──────────────────────────────────────────────────────────
 function saveFile() {
-  try { fs.writeFileSync(FILE, JSON.stringify(list, null, 2)); }
-  catch (e) { log.error({ err: e.message }, "[alarm-events] falha ao salvar JSON"); }
+  try {
+    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
+  } catch (e) {
+    log.error({ err: e.message }, "[alarm-events] falha ao salvar JSON");
+  }
 }
 async function persist(ev) {
   if (!usingPg) return saveFile();
@@ -75,8 +81,19 @@ async function persist(ev) {
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (id) do update set
        state=excluded.state, ack_by=excluded.ack_by, ack_at=excluded.ack_at`,
-    [ev.id, ev.ts, ev.cameraId ?? null, ev.cameraLabel ?? null, ev.zona ?? null, ev.tipo,
-     ev.priority, ev.text, ev.state, ev.ackBy ?? null, ev.ackAt ?? null]
+    [
+      ev.id,
+      ev.ts,
+      ev.cameraId ?? null,
+      ev.cameraLabel ?? null,
+      ev.zona ?? null,
+      ev.tipo,
+      ev.priority,
+      ev.text,
+      ev.state,
+      ev.ackBy ?? null,
+      ev.ackAt ?? null,
+    ],
   );
 }
 
@@ -86,14 +103,19 @@ async function enforceRetention() {
   const before = list.length;
   if (cutoff) list = list.filter((e) => e.ts >= cutoff);
   if (list.length > RETENTION) list = list.slice(0, RETENTION);
-  if (!usingPg) { if (list.length !== before) saveFile(); return; }
+  if (!usingPg) {
+    if (list.length !== before) saveFile();
+    return;
+  }
   try {
     if (cutoff) await db.query("delete from alarm_events where ts < $1", [cutoff]);
     await db.query(
       "delete from alarm_events where id not in (select id from alarm_events order by ts desc limit $1)",
-      [RETENTION]
+      [RETENTION],
     );
-  } catch (e) { log.error({ err: e.message }, "[alarm-events] falha na retenção (PG)"); }
+  } catch (e) {
+    log.error({ err: e.message }, "[alarm-events] falha na retenção (PG)");
+  }
 }
 
 async function init() {
@@ -103,19 +125,27 @@ async function init() {
         `select id, ts, camera_id as "cameraId", camera_label as "cameraLabel", zona, tipo,
                 priority, text, state, ack_by as "ackBy", ack_at as "ackAt"
          from alarm_events order by ts desc limit $1`,
-        [RETENTION]
+        [RETENTION],
       );
       list = r.rows.map(build);
       usingPg = true;
       log.info({ n: list.length }, "[alarm-events] carregados do Postgres");
       return;
-    } catch (e) { log.error({ err: e.message }, "[alarm-events] Postgres indisponível, usando JSON"); }
+    } catch (e) {
+      log.error({ err: e.message }, "[alarm-events] Postgres indisponível, usando JSON");
+    }
   }
   usingPg = false;
   try {
     const a = JSON.parse(fs.readFileSync(FILE, "utf8"));
-    if (Array.isArray(a)) list = a.map(build).sort((x, y) => y.ts - x.ts).slice(0, RETENTION);
-  } catch { list = []; }
+    if (Array.isArray(a))
+      list = a
+        .map(build)
+        .sort((x, y) => y.ts - x.ts)
+        .slice(0, RETENTION);
+  } catch {
+    list = [];
+  }
   log.info({ n: list.length }, "[alarm-events] carregados do JSON (fallback)");
 }
 
@@ -126,7 +156,10 @@ async function record(e) {
   list.unshift(ev);
   await persist(ev);
   await enforceRetention();
-  log.info({ id: ev.id, cameraId: ev.cameraId, tipo: ev.tipo, priority: ev.priority, state: ev.state }, "[alarm-events] alarme gravado");
+  log.info(
+    { id: ev.id, cameraId: ev.cameraId, tipo: ev.tipo, priority: ev.priority, state: ev.state },
+    "[alarm-events] alarme gravado",
+  );
   return ev;
 }
 
@@ -138,7 +171,10 @@ async function ack(id, by) {
   ev.ackBy = clean(by) || ev.ackBy || "—";
   ev.ackAt = Date.now();
   await persist(ev);
-  log.info({ id: ev.id, ackBy: ev.ackBy, state: ev.state }, "[alarm-events] alarme reconhecido (ack)");
+  log.info(
+    { id: ev.id, ackBy: ev.ackBy, state: ev.state },
+    "[alarm-events] alarme reconhecido (ack)",
+  );
   return { event: ev };
 }
 
@@ -150,14 +186,20 @@ async function forward(id, by) {
   if (clean(by)) ev.ackBy = clean(by);
   if (!ev.ackAt) ev.ackAt = Date.now();
   await persist(ev);
-  log.info({ id: ev.id, by: ev.ackBy, state: ev.state }, "[alarm-events] alarme encaminhado (forward)");
+  log.info(
+    { id: ev.id, by: ev.ackBy, state: ev.state },
+    "[alarm-events] alarme encaminhado (forward)",
+  );
   return { event: ev };
 }
 
 // Lista filtrada (sempre ts desc). { limit, since, state, priority }.
 function query({ limit, since, state, priority } = {}) {
   let out = list;
-  if (since != null && !Number.isNaN(Number(since))) { const s = Number(since); out = out.filter((e) => e.ts > s); }
+  if (since != null && !Number.isNaN(Number(since))) {
+    const s = Number(since);
+    out = out.filter((e) => e.ts > s);
+  }
   if (state && STATES.has(state)) out = out.filter((e) => e.state === state);
   if (priority && PRIORITIES.has(priority)) out = out.filter((e) => e.priority === priority);
   let n = Number(limit);
@@ -166,6 +208,8 @@ function query({ limit, since, state, priority } = {}) {
   return out.slice(0, n);
 }
 
-function get(id) { return list.find((x) => x.id === id) || null; }
+function get(id) {
+  return list.find((x) => x.id === id) || null;
+}
 
 module.exports = { init, record, ack, forward, query, get, all: () => list };

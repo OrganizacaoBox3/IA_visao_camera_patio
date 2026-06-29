@@ -21,18 +21,35 @@ function classify(text) {
 }
 
 // Mensagem PROFISSIONAL para WhatsApp (markdown do WA: *negrito* / _itálico_), configurável pelo superadmin.
-const FADIGA_DETALHE = { Fadiga: "Possível fadiga/sonolência detectada.", Celular: "Uso de celular detectado.", Duplo: "Fadiga e uso de celular detectados.", OK: "Operador normalizado." };
+const FADIGA_DETALHE = {
+  Fadiga: "Possível fadiga/sonolência detectada.",
+  Celular: "Uso de celular detectado.",
+  Duplo: "Fadiga e uso de celular detectados.",
+  OK: "Operador normalizado.",
+};
 
 function formatWhatsApp(text, meta, ts, s = settings.get()) {
   const tcfg = (s.tipos && s.tipos[meta.tipo]) || {};
-  let body = String(text || "").replace(/^[\s⚠️!]+/, "").trim(); // remove o "⚠ " inicial
+  let body = String(text || "")
+    .replace(/^[\s⚠️!]+/, "")
+    .trim(); // remove o "⚠ " inicial
   let local = "";
   const i = body.indexOf(": ");
-  if (i > 0 && i < 60) { local = body.slice(0, i).trim(); body = body.slice(i + 2).trim(); }
+  if (i > 0 && i < 60) {
+    local = body.slice(0, i).trim();
+    body = body.slice(i + 2).trim();
+  }
   if (meta.tipo === "fadiga" && FADIGA_DETALHE[body]) body = FADIGA_DETALHE[body];
   body = body.replace(/^([a-zà-ú])/, (m) => m.toUpperCase()); // capitaliza letra inicial (não mexe em emoji)
   if (tcfg.instrucao) body += `\n\n${tcfg.instrucao}`;
-  const quando = new Date(ts || Date.now()).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+  const quando = new Date(ts || Date.now()).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
   const linhas = [
     `${meta.critico ? "🔴" : "🟡"} *${meta.critico ? "ALERTA" : "Aviso"} — ${tcfg.titulo || "Operação"}*`,
     s.incluirLocal && local ? `📍 ${local}` : null,
@@ -87,7 +104,9 @@ function dispatchAlert(text, ts, priority) {
     const key = `${t.numero}|${text}`;
     if (sent.has(key) && now - sent.get(key) < DEDUP_MS) continue;
     sent.set(key, now);
-    whatsapp.sendText(t.numero, msg).catch((e) => console.error(`[dispatch] envio falhou p/ ${t.nome}:`, e.message));
+    whatsapp
+      .sendText(t.numero, msg)
+      .catch((e) => console.error(`[dispatch] envio falhou p/ ${t.nome}:`, e.message));
   }
   if (sent.size > 800) for (const [k, t] of sent) if (now - t > DEDUP_MS) sent.delete(k);
 }

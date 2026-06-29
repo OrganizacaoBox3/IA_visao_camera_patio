@@ -3,7 +3,9 @@
    já existentes (going-gray: base neutra, cor só para anormalidade). NÃO edita index.css/ui.css. */
 
 /* Seletor de view no cabeçalho — discreto (largura contida p/ não dominar a barra). */
-.view-picker .ui-select { min-width: 150px; }
+.view-picker .ui-select {
+  min-width: 150px;
+}
 
 /* ── Grade responsiva do dashboard (correção F1-c) ─────────────────────────────────────────
    A contagem de colunas vem do data-cols (não mais de um style inline), para que os media
@@ -11,10 +13,18 @@
    Estas regras atuam SÓ acima de 900px (desktop); abaixo, o index.css assume o controle.
    (A Fase 2 consolidará media/container queries no index.css.) */
 @media (min-width: 901px) {
-  .dash-grid[data-cols="1"] { grid-template-columns: 1fr; }
-  .dash-grid[data-cols="2"] { grid-template-columns: repeat(2, 1fr); }
-  .dash-grid[data-cols="3"] { grid-template-columns: repeat(3, 1fr); }
-  .dash-grid[data-cols="4"] { grid-template-columns: repeat(4, 1fr); }
+  .dash-grid[data-cols="1"] {
+    grid-template-columns: 1fr;
+  }
+  .dash-grid[data-cols="2"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .dash-grid[data-cols="3"] {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .dash-grid[data-cols="4"] {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 /* ── Gerenciador de views (dentro do Dialog) ── */
@@ -33,7 +43,9 @@
   border-radius: 8px;
   background: var(--state-neutral-bg, #161c24);
 }
-.views-mgr__row--all { background: transparent; }
+.views-mgr__row--all {
+  background: transparent;
+}
 
 .views-mgr__name {
   display: flex;
@@ -55,7 +67,9 @@
 }
 
 /* ── Editor de uma view ── */
-.views-editor { gap: 12px; }
+.views-editor {
+  gap: 12px;
+}
 .views-editor__name {
   display: flex;
   flex-direction: column;
@@ -70,7 +84,9 @@
   border-radius: 8px;
 }
 /* A rolagem das listas do editor passou para a ScrollArea (a coluna não rola mais). */
-.views-editor__scroll { max-height: 200px; }
+.views-editor__scroll {
+  max-height: 200px;
+}
 .views-editor__items {
   display: flex;
   flex-direction: column;

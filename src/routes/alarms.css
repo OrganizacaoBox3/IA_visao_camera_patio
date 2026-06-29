@@ -23,8 +23,14 @@
   animation: alarm-drawer-in 0.18s ease;
 }
 @keyframes alarm-drawer-in {
-  from { transform: translateX(16px); opacity: 0.6; }
-  to { transform: none; opacity: 1; }
+  from {
+    transform: translateX(16px);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 /* O corpo do diálogo vira coluna flexível para a lista (ScrollArea) ocupar a altura restante. */
 .ui-dialog:has(.alarm-drawer__list) .ui-dialog-body {
@@ -55,8 +61,14 @@
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
   }
   @keyframes alarm-drawer-in {
-    from { transform: translateY(16px); opacity: 0.6; }
-    to { transform: none; opacity: 1; }
+    from {
+      transform: translateY(16px);
+      opacity: 0.6;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
   }
 }
 
@@ -68,7 +80,9 @@
   font-weight: 400;
   color: var(--state-warn-fg, #facc15);
 }
-.alarm-drawer__count[data-zero="1"] { color: var(--state-neutral-fg, #9aa7b4); }
+.alarm-drawer__count[data-zero="1"] {
+  color: var(--state-neutral-fg, #9aa7b4);
+}
 
 .alarm-drawer__filters {
   display: flex;
@@ -112,7 +126,10 @@
   gap: 7px;
 }
 /* Estado new = destacado; acknowledged/forwarded = esmaecido (going-gray). */
-.alarm-card[data-done="1"] { opacity: 0.55; background: transparent; }
+.alarm-card[data-done="1"] {
+  opacity: 0.55;
+  background: transparent;
+}
 
 .alarm-card__top {
   display: flex;
@@ -177,5 +194,11 @@
   color: #fff;
   background: var(--state-critical, #ef4444);
 }
-.alarm-badge[data-prio="high"] { background: var(--state-warn, #eab308); color: #1a1500; }
-.alarm-badge[data-prio="advisory"] { background: var(--state-info, #38bdf8); color: #041018; }
+.alarm-badge[data-prio="high"] {
+  background: var(--state-warn, #eab308);
+  color: #1a1500;
+}
+.alarm-badge[data-prio="advisory"] {
+  background: var(--state-info, #38bdf8);
+  color: #041018;
+}

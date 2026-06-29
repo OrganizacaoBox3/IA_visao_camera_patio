@@ -13,8 +13,11 @@ const URL_RE = /^(rtsp|rtsps|http|https):\/\//i; // aceita RTSP, HLS (.m3u8) e M
 let list = [];
 
 function save() {
-  try { fs.writeFileSync(FILE, JSON.stringify(list, null, 2)); }
-  catch (e) { console.error("[cameras] falha ao salvar cameras.json:", e.message); }
+  try {
+    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
+  } catch (e) {
+    console.error("[cameras] falha ao salvar cameras.json:", e.message);
+  }
 }
 
 function clampNum(v, min, max) {
@@ -28,13 +31,19 @@ function init() {
   try {
     const a = JSON.parse(fs.readFileSync(FILE, "utf8"));
     if (Array.isArray(a)) list = a.filter((c) => c && c.id && c.url);
-  } catch { list = []; }
+  } catch {
+    list = [];
+  }
   console.log(`[cameras] ${list.length} câmera(s) dinâmica(s) carregada(s) de cameras.json`);
   return list;
 }
 
-function all() { return list; }
-function get(id) { return list.find((c) => c.id === id) || null; }
+function all() {
+  return list;
+}
+function get(id) {
+  return list.find((c) => c.id === id) || null;
+}
 
 function create(p) {
   p = p || {};
@@ -67,7 +76,10 @@ function update(id, patch) {
     if (!URL_RE.test(u)) return { error: "url inválida (use rtsp://, rtsps:// ou http(s)://)" };
     rec.url = u;
   }
-  if (patch.transport !== undefined) rec.transport = TRANSPORTS.includes(String(patch.transport)) ? String(patch.transport) : undefined;
+  if (patch.transport !== undefined)
+    rec.transport = TRANSPORTS.includes(String(patch.transport))
+      ? String(patch.transport)
+      : undefined;
   if (patch.fps !== undefined) rec.fps = clampNum(patch.fps, 1, 30);
   if (patch.width !== undefined) rec.width = clampNum(patch.width, 160, 1920);
   if (patch.quality !== undefined) rec.quality = clampNum(patch.quality, 1, 31);

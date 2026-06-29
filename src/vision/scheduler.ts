@@ -59,16 +59,25 @@ class InferenceScheduler {
   private maxConcurrent = 1;
   private seq = 0;
 
-  request<T>(source: InferenceSource<T>, opts?: { priority?: InferencePriority }): Promise<T | undefined> {
+  request<T>(
+    source: InferenceSource<T>,
+    opts?: { priority?: InferencePriority },
+  ): Promise<T | undefined> {
     const priority = opts?.priority ?? "normal";
     return new Promise<T | undefined>((resolve, reject) => {
       // coalescência: descarta a tarefa pendente anterior da mesma origem (frame velho)
       const idx = this.queue.findIndex((q) => q.key === source.key);
-      if (idx >= 0) { const old = this.queue.splice(idx, 1)[0]; old.resolve(undefined); }
+      if (idx >= 0) {
+        const old = this.queue.splice(idx, 1)[0];
+        old.resolve(undefined);
+      }
       this.queue.push({
-        key: source.key, priority,
+        key: source.key,
+        priority,
         run: source.run as () => Promise<unknown>,
-        resolve: resolve as (v: unknown) => void, reject, seq: ++this.seq,
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        seq: ++this.seq,
       });
       this.pump();
     });
@@ -79,10 +88,15 @@ class InferenceScheduler {
     if (item) item.priority = priority;
   }
 
-  stats(): { running: number; queued: number } { return { running: this.running, queued: this.queue.length }; }
+  stats(): { running: number; queued: number } {
+    return { running: this.running, queued: this.queue.length };
+  }
 
   configure(opts: { maxConcurrent?: number }): void {
-    if (opts.maxConcurrent && opts.maxConcurrent > 0) { this.maxConcurrent = Math.floor(opts.maxConcurrent); this.pump(); }
+    if (opts.maxConcurrent && opts.maxConcurrent > 0) {
+      this.maxConcurrent = Math.floor(opts.maxConcurrent);
+      this.pump();
+    }
   }
 
   private pump(): void {
@@ -90,24 +104,44 @@ class InferenceScheduler {
       // escolhe a maior prioridade; desempata por ordem de chegada (FIFO)
       let best = 0;
       for (let i = 1; i < this.queue.length; i++) {
-        const a = this.queue[i], b = this.queue[best];
-        if (PRIO_RANK[a.priority] < PRIO_RANK[b.priority] || (a.priority === b.priority && a.seq < b.seq)) best = i;
+        const a = this.queue[i],
+          b = this.queue[best];
+        if (
+          PRIO_RANK[a.priority] < PRIO_RANK[b.priority] ||
+          (a.priority === b.priority && a.seq < b.seq)
+        )
+          best = i;
       }
       const item = this.queue.splice(best, 1)[0];
       this.running++;
       void Promise.resolve()
         .then(item.run)
-        .then((v) => item.resolve(v), (e) => item.reject(e))
-        .finally(() => { this.running--; this.pump(); });
+        .then(
+          (v) => item.resolve(v),
+          (e) => item.reject(e),
+        )
+        .finally(() => {
+          this.running--;
+          this.pump();
+        });
     }
   }
 }
 
 const scheduler = new InferenceScheduler();
 
-export function requestInference<T>(source: InferenceSource<T>, opts?: { priority?: InferencePriority }): Promise<T | undefined> {
+export function requestInference<T>(
+  source: InferenceSource<T>,
+  opts?: { priority?: InferencePriority },
+): Promise<T | undefined> {
   return scheduler.request(source, opts);
 }
-export function setInferencePriority(key: string, priority: InferencePriority): void { scheduler.setPriority(key, priority); }
-export function schedulerStats(): { running: number; queued: number } { return scheduler.stats(); }
-export function configureScheduler(opts: { maxConcurrent?: number }): void { scheduler.configure(opts); }
+export function setInferencePriority(key: string, priority: InferencePriority): void {
+  scheduler.setPriority(key, priority);
+}
+export function schedulerStats(): { running: number; queued: number } {
+  return scheduler.stats();
+}
+export function configureScheduler(opts: { maxConcurrent?: number }): void {
+  scheduler.configure(opts);
+}

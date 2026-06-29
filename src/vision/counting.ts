@@ -127,10 +127,7 @@ export function segmentsIntersect(p1: Point, p2: Point, p3: Point, p4: Point): b
   const d2 = orient(p3, p4, p2);
   const d3 = orient(p1, p2, p3);
   const d4 = orient(p1, p2, p4);
-  return (
-    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
-  );
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
 }
 
 /** Ponto de interseção das retas que contêm [p1,p2] e [p3,p4]. Assume não-paralelas. */
@@ -244,10 +241,14 @@ export function createCounter(
   }
 
   function totals(): TripwireCounts {
-    let cin = 0, cout = 0;
+    let cin = 0,
+      cout = 0;
     for (const w of wires) {
       const c = counts.get(w.id);
-      if (c) { cin += c.in; cout += c.out; }
+      if (c) {
+        cin += c.in;
+        cout += c.out;
+      }
     }
     return { in: cin, out: cout };
   }
@@ -362,7 +363,10 @@ export function createOccupancy(options: OccupancyOptions): Occupancy {
   function grid(): Float32Array {
     let m = 0;
     for (let i = 0; i < raw.length; i++) if (raw[i] > m) m = raw[i];
-    if (m <= 0) { normBuf.fill(0); return normBuf; }
+    if (m <= 0) {
+      normBuf.fill(0);
+      return normBuf;
+    }
     for (let i = 0; i < raw.length; i++) normBuf[i] = raw[i] / m;
     return normBuf;
   }

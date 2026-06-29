@@ -3,45 +3,45 @@
 export const APP_CONFIG = {
   detection: {
     // Detecção de MOVIMENTO (diferença de frames, independente de classe)
-    procWidth: 240,            // largura do canvas de processamento (downscale)
-    motionPixelDelta: 22,      // delta de luminância (0-255) p/ considerar pixel "mudou"
-    motionActiveRatio: 0.012,  // fração da zona alterada p/ contar como movimento NORMAL (ATIVA)
-    motionSlowRatio: 0.004,    // movimento entre slow e active = BAIXA MOVIMENTAÇÃO / gargalo (LENTA)
+    procWidth: 240, // largura do canvas de processamento (downscale)
+    motionPixelDelta: 22, // delta de luminância (0-255) p/ considerar pixel "mudou"
+    motionActiveRatio: 0.012, // fração da zona alterada p/ contar como movimento NORMAL (ATIVA)
+    motionSlowRatio: 0.004, // movimento entre slow e active = BAIXA MOVIMENTAÇÃO / gargalo (LENTA)
     signalSmoothingAlpha: 0.4, // suavização EMA do score de movimento
 
     // Detecção de OCUPAÇÃO (objetos) — coco-ssd (roda em WORKER, fora da main thread)
     base: "mobilenet_v2" as "mobilenet_v1" | "mobilenet_v2" | "lite_mobilenet_v2", // melhor recall que lite_*
-    objectIntervalMs: 350,     // cadência da inferência na câmera ABERTA (full)
-    objectIntervalMsTile: 1200,// cadência nas tiles do grid (economiza GPU; câmera aberta é a foco)
+    objectIntervalMs: 350, // cadência da inferência na câmera ABERTA (full)
+    objectIntervalMsTile: 1200, // cadência nas tiles do grid (economiza GPU; câmera aberta é a foco)
     objectScoreThreshold: 0.5,
-    maxBoxes: 40,              // teto de detecções por inferência (coco default é só 20 → perdia gente)
-    minScore: 0.25,            // limiar BRUTO do coco (baixo de propósito; filtramos por classe depois)
+    maxBoxes: 40, // teto de detecções por inferência (coco default é só 20 → perdia gente)
+    minScore: 0.25, // limiar BRUTO do coco (baixo de propósito; filtramos por classe depois)
     occupancyClasses: ["person", "truck", "car", "bus", "motorcycle", "bicycle"] as const,
     // TILING: recorta o frame em blocos e detecta cada um — objetos pequenos/distantes ficam
     // relativamente maiores no input 300×300 do SSD, melhorando o recall em cenas amplas/densas.
-    detectTileWidth: 512,      // largura (px) de cada bloco enviado ao modelo
+    detectTileWidth: 512, // largura (px) de cada bloco enviado ao modelo
     tiles: { cols: 2, rows: 2, overlap: 0.12 }, // cols*rows=1 desliga o tiling
-    nmsIoU: 0.45,              // IoU p/ fundir detecções duplicadas nas bordas dos blocos
+    nmsIoU: 0.45, // IoU p/ fundir detecções duplicadas nas bordas dos blocos
 
     // Máquina de estados / anti-flicker
-    activeHoldMs: 1200,        // tempo após movimento em que a zona segue "ATIVA"
-    stateConfirmationMs: 900,  // confirma transição de estado
-    recoveryGraceMs: 1500,     // tolerância ao sair de ALERTA
+    activeHoldMs: 1200, // tempo após movimento em que a zona segue "ATIVA"
+    stateConfirmationMs: 900, // confirma transição de estado
+    recoveryGraceMs: 1500, // tolerância ao sair de ALERTA
   },
 
   // Presença: contagem de pessoas + permanência ANÔNIMA (IDs efêmeros, sem rosto/identidade)
   people: {
-    scoreThreshold: 0.4,       // confiança mínima p/ contar "person" (baixado: alvos distantes pontuam menos)
-    trackMaxDist: 0.12,        // distância normalizada p/ casar detecção com track existente
-    trackTimeoutMs: 1500,      // remove o track se a pessoa some por mais que isso
-    dwellMinMs: 800,           // ignora aparições muito curtas (flicker)
+    scoreThreshold: 0.4, // confiança mínima p/ contar "person" (baixado: alvos distantes pontuam menos)
+    trackMaxDist: 0.12, // distância normalizada p/ casar detecção com track existente
+    trackTimeoutMs: 1500, // remove o track se a pessoa some por mais que isso
+    dwellMinMs: 800, // ignora aparições muito curtas (flicker)
   },
 
   zones: {
     // Limite de inatividade p/ disparar alerta. Tempo SEMPRE exibido em valor REAL (sem escala).
     // Agora é definido POR ÁREA na interface; este é só o default de zonas novas/semente.
     defaultIdleAlertMs: 15 * 60_000, // limite operacional (15 min)
-    demoIdleAlertMs: 10_000,         // limite curto p/ demonstrar ao vivo (10 s) — sobrepõe por-área quando "Limite curto" está ligado
+    demoIdleAlertMs: 10_000, // limite curto p/ demonstrar ao vivo (10 s) — sobrepõe por-área quando "Limite curto" está ligado
     limitPresetsMs: [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000], // 30s..30min
   },
 
@@ -52,7 +52,7 @@ export const APP_CONFIG = {
   //   • o toggle "Limite curto (10s)" na central (override manual por sessão).
   demo: {
     shortLimitDefault:
-      ((import.meta.env as Record<string, string | undefined>).VITE_DEMO_MODE === "1"),
+      (import.meta.env as Record<string, string | undefined>).VITE_DEMO_MODE === "1",
   },
 
   // OVERLAY da câmera ao vivo (Onda A — fundação consumida pela Onda 2/CameraWorkspace).
@@ -73,7 +73,7 @@ export const APP_CONFIG = {
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS
   // (inferência + decode + draw). Limita CPU/GPU com N câmeras (não roda inferência de todos).
   dashboard: {
-    feedsPerPage: 6,           // máx. de feeds processados simultaneamente por página
+    feedsPerPage: 6, // máx. de feeds processados simultaneamente por página
   },
 
   audio: {
@@ -93,31 +93,41 @@ export const APP_CONFIG = {
 
   // Modo LEITURA de código de barras (câmera lê códigos na esteira; N câmeras = 1 Ponto de Leitura)
   reading: {
-    decodeIntervalMs: 120,   // cadência de decodificação (~8/s) — throttle p/ performance
-    dedupWindowMs: 1500,     // mesmo código no ponto dentro disso = mesma caixa
-    recentWindowMs: 60_000,  // janela p/ throughput/contagem "recente"
+    decodeIntervalMs: 120, // cadência de decodificação (~8/s) — throttle p/ performance
+    dedupWindowMs: 1500, // mesmo código no ponto dentro disso = mesma caixa
+    recentWindowMs: 60_000, // janela p/ throughput/contagem "recente"
     // Formatos (nomes do BarcodeDetector). ZXing tenta todos no fallback.
-    formats: ["ean_13", "ean_8", "code_128", "code_39", "itf", "qr_code", "data_matrix", "upc_a", "upc_e"] as string[],
+    formats: [
+      "ean_13",
+      "ean_8",
+      "code_128",
+      "code_39",
+      "itf",
+      "qr_code",
+      "data_matrix",
+      "upc_a",
+      "upc_e",
+    ] as string[],
     defaultPonto: "Ponto 1",
     // Captura de ALTA RESOLUÇÃO p/ câmeras de leitura (barras precisam de pixels).
     // A central pede esse perfil ao nó quando a câmera vira "leitura" (câmeras de atividade seguem em net.*).
-    captureWidth: 1280,      // default ("alta") — usado se a câmera não tiver preset
-    captureQuality: 0.9,     // qualidade JPEG (menos artefato = leitura melhor)
+    captureWidth: 1280, // default ("alta") — usado se a câmera não tiver preset
+    captureQuality: 0.9, // qualidade JPEG (menos artefato = leitura melhor)
     captureFps: 8,
     // Presets de captura escolhíveis por câmera no modal ⚙ Câmeras.
     capturePresets: {
-      media:  { width: 960,  quality: 0.8,  fps: 8, label: "Média (960)" },
-      alta:   { width: 1280, quality: 0.9,  fps: 8, label: "Alta (1280)" },
+      media: { width: 960, quality: 0.8, fps: 8, label: "Média (960)" },
+      alta: { width: 1280, quality: 0.9, fps: 8, label: "Alta (1280)" },
       maxima: { width: 1920, quality: 0.92, fps: 6, label: "Máxima (1920)" },
     } as Record<string, { width: number; quality: number; fps: number; label: string }>,
     // F3 — detecção de PASSAGEM de caixa (motion no ROI) p/ taxa de leitura e no-read.
-    motionProcWidth: 160,    // downscale p/ o diff de movimento (leve)
-    motionPixelDelta: 22,    // delta de luminância p/ "pixel mudou"
-    passEnterRatio: 0.06,    // fração do ROI alterada p/ considerar que ENTROU caixa
-    passClearRatio: 0.02,    // abaixo disso = ROI livre (fim da passagem)
-    passDebounceMs: 600,     // tempo mínimo entre passagens (anti-flicker)
+    motionProcWidth: 160, // downscale p/ o diff de movimento (leve)
+    motionPixelDelta: 22, // delta de luminância p/ "pixel mudou"
+    passEnterRatio: 0.06, // fração do ROI alterada p/ considerar que ENTROU caixa
+    passClearRatio: 0.02, // abaixo disso = ROI livre (fim da passagem)
+    passDebounceMs: 600, // tempo mínimo entre passagens (anti-flicker)
     // Reconciliação passagens × leituras → taxa; alerta de queda de taxa.
-    rateAlertPct: 80,        // taxa de leitura abaixo disso (com volume) dispara alerta
+    rateAlertPct: 80, // taxa de leitura abaixo disso (com volume) dispara alerta
     rateAlertMinPassages: 5, // só alerta com nº mínimo de passagens na janela (evita ruído)
     rateAlertCooldownMs: 30_000,
   },
@@ -125,17 +135,19 @@ export const APP_CONFIG = {
   // Modo OBJETOS — detecção zero-shot (OWL-ViT via transformers.js, em worker).
   objects: {
     model: "Xenova/owlvit-base-patch32", // modelo zero-shot (baixado do HF na 1ª vez, depois cacheado)
-    procWidth: 640,            // largura p/ rasterizar o frame antes de detectar (custo×precisão)
-    threshold: 0.1,            // confiança mínima do OWL-ViT (scores são baixos)
-    detectIntervalMs: 700,     // cadência de detecção (zero-shot é pesado; o worker se auto-regula)
+    procWidth: 640, // largura p/ rasterizar o frame antes de detectar (custo×precisão)
+    threshold: 0.1, // confiança mínima do OWL-ViT (scores são baixos)
+    detectIntervalMs: 700, // cadência de detecção (zero-shot é pesado; o worker se auto-regula)
   },
 
   // Modo FADIGA (operador) — MediaPipe FaceLandmarker + HandLandmarker + coco-ssd (celular).
   // Câmera dedicada ao rosto do operador (≠ câmeras de área). Portado do sensor_fadiga_mvp.
   fadiga: {
     mediapipeWasmUrl: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
-    faceModelAssetUrl: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-    handModelAssetUrl: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    faceModelAssetUrl:
+      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    handModelAssetUrl:
+      "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
     faceIntervalMs: 66,
     handIntervalMs: 90,
     objectIntervalMs: 220,
@@ -169,25 +181,27 @@ export const APP_CONFIG = {
     //     Isso evita mixed-content (página https + ws:// é bloqueado pelo navegador).
     //  3) dev: mesma máquina na porta 4000 (permite celular apontar p/ o IP do laptop).
     serverUrl:
-      ((import.meta.env as Record<string, string | undefined>).VITE_HUB_URL) ??
+      (import.meta.env as Record<string, string | undefined>).VITE_HUB_URL ??
       (typeof location !== "undefined"
-        ? (import.meta.env.DEV ? `http://${location.hostname}:4000` : location.origin)
+        ? import.meta.env.DEV
+          ? `http://${location.hostname}:4000`
+          : location.origin
         : "http://localhost:4000"),
     // Resolução/fps de EXIBIÇÃO p/ câmeras de ATIVIDADE. A detecção reamostra p/ detection.procWidth
     // (240/512/640) de qualquer forma, então estes pixels só servem à tela → reduzimos p/ economizar
     // banda/encode (nó) e createImageBitmap (central). O modo LEITURA sobrepõe com alta resolução
     // (reading.capturePresets) via evento `capture`, pois código de barras precisa de pixels.
-    frameWidth: 960,     // largura do frame enviado (suficiente p/ tile e full; era 1280)
-    frameFps: 12,        // frames/s (era 15) — fluidez boa com menos banda/CPU
-    jpegQuality: 0.75,   // qualidade do JPEG (era 0.82) — menor payload por frame
+    frameWidth: 960, // largura do frame enviado (suficiente p/ tile e full; era 1280)
+    frameFps: 12, // frames/s (era 15) — fluidez boa com menos banda/CPU
+    jpegQuality: 0.75, // qualidade do JPEG (era 0.82) — menor payload por frame
   },
 
   // Zonas iniciais (frações do frame: x,y,w,h em 0..1). Editáveis na tela.
   defaultZones: [
-    { label: "Expedição", x: 0.06, y: 0.12, w: 0.40, h: 0.40 },
-    { label: "Carga",     x: 0.54, y: 0.12, w: 0.40, h: 0.40 },
-    { label: "Estoque",   x: 0.06, y: 0.58, w: 0.40, h: 0.34 },
-    { label: "Espera",    x: 0.54, y: 0.58, w: 0.40, h: 0.34 },
+    { label: "Expedição", x: 0.06, y: 0.12, w: 0.4, h: 0.4 },
+    { label: "Carga", x: 0.54, y: 0.12, w: 0.4, h: 0.4 },
+    { label: "Estoque", x: 0.06, y: 0.58, w: 0.4, h: 0.34 },
+    { label: "Espera", x: 0.54, y: 0.58, w: 0.4, h: 0.34 },
   ],
 } as const;
 
@@ -215,11 +229,11 @@ export type ModeKey = "atividade" | "leitura" | "objetos" | "fadiga";
 export type ModeMetric = { key: string; label: string };
 
 export type ModePreset = {
-  label: string;                 // nome curto do modo (UI)
-  description: string;           // o que o modo monitora (UI, 1 linha)
-  layers: OverlayLayers;         // camadas a LIGAR ao entrar no modo
-  confidenceThreshold: number;   // confiança default do modo (0..1)
-  metrics: ModeMetric[];         // KPIs/indicadores que o painel destaca neste modo
+  label: string; // nome curto do modo (UI)
+  description: string; // o que o modo monitora (UI, 1 linha)
+  layers: OverlayLayers; // camadas a LIGAR ao entrar no modo
+  confidenceThreshold: number; // confiança default do modo (0..1)
+  metrics: ModeMetric[]; // KPIs/indicadores que o painel destaca neste modo
 };
 
 export type ModePresets = Record<ModeKey, ModePreset>;

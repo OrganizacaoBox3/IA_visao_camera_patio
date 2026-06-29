@@ -27,7 +27,10 @@ test("login + navegação das telas principais", async ({ page }) => {
   await expect(page).toHaveURL(/\/perfil/);
 });
 
-test("regressão: Select abre e seleciona DENTRO do modal de config da zona", async ({ page, context }) => {
+test("regressão: Select abre e seleciona DENTRO do modal de config da zona", async ({
+  page,
+  context,
+}) => {
   await login(page);
   await connectCamera(context, page);
 
@@ -43,9 +46,9 @@ test("regressão: Select abre e seleciona DENTRO do modal de config da zona", as
   const modo = dlg.getByLabel("Modo da zona");
   await modo.click();
   const opt = page.getByRole("option", { name: "Leitura" });
-  await expect(opt).toBeVisible();              // dropdown na frente do overlay
-  await opt.click();                            // clique funciona
-  await expect(modo).toContainText("Leitura");  // valor mudou → confirmado
+  await expect(opt).toBeVisible(); // dropdown na frente do overlay
+  await opt.click(); // clique funciona
+  await expect(modo).toContainText("Leitura"); // valor mudou → confirmado
 });
 
 test("regressão: Select funciona no modal '⚙ Câmeras' do dashboard", async ({ page, context }) => {
@@ -66,7 +69,10 @@ test("regressão: Select funciona no modal '⚙ Câmeras' do dashboard", async (
 
 // BUG relatado: abrir um Select e fechá-lo (ESC ou clique fora) estava FECHANDO O MODAL.
 // O Radix deve dismissar só a camada de cima (o Select), mantendo o Dialog aberto.
-test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashboard)", async ({ page, context }) => {
+test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashboard)", async ({
+  page,
+  context,
+}) => {
   await login(page);
   await connectCamera(context, page);
 
@@ -80,7 +86,7 @@ test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashb
   await expect(page.getByRole("option").first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("option")).toHaveCount(0); // select fechou
-  await expect(dlg).toBeVisible();                        // dialog continua aberto
+  await expect(dlg).toBeVisible(); // dialog continua aberto
 
   // 2) clique no OVERLAY com o Select aberto deve fechar só o Select (Radix:
   //    Select tem disableOutsidePointerEvents → blinda o Dialog na 1ª interação).
@@ -96,7 +102,10 @@ test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashb
   await expect(page.locator(".ui-dialog")).toHaveCount(0);
 });
 
-test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config de zona)", async ({ page, context }) => {
+test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config de zona)", async ({
+  page,
+  context,
+}) => {
   await login(page);
   await connectCamera(context, page);
   await page.locator(".tile[title='Abrir câmera']").first().click();
@@ -109,7 +118,7 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   await expect(page.getByRole("option").first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("option")).toHaveCount(0); // select fechou
-  await expect(dlg).toBeVisible();                        // dialog de zona continua
+  await expect(dlg).toBeVisible(); // dialog de zona continua
   // e a câmera fullscreen (overlay) continua aberta
   await expect(page.locator(".cam")).toBeVisible();
 });

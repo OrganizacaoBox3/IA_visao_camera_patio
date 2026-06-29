@@ -142,7 +142,8 @@ export async function buildMontagePng(
   const step = Math.max(1, Math.ceil(n / maxCells));
   const picked: ClipFrame[] = [];
   for (let i = 0; i < n && picked.length < maxCells; i += step) picked.push(frames[i]);
-  if (picked[picked.length - 1] !== frames[n - 1] && picked.length < maxCells) picked.push(frames[n - 1]);
+  if (picked[picked.length - 1] !== frames[n - 1] && picked.length < maxCells)
+    picked.push(frames[n - 1]);
 
   const cols = Math.ceil(Math.sqrt(picked.length));
   const rows = Math.ceil(picked.length / cols);

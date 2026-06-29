@@ -2,77 +2,198 @@
    Importado SÓ por ReportPage.tsx. Reusa os tokens var(--state-*) e var(--sp-*) do tema;
    sem imagens (LGPD) — os cards usam só badges de prioridade/estado + texto. */
 
-.alarm-list { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.alarm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2, 8px);
+}
 
 /* ── Migração Radix (Fase 1) — Tabs/ScrollArea no ReportPage ── */
 /* Tabs.Root ocupa o espaço restante do .rep-body (flex column) e deixa o painel ativo rolar. */
-.rep-tabs { flex: 1; min-height: 0; }
+.rep-tabs {
+  flex: 1;
+  min-height: 0;
+}
 /* Tabelas de eventos/leituras/ocorrências dentro de ScrollArea (rolagem vertical estilizada). */
-.rep-tablescroll { max-height: 420px; }
+.rep-tablescroll {
+  max-height: 420px;
+}
 /* Matriz Setor × Classe: rolagem vertical + horizontal (muitas colunas de classe). */
-.rep-matrixscroll { max-height: 420px; }
+.rep-matrixscroll {
+  max-height: 420px;
+}
 /* Lista longa de cards de alarme (até 500) rolável dentro do card. */
-.alarm-list-scroll { max-height: 520px; }
+.alarm-list-scroll {
+  max-height: 520px;
+}
 /* O .rep-foot é irmão do Tabs no fluxo; ScrollArea não deve impedir a impressão. */
 @media print {
-  .rep-tabs, .rep-tablescroll, .rep-matrixscroll, .alarm-list-scroll { overflow: visible; max-height: none; }
+  .rep-tabs,
+  .rep-tablescroll,
+  .rep-matrixscroll,
+  .alarm-list-scroll {
+    overflow: visible;
+    max-height: none;
+  }
   .rep-tablescroll [data-radix-scroll-area-viewport],
   .rep-matrixscroll [data-radix-scroll-area-viewport],
-  .alarm-list-scroll [data-radix-scroll-area-viewport] { overflow: visible !important; }
+  .alarm-list-scroll [data-radix-scroll-area-viewport] {
+    overflow: visible !important;
+  }
 }
 
 .alarm-card {
-  display: grid; grid-template-columns: auto 1fr auto; gap: var(--sp-2, 8px);
-  align-items: start; text-align: left; width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-2, 8px);
+  align-items: start;
+  text-align: left;
+  width: 100%;
   padding: var(--sp-2, 8px) var(--sp-3, 12px);
   background: var(--state-neutral-bg, #161c24);
   border: 1px solid var(--state-neutral-border, #1f2937);
-  border-left-width: 3px; border-radius: 8px;
-  color: inherit; cursor: pointer;
-  transition: background .12s ease, border-color .12s ease;
+  border-left-width: 3px;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
-.alarm-card:hover { background: #1b2330; }
-.alarm-card.sel { border-color: var(--state-info, #38bdf8); background: var(--state-info-bg, #0b2530); }
+.alarm-card:hover {
+  background: #1b2330;
+}
+.alarm-card.sel {
+  border-color: var(--state-info, #38bdf8);
+  background: var(--state-info-bg, #0b2530);
+}
 
 /* Faixa lateral por prioridade (advisory→info, high→warn, critical→critical). */
-.alarm-card.prio-critical { border-left-color: var(--state-critical, #ef4444); }
-.alarm-card.prio-high     { border-left-color: var(--state-warn, #eab308); }
-.alarm-card.prio-advisory { border-left-color: var(--state-info, #38bdf8); }
+.alarm-card.prio-critical {
+  border-left-color: var(--state-critical, #ef4444);
+}
+.alarm-card.prio-high {
+  border-left-color: var(--state-warn, #eab308);
+}
+.alarm-card.prio-advisory {
+  border-left-color: var(--state-info, #38bdf8);
+}
 
-.alarm-time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--state-neutral-fg, #9aa7b4); white-space: nowrap; }
-.alarm-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.alarm-text { font-size: 13px; line-height: 1.35; }
-.alarm-loc { font-size: 11px; color: var(--state-neutral-fg, #9aa7b4); }
-.alarm-loc .sep { opacity: .5; margin: 0 4px; }
+.alarm-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--state-neutral-fg, #9aa7b4);
+  white-space: nowrap;
+}
+.alarm-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.alarm-text {
+  font-size: 13px;
+  line-height: 1.35;
+}
+.alarm-loc {
+  font-size: 11px;
+  color: var(--state-neutral-fg, #9aa7b4);
+}
+.alarm-loc .sep {
+  opacity: 0.5;
+  margin: 0 4px;
+}
 
-.alarm-badges { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.alarm-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
 .alarm-badge {
-  font-size: 10px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
-  padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
   border: 1px solid transparent;
 }
-.alarm-badge.b-critical { color: var(--state-critical-fg, #fecaca); background: var(--state-critical-bg, #2a1113); border-color: var(--state-critical-border, #7f1d1d); }
-.alarm-badge.b-high     { color: var(--state-warn-fg, #facc15);   background: var(--state-warn-bg, #211c08);   border-color: var(--state-warn-border, #4d3a09); }
-.alarm-badge.b-advisory { color: var(--state-info-fg, #bae6fd);   background: var(--state-info-bg, #0b2530);   border-color: var(--state-info-border, #155e75); }
+.alarm-badge.b-critical {
+  color: var(--state-critical-fg, #fecaca);
+  background: var(--state-critical-bg, #2a1113);
+  border-color: var(--state-critical-border, #7f1d1d);
+}
+.alarm-badge.b-high {
+  color: var(--state-warn-fg, #facc15);
+  background: var(--state-warn-bg, #211c08);
+  border-color: var(--state-warn-border, #4d3a09);
+}
+.alarm-badge.b-advisory {
+  color: var(--state-info-fg, #bae6fd);
+  background: var(--state-info-bg, #0b2530);
+  border-color: var(--state-info-border, #155e75);
+}
 /* Estado: novo=neutro destacado, reconhecido=ok, encaminhado=info. */
-.alarm-badge.s-new          { color: var(--state-neutral-fg, #9aa7b4); background: var(--state-neutral-bg, #161c24); border-color: var(--state-neutral-border, #1f2937); }
-.alarm-badge.s-acknowledged { color: var(--state-ok-fg, #4ade80);      background: var(--state-ok-bg, #0c1f15);      border-color: var(--state-ok-border, #14532d); }
-.alarm-badge.s-forwarded    { color: var(--state-info-fg, #bae6fd);    background: var(--state-info-bg, #0b2530);    border-color: var(--state-info-border, #155e75); }
+.alarm-badge.s-new {
+  color: var(--state-neutral-fg, #9aa7b4);
+  background: var(--state-neutral-bg, #161c24);
+  border-color: var(--state-neutral-border, #1f2937);
+}
+.alarm-badge.s-acknowledged {
+  color: var(--state-ok-fg, #4ade80);
+  background: var(--state-ok-bg, #0c1f15);
+  border-color: var(--state-ok-border, #14532d);
+}
+.alarm-badge.s-forwarded {
+  color: var(--state-info-fg, #bae6fd);
+  background: var(--state-info-bg, #0b2530);
+  border-color: var(--state-info-border, #155e75);
+}
 
 /* Bidirecional: gráficos clicáveis + destaque do ponto correspondente ao evento selecionado.
    Reusa as classes .evo/.hm-* já existentes (index.css); aqui só clicabilidade + destaque. */
-.evo-col.clk { cursor: pointer; background: none; border: 0; padding: 0; }
-.evo-col.clk:hover .evo-bar { filter: brightness(1.25); }
-.evo-col.sel .evo-bar { outline: 2px solid var(--state-info, #38bdf8); outline-offset: 1px; }
-.evo-bar.crit { background: var(--state-critical, #ef4444); }
-
-.hm-cell.clk { cursor: pointer; }
-.hm-cell.sel { outline: 2px solid var(--state-info, #38bdf8); outline-offset: -2px; }
-
-.alarm-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); align-items: center; margin-bottom: var(--sp-2, 8px); }
-.alarm-windownote {
-  font-size: 11px; color: var(--state-info-fg, #bae6fd);
-  background: var(--state-info-bg, #0b2530); border: 1px solid var(--state-info-border, #155e75);
-  padding: 2px 8px; border-radius: 999px;
+.evo-col.clk {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
 }
-.alarm-windownote .linkbtn { margin-left: 6px; }
+.evo-col.clk:hover .evo-bar {
+  filter: brightness(1.25);
+}
+.evo-col.sel .evo-bar {
+  outline: 2px solid var(--state-info, #38bdf8);
+  outline-offset: 1px;
+}
+.evo-bar.crit {
+  background: var(--state-critical, #ef4444);
+}
+
+.hm-cell.clk {
+  cursor: pointer;
+}
+.hm-cell.sel {
+  outline: 2px solid var(--state-info, #38bdf8);
+  outline-offset: -2px;
+}
+
+.alarm-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2, 8px);
+  align-items: center;
+  margin-bottom: var(--sp-2, 8px);
+}
+.alarm-windownote {
+  font-size: 11px;
+  color: var(--state-info-fg, #bae6fd);
+  background: var(--state-info-bg, #0b2530);
+  border: 1px solid var(--state-info-border, #155e75);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.alarm-windownote .linkbtn {
+  margin-left: 6px;
+}

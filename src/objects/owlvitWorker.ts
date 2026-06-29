@@ -8,7 +8,15 @@ import { pipeline, RawImage, env } from "@xenova/transformers";
 env.allowLocalModels = false;
 
 type InitMsg = { type: "init"; model: string };
-type DetMsg = { type: "detect"; id: number; rgba: ArrayBuffer; w: number; h: number; labels: string[]; threshold: number };
+type DetMsg = {
+  type: "detect";
+  id: number;
+  rgba: ArrayBuffer;
+  w: number;
+  h: number;
+  labels: string[];
+  threshold: number;
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let detector: any = null;
@@ -27,7 +35,10 @@ self.onmessage = async (e: MessageEvent<InitMsg | DetMsg>) => {
   }
 
   if (m.type === "detect") {
-    if (!detector) { (self as unknown as Worker).postMessage({ type: "result", id: m.id, dets: [] }); return; }
+    if (!detector) {
+      (self as unknown as Worker).postMessage({ type: "result", id: m.id, dets: [] });
+      return;
+    }
     try {
       const raw = new RawImage(new Uint8ClampedArray(m.rgba), m.w, m.h, 4).rgb();
       const out = await detector(raw, m.labels, { threshold: m.threshold, topk: 50 });

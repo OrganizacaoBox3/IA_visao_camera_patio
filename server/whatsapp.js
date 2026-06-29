@@ -20,24 +20,51 @@ async function start() {
   if (!ENABLED || starting || connected) return;
   starting = true;
   try {
-    const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+    const {
+      default: makeWASocket,
+      useMultiFileAuthState,
+      DisconnectReason,
+      fetchLatestBaileysVersion,
+    } = require("@whiskeysockets/baileys");
     const QRCode = require("qrcode");
     const pino = require("pino");
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion(); // casa com a versão atual do WhatsApp Web (evita close-loop)
     console.log(`[whatsapp] usando WA Web version ${version?.join?.(".")}`);
 
-    sock = makeWASocket({ version, auth: state, logger: pino({ level: "silent" }), browser: ["Visao de Patio", "Chrome", "1.0"] });
+    sock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: "silent" }),
+      browser: ["Visao de Patio", "Chrome", "1.0"],
+    });
     sock.ev.on("creds.update", saveCreds);
     sock.ev.on("connection.update", async (u) => {
-      if (u.qr) { try { qrDataUrl = await QRCode.toDataURL(u.qr); console.log("[whatsapp] QR gerado — escaneie no painel (Usuários)"); } catch (e) { console.error("[whatsapp] erro ao gerar QR:", e.message); } }
-      if (u.connection === "open") { connected = true; qrDataUrl = null; console.log("[whatsapp] conectado"); }
+      if (u.qr) {
+        try {
+          qrDataUrl = await QRCode.toDataURL(u.qr);
+          console.log("[whatsapp] QR gerado — escaneie no painel (Usuários)");
+        } catch (e) {
+          console.error("[whatsapp] erro ao gerar QR:", e.message);
+        }
+      }
+      if (u.connection === "open") {
+        connected = true;
+        qrDataUrl = null;
+        console.log("[whatsapp] conectado");
+      }
       if (u.connection === "close") {
-        connected = false; sock = null; starting = false;
+        connected = false;
+        sock = null;
+        starting = false;
         const code = u.lastDisconnect?.error?.output?.statusCode;
         const loggedOut = code === DisconnectReason.loggedOut;
-        console.warn(`[whatsapp] fechou (code=${code ?? "?"}: ${u.lastDisconnect?.error?.message ?? ""})` + (loggedOut ? " — logout, re-parear" : " — reconectando em 3s"));
-        if (loggedOut) qrDataUrl = null; else setTimeout(start, 3000);
+        console.warn(
+          `[whatsapp] fechou (code=${code ?? "?"}: ${u.lastDisconnect?.error?.message ?? ""})` +
+            (loggedOut ? " — logout, re-parear" : " — reconectando em 3s"),
+        );
+        if (loggedOut) qrDataUrl = null;
+        else setTimeout(start, 3000);
       }
     });
   } catch (e) {
@@ -56,7 +83,11 @@ async function sendText(numberDigits, text) {
   await sock.sendMessage(`${digits}@s.whatsapp.net`, { text: String(text) });
 }
 
-function status() { return { enabled: ENABLED, connected, qr: qrDataUrl }; }
-function init() { if (ENABLED) start(); }
+function status() {
+  return { enabled: ENABLED, connected, qr: qrDataUrl };
+}
+function init() {
+  if (ENABLED) start();
+}
 
 module.exports = { init, start, sendText, status, enabled: () => ENABLED };

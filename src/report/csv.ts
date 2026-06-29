@@ -38,13 +38,31 @@ export function dateStamp(d: Date): string {
 
 // ── Export dos EVENTOS DE ALARME (metadados, LGPD: sem imagens) ──
 // Reusa o padrão de seções; o ReportPage só anexa o bloco retornado às demais seções.
-const ALARM_PRIORITY_PT: Record<string, string> = { advisory: "Informativo", high: "Alta", critical: "Crítica" };
-const ALARM_STATE_PT: Record<string, string> = { new: "Novo", acknowledged: "Reconhecido", forwarded: "Encaminhado" };
+const ALARM_PRIORITY_PT: Record<string, string> = {
+  advisory: "Informativo",
+  high: "Alta",
+  critical: "Crítica",
+};
+const ALARM_STATE_PT: Record<string, string> = {
+  new: "Novo",
+  acknowledged: "Reconhecido",
+  forwarded: "Encaminhado",
+};
 
 export function alarmSection(events: AlarmEvent[]): CsvSection {
   return {
     title: `ALARMES (${events.length})`,
-    headers: ["Data/hora", "Câmera", "Zona", "Tipo", "Prioridade", "Estado", "Mensagem", "Reconhecido por", "Reconhecido em"],
+    headers: [
+      "Data/hora",
+      "Câmera",
+      "Zona",
+      "Tipo",
+      "Prioridade",
+      "Estado",
+      "Mensagem",
+      "Reconhecido por",
+      "Reconhecido em",
+    ],
     rows: events.map((e) => [
       new Date(e.ts).toLocaleString("pt-BR"),
       e.cameraLabel ?? e.cameraId ?? "—",
