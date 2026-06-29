@@ -17,10 +17,8 @@ import {
   type FadigaDataset,
   type FadigaCell,
   type FadigaEventRow,
-  type AlarmEvent,
-  type AlarmPriority,
-  type AlarmState,
 } from "./mock";
+import type { AlarmEvent, AlarmPriority, AlarmState } from "../types/alarm";
 
 const DAY = 86_400_000;
 const shiftFor = (ts: number) => shiftOf(new Date(ts).getHours());

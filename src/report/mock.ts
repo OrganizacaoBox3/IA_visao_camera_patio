@@ -673,23 +673,11 @@ export function fadigaInsights(k: FadigaKpis, occFadiga: number, occCelular: num
 // destaque bidirecional). As funções abaixo são puras (agregação/filtro em memória).
 // ════════════════════════════════════════════════════════════════════════════
 
-export type AlarmPriority = "advisory" | "high" | "critical";
-export type AlarmState = "new" | "acknowledged" | "forwarded";
-
-/** Modelo do evento de alarme (espelha o contrato B1 — §1 de contrato-eventos-alarme.md). */
-export type AlarmEvent = {
-  id: string;
-  ts: number;
-  cameraId?: string;
-  cameraLabel?: string;
-  zona?: string;
-  tipo: string; // atividade | fadiga | leitura | objetos (classificação da política)
-  priority: AlarmPriority; // já calculada pela política
-  text: string;
-  state: AlarmState;
-  ackBy?: string;
-  ackAt?: number;
-};
+// Tipo do evento de alarme: fonte ÚNICA em src/types/alarm.ts (R2.2 — antes era redefinido aqui,
+// com risco de drift vs. a cópia de api.ts). Re-exportado daqui para RETROCOMPATIBILIDADE:
+// report/csv.ts, report/store.ts e ReportPage importam estes tipos via `./mock` sem alteração.
+export type { AlarmEvent, AlarmPriority, AlarmState, AlarmTipo } from "../types/alarm";
+import type { AlarmEvent, AlarmPriority, AlarmState } from "../types/alarm";
 
 export type AlarmFilters = {
   period: Period;

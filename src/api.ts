@@ -169,23 +169,11 @@ export const deleteRecipient = (id: string) =>
 // ── Fila de alarmes acionável (Onda B · item 7) — eventos com acknowledge ──
 // Consome o backend B1 (contrato-eventos-alarme.md). SÓ METADADOS (LGPD): nunca imagem/frame.
 // Eventos ao vivo chegam por socket (`alarm-event`/`alarm-update`); aqui ficam as rotas HTTP.
-export type AlarmPriority = "advisory" | "high" | "critical";
-export type AlarmState = "new" | "acknowledged" | "forwarded";
-// tipo vem da política (atividade|fadiga|leitura|objetos); aceita string p/ ser retrocompatível.
-export type AlarmTipo = "atividade" | "fadiga" | "leitura" | "objetos" | (string & {});
-export type AlarmEvent = {
-  id: string;
-  ts: number;
-  cameraId?: string;
-  cameraLabel?: string;
-  zona?: string;
-  tipo: AlarmTipo;
-  priority: AlarmPriority;
-  text: string;
-  state: AlarmState;
-  ackBy?: string;
-  ackAt?: number;
-};
+// Tipo canônico do evento de alarme: fonte ÚNICA em src/types/alarm.ts (R2.2). Re-exportado aqui
+// para RETROCOMPATIBILIDADE — DashboardPage/AlarmHealthPage importam estes tipos via `../api` e
+// continuam funcionando sem alteração. (Mesmo padrão do re-export de `Papel` acima.)
+export type { AlarmEvent, AlarmPriority, AlarmState, AlarmTipo } from "./types/alarm";
+import type { AlarmEvent, AlarmPriority, AlarmState } from "./types/alarm";
 export type ListAlarmsParams = {
   limit?: number;
   since?: number;

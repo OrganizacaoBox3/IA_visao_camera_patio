@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   windows,
   kpis,
@@ -49,11 +49,9 @@ import {
   type FadigaFilters,
   type FadigaDataset,
   type FadigaEventRow,
-  type AlarmEvent,
-  type AlarmPriority,
-  type AlarmState,
   type AlarmWindow,
 } from "../report/mock";
+import type { AlarmEvent, AlarmPriority, AlarmState } from "../types/alarm";
 import {
   loadDataset,
   loadEvents,
@@ -150,6 +148,22 @@ function heatColor(v: number, max: number): string {
 function readColor(v: number, max: number): string {
   if (v <= 0) return "transparent";
   return `rgba(56, 189, 248, ${0.12 + Math.min(1, v / max) * 0.78})`;
+}
+
+// Largura mínima do heatmap (rótulo 84px + 24 colunas de hora). Abaixo disso a ScrollArea
+// horizontal entra (R3.2); em telas largas o grid 1fr preenche, então o layout desktop não muda.
+const HEATMAP_MIN_WIDTH = 640;
+
+// Heatmap (.hm-row) com rolagem horizontal previsível em telas estreitas, sem alterar o desktop.
+// Reusa a classe .rep-matrixscroll (mesmo tratamento de impressão da matriz Setor×Classe).
+function HeatScroll({ children }: { children: ReactNode }) {
+  return (
+    <ScrollArea className="rep-matrixscroll" orientation="horizontal">
+      <div className="heatmap" style={{ minWidth: HEATMAP_MIN_WIDTH }}>
+        {children}
+      </div>
+    </ScrollArea>
+  );
 }
 
 function Delta({ v, goodWhenDown = true }: { v: number | null; goodWhenDown?: boolean }) {
@@ -1067,7 +1081,7 @@ export function ReportPage() {
               <TabsContent value="quando" className="rep-tabpanel">
                 <section className="panel">
                   <h3>Quando para — horários críticos</h3>
-                  <div className="heatmap">
+                  <HeatScroll>
                     <div className="hm-axis">
                       <span />{" "}
                       {HOURS.map((h) => (
@@ -1096,7 +1110,7 @@ export function ReportPage() {
                       <i className="hm-scale" />
                       <span>mais ocioso</span>
                     </div>
-                  </div>
+                  </HeatScroll>
                 </section>
               </TabsContent>
               <TabsContent value="onde" className="rep-tabpanel">
@@ -1290,7 +1304,7 @@ export function ReportPage() {
               <TabsContent value="quando" className="rep-tabpanel">
                 <section className="panel">
                   <h3>Quando lê — volume por hora</h3>
-                  <div className="heatmap">
+                  <HeatScroll>
                     <div className="hm-axis">
                       <span />{" "}
                       {HOURS.map((h) => (
@@ -1319,7 +1333,7 @@ export function ReportPage() {
                       <i className="hm-scale read" />
                       <span>mais volume</span>
                     </div>
-                  </div>
+                  </HeatScroll>
                 </section>
               </TabsContent>
               <TabsContent value="onde" className="rep-tabpanel">
@@ -1511,7 +1525,7 @@ export function ReportPage() {
               <TabsContent value="quando" className="rep-tabpanel">
                 <section className="panel">
                   <h3>Quando — contagem média por hora</h3>
-                  <div className="heatmap">
+                  <HeatScroll>
                     <div className="hm-axis">
                       <span />{" "}
                       {HOURS.map((h) => (
@@ -1540,7 +1554,7 @@ export function ReportPage() {
                       <i className="hm-scale read" />
                       <span>mais objetos</span>
                     </div>
-                  </div>
+                  </HeatScroll>
                 </section>
               </TabsContent>
               <TabsContent value="onde" className="rep-tabpanel">
@@ -1753,7 +1767,7 @@ export function ReportPage() {
                 <TabsContent key={v} value={v} className="rep-tabpanel">
                   <section className="panel">
                     <h3>Quando — tempo de risco por hora (min)</h3>
-                    <div className="heatmap">
+                    <HeatScroll>
                       <div className="hm-axis">
                         <span />{" "}
                         {HOURS.map((h) => (
@@ -1782,7 +1796,7 @@ export function ReportPage() {
                         <i className="hm-scale" />
                         <span>mais risco</span>
                       </div>
-                    </div>
+                    </HeatScroll>
                   </section>
                 </TabsContent>
               ))}
@@ -1955,7 +1969,7 @@ export function ReportPage() {
                         — clique p/ filtrar a hora
                       </span>
                     </h3>
-                    <div className="heatmap">
+                    <HeatScroll>
                       <div className="hm-axis">
                         <span />{" "}
                         {HOURS.map((h) => (
@@ -1988,7 +2002,7 @@ export function ReportPage() {
                         <i className="hm-scale" />
                         <span>mais alarmes</span>
                       </div>
-                    </div>
+                    </HeatScroll>
                   </section>
                 </div>
                 <section className="panel panel-events">

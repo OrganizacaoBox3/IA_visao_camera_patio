@@ -2,7 +2,7 @@
 // detalhamento e eventos) num único arquivo auto-descritivo. Separador ';' + BOM → abre direto
 // no Excel pt-BR com acentos corretos. Sem imagens/identificação (LGPD) — só números agregados.
 
-import type { AlarmEvent } from "./mock";
+import type { AlarmEvent } from "../types/alarm";
 
 export type CsvSection = { title?: string; headers?: string[]; rows: (string | number)[][] };
 
