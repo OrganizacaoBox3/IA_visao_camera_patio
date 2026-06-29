@@ -55,9 +55,9 @@ persistência (Postgres com fallback JSON) + notificações (WhatsApp/Baileys, A
 
 Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste projeto:
 
-- **`verify` = `tsc --noEmit` + `vite build` + `npx playwright test`** (+ `node --check` nos arquivos `server/*` tocados). Roda a cada onda; **vermelho não entra**.
-- **Critérios de aceite viram teste** (ao menos caminhos críticos/invariantes). "Validado manual" é ponto de partida, não chegada. Regressão corrigida → vira teste (ex.: Select-em-Dialog no `e2e/`).
-- **Lacunas da "Onda 0" ainda abertas neste MVP** (fechar antes de elevar autonomia): **ESLint + Prettier**, **CI** (GitHub Actions ou pre-push hook rodando `verify`), **testes de unidade** das lógicas puras (`vision/counting.ts`, `report/predict.ts`, `server/alarmPolicy.js`). Pendência de segurança: rotacionar a credencial Postgres em `deploy/visao-hub.service`.
+- **`npm run verify` = `lint` (ESLint) + `typecheck` (`tsc --noEmit`) + `build` (Vite) + `test` (Vitest).** Gate local via **pre-push hook** (`.githooks/pre-push`, `core.hooksPath`) + CI (`.github/workflows/ci.yml`). **Vermelho não entra.** Para mudança que toca o front/fluxo, rode também o e2e: `npx playwright test`.
+- **Critérios de aceite viram teste** (ao menos caminhos críticos/invariantes). "Validado manual" é ponto de partida, não chegada. Regressão corrigida → vira teste (ex.: Select-em-Dialog no `e2e/`). Lógicas puras com unit test em Vitest (`*.test.ts`/`*.test.js` ao lado do código).
+- **Onda 0 fechada** (commits R0/R1): ESLint+Prettier, `verify`, pre-push hook, CI e 68 unit tests das lógicas puras existem. **Resíduos a baixar:** ~18 warnings de lint; `npm audit` com 4 vulns transitivas de `@xenova/transformers` (fix é breaking — avaliar). **Pendência de segurança humana:** rotacionar a senha Postgres e o `AUTH_SECRET` que estiveram expostos (já desversionados/purgados do histórico). Próximas ondas do retrofit: R2 (quebrar `CameraWorkspace.tsx`, unificar duplicações) e R3 (acabamento UI) — ver `analises/saude/00-relatorio-saude-e-retrofit.md`.
 
 ## 7. Definition of Done
 
