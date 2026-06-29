@@ -122,3 +122,109 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   // e a câmera fullscreen (overlay) continua aberta
   await expect(page.locator(".cam")).toBeVisible();
 });
+
+// ── R3.3 — cobertura das primitivas Radix da migração (Onda G): Tabs + AlertDialog ──
+
+// Tabs internas do Relatório (Radix Tabs): semântica ARIA (role tab/tabpanel), navegação por
+// SETAS (ativação automática) e clique; só o painel ativo fica no DOM.
+//
+// NOTA DETERMINISMO: as abas internas do Relatório só montam quando há histórico (`!noData`).
+// O hub do E2E sobe SEM Postgres (global-setup), então `GET /api/data/ativ/buckets` devolve [] e
+// a página fica no estado "sem dados" — as abas nunca renderizariam. Mockamos APENAS essa rota
+// (só metadados agregados, coerente com LGPD) para exercitar a SEMÂNTICA das abas, não os dados.
+test("Tabs (Relatório): setas/clique trocam a aba e só o tabpanel ativo é exibido", async ({
+  page,
+}) => {
+  await login(page);
+
+  const hourStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  await page.route("**/api/data/ativ/buckets", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: `e2e|z1|${hourStart}`,
+          cameraId: "e2e",
+          area: "Doca 1",
+          atividade: "Separação",
+          hourStart,
+          idleMs: 1_800_000,
+          alerts: 2,
+          samples: 100,
+          activeSamples: 60,
+          peoplePeak: 3,
+        },
+      ],
+    }),
+  );
+
+  await page.getByRole("link", { name: /Relatório/i }).click();
+  await expect(page.getByRole("heading", { name: /Relatório Operacional/i })).toBeVisible();
+
+  // Modo "Atividade" (SegmentedControl) → expõe as abas internas Radix.
+  await page.getByRole("button", { name: "Atividade" }).click();
+
+  const tablist = page.getByRole("tablist", { name: "Seção" });
+  await expect(tablist).toBeVisible();
+  await expect(tablist.getByRole("tab")).toHaveCount(4);
+
+  // Estado inicial: "Quando para" ativa; um único tabpanel no DOM, com o conteúdo certo.
+  const tQuando = tablist.getByRole("tab", { name: "Quando para" });
+  const tOnde = tablist.getByRole("tab", { name: "Onde para" });
+  const tTendencia = tablist.getByRole("tab", { name: "Tendência" });
+  await expect(tQuando).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel")).toHaveCount(1);
+  await expect(page.getByRole("tabpanel")).toContainText("horários críticos");
+
+  // Navegação por SETA (Radix ativa automaticamente a aba focada) → "Onde para".
+  await tQuando.click(); // garante o foco na aba selecionada
+  await page.keyboard.press("ArrowRight");
+  await expect(tOnde).toHaveAttribute("aria-selected", "true");
+  await expect(tQuando).toHaveAttribute("aria-selected", "false");
+  await expect(page.getByRole("tabpanel")).toHaveCount(1); // continua só o ativo
+  await expect(page.getByRole("tabpanel")).toContainText("Por área");
+
+  // Troca por CLIQUE → "Tendência".
+  await tTendencia.click();
+  await expect(tTendencia).toHaveAttribute("aria-selected", "true");
+  await expect(tOnde).toHaveAttribute("aria-selected", "false");
+  await expect(page.getByRole("tabpanel")).toHaveCount(1);
+  await expect(page.getByRole("tabpanel")).toContainText("Tendência (14 dias)");
+});
+
+// AlertDialog destrutivo (Radix) na remoção de usuário — substitui o antigo window.confirm.
+// Cobre: abrir (role=alertdialog), Cancelar fecha SEM efeito, Confirmar dispara a ação.
+// É seguro confirmar: o hub do E2E é isolado/efêmero e o usuário removido é criado no próprio
+// teste (descartável), então a ação é reversível no ambiente.
+test("AlertDialog (Usuários): abre na remoção; Cancelar não apaga, Confirmar apaga", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("link", { name: /Usuários/i }).click();
+  await expect(page).toHaveURL(/\/usuarios/);
+
+  // Cria um usuário descartável para exercitar a remoção sem afetar nada real.
+  const nome = `e2e_del_${Date.now()}`;
+  await page.getByPlaceholder("Usuário").fill(nome);
+  await page.getByRole("button", { name: "Criar" }).click();
+  const row = page.getByRole("row").filter({ hasText: nome });
+  await expect(row).toBeVisible();
+
+  // 1) Abrir o AlertDialog destrutivo.
+  await row.getByRole("button", { name: "Remover" }).click();
+  const dlg = page.getByRole("alertdialog");
+  await expect(dlg).toBeVisible();
+  await expect(dlg).toContainText("Remover usuário?");
+  await expect(dlg).toContainText(nome);
+
+  // 2) Cancelar fecha o diálogo SEM efeito — o usuário permanece na tabela.
+  await dlg.getByRole("button", { name: "Cancelar" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(row).toBeVisible();
+
+  // 3) Confirmar dispara a remoção — o diálogo fecha e o usuário some.
+  await row.getByRole("button", { name: "Remover" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remover" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("row").filter({ hasText: nome })).toHaveCount(0);
+});
