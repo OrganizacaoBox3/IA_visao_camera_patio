@@ -57,12 +57,7 @@ import {
   containsNorm,
   type Mask,
 } from "./zoneMask";
-import {
-  createCounter,
-  createOccupancy,
-  inwardNormal,
-  type Occupancy,
-} from "./vision/counting";
+import { createCounter, createOccupancy, type Occupancy } from "./vision/counting";
 import {
   Button,
   IconButton,
@@ -90,9 +85,14 @@ import {
   cssVar,
   stateCanvasColor,
   stateVar,
-  hexToRgb,
   riskCanvasColor,
   drawFadigaZone,
+  drawOccupancyHeatmap,
+  drawTracks,
+  drawTripwires,
+  drawPaintGrid,
+  drawZoneDraft,
+  drawTripwireDraft,
 } from "./camera/draw";
 import {
   OCC_HI,
@@ -880,58 +880,12 @@ export function CameraWorkspace({
 
     // Heatmap de ocupação (camada) — agora UNIFICADO na lib pura counting.ts (occ.grid() já normalizado 0..1).
     // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
-    if (layersRef.current.heatmap && occRef.current) {
-      const occ = occRef.current,
-        g = occ.grid(),
-        cols = occ.cols,
-        rows = occ.rows;
-      let max = 0;
-      for (let i = 0; i < g.length; i++) if (g[i] > max) max = g[i];
-      if (max > 0.05) {
-        const cw = cr.w / cols,
-          ch = cr.h / rows;
-        const warn = hexToRgb(cssVar("--state-warn", "#eab308"));
-        const crit = hexToRgb(cssVar("--state-critical", "#ef4444"));
-        for (let rr = 0; rr < rows; rr++)
-          for (let cc = 0; cc < cols; cc++) {
-            const v = g[rr * cols + cc];
-            if (v < 0.05) continue; // já é raw/max (0..1)
-            const R = Math.round(warn[0] + (crit[0] - warn[0]) * v);
-            const G = Math.round(warn[1] + (crit[1] - warn[1]) * v);
-            const B = Math.round(warn[2] + (crit[2] - warn[2]) * v);
-            ctx.fillStyle = `rgba(${R},${G},${B},${(0.12 + 0.45 * v).toFixed(3)})`;
-            ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
-          }
-      }
-    }
+    if (layersRef.current.heatmap && occRef.current)
+      drawOccupancyHeatmap(ctx, cr, occRef.current);
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
-    if (layersRef.current.boxes) {
-      ctx.lineWidth = 1.5;
-      const personStroke = cssVar("--state-info", "#38bdf8");
-      const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
-      const personFg = cssVar("--state-info-fg", "#bae6fd");
-      for (const t of tracksRef.current) {
-        ctx.globalAlpha = t.score < confRef.current ? 0.3 : 1;
-        const x = cr.x + t.bbox[0] * cr.w,
-          y = cr.y + t.bbox[1] * cr.h,
-          w = t.bbox[2] * cr.w,
-          h = t.bbox[3] * cr.h;
-        ctx.strokeStyle = personStroke;
-        ctx.strokeRect(x, y, w, h);
-        const inspecting = pausedRef.current && detailed;
-        const tag = inspecting
-          ? `Pessoa ${t.id} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
-          : `Pessoa ${t.id}`;
-        ctx.font = inspecting ? "bold 12px ui-sans-serif, system-ui" : "10px monospace";
-        const tw = ctx.measureText(tag).width + 8;
-        ctx.fillStyle = scrim;
-        ctx.fillRect(x, y - 15, tw, 14);
-        ctx.fillStyle = personFg;
-        ctx.fillText(tag, x + 4, y - 4);
-      }
-      ctx.globalAlpha = 1;
-    }
+    if (layersRef.current.boxes)
+      drawTracks(ctx, cr, tracksRef.current, confRef.current, pausedRef.current && detailed);
 
     for (const z of zonesRef.current) {
       const x = cr.x + z.x * cr.w,
@@ -1033,115 +987,16 @@ export function CameraWorkspace({
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
     // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral) + HUD in/out.
-    const wires = tripwiresRef.current;
-    if (wires.length) {
-      const info = cssVar("--state-info", "#38bdf8");
-      const neutral = cssVar("--state-neutral", "#64748b");
-      const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
-      const counts = twCountsRef.current;
-      for (let wi = 0; wi < wires.length; wi++) {
-        const w = wires[wi];
-        const ax = cr.x + w.a.x * cr.w,
-          ay = cr.y + w.a.y * cr.h;
-        const bx = cr.x + w.b.x * cr.w,
-          by = cr.y + w.b.y * cr.h;
-        ctx.lineWidth = 2.5;
-        ctx.strokeStyle = info;
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(bx, by);
-        ctx.stroke();
-        ctx.fillStyle = info;
-        ctx.beginPath();
-        ctx.arc(ax, ay, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(bx, by, 3, 0, Math.PI * 2);
-        ctx.fill();
-        // seta da direção "in": normal mapeada p/ tela (compensa o aspecto do letterbox) a partir do ponto médio
-        const n = inwardNormal(w);
-        let dx = n.x * cr.w,
-          dy = n.y * cr.h;
-        const dl = Math.hypot(dx, dy) || 1;
-        const AR = 16;
-        dx = (dx / dl) * AR;
-        dy = (dy / dl) * AR;
-        const mx = (ax + bx) / 2,
-          my = (ay + by) / 2,
-          ex = mx + dx,
-          ey = my + dy;
-        ctx.strokeStyle = neutral;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(mx, my);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
-        const ang = Math.atan2(dy, dx),
-          ha = 0.5,
-          hl = 6;
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(ex - hl * Math.cos(ang - ha), ey - hl * Math.sin(ang - ha));
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(ex - hl * Math.cos(ang + ha), ey - hl * Math.sin(ang + ha));
-        ctx.stroke();
-        // HUD discreto: in/out por linha (do lado oposto à seta p/ não cobri-la)
-        const c = counts[w.id] ?? { in: 0, out: 0 };
-        const tag = `L${wi + 1}  in ${c.in}  out ${c.out}`;
-        ctx.font = "bold 11px ui-sans-serif, system-ui";
-        const tw = ctx.measureText(tag).width + 10;
-        const hx = mx - dx - tw / 2,
-          hy = my - dy - 18;
-        ctx.fillStyle = scrim;
-        ctx.fillRect(hx, hy, tw, 16);
-        ctx.fillStyle = info;
-        ctx.fillText(tag, hx + 5, hy + 12);
-      }
-    }
+    drawTripwires(ctx, cr, tripwiresRef.current, twCountsRef.current);
 
     // grade de pintura (ao editar a máscara de uma zona)
-    if (paintZoneId) {
-      const cols = DEFAULT_GRID.cols,
-        rows = DEFAULT_GRID.rows,
-        cw = cr.w / cols,
-        ch = cr.h / rows;
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = "rgba(148,163,184,0.28)";
-      ctx.beginPath();
-      for (let c = 0; c <= cols; c++) {
-        ctx.moveTo(cr.x + c * cw, cr.y);
-        ctx.lineTo(cr.x + c * cw, cr.y + cr.h);
-      }
-      for (let rr = 0; rr <= rows; rr++) {
-        ctx.moveTo(cr.x, cr.y + rr * ch);
-        ctx.lineTo(cr.x + cr.w, cr.y + rr * ch);
-      }
-      ctx.stroke();
-    }
+    if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows);
 
-    const d = drawRef.current;
-    if (d?.active) {
-      const x = Math.min(d.sx, d.cx),
-        y = Math.min(d.sy, d.cy);
-      ctx.setLineDash([6, 4]);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = "#38bdf8";
-      ctx.strokeRect(x, y, Math.abs(d.cx - d.sx), Math.abs(d.cy - d.sy));
-      ctx.setLineDash([]);
-    }
+    // retângulo de uma nova zona em arraste
+    drawZoneDraft(ctx, drawRef.current);
 
     // tripwire em traçado (clique em A, arrasta até B)
-    const td = twDrawRef.current;
-    if (td?.active) {
-      ctx.setLineDash([6, 4]);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = cssVar("--state-info", "#38bdf8");
-      ctx.beginPath();
-      ctx.moveTo(td.sx, td.sy);
-      ctx.lineTo(td.cx, td.cy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
+    drawTripwireDraft(ctx, twDrawRef.current);
   }
 
   // Cine-loop / revisão / snapshot / export de clipe → hook ./camera/useCineLoop

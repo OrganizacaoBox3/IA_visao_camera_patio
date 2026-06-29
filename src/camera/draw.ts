@@ -5,10 +5,12 @@
 // testáveis; o desenho do palco completo (`drawScene`) segue no componente porque
 // fecha sobre vários refs/estado do React.
 import { APP_CONFIG } from "../config";
+import { fmtDuration } from "../format";
 import { type ZoneState } from "../processors/atividade";
 import { type RiskState } from "../fadiga/landmarks";
 import { type FadigaScene } from "../fadiga/draw";
 import { type CineFrame } from "./cineBuffer";
+import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
 
 // Retângulo de conteúdo (letterbox): ajusta o vídeo no viewport preservando aspecto.
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -155,4 +157,190 @@ export function drawReviewFrame(
   ctx.clearRect(0, 0, vpW, vpH);
   const cr = getContentRect(vpW, vpH, fr.w, fr.h);
   ctx.drawImage(fr.bmp, cr.x, cr.y, cr.w, cr.h);
+}
+
+// ── OVERLAYS do palco (camadas independentes do laço por-zona) ───────────────
+// Extraídos de `drawScene` (R2.1, 2ª passada) SEM mudança de comportamento. São
+// funções FOLHA: recebem o ctx 2D já transformado (dpr) + o retângulo de conteúdo
+// (letterbox) + os dados do frame, e pintam UMA camada. Os GATES (toggles de
+// camada/refs/estado) permanecem em `drawScene` no componente; aqui só o desenho.
+
+// Heatmap de ocupação (camada) — lê a grade normalizada (0..1) da lib pura counting.ts
+// e pinta com ramp warn→critical (tokens going-gray). Sob as geometrias.
+export function drawOccupancyHeatmap(ctx: CanvasRenderingContext2D, cr: Rect, occ: Occupancy) {
+  const g = occ.grid(),
+    cols = occ.cols,
+    rows = occ.rows;
+  let max = 0;
+  for (let i = 0; i < g.length; i++) if (g[i] > max) max = g[i];
+  if (max <= 0.05) return;
+  const cw = cr.w / cols,
+    ch = cr.h / rows;
+  const warn = hexToRgb(cssVar("--state-warn", "#eab308"));
+  const crit = hexToRgb(cssVar("--state-critical", "#ef4444"));
+  for (let rr = 0; rr < rows; rr++)
+    for (let cc = 0; cc < cols; cc++) {
+      const v = g[rr * cols + cc];
+      if (v < 0.05) continue; // já é raw/max (0..1)
+      const R = Math.round(warn[0] + (crit[0] - warn[0]) * v);
+      const G = Math.round(warn[1] + (crit[1] - warn[1]) * v);
+      const B = Math.round(warn[2] + (crit[2] - warn[2]) * v);
+      ctx.fillStyle = `rgba(${R},${G},${B},${(0.12 + 0.45 * v).toFixed(3)})`;
+      ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
+    }
+}
+
+// Tracks anônimos (Presença) — caixas + rótulo. Atenua abaixo da confiança global.
+// `inspecting` (⏸ + tela cheia) acrescenta tempo em cena/zona ao rótulo (idêntico ao original).
+export type TrackBox = {
+  id: number;
+  score: number;
+  bbox: [number, number, number, number];
+  firstSeen: number;
+  zone: string | null;
+};
+export function drawTracks(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  tracks: ReadonlyArray<TrackBox>,
+  conf: number,
+  inspecting: boolean,
+) {
+  ctx.lineWidth = 1.5;
+  const personStroke = cssVar("--state-info", "#38bdf8");
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
+  const personFg = cssVar("--state-info-fg", "#bae6fd");
+  for (const t of tracks) {
+    ctx.globalAlpha = t.score < conf ? 0.3 : 1;
+    const x = cr.x + t.bbox[0] * cr.w,
+      y = cr.y + t.bbox[1] * cr.h,
+      w = t.bbox[2] * cr.w,
+      h = t.bbox[3] * cr.h;
+    ctx.strokeStyle = personStroke;
+    ctx.strokeRect(x, y, w, h);
+    const tag = inspecting
+      ? `Pessoa ${t.id} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
+      : `Pessoa ${t.id}`;
+    ctx.font = inspecting ? "bold 12px ui-sans-serif, system-ui" : "10px monospace";
+    const tw = ctx.measureText(tag).width + 8;
+    ctx.fillStyle = scrim;
+    ctx.fillRect(x, y - 15, tw, 14);
+    ctx.fillStyle = personFg;
+    ctx.fillText(tag, x + 4, y - 4);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Tripwires (linhas de contagem com direção) — linha a→b + seta da direção "in"
+// (via inwardNormal, compensando o aspecto do letterbox) + HUD in/out por linha.
+export function drawTripwires(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  wires: ReadonlyArray<Tripwire>,
+  counts: Record<string, TripwireCounts>,
+) {
+  if (!wires.length) return;
+  const info = cssVar("--state-info", "#38bdf8");
+  const neutral = cssVar("--state-neutral", "#64748b");
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  for (let wi = 0; wi < wires.length; wi++) {
+    const w = wires[wi];
+    const ax = cr.x + w.a.x * cr.w,
+      ay = cr.y + w.a.y * cr.h;
+    const bx = cr.x + w.b.x * cr.w,
+      by = cr.y + w.b.y * cr.h;
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = info;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    ctx.fillStyle = info;
+    ctx.beginPath();
+    ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(bx, by, 3, 0, Math.PI * 2);
+    ctx.fill();
+    // seta da direção "in": normal mapeada p/ tela (compensa o aspecto do letterbox) a partir do ponto médio
+    const n = inwardNormal(w);
+    let dx = n.x * cr.w,
+      dy = n.y * cr.h;
+    const dl = Math.hypot(dx, dy) || 1;
+    const AR = 16;
+    dx = (dx / dl) * AR;
+    dy = (dy / dl) * AR;
+    const mx = (ax + bx) / 2,
+      my = (ay + by) / 2,
+      ex = mx + dx,
+      ey = my + dy;
+    ctx.strokeStyle = neutral;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    const ang = Math.atan2(dy, dx),
+      ha = 0.5,
+      hl = 6;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - hl * Math.cos(ang - ha), ey - hl * Math.sin(ang - ha));
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - hl * Math.cos(ang + ha), ey - hl * Math.sin(ang + ha));
+    ctx.stroke();
+    // HUD discreto: in/out por linha (do lado oposto à seta p/ não cobri-la)
+    const c = counts[w.id] ?? { in: 0, out: 0 };
+    const tag = `L${wi + 1}  in ${c.in}  out ${c.out}`;
+    ctx.font = "bold 11px ui-sans-serif, system-ui";
+    const tw = ctx.measureText(tag).width + 10;
+    const hx = mx - dx - tw / 2,
+      hy = my - dy - 18;
+    ctx.fillStyle = scrim;
+    ctx.fillRect(hx, hy, tw, 16);
+    ctx.fillStyle = info;
+    ctx.fillText(tag, hx + 5, hy + 12);
+  }
+}
+
+// Grade de pintura (ao editar a máscara de uma zona).
+export function drawPaintGrid(ctx: CanvasRenderingContext2D, cr: Rect, cols: number, rows: number) {
+  const cw = cr.w / cols,
+    ch = cr.h / rows;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(148,163,184,0.28)";
+  ctx.beginPath();
+  for (let c = 0; c <= cols; c++) {
+    ctx.moveTo(cr.x + c * cw, cr.y);
+    ctx.lineTo(cr.x + c * cw, cr.y + cr.h);
+  }
+  for (let rr = 0; rr <= rows; rr++) {
+    ctx.moveTo(cr.x, cr.y + rr * ch);
+    ctx.lineTo(cr.x + cr.w, cr.y + rr * ch);
+  }
+  ctx.stroke();
+}
+
+// Rascunho de arraste (viewport px): retângulo de uma nova zona OU traçado de uma tripwire.
+export type DragBox = { active: boolean; sx: number; sy: number; cx: number; cy: number };
+export function drawZoneDraft(ctx: CanvasRenderingContext2D, d: DragBox | null) {
+  if (!d?.active) return;
+  const x = Math.min(d.sx, d.cx),
+    y = Math.min(d.sy, d.cy);
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#38bdf8";
+  ctx.strokeRect(x, y, Math.abs(d.cx - d.sx), Math.abs(d.cy - d.sy));
+  ctx.setLineDash([]);
+}
+export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | null) {
+  if (!td?.active) return;
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = cssVar("--state-info", "#38bdf8");
+  ctx.beginPath();
+  ctx.moveTo(td.sx, td.sy);
+  ctx.lineTo(td.cx, td.cy);
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
