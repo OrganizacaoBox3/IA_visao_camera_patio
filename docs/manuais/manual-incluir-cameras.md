@@ -82,8 +82,12 @@ As zonas/linhas ficam salvas por câmera. Perfis **operador** só visualizam; **
 ---
 
 ## Passo 6 — Testar sem uma câmera de LAN à mão
-Só para validar a integração/rede rapidamente, cadastre um **HLS de teste** (funciona igual a uma câmera):
-- `https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8` (sempre-online).
+Rode **`npm run cameras`** — ele gera URLs de câmeras reais **prontas para copiar e colar** na "+ Câmera IP"
+(um HLS de teste sempre-online + câmeras ao vivo do YouTube resolvidas na hora). As do YouTube **expiram (~6h)**;
+é só rodar de novo para renovar, ou passar seu próprio link: `npm run cameras "<url-youtube-live>"`.
+Requer `yt-dlp` (`winget install yt-dlp.yt-dlp`) e ffmpeg (auto-detectados).
+
+HLS de teste sempre-online (funciona igual a uma câmera): `https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8`.
 
 Para **cenas industriais reais** de demonstração (portos etc.), veja o catálogo em `analises/cameras-industriais/00-guia.md` (com as ressalvas: YouTube expira, EarthCam/Skyline proíbem, trânsito BR é snapshot).
 

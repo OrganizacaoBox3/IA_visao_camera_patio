@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "hub": "node server/index.js",
     "start": "node server/index.js",
+    "cameras": "node scripts/cameras-demo.mjs",
     "e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write .",
