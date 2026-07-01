@@ -1,25 +1,21 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
-import { fmtDuration, fmtLimit, clock } from "./format";
+import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame } from "./vision/detect";
 import { requestInference } from "./vision/scheduler";
 import {
   AtividadeProcessor,
-  ACTIVITIES,
   sensitivityFactor,
   type AtividadeCtx,
-  type ZoneView,
 } from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
-import { FadigaProcessor, type FadigaModelState } from "./processors/fadiga";
+import { FadigaProcessor } from "./processors/fadiga";
 import { loadFadigaThresholds } from "./fadiga/calibration";
 import { type RiskState } from "./fadiga/landmarks";
-import { type FadigaScene } from "./fadiga/draw";
-import { type ObjDetection } from "./objects/detector";
 import { pushRead, pushPass } from "./reading/cluster";
 import {
   recordSamples,
@@ -34,7 +30,6 @@ import {
   type ZoneSample,
 } from "./report/store";
 import { type Dataset } from "./report/mock";
-import { predictAlertsPerDay } from "./report/predict";
 import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import {
   loadZonesForCamera,
@@ -63,7 +58,6 @@ import { createCounter, createOccupancy, type Occupancy } from "./vision/countin
 import {
   Button,
   IconButton,
-  Input,
   Select,
   Slider,
   Switch,
@@ -71,9 +65,7 @@ import {
   TabsContent,
   ScrollArea,
   Toggle,
-  ToggleGroup,
   Tooltip,
-  Dialog,
   Badge,
   Field,
   type Tone,
@@ -84,18 +76,18 @@ import { MetricCell } from "./components/Sparkline";
 import { useAuth } from "./auth";
 import {
   getContentRect,
-  cssVar,
-  stateCanvasColor,
   stateVar,
-  riskCanvasColor,
-  drawFadigaZone,
   drawOccupancyHeatmap,
   drawTracks,
   drawTripwires,
   drawPaintGrid,
   drawZoneDraft,
   drawTripwireDraft,
+  drawZoneOverlays,
+  RISK_LABEL,
+  type ZoneResult,
 } from "./camera/draw";
+import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import {
   OCC_HI,
   EAR_HI,
@@ -111,12 +103,6 @@ import {
 } from "./camera/useTelemetry";
 import "./camera/cine.css";
 
-const MODO_OPTS = [
-  { value: "atividade", label: "Atividade" },
-  { value: "leitura", label: "Leitura" },
-  { value: "objetos", label: "Objetos" },
-  { value: "fadiga", label: "Fadiga" },
-];
 const BRUSH_OPTS = [
   { value: "1", label: "1×" },
   { value: "2", label: "2×" },
@@ -133,39 +119,14 @@ const HEAT_COLS = 32,
 // Roda o processador de cada zona na sua ROI, compõe o overlay e o painel num lugar só.
 // Helpers puros de geometria/cor/desenho ficam em ./camera/draw; telemetria em ./camera/useTelemetry.
 
-// resultado por zona guardado p/ desenho + painel
-type ZoneResult =
-  | { modo: "atividade"; view: ZoneView }
-  | {
-      modo: "leitura";
-      lastCode: string | null;
-      perMin: number;
-      passes: number;
-      ratePct: number;
-      noReads: number;
-    }
-  | { modo: "objetos"; counts: Record<string, number>; total: number; dets: ObjDetection[] }
-  | {
-      modo: "fadiga";
-      risk: RiskState;
-      ear: number | null;
-      phone: boolean;
-      faceState: FadigaModelState;
-      scene: FadigaScene;
-    };
+// resultado por zona guardado p/ desenho + painel → tipo em ./camera/draw (ZoneResult).
 
 type Holder = {
   modo: ZoneMode;
   proc: AtividadeProcessor | LeituraProcessor | ObjetosProcessor | FadigaProcessor;
 };
 
-// risco → rótulo/tone (cor de canvas via riskCanvasColor em ./camera/draw)
-const RISK_LABEL: Record<RiskState, string> = {
-  OK: "OK",
-  ALERTA_FADIGA: "Fadiga",
-  ALERTA_CELULAR: "Celular",
-  ALERTA_DUPLO: "Duplo",
-};
+// risco → rótulo (RISK_LABEL) + cor de canvas (riskCanvasColor) em ./camera/draw.
 const RISK_TONE: Record<RiskState, Tone> = {
   OK: "ok",
   ALERTA_FADIGA: "warn",
@@ -949,103 +910,18 @@ export function CameraWorkspace({
     if (layersRef.current.boxes)
       drawTracks(ctx, cr, tracksRef.current, confRef.current, pausedRef.current && detailed);
 
-    for (const z of zonesRef.current) {
-      const x = cr.x + z.x * cr.w,
-        y = cr.y + z.y * cr.h,
-        w = z.w * cr.w,
-        h = z.h * cr.h;
-      const r = resultsRef.current.get(z.id);
-      let color = cssVar("--state-neutral", "#64748b");
-      let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
-      if (r?.modo === "atividade") {
-        color = stateCanvasColor(r.view.state);
-        label2 = `${z.label} · ${r.view.state} · ${r.view.people}p`;
-      } else if (r?.modo === "leitura") {
-        color = cssVar("--state-info", "#38bdf8");
-        label2 = `${z.label} · ${r.lastCode ?? "leitura…"}`;
-      } else if (r?.modo === "objetos") {
-        color = cssVar("--state-neutral", "#64748b"); // contagem = operação normal (going-gray); classes mantêm cor categórica
-        const parts = Object.entries(r.counts)
-          .filter(([, n]) => n > 0)
-          .map(([k, n]) => `${objClass(k)?.emoji ?? ""}${n}`);
-        label2 = `${z.label} · ${parts.length ? parts.join(" ") : "0"}`;
-        if (layersRef.current.boxes) {
-          const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
-          for (const d of r.dets) {
-            if (d.score < confRef.current) continue; // slider global de confiança filtra detecções
-            const cx = d.bbox[0] + d.bbox[2] / 2,
-              cy = d.bbox[1] + d.bbox[3] / 2;
-            if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
-            const oc = objClass(d.key);
-            const cc = oc?.color ?? color;
-            const bx = cr.x + d.bbox[0] * cr.w,
-              by = cr.y + d.bbox[1] * cr.h;
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = cc;
-            ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);
-            if (detailed) {
-              // rótulo da classe acima da bbox (só no modo cheio, p/ não poluir o tile)
-              const tag = `${oc?.emoji ?? ""} ${oc?.label ?? d.key}`;
-              ctx.font = "10px ui-sans-serif, system-ui";
-              const tw = ctx.measureText(tag).width + 6;
-              ctx.fillStyle = scrim;
-              ctx.fillRect(bx, by - 13, tw, 12);
-              ctx.fillStyle = cc;
-              ctx.fillText(tag, bx + 3, by - 4);
-            }
-          }
-        }
-      } else if (r?.modo === "fadiga") {
-        color = riskCanvasColor(r.risk);
-        label2 = `${z.label} · ${RISK_LABEL[r.risk]}${r.ear != null ? ` · EAR ${r.ear.toFixed(2)}` : ""}${r.phone ? " · 📱" : ""}`;
-      }
-      const mask = getMask(z);
-      const hasMask = !!(mask && anySet(mask));
-      const alerting = r?.modo === "atividade" && r.view.state === "ALERTA";
-      if (hasMask && mask) {
-        // área irregular: pinta as células marcadas na cor do modo (camada "máscara")
-        if (layersRef.current.mask) {
-          const cw = cr.w / mask.cols,
-            ch = cr.h / mask.rows;
-          ctx.fillStyle = color + (alerting ? "3a" : "26");
-          for (let rr = 0; rr < mask.rows; rr++)
-            for (let cc = 0; cc < mask.cols; cc++)
-              if (mask.bits[rr * mask.cols + cc])
-                ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
-        }
-        if (layersRef.current.zones) {
-          ctx.lineWidth = alerting ? 2 : 1;
-          ctx.strokeStyle = color;
-          ctx.strokeRect(x, y, w, h);
-        } // contorno da bbox
-      } else if (layersRef.current.zones) {
-        ctx.lineWidth = alerting ? 3 : 2;
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color + "1f";
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-      }
-      if (layersRef.current.zones) {
-        ctx.font = "bold 11px ui-sans-serif, system-ui";
-        const tw = ctx.measureText(label2).width + 10;
-        ctx.fillStyle = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
-        ctx.fillRect(x, y, tw, 17);
-        ctx.fillStyle = color;
-        ctx.fillText(label2, x + 5, y + 12);
-        if (
-          detailed &&
-          r?.modo === "atividade" &&
-          r.view.state !== "ATIVA" &&
-          r.view.state !== "LENTA"
-        ) {
-          ctx.font = "10px monospace";
-          ctx.fillStyle = cssVar("--cam-overlay-fg", "#cbd5e1");
-          ctx.fillText(`parada ${fmtDuration(r.view.idleMs)}`, x + 5, y + 28);
-        }
-      }
-      if (layersRef.current.boxes && detailed && r?.modo === "fadiga")
-        drawFadigaZone(ctx, x, y, w, h, r.scene);
-    }
+    // Laço por-zona (retângulo/máscara + rótulo + detecções + overlay de fadiga) → ./camera/draw.
+    // Passa os valores já resolvidos (refs/estado) + getMask; os gates de camada seguem lá dentro.
+    drawZoneOverlays(
+      ctx,
+      cr,
+      zonesRef.current,
+      resultsRef.current,
+      layersRef.current,
+      confRef.current,
+      detailed,
+      getMask,
+    );
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
     // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral) + HUD in/out.
@@ -2134,173 +2010,15 @@ export function CameraWorkspace({
         {paused && <span className="kb muted">⏸ inspecionando</span>}
       </div>
 
-      <Dialog
-        open={!!cfgZone}
-        onOpenChange={(o) => {
-          if (!o) setCfgZoneId(null);
-        }}
-        title={cfgZone ? `Configurar — ${cfgZone.label}` : "Configurar zona"}
-        description="Ajuste o modo e os parâmetros desta zona. As mudanças valem na hora."
-        footer={
-          <Button active onClick={() => setCfgZoneId(null)}>
-            Concluir
-          </Button>
-        }
-      >
-        {cfgZone &&
-          (() => {
-            const z = cfgZone;
-            return (
-              <div className="cfg-form">
-                <Field label="Nome da zona" htmlFor={`cfg-name-${z.id}`}>
-                  <Input
-                    id={`cfg-name-${z.id}`}
-                    value={z.label}
-                    onChange={(e) => patchZone(z.id, { label: e.target.value })}
-                  />
-                </Field>
-                <Field
-                  label="Modo"
-                  hint="Modo = preset completo: troca camadas, confiança e métricas em destaque. Geometria/zonas preservadas."
-                >
-                  <Select
-                    value={z.modo}
-                    onChange={(v) => changeZoneMode(z, v as ZoneMode)}
-                    options={MODO_OPTS}
-                    ariaLabel="Modo da zona"
-                  />
-                </Field>
-
-                {z.modo === "atividade" && (
-                  <>
-                    <Field
-                      label="Atividade"
-                      hint="Rótulo do processo executado na área (para o relatório)."
-                    >
-                      <Select
-                        value={z.atividade}
-                        onChange={(v) => patchZone(z.id, { atividade: v })}
-                        options={ACTIVITIES.map((a) => ({ value: a, label: a }))}
-                        ariaLabel="Atividade da zona"
-                      />
-                    </Field>
-                    <Field
-                      label="Alerta se parada acima de"
-                      hint={
-                        demoMode
-                          ? `Modo demo força ${fmtLimit(APP_CONFIG.zones.demoIdleAlertMs)}.`
-                          : undefined
-                      }
-                    >
-                      <Select
-                        value={String(z.idleAlertMs)}
-                        disabled={demoMode}
-                        onChange={(v) => patchZone(z.id, { idleAlertMs: Number(v) })}
-                        options={APP_CONFIG.zones.limitPresetsMs.map((ms) => ({
-                          value: String(ms),
-                          label: fmtLimit(ms),
-                        }))}
-                        ariaLabel="Limite de parada"
-                      />
-                    </Field>
-                    <Field
-                      label={`Sensibilidade ao movimento · ${z.sensitivity}`}
-                      hint="Menor = ignora micro-movimentos; maior = detecta o mínimo."
-                    >
-                      <div className="cfg-slider">
-                        <span className="ss-end">−</span>
-                        <Slider
-                          value={z.sensitivity}
-                          min={1}
-                          max={10}
-                          step={1}
-                          onChange={(v) => patchZone(z.id, { sensitivity: v })}
-                          ariaLabel="Sensibilidade"
-                        />
-                        <span className="ss-end">+</span>
-                      </div>
-                      <div
-                        style={{ marginTop: "var(--sp-1)", fontSize: 11, color: "var(--text-dim)" }}
-                        aria-live="polite"
-                      >
-                        {histState === "loading" && (
-                          <span className="muted">estimando alertas/dia…</span>
-                        )}
-                        {histState === "error" && (
-                          <span className="muted">histórico indisponível — sem estimativa</span>
-                        )}
-                        {histState === "ready" &&
-                          histDataset &&
-                          (() => {
-                            const p = predictAlertsPerDay(histDataset, z.label, z.sensitivity);
-                            if (p.status === "no-data")
-                              return (
-                                <span className="muted">
-                                  sem dados suficientes p/ estimar alertas/dia
-                                </span>
-                              );
-                            return (
-                              <span>
-                                ≈{" "}
-                                <b style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>
-                                  {p.perDay}
-                                </b>{" "}
-                                alerta(s)/dia estimados{" "}
-                                <span className="muted">
-                                  (base {p.baselinePerDay}/dia · {p.days}d
-                                  {demoMode ? " · limite curto demo eleva o real" : ""})
-                                </span>
-                              </span>
-                            );
-                          })()}
-                      </div>
-                    </Field>
-                  </>
-                )}
-
-                {z.modo === "leitura" && (
-                  <Field
-                    label="Ponto de leitura"
-                    hint="Identifica este leitor no histórico/relatório."
-                  >
-                    <Input
-                      value={z.ponto}
-                      onChange={(e) => patchZone(z.id, { ponto: e.target.value })}
-                    />
-                  </Field>
-                )}
-
-                {z.modo === "objetos" && (
-                  <Field label="Classes a contar" hint="Toque para incluir/excluir cada objeto.">
-                    <ToggleGroup
-                      type="multiple"
-                      className="ws-cfg ws-chips"
-                      ariaLabel="Classes a contar"
-                      value={z.selectedClasses}
-                      onValueChange={(vals) => patchZone(z.id, { selectedClasses: vals })}
-                      items={OBJECT_CATALOG.map((o) => ({
-                        value: o.key,
-                        label: (
-                          <>
-                            {o.emoji} {o.label}
-                          </>
-                        ),
-                        ariaLabel: o.label,
-                      }))}
-                    />
-                  </Field>
-                )}
-
-                {z.modo === "fadiga" && (
-                  <p className="empty-note">
-                    Monitora 1 operador na ROI da zona (recorte). Som e calibração de limiares ficam
-                    na câmera dedicada de fadiga.
-                  </p>
-                )}
-              </div>
-            );
-          })()}
-      </Dialog>
+      <ConfigZonaDialog
+        zone={cfgZone}
+        demoMode={demoMode}
+        histState={histState}
+        histDataset={histDataset}
+        onClose={() => setCfgZoneId(null)}
+        patchZone={patchZone}
+        changeZoneMode={changeZoneMode}
+      />
     </div>
   );
 }

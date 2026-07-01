@@ -4,13 +4,48 @@
 // (overlay de fadiga na zona, quadro de revisão do cine-loop). Funções puras /
 // testáveis; o desenho do palco completo (`drawScene`) segue no componente porque
 // fecha sobre vários refs/estado do React.
-import { APP_CONFIG } from "../config";
+import { APP_CONFIG, type OverlayLayers } from "../config";
 import { fmtDuration } from "../format";
-import { type ZoneState } from "../processors/atividade";
+import { type ZoneState, type ZoneView } from "../processors/atividade";
+import { type FadigaModelState } from "../processors/fadiga";
 import { type RiskState } from "../fadiga/landmarks";
 import { type FadigaScene } from "../fadiga/draw";
+import { type ObjDetection } from "../objects/detector";
+import { objClass } from "../objects/catalog";
+import { anySet, type Mask } from "../zoneMask";
+import { ZONE_MODE_LABEL, type Zone } from "../zones";
 import { type CineFrame } from "./cineBuffer";
 import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
+
+// Resultado por zona guardado p/ desenho + painel. Vive aqui (perto do desenho que o
+// consome) e é reimportado pelo CameraWorkspace; mover não muda comportamento.
+export type ZoneResult =
+  | { modo: "atividade"; view: ZoneView }
+  | {
+      modo: "leitura";
+      lastCode: string | null;
+      perMin: number;
+      passes: number;
+      ratePct: number;
+      noReads: number;
+    }
+  | { modo: "objetos"; counts: Record<string, number>; total: number; dets: ObjDetection[] }
+  | {
+      modo: "fadiga";
+      risk: RiskState;
+      ear: number | null;
+      phone: boolean;
+      faceState: FadigaModelState;
+      scene: FadigaScene;
+    };
+
+// risco → rótulo (cor de canvas via riskCanvasColor). Compartilhado com o painel/alertas do workspace.
+export const RISK_LABEL: Record<RiskState, string> = {
+  OK: "OK",
+  ALERTA_FADIGA: "Fadiga",
+  ALERTA_CELULAR: "Celular",
+  ALERTA_DUPLO: "Duplo",
+};
 
 // Retângulo de conteúdo (letterbox): ajusta o vídeo no viewport preservando aspecto.
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -343,4 +378,117 @@ export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | n
   ctx.lineTo(td.cx, td.cy);
   ctx.stroke();
   ctx.setLineDash([]);
+}
+
+// ── Laço por-zona do palco (retângulo/máscara + rótulo + detecções de objeto + overlay de fadiga) ──
+// Extraído de `drawScene` (R3) SEM mudança de comportamento. Função FOLHA: recebe o ctx 2D já
+// transformado (dpr), o retângulo de conteúdo (letterbox) e os dados por-zona (zonas/resultados/
+// camadas/confiança/detalhe) já resolvidos pelo componente. Os GATES de camada (layers.*) e o
+// `maskOf` (getMask, que fecha sobre o estado de pintura) continuam vindo do componente; aqui só o desenho.
+export function drawZoneOverlays(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  zones: ReadonlyArray<Zone>,
+  results: Map<string, ZoneResult>,
+  layers: OverlayLayers,
+  conf: number,
+  detailed: boolean,
+  maskOf: (z: Zone) => Mask | null,
+) {
+  for (const z of zones) {
+    const x = cr.x + z.x * cr.w,
+      y = cr.y + z.y * cr.h,
+      w = z.w * cr.w,
+      h = z.h * cr.h;
+    const r = results.get(z.id);
+    let color = cssVar("--state-neutral", "#64748b");
+    let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
+    if (r?.modo === "atividade") {
+      color = stateCanvasColor(r.view.state);
+      label2 = `${z.label} · ${r.view.state} · ${r.view.people}p`;
+    } else if (r?.modo === "leitura") {
+      color = cssVar("--state-info", "#38bdf8");
+      label2 = `${z.label} · ${r.lastCode ?? "leitura…"}`;
+    } else if (r?.modo === "objetos") {
+      color = cssVar("--state-neutral", "#64748b"); // contagem = operação normal (going-gray); classes mantêm cor categórica
+      const parts = Object.entries(r.counts)
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => `${objClass(k)?.emoji ?? ""}${n}`);
+      label2 = `${z.label} · ${parts.length ? parts.join(" ") : "0"}`;
+      if (layers.boxes) {
+        const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
+        for (const d of r.dets) {
+          if (d.score < conf) continue; // slider global de confiança filtra detecções
+          const cx = d.bbox[0] + d.bbox[2] / 2,
+            cy = d.bbox[1] + d.bbox[3] / 2;
+          if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
+          const oc = objClass(d.key);
+          const cc = oc?.color ?? color;
+          const bx = cr.x + d.bbox[0] * cr.w,
+            by = cr.y + d.bbox[1] * cr.h;
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = cc;
+          ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);
+          if (detailed) {
+            // rótulo da classe acima da bbox (só no modo cheio, p/ não poluir o tile)
+            const tag = `${oc?.emoji ?? ""} ${oc?.label ?? d.key}`;
+            ctx.font = "10px ui-sans-serif, system-ui";
+            const tw = ctx.measureText(tag).width + 6;
+            ctx.fillStyle = scrim;
+            ctx.fillRect(bx, by - 13, tw, 12);
+            ctx.fillStyle = cc;
+            ctx.fillText(tag, bx + 3, by - 4);
+          }
+        }
+      }
+    } else if (r?.modo === "fadiga") {
+      color = riskCanvasColor(r.risk);
+      label2 = `${z.label} · ${RISK_LABEL[r.risk]}${r.ear != null ? ` · EAR ${r.ear.toFixed(2)}` : ""}${r.phone ? " · 📱" : ""}`;
+    }
+    const mask = maskOf(z);
+    const hasMask = !!(mask && anySet(mask));
+    const alerting = r?.modo === "atividade" && r.view.state === "ALERTA";
+    if (hasMask && mask) {
+      // área irregular: pinta as células marcadas na cor do modo (camada "máscara")
+      if (layers.mask) {
+        const cw = cr.w / mask.cols,
+          ch = cr.h / mask.rows;
+        ctx.fillStyle = color + (alerting ? "3a" : "26");
+        for (let rr = 0; rr < mask.rows; rr++)
+          for (let cc = 0; cc < mask.cols; cc++)
+            if (mask.bits[rr * mask.cols + cc])
+              ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
+      }
+      if (layers.zones) {
+        ctx.lineWidth = alerting ? 2 : 1;
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x, y, w, h);
+      } // contorno da bbox
+    } else if (layers.zones) {
+      ctx.lineWidth = alerting ? 3 : 2;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color + "1f";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+    }
+    if (layers.zones) {
+      ctx.font = "bold 11px ui-sans-serif, system-ui";
+      const tw = ctx.measureText(label2).width + 10;
+      ctx.fillStyle = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+      ctx.fillRect(x, y, tw, 17);
+      ctx.fillStyle = color;
+      ctx.fillText(label2, x + 5, y + 12);
+      if (
+        detailed &&
+        r?.modo === "atividade" &&
+        r.view.state !== "ATIVA" &&
+        r.view.state !== "LENTA"
+      ) {
+        ctx.font = "10px monospace";
+        ctx.fillStyle = cssVar("--cam-overlay-fg", "#cbd5e1");
+        ctx.fillText(`parada ${fmtDuration(r.view.idleMs)}`, x + 5, y + 28);
+      }
+    }
+    if (layers.boxes && detailed && r?.modo === "fadiga") drawFadigaZone(ctx, x, y, w, h, r.scene);
+  }
 }
