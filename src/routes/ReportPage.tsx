@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   windows,
   kpis,
-  deltaPct,
   heatmap,
   ranking,
   evolution,
@@ -65,7 +64,6 @@ import {
   loadAlarms,
 } from "../report/store";
 import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
-import { objClass } from "../objects/catalog";
 import {
   Button,
   IconButton,
@@ -73,31 +71,16 @@ import {
   SegmentedControl,
   Skeleton,
   useToast,
-  Tabs,
-  TabsContent,
-  ScrollArea,
   AlertDialog,
 } from "../ui";
 import "../report/alarms.css";
+import { AtividadePanel } from "./report/AtividadePanel";
+import { LeituraPanel } from "./report/LeituraPanel";
+import { ObjetosPanel, classLabel } from "./report/ObjetosPanel";
+import { FadigaPanel } from "./report/FadigaPanel";
+import { AlarmesPanel, PRIORITY_LABEL, STATE_LABEL } from "./report/AlarmesPanel";
 
 const ALARM_DAY_MS = 86_400_000;
-const PRIORITY_LABEL: Record<AlarmPriority, string> = {
-  advisory: "Informativo",
-  high: "Alta",
-  critical: "Crítica",
-};
-const STATE_LABEL: Record<AlarmState, string> = {
-  new: "Novo",
-  acknowledged: "Reconhecido",
-  forwarded: "Encaminhado",
-};
-function alarmHeatColor(priority: AlarmPriority, v: number, max: number): string {
-  if (v <= 0) return "transparent";
-  const t = 0.18 + Math.min(1, v / max) * 0.82;
-  const rgb =
-    priority === "critical" ? "239, 68, 68" : priority === "high" ? "234, 179, 8" : "56, 189, 248";
-  return `rgba(${rgb}, ${t})`;
-}
 
 type Mode = "resumo" | "atividade" | "leitura" | "objetos" | "fadiga" | "alarmes";
 const MODE_LABEL: Record<Mode, string> = {
@@ -130,52 +113,6 @@ const EMPTY_ODS: ObjectDataset = {
   startMs: Date.now(),
 };
 const EMPTY_FDS: FadigaDataset = { days: 0, postos: [], cells: [], startMs: Date.now() };
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
-function classLabel(k: string): string {
-  const c = objClass(k);
-  return c ? `${c.emoji} ${c.label}` : k;
-}
-
-function heatColor(v: number, max: number): string {
-  if (v <= 0) return "transparent";
-  const t = Math.min(1, v / max);
-  const r = Math.round(40 + t * 199),
-    g = Math.round(55 - t * 5),
-    b = Math.round(72 - t * 40);
-  return `rgba(${r}, ${g}, ${b}, ${0.18 + t * 0.82})`;
-}
-// Leitura: volume é POSITIVO → escala azul (accent), distinta da ociosidade (âmbar/vermelho).
-function readColor(v: number, max: number): string {
-  if (v <= 0) return "transparent";
-  return `rgba(56, 189, 248, ${0.12 + Math.min(1, v / max) * 0.78})`;
-}
-
-// Largura mínima do heatmap (rótulo 84px + 24 colunas de hora). Abaixo disso a ScrollArea
-// horizontal entra (R3.2); em telas largas o grid 1fr preenche, então o layout desktop não muda.
-const HEATMAP_MIN_WIDTH = 640;
-
-// Heatmap (.hm-row) com rolagem horizontal previsível em telas estreitas, sem alterar o desktop.
-// Reusa a classe .rep-matrixscroll (mesmo tratamento de impressão da matriz Setor×Classe).
-function HeatScroll({ children }: { children: ReactNode }) {
-  return (
-    <ScrollArea className="rep-matrixscroll" orientation="horizontal">
-      <div className="heatmap" style={{ minWidth: HEATMAP_MIN_WIDTH }}>
-        {children}
-      </div>
-    </ScrollArea>
-  );
-}
-
-function Delta({ v, goodWhenDown = true }: { v: number | null; goodWhenDown?: boolean }) {
-  if (v == null) return <span className="delta muted">—</span>;
-  const down = v < 0;
-  const good = goodWhenDown ? down : !down;
-  return (
-    <span className={`delta ${good ? "good" : "bad"}`}>
-      {down ? "▼" : "▲"} {Math.abs(v)}%
-    </span>
-  );
-}
 
 export function ReportPage() {
   const [mode, setMode] = useState<Mode>("resumo");
@@ -1022,1054 +959,105 @@ export function ReportPage() {
         )}
 
         {!loading && !error && !noData && mode === "atividade" && (
-          <>
-            <div className="rep-lens">
-              Visão: <b>{lens}</b>
-            </div>
-            <div className="kpi-row">
-              <div className="kpi big">
-                <div className="v">{fmtMin(k.idleMin)}</div>
-                <div className="l">
-                  tempo parado <Delta v={deltaPct(k.idleMin, kPrev.idleMin)} />
-                </div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{k.alerts}</div>
-                <div className="l">
-                  alertas <Delta v={deltaPct(k.alerts, kPrev.alerts)} />
-                </div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ fontSize: 17 }}>
-                  {k.topArea}
-                </div>
-                <div className="l">área mais parada</div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{String(k.peakHour).padStart(2, "0")}h</div>
-                <div className="l">horário crítico</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: "var(--ok)" }}>
-                  {k.activePct}%
-                </div>
-                <div className="l">tempo ativo</div>
-              </div>
-            </div>
-            <section className="insight">
-              <b>💡 Oportunidades</b> {tips.join(" · ")}
-            </section>
-            <Tabs
-              className="rep-tabs"
-              ariaLabel="Seção"
-              value={tab}
-              onValueChange={(v) => setTab(v as typeof tab)}
-              items={[
-                { value: "quando", label: "Quando para" },
-                { value: "onde", label: "Onde para" },
-                { value: "tendencia", label: "Tendência" },
-                { value: "eventos", label: `Eventos (${evt.length})` },
-              ]}
-            >
-              <TabsContent value="quando" className="rep-tabpanel">
-                <section className="panel">
-                  <h3>Quando para — horários críticos</h3>
-                  <HeatScroll>
-                    <div className="hm-axis">
-                      <span />{" "}
-                      {HOURS.map((h) => (
-                        <span key={h} className="hm-h">
-                          {h % 2 === 0 ? String(h).padStart(2, "0") : ""}
-                        </span>
-                      ))}
-                    </div>
-                    {hm.rows.map((row) => (
-                      <div className="hm-row" key={row.area}>
-                        <span className="hm-area" title={row.area}>
-                          {row.area}
-                        </span>
-                        {row.hours.map((v, h) => (
-                          <span
-                            key={h}
-                            className="hm-cell"
-                            style={{ background: heatColor(v, hm.max) }}
-                            title={`${row.area} · ${String(h).padStart(2, "0")}h · ${fmtMin(v)} parado`}
-                          />
-                        ))}
-                      </div>
-                    ))}
-                    <div className="hm-legend">
-                      <span>menos</span>
-                      <i className="hm-scale" />
-                      <span>mais ocioso</span>
-                    </div>
-                  </HeatScroll>
-                </section>
-              </TabsContent>
-              <TabsContent value="onde" className="rep-tabpanel">
-                <div className="rep-2col">
-                  <section className="panel">
-                    <h3>Por área</h3>
-                    {rank.rows.length === 0 && (
-                      <p className="empty-note">Sem ociosidade no período.</p>
-                    )}
-                    {rank.rows.map((r) => (
-                      <div className="rank-row" key={r.area}>
-                        <div className="rank-head">
-                          <span>{r.area}</span>
-                          <span className="rank-val">
-                            {fmtMin(r.idleMin)} · {r.alerts} alertas
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i style={{ width: `${Math.round((r.idleMin / rank.max) * 100)}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                  <section className="panel">
-                    <h3>Por atividade</h3>
-                    {byAtiv.rows.length === 0 && <p className="empty-note">Sem dados.</p>}
-                    {byAtiv.rows.map((r) => (
-                      <div className="rank-row" key={r.atividade}>
-                        <div className="rank-head">
-                          <span>{r.atividade}</span>
-                          <span className="rank-val">
-                            {fmtMin(r.idleMin)} · {r.alerts} alertas
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i style={{ width: `${Math.round((r.idleMin / byAtiv.max) * 100)}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                </div>
-              </TabsContent>
-              <TabsContent value="tendencia" className="rep-tabpanel">
-                <div className="rep-2col">
-                  <section className="panel">
-                    <h3>Tendência (14 dias)</h3>
-                    <div className="evo">
-                      {evo.bars.map((b) => (
-                        <div
-                          className="evo-col"
-                          key={b.dayIndex}
-                          title={`${b.label} · ${fmtMin(b.idleMin)} parado`}
-                        >
-                          <div
-                            className="evo-bar"
-                            style={{
-                              height: `${Math.max(2, Math.round((b.idleMin / evo.max) * 100))}%`,
-                            }}
-                          />
-                          <span className="evo-lbl">{b.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                  <section className="panel">
-                    <h3>Por turno</h3>
-                    {(["Manhã", "Tarde", "Noite"] as Shift[]).map((s) => (
-                      <div className="rank-row" key={s}>
-                        <div className="rank-head">
-                          <span>{s}</span>
-                          <span className="rank-val">{fmtMin(byShiftA.m[s])}</span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            style={{
-                              width: `${Math.round((byShiftA.m[s] / byShiftA.max) * 100)}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                </div>
-              </TabsContent>
-              <TabsContent value="eventos" className="rep-tabpanel">
-                <section className="panel panel-events">
-                  <h3>Eventos — alertas no período ({evt.length})</h3>
-                  <ScrollArea className="rep-tablescroll">
-                    <table className="rtable">
-                      <thead>
-                        <tr>
-                          <th>Data / hora</th>
-                          <th>Área</th>
-                          <th>Câmera</th>
-                          <th>Duração</th>
-                          <th>Turno</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {evt.map((r, i) => (
-                          <tr key={i}>
-                            <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
-                            <td>{r.area}</td>
-                            <td className="muted">{r.camera}</td>
-                            <td className="mono">{fmtMin(r.durationMin)}</td>
-                            <td>{r.shift}</td>
-                          </tr>
-                        ))}
-                        {evt.length === 0 && (
-                          <tr>
-                            <td colSpan={5} className="empty-note">
-                              Nenhum alerta no período.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                </section>
-              </TabsContent>
-            </Tabs>
-            <div className="rep-foot">
-              Histórico (Postgres) · indicadores agregados, sem imagens ·{" "}
-              <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">
-                limpar histórico
-              </button>
-            </div>
-          </>
+          <AtividadePanel
+            lens={lens}
+            k={k}
+            kPrev={kPrev}
+            tips={tips}
+            hm={hm}
+            rank={rank}
+            byAtiv={byAtiv}
+            evo={evo}
+            byShiftA={byShiftA}
+            evt={evt}
+            tab={tab}
+            onTabChange={setTab}
+            busy={busy}
+            onClear={() => setConfirmClear(true)}
+          />
         )}
 
         {!loading && !error && !noData && isReading && (
-          <>
-            <div className="rep-lens">
-              Visão: <b>{lens}</b>
-            </div>
-            <div className="kpi-row">
-              <div className="kpi big">
-                <div className="v">{rk.boxes.toLocaleString("pt-BR")}</div>
-                <div className="l">
-                  caixas lidas <Delta v={deltaPct(rk.boxes, rkPrev.boxes)} goodWhenDown={false} />
-                </div>
-              </div>
-              <div className="kpi big">
-                <div
-                  className="v"
-                  style={{
-                    color:
-                      rk.ratePct >= 95
-                        ? "var(--ok)"
-                        : rk.ratePct >= 80
-                          ? "var(--idle)"
-                          : "var(--alert)",
-                  }}
-                >
-                  {rk.ratePct}%
-                </div>
-                <div className="l">taxa de leitura</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: rk.noReads > 0 ? "var(--alert)" : undefined }}>
-                  {rk.noReads.toLocaleString("pt-BR")}
-                </div>
-                <div className="l">no-reads</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ fontSize: 15 }}>
-                  {rk.topPonto}
-                </div>
-                <div className="l">ponto de maior volume</div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{String(rk.peakHour).padStart(2, "0")}h</div>
-                <div className="l">horário de pico</div>
-              </div>
-            </div>
-            <section className="insight">
-              <b>💡 Leitura</b> {rtips.join(" · ")}
-            </section>
-            <Tabs
-              className="rep-tabs"
-              ariaLabel="Seção"
-              value={tab}
-              onValueChange={(v) => setTab(v as typeof tab)}
-              items={[
-                { value: "quando", label: "Quando lê" },
-                { value: "onde", label: "Onde lê" },
-                { value: "tendencia", label: "Tendência" },
-                { value: "eventos", label: `Leituras (${revt.length})` },
-              ]}
-            >
-              <TabsContent value="quando" className="rep-tabpanel">
-                <section className="panel">
-                  <h3>Quando lê — volume por hora</h3>
-                  <HeatScroll>
-                    <div className="hm-axis">
-                      <span />{" "}
-                      {HOURS.map((h) => (
-                        <span key={h} className="hm-h">
-                          {h % 2 === 0 ? String(h).padStart(2, "0") : ""}
-                        </span>
-                      ))}
-                    </div>
-                    {rhm.rows.map((row) => (
-                      <div className="hm-row" key={row.ponto}>
-                        <span className="hm-area" title={row.ponto}>
-                          {row.ponto}
-                        </span>
-                        {row.hours.map((v, h) => (
-                          <span
-                            key={h}
-                            className="hm-cell"
-                            style={{ background: readColor(v, rhm.max) }}
-                            title={`${row.ponto} · ${String(h).padStart(2, "0")}h · ${v} caixas`}
-                          />
-                        ))}
-                      </div>
-                    ))}
-                    <div className="hm-legend">
-                      <span>menos</span>
-                      <i className="hm-scale read" />
-                      <span>mais volume</span>
-                    </div>
-                  </HeatScroll>
-                </section>
-              </TabsContent>
-              <TabsContent value="onde" className="rep-tabpanel">
-                <div className="rep-2col">
-                  <section className="panel">
-                    <h3>Por ponto</h3>
-                    {rrank.rows.length === 0 && (
-                      <p className="empty-note">Sem leituras no período.</p>
-                    )}
-                    {rrank.rows.map((r) => (
-                      <div className="rank-row" key={r.ponto}>
-                        <div className="rank-head">
-                          <span>{r.ponto}</span>
-                          <span className="rank-val">
-                            {r.boxes.toLocaleString("pt-BR")} caixas · taxa {r.ratePct}%
-                            {r.noReads > 0 ? ` · ${r.noReads} no-read` : ""}
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            className="read"
-                            style={{ width: `${Math.round((r.boxes / rrank.max) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                  <section className="panel">
-                    <h3>Contribuição por câmera</h3>
-                    {byCam.rows.length === 0 && <p className="empty-note">Sem dados.</p>}
-                    {byCam.rows.map((r) => (
-                      <div className="rank-row" key={r.camera}>
-                        <div className="rank-head">
-                          <span>{r.camera}</span>
-                          <span className="rank-val">
-                            {r.reads.toLocaleString("pt-BR")} leituras
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            className="read"
-                            style={{ width: `${Math.round((r.reads / byCam.max) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                </div>
-              </TabsContent>
-              <TabsContent value="tendencia" className="rep-tabpanel">
-                <div className="rep-2col">
-                  <section className="panel">
-                    <h3>Tendência (14 dias)</h3>
-                    <div className="evo">
-                      {revo.bars.map((b) => (
-                        <div
-                          className="evo-col"
-                          key={b.dayIndex}
-                          title={`${b.label} · ${b.boxes} caixas`}
-                        >
-                          <div
-                            className="evo-bar read"
-                            style={{
-                              height: `${Math.max(2, Math.round((b.boxes / revo.max) * 100))}%`,
-                            }}
-                          />
-                          <span className="evo-lbl">{b.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                  <section className="panel">
-                    <h3>Por turno</h3>
-                    {(["Manhã", "Tarde", "Noite"] as Shift[]).map((s) => (
-                      <div className="rank-row" key={s}>
-                        <div className="rank-head">
-                          <span>{s}</span>
-                          <span className="rank-val">
-                            {byShiftR.m[s].toLocaleString("pt-BR")} caixas
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            className="read"
-                            style={{
-                              width: `${Math.round((byShiftR.m[s] / byShiftR.max) * 100)}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                </div>
-              </TabsContent>
-              <TabsContent value="eventos" className="rep-tabpanel">
-                <section className="panel panel-events">
-                  <h3>Leituras — códigos no período ({revt.length})</h3>
-                  <ScrollArea className="rep-tablescroll">
-                    <table className="rtable">
-                      <thead>
-                        <tr>
-                          <th>Data / hora</th>
-                          <th>Ponto</th>
-                          <th>Código</th>
-                          <th>Câmeras</th>
-                          <th>Turno</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {revt.map((r, i) => (
-                          <tr key={i}>
-                            <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
-                            <td>{r.ponto}</td>
-                            <td className="mono">{r.code}</td>
-                            <td className="mono">{r.cameras > 1 ? `${r.cameras}×` : "1"}</td>
-                            <td>{r.shift}</td>
-                          </tr>
-                        ))}
-                        {revt.length === 0 && (
-                          <tr>
-                            <td colSpan={5} className="empty-note">
-                              Nenhuma leitura no período.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                </section>
-              </TabsContent>
-            </Tabs>
-            <div className="rep-foot">
-              Histórico (Postgres) · indicadores agregados, sem imagens ·{" "}
-              <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">
-                limpar histórico
-              </button>
-            </div>
-          </>
+          <LeituraPanel
+            lens={lens}
+            rk={rk}
+            rkPrev={rkPrev}
+            rtips={rtips}
+            rhm={rhm}
+            rrank={rrank}
+            byCam={byCam}
+            revo={revo}
+            byShiftR={byShiftR}
+            revt={revt}
+            tab={tab}
+            onTabChange={setTab}
+            busy={busy}
+            onClear={() => setConfirmClear(true)}
+          />
         )}
 
         {!loading && !error && !noData && isObjects && (
-          <>
-            <div className="rep-lens">
-              Visão: <b>{lens}</b>
-            </div>
-            <div className="kpi-row">
-              <div className="kpi big">
-                <div className="v">{ok.avgCount}</div>
-                <div className="l">objetos médios em cena</div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{ok.peak}</div>
-                <div className="l">pico simultâneo</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ fontSize: 17 }}>
-                  {classLabel(ok.topClasse)}
-                </div>
-                <div className="l">objeto predominante</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: "var(--accent)" }}>
-                  {ok.presenceTopPct}%
-                </div>
-                <div className="l">presença (predominante)</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: oLoads ? "var(--idle)" : undefined }}>
-                  {oLoads}
-                </div>
-                <div className="l">carregamentos</div>
-              </div>
-            </div>
-            <section className="insight">
-              <b>💡 Objetos</b> {otips.join(" · ")}
-            </section>
-            <Tabs
-              className="rep-tabs"
-              ariaLabel="Seção"
-              value={tab}
-              onValueChange={(v) => setTab(v as typeof tab)}
-              items={[
-                { value: "quando", label: "Quando" },
-                { value: "onde", label: "Setor × Classe" },
-                { value: "tendencia", label: "Tendência" },
-                { value: "eventos", label: `Eventos (${oevt.length})` },
-              ]}
-            >
-              <TabsContent value="quando" className="rep-tabpanel">
-                <section className="panel">
-                  <h3>Quando — contagem média por hora</h3>
-                  <HeatScroll>
-                    <div className="hm-axis">
-                      <span />{" "}
-                      {HOURS.map((h) => (
-                        <span key={h} className="hm-h">
-                          {h % 2 === 0 ? String(h).padStart(2, "0") : ""}
-                        </span>
-                      ))}
-                    </div>
-                    {ohm.rows.map((row) => (
-                      <div className="hm-row" key={row.classe}>
-                        <span className="hm-area" title={row.classe}>
-                          {classLabel(row.classe)}
-                        </span>
-                        {row.hours.map((v, h) => (
-                          <span
-                            key={h}
-                            className="hm-cell"
-                            style={{ background: readColor(v, ohm.max) }}
-                            title={`${classLabel(row.classe)} · ${String(h).padStart(2, "0")}h · ${v} em média`}
-                          />
-                        ))}
-                      </div>
-                    ))}
-                    <div className="hm-legend">
-                      <span>menos</span>
-                      <i className="hm-scale read" />
-                      <span>mais objetos</span>
-                    </div>
-                  </HeatScroll>
-                </section>
-              </TabsContent>
-              <TabsContent value="onde" className="rep-tabpanel">
-                <div className="rep-2col">
-                  <section className="panel">
-                    <h3>Presença por Setor × Classe (% do tempo)</h3>
-                    <ScrollArea className="rep-matrixscroll" orientation="both">
-                      <table className="obj-matrix">
-                        <thead>
-                          <tr>
-                            <th>Setor</th>
-                            {odataset.classes.map((cl) => (
-                              <th key={cl} title={cl}>
-                                {objClass(cl)?.emoji ?? cl}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {presSetores.map((s) => (
-                            <tr key={s}>
-                              <td className="obj-setor">{s}</td>
-                              {odataset.classes.map((cl) => {
-                                const v = opres[s]?.[cl] ?? 0;
-                                return (
-                                  <td key={cl} className={v >= 50 ? "on" : v > 0 ? "" : "off"}>
-                                    {v ? `${v}%` : "·"}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
-                          {presSetores.length === 0 && (
-                            <tr>
-                              <td colSpan={odataset.classes.length + 1} className="empty-note">
-                                Sem dados.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </ScrollArea>
-                  </section>
-                  <section className="panel">
-                    <h3>Por setor (média em cena)</h3>
-                    {orank.rows.length === 0 && (
-                      <p className="empty-note">Sem objetos no período.</p>
-                    )}
-                    {orank.rows.map((r) => (
-                      <div className="rank-row" key={r.setor}>
-                        <div className="rank-head">
-                          <span>{r.setor}</span>
-                          <span className="rank-val">
-                            média {r.avg} · pico {r.peak}
-                          </span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            className="read"
-                            style={{ width: `${Math.round((r.avg / orank.max) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                    <h3 style={{ marginTop: 12 }}>Por classe</h3>
-                    {obyClass.rows.map((r) => (
-                      <div className="rank-row" key={r.classe}>
-                        <div className="rank-head">
-                          <span>{classLabel(r.classe)}</span>
-                          <span className="rank-val">média {r.avg}</span>
-                        </div>
-                        <div className="rank-bar">
-                          <i
-                            className="read"
-                            style={{ width: `${Math.round((r.avg / obyClass.max) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                </div>
-              </TabsContent>
-              <TabsContent value="tendencia" className="rep-tabpanel">
-                <section className="panel">
-                  <h3>Tendência (14 dias) — objetos médios/dia</h3>
-                  <div className="evo">
-                    {oevo.bars.map((b) => (
-                      <div
-                        className="evo-col"
-                        key={b.dayIndex}
-                        title={`${b.label} · ${b.avg} em média`}
-                      >
-                        <div
-                          className="evo-bar read"
-                          style={{
-                            height: `${Math.max(2, Math.round((b.avg / oevo.max) * 100))}%`,
-                          }}
-                        />
-                        <span className="evo-lbl">{b.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </TabsContent>
-              <TabsContent value="eventos" className="rep-tabpanel">
-                <section className="panel panel-events">
-                  <h3>Eventos — presença e carregamentos ({oevt.length})</h3>
-                  <ScrollArea className="rep-tablescroll">
-                    <table className="rtable">
-                      <thead>
-                        <tr>
-                          <th>Data / hora</th>
-                          <th>Tipo</th>
-                          <th>Setor</th>
-                          <th>Classe</th>
-                          <th>Turno</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {oevt.map((r, i) => (
-                          <tr key={i}>
-                            <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
-                            <td>{r.type}</td>
-                            <td>{r.setor}</td>
-                            <td>{classLabel(r.classe)}</td>
-                            <td>{r.shift}</td>
-                          </tr>
-                        ))}
-                        {oevt.length === 0 && (
-                          <tr>
-                            <td colSpan={5} className="empty-note">
-                              Nenhum evento no período.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                </section>
-              </TabsContent>
-            </Tabs>
-            <div className="rep-foot">
-              Histórico (Postgres) · indicadores agregados, sem imagens ·{" "}
-              <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">
-                limpar histórico
-              </button>
-            </div>
-          </>
+          <ObjetosPanel
+            lens={lens}
+            ok={ok}
+            oLoads={oLoads}
+            otips={otips}
+            ohm={ohm}
+            opres={opres}
+            orank={orank}
+            obyClass={obyClass}
+            oevo={oevo}
+            oevt={oevt}
+            classes={odataset.classes}
+            presSetores={presSetores}
+            tab={tab}
+            onTabChange={setTab}
+            busy={busy}
+            onClear={() => setConfirmClear(true)}
+          />
         )}
 
         {!loading && !error && !noData && isFadiga && (
-          <>
-            <div className="rep-lens">
-              Visão: <b>{lens}</b>
-            </div>
-            <div className="kpi-row">
-              <div className="kpi big">
-                <div
-                  className="v"
-                  style={{
-                    color:
-                      fk.alertPct <= 2
-                        ? "var(--ok)"
-                        : fk.alertPct <= 10
-                          ? "var(--idle)"
-                          : "var(--alert)",
-                  }}
-                >
-                  {fk.alertPct}%
-                </div>
-                <div className="l">tempo em alerta</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: fOccFadiga ? "var(--idle)" : undefined }}>
-                  {fOccFadiga}
-                </div>
-                <div className="l">ocorrências de fadiga</div>
-              </div>
-              <div className="kpi big">
-                <div className="v" style={{ color: fOccCelular ? "var(--idle)" : undefined }}>
-                  {fOccCelular}
-                </div>
-                <div className="l">ocorrências de celular</div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{fBocejos}</div>
-                <div className="l">bocejos</div>
-              </div>
-              <div className="kpi big">
-                <div className="v">{String(fk.peakHour).padStart(2, "0")}h</div>
-                <div className="l">horário crítico</div>
-              </div>
-            </div>
-            <section className="insight">
-              <b>💡 Operador</b> {ftips.join(" · ")}
-            </section>
-            <Tabs
-              className="rep-tabs"
-              ariaLabel="Seção"
-              value={tab}
-              onValueChange={(v) => setTab(v as typeof tab)}
-              items={[
-                { value: "quando", label: "Quando" },
-                { value: "tendencia", label: "Tendência" },
-                { value: "eventos", label: `Ocorrências (${fevt.length})` },
-              ]}
-            >
-              {/* "quando" e "onde" (fallback p/ estado herdado de outro modo) mostram o mesmo heatmap. */}
-              {(["quando", "onde"] as const).map((v) => (
-                <TabsContent key={v} value={v} className="rep-tabpanel">
-                  <section className="panel">
-                    <h3>Quando — tempo de risco por hora (min)</h3>
-                    <HeatScroll>
-                      <div className="hm-axis">
-                        <span />{" "}
-                        {HOURS.map((h) => (
-                          <span key={h} className="hm-h">
-                            {h % 2 === 0 ? String(h).padStart(2, "0") : ""}
-                          </span>
-                        ))}
-                      </div>
-                      {fhm.rows.map((row) => (
-                        <div className="hm-row" key={row.label}>
-                          <span className="hm-area" title={row.label}>
-                            {row.label}
-                          </span>
-                          {row.hours.map((v2, h) => (
-                            <span
-                              key={h}
-                              className="hm-cell"
-                              style={{ background: heatColor(v2, fhm.max) }}
-                              title={`${row.label} · ${String(h).padStart(2, "0")}h · ${v2} min`}
-                            />
-                          ))}
-                        </div>
-                      ))}
-                      <div className="hm-legend">
-                        <span>menos</span>
-                        <i className="hm-scale" />
-                        <span>mais risco</span>
-                      </div>
-                    </HeatScroll>
-                  </section>
-                </TabsContent>
-              ))}
-              <TabsContent value="tendencia" className="rep-tabpanel">
-                <section className="panel">
-                  <h3>Tendência (14 dias) — % do tempo em alerta</h3>
-                  <div className="evo">
-                    {fevo.bars.map((b) => (
-                      <div
-                        className="evo-col"
-                        key={b.dayIndex}
-                        title={`${b.label} · ${b.pct}% em alerta`}
-                      >
-                        <div
-                          className="evo-bar"
-                          style={{
-                            height: `${Math.max(2, Math.round((b.pct / fevo.max) * 100))}%`,
-                          }}
-                        />
-                        <span className="evo-lbl">{b.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </TabsContent>
-              <TabsContent value="eventos" className="rep-tabpanel">
-                <section className="panel panel-events">
-                  <h3>Ocorrências de risco ({fevt.length})</h3>
-                  <ScrollArea className="rep-tablescroll">
-                    <table className="rtable">
-                      <thead>
-                        <tr>
-                          <th>Data / hora</th>
-                          <th>Posto</th>
-                          <th>Tipo</th>
-                          <th>Turno</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {fevt.map((r, i) => (
-                          <tr key={i}>
-                            <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
-                            <td>{r.posto}</td>
-                            <td>{r.type}</td>
-                            <td>{r.shift}</td>
-                          </tr>
-                        ))}
-                        {fevt.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="empty-note">
-                              Nenhuma ocorrência no período.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                </section>
-              </TabsContent>
-            </Tabs>
-            <div className="rep-foot">
-              Histórico (Postgres) · indicadores agregados, sem imagens ·{" "}
-              <button onClick={() => setConfirmClear(true)} disabled={busy} className="linkbtn">
-                limpar histórico
-              </button>
-            </div>
-          </>
+          <FadigaPanel
+            lens={lens}
+            fk={fk}
+            fOccFadiga={fOccFadiga}
+            fOccCelular={fOccCelular}
+            fBocejos={fBocejos}
+            ftips={ftips}
+            fhm={fhm}
+            fevo={fevo}
+            fevt={fevt}
+            tab={tab}
+            onTabChange={setTab}
+            busy={busy}
+            onClear={() => setConfirmClear(true)}
+          />
         )}
 
         {!loading && !error && isAlarmes && (
-          <>
-            <div className="rep-lens">
-              Alarmes · <b>{PERIOD_LABEL[period]}</b>
-              {alarmPriority !== "Todas" ? <> · {PRIORITY_LABEL[alarmPriority]}</> : null}
-              {alarmState !== "Todos" ? <> · {STATE_LABEL[alarmState]}</> : null}
-            </div>
-            {alarms.length === 0 ? (
-              <div className="dash-empty">
-                <p>
-                  <b>Sem alarmes registrados.</b>
-                </p>
-                <p>
-                  A fila de alarmes aparece aqui conforme a política dispara eventos na Central.
-                </p>
-                <p className="muted">
-                  Apenas metadados (hora, câmera/zona, tipo, prioridade, estado) — sem imagens
-                  (LGPD).
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="kpi-row">
-                  <div className="kpi big">
-                    <div className="v">{ak.total}</div>
-                    <div className="l">alarmes no período</div>
-                  </div>
-                  <div className="kpi big">
-                    <div
-                      className="v"
-                      style={{ color: ak.critical ? "var(--state-critical)" : undefined }}
-                    >
-                      {ak.critical}
-                    </div>
-                    <div className="l">críticos</div>
-                  </div>
-                  <div className="kpi big">
-                    <div className="v" style={{ color: ak.high ? "var(--state-warn)" : undefined }}>
-                      {ak.high}
-                    </div>
-                    <div className="l">alta</div>
-                  </div>
-                  <div className="kpi big">
-                    <div
-                      className="v"
-                      style={{ color: ak.advisory ? "var(--state-info)" : undefined }}
-                    >
-                      {ak.advisory}
-                    </div>
-                    <div className="l">informativos</div>
-                  </div>
-                  <div className="kpi big">
-                    <div className="v" style={{ color: ak.news ? "var(--state-warn)" : undefined }}>
-                      {ak.news}
-                    </div>
-                    <div className="l">em aberto</div>
-                  </div>
-                </div>
-                <section className="insight">
-                  <b>🔔 Alarmes</b> {aTips.join(" · ")}
-                </section>
-                <div className="rep-2col" ref={trendRef}>
-                  <section className="panel">
-                    <h3>
-                      Tendência (14 dias){" "}
-                      <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-                        — clique p/ filtrar o dia
-                      </span>
-                    </h3>
-                    <div className="evo">
-                      {aTrend.bars.map((b) => {
-                        const active = !!(
-                          (alarmWindow && alarmWindow.from === b.dayStart) ||
-                          selDay === b.dayStart
-                        );
-                        return (
-                          <button
-                            type="button"
-                            className={`evo-col clk ${active ? "sel" : ""}`}
-                            key={b.dayStart}
-                            title={`${b.label} · ${b.count} alarme(s)`}
-                            onClick={() => pickDay(b.dayStart, b.label)}
-                            aria-pressed={active}
-                          >
-                            <div
-                              className={`evo-bar ${b.critical > 0 ? "crit" : ""}`}
-                              style={{
-                                height: `${Math.max(2, Math.round((b.count / aTrend.max) * 100))}%`,
-                              }}
-                            />
-                            <span className="evo-lbl">{b.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </section>
-                  <section className="panel">
-                    <h3>
-                      Quando — prioridade × hora{" "}
-                      <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-                        — clique p/ filtrar a hora
-                      </span>
-                    </h3>
-                    <HeatScroll>
-                      <div className="hm-axis">
-                        <span />{" "}
-                        {HOURS.map((h) => (
-                          <span key={h} className="hm-h">
-                            {h % 2 === 0 ? String(h).padStart(2, "0") : ""}
-                          </span>
-                        ))}
-                      </div>
-                      {aHeat.rows.map((row) => (
-                        <div className="hm-row" key={row.priority}>
-                          <span className="hm-area" title={PRIORITY_LABEL[row.priority]}>
-                            {PRIORITY_LABEL[row.priority]}
-                          </span>
-                          {row.hours.map((v, h) => {
-                            const sel = alarmHour === h || selHour === h;
-                            return (
-                              <span
-                                key={h}
-                                className={`hm-cell clk ${sel ? "sel" : ""}`}
-                                style={{ background: alarmHeatColor(row.priority, v, aHeat.max) }}
-                                title={`${PRIORITY_LABEL[row.priority]} · ${String(h).padStart(2, "0")}h · ${v} alarme(s)`}
-                                onClick={() => pickHour(h)}
-                              />
-                            );
-                          })}
-                        </div>
-                      ))}
-                      <div className="hm-legend">
-                        <span>menos</span>
-                        <i className="hm-scale" />
-                        <span>mais alarmes</span>
-                      </div>
-                    </HeatScroll>
-                  </section>
-                </div>
-                <section className="panel panel-events">
-                  <div className="alarm-toolbar">
-                    <h3 style={{ margin: 0 }}>Eventos ({alarmsView.length})</h3>
-                    {(alarmWindow || alarmHour != null) && (
-                      <span className="alarm-windownote">
-                        {alarmWindow
-                          ? `Dia ${alarmWindow.label}`
-                          : `${String(alarmHour).padStart(2, "0")}h`}
-                        <button className="linkbtn" onClick={clearAlarmSel}>
-                          limpar
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                  <ScrollArea className="alarm-list-scroll">
-                    <div className="alarm-list">
-                      {alarmsView.map((e) => (
-                        <button
-                          type="button"
-                          key={e.id}
-                          className={`alarm-card prio-${e.priority} ${selAlarm === e.id ? "sel" : ""}`}
-                          onClick={() => pickAlarm(e.id)}
-                          aria-pressed={selAlarm === e.id}
-                        >
-                          <span className="alarm-time">
-                            {new Date(e.ts).toLocaleString("pt-BR")}
-                          </span>
-                          <span className="alarm-body">
-                            <span className="alarm-text">{e.text}</span>
-                            <span className="alarm-loc">
-                              <span>{e.cameraLabel ?? e.cameraId ?? "câmera —"}</span>
-                              {e.zona ? (
-                                <>
-                                  <span className="sep">·</span>
-                                  <span>{e.zona}</span>
-                                </>
-                              ) : null}
-                              <span className="sep">·</span>
-                              <span>{e.tipo}</span>
-                              {e.ackBy ? (
-                                <>
-                                  <span className="sep">·</span>
-                                  <span>por {e.ackBy}</span>
-                                </>
-                              ) : null}
-                            </span>
-                          </span>
-                          <span className="alarm-badges">
-                            <span className={`alarm-badge b-${e.priority}`}>
-                              {PRIORITY_LABEL[e.priority]}
-                            </span>
-                            <span className={`alarm-badge s-${e.state}`}>
-                              {STATE_LABEL[e.state]}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                      {alarmsView.length === 0 && (
-                        <p className="empty-note">Nenhum alarme com os filtros atuais.</p>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </section>
-                <div className="rep-foot">
-                  Eventos de alarme (B1) · só metadados, sem imagens (LGPD) ·{" "}
-                  <button onClick={refresh} className="linkbtn">
-                    recarregar
-                  </button>
-                </div>
-              </>
-            )}
-          </>
+          <AlarmesPanel
+            periodLabel={PERIOD_LABEL[period]}
+            alarmPriority={alarmPriority}
+            alarmState={alarmState}
+            alarms={alarms}
+            ak={ak}
+            aTips={aTips}
+            aTrend={aTrend}
+            aHeat={aHeat}
+            alarmsView={alarmsView}
+            alarmWindow={alarmWindow}
+            alarmHour={alarmHour}
+            selAlarm={selAlarm}
+            selDay={selDay}
+            selHour={selHour}
+            trendRef={trendRef}
+            pickDay={pickDay}
+            pickHour={pickHour}
+            pickAlarm={pickAlarm}
+            clearAlarmSel={clearAlarmSel}
+            onRefresh={refresh}
+          />
         )}
       </div>
 

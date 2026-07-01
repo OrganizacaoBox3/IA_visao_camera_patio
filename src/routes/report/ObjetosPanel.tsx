@@ -1,0 +1,218 @@
+import {
+  objectKpis,
+  objectHeatmap,
+  objectPresence,
+  objectRanking,
+  objectByClass,
+  objectEvolution,
+  type ObjectEventRow,
+} from "../../report/mock";
+import { objClass } from "../../objects/catalog";
+import { Tabs, TabsContent, ScrollArea } from "../../ui";
+import { RepLens, HistoryFooter, type RepTab } from "./chrome";
+import { KpiRow, Kpi } from "./KpiRow";
+import { Heatmap, readColor } from "./Heatmap";
+import { RankingBars } from "./RankingBars";
+import { TrendChart } from "./TrendChart";
+import { EventsTable } from "./EventsTable";
+
+export function classLabel(k: string): string {
+  const c = objClass(k);
+  return c ? `${c.emoji} ${c.label}` : k;
+}
+
+type OKpis = ReturnType<typeof objectKpis>;
+
+export function ObjetosPanel({
+  lens,
+  ok,
+  oLoads,
+  otips,
+  ohm,
+  opres,
+  orank,
+  obyClass,
+  oevo,
+  oevt,
+  classes,
+  presSetores,
+  tab,
+  onTabChange,
+  busy,
+  onClear,
+}: {
+  lens: string;
+  ok: OKpis;
+  oLoads: number;
+  otips: string[];
+  ohm: ReturnType<typeof objectHeatmap>;
+  opres: ReturnType<typeof objectPresence>;
+  orank: ReturnType<typeof objectRanking>;
+  obyClass: ReturnType<typeof objectByClass>;
+  oevo: ReturnType<typeof objectEvolution>;
+  oevt: ObjectEventRow[];
+  classes: string[];
+  presSetores: string[];
+  tab: RepTab;
+  onTabChange: (v: RepTab) => void;
+  busy: boolean;
+  onClear: () => void;
+}) {
+  return (
+    <>
+      <RepLens lens={lens} />
+      <KpiRow>
+        <Kpi value={ok.avgCount} label="objetos médios em cena" />
+        <Kpi value={ok.peak} label="pico simultâneo" />
+        <Kpi value={classLabel(ok.topClasse)} label="objeto predominante" valueStyle={{ fontSize: 17 }} />
+        <Kpi
+          value={`${ok.presenceTopPct}%`}
+          label="presença (predominante)"
+          valueStyle={{ color: "var(--accent)" }}
+        />
+        <Kpi
+          value={oLoads}
+          label="carregamentos"
+          valueStyle={{ color: oLoads ? "var(--idle)" : undefined }}
+        />
+      </KpiRow>
+      <section className="insight">
+        <b>💡 Objetos</b> {otips.join(" · ")}
+      </section>
+      <Tabs
+        className="rep-tabs"
+        ariaLabel="Seção"
+        value={tab}
+        onValueChange={(v) => onTabChange(v as RepTab)}
+        items={[
+          { value: "quando", label: "Quando" },
+          { value: "onde", label: "Setor × Classe" },
+          { value: "tendencia", label: "Tendência" },
+          { value: "eventos", label: `Eventos (${oevt.length})` },
+        ]}
+      >
+        <TabsContent value="quando" className="rep-tabpanel">
+          <section className="panel">
+            <h3>Quando — contagem média por hora</h3>
+            <Heatmap
+              rows={ohm.rows.map((row) => ({
+                key: row.classe,
+                label: classLabel(row.classe),
+                title: row.classe,
+                hours: row.hours,
+              }))}
+              cellColor={(_, v) => readColor(v, ohm.max)}
+              cellTitle={(row, v, h) =>
+                `${classLabel(row.key)} · ${String(h).padStart(2, "0")}h · ${v} em média`
+              }
+              legendLeft="menos"
+              legendRight="mais objetos"
+              scaleRead
+            />
+          </section>
+        </TabsContent>
+        <TabsContent value="onde" className="rep-tabpanel">
+          <div className="rep-2col">
+            <section className="panel">
+              <h3>Presença por Setor × Classe (% do tempo)</h3>
+              <ScrollArea className="rep-matrixscroll" orientation="both">
+                <table className="obj-matrix">
+                  <thead>
+                    <tr>
+                      <th>Setor</th>
+                      {classes.map((cl) => (
+                        <th key={cl} title={cl}>
+                          {objClass(cl)?.emoji ?? cl}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {presSetores.map((s) => (
+                      <tr key={s}>
+                        <td className="obj-setor">{s}</td>
+                        {classes.map((cl) => {
+                          const v = opres[s]?.[cl] ?? 0;
+                          return (
+                            <td key={cl} className={v >= 50 ? "on" : v > 0 ? "" : "off"}>
+                              {v ? `${v}%` : "·"}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {presSetores.length === 0 && (
+                      <tr>
+                        <td colSpan={classes.length + 1} className="empty-note">
+                          Sem dados.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </ScrollArea>
+            </section>
+            <section className="panel">
+              <h3>Por setor (média em cena)</h3>
+              <RankingBars
+                rows={orank.rows.map((r) => ({
+                  key: r.setor,
+                  label: r.setor,
+                  value: r.avg,
+                  valueText: `média ${r.avg} · pico ${r.peak}`,
+                }))}
+                max={orank.max}
+                read
+                emptyNote="Sem objetos no período."
+              />
+              <h3 style={{ marginTop: 12 }}>Por classe</h3>
+              <RankingBars
+                rows={obyClass.rows.map((r) => ({
+                  key: r.classe,
+                  label: classLabel(r.classe),
+                  value: r.avg,
+                  valueText: `média ${r.avg}`,
+                }))}
+                max={obyClass.max}
+                read
+              />
+            </section>
+          </div>
+        </TabsContent>
+        <TabsContent value="tendencia" className="rep-tabpanel">
+          <section className="panel">
+            <h3>Tendência (14 dias) — objetos médios/dia</h3>
+            <TrendChart
+              bars={oevo.bars.map((b) => ({
+                key: b.dayIndex,
+                label: b.label,
+                value: b.avg,
+                title: `${b.label} · ${b.avg} em média`,
+              }))}
+              max={oevo.max}
+              read
+            />
+          </section>
+        </TabsContent>
+        <TabsContent value="eventos" className="rep-tabpanel">
+          <EventsTable
+            title={`Eventos — presença e carregamentos (${oevt.length})`}
+            headers={["Data / hora", "Tipo", "Setor", "Classe", "Turno"]}
+            rows={oevt}
+            emptyNote="Nenhum evento no período."
+            renderCells={(r) => (
+              <>
+                <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
+                <td>{r.type}</td>
+                <td>{r.setor}</td>
+                <td>{classLabel(r.classe)}</td>
+                <td>{r.shift}</td>
+              </>
+            )}
+          />
+        </TabsContent>
+      </Tabs>
+      <HistoryFooter onClear={onClear} busy={busy} />
+    </>
+  );
+}
