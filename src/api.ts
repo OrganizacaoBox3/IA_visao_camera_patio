@@ -271,3 +271,59 @@ export const getTripwires = (cameraId: string) =>
 // Auth: perfil de configuração (engenharia) — coerente com o gate de edição no front.
 export const saveTripwires = (cameraId: string, tripwires: Tripwire[]) =>
   apiPut<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`, { tripwires });
+
+// ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
+// CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
+// POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`
+// que a DashboardPage já escuta — o client só dispara a chamada HTTP.
+// SEGURANÇA/LGPD: `url` é SENSÍVEL (pode conter credenciais user:pass). NUNCA logar a url; ao
+// exibir/editar, mascarar as credenciais (maskCameraUrl). O contrato aceita rtsp/rtsps/http(s).
+export type CameraTransport = "tcp" | "udp" | "http" | "auto"; // só relevante p/ rtsp
+export type Camera = {
+  id: string;
+  label: string;
+  url: string; // rtsp:// | rtsps:// | http(s):// — SENSÍVEL (credenciais)
+  transport?: CameraTransport;
+  fps?: number; // 1–30
+  width?: number; // 160–1920
+  quality?: number; // 1–31 (menor = melhor)
+  enabled: boolean;
+  criadoEm: number; // epoch-ms
+};
+// Corpo do POST (label opcional; url obrigatória). PATCH aceita qualquer subconjunto.
+export type NewCamera = {
+  label?: string;
+  url: string;
+  transport?: CameraTransport;
+  fps?: number;
+  width?: number;
+  quality?: number;
+  enabled?: boolean;
+};
+
+// Validação de URL no cliente (espelha o backend): deve começar com rtsp/rtsps/http/https.
+// Bloqueia o POST antes de ir à rede quando a url é inválida.
+const CAMERA_URL_RE = /^(rtsps?|https?):\/\/\S+/i;
+export function isValidCameraUrl(url: string): boolean {
+  return CAMERA_URL_RE.test((url ?? "").trim());
+}
+
+// Mascara as credenciais (user:pass@) da url para exibição — mostra o host, oculta o segredo.
+// Ex.: rtsp://admin:1234@10.0.0.5:554/stream → rtsp://***@10.0.0.5:554/stream.
+// Se não houver credenciais, retorna a url inalterada (só host/caminho, não sensível).
+export function maskCameraUrl(url: string): string {
+  const s = (url ?? "").trim();
+  if (!s) return "";
+  return s.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, (_m, scheme) => `${scheme}***@`);
+}
+
+// GET /api/cameras → Camera[] (url completa; tratar como sensível). Auth: superadmin.
+export const listCameras = () => apiGet<Camera[]>("/api/cameras");
+// POST /api/cameras → 201 Camera | 400 {error}. Auth: superadmin.
+export const createCamera = (body: NewCamera) => apiSend<Camera>("POST", "/api/cameras", body);
+// PATCH /api/cameras/:id → 200 Camera. Auth: superadmin.
+export const updateCamera = (id: string, patch: Partial<NewCamera>) =>
+  apiSend<Camera>("PATCH", `/api/cameras/${encodeURIComponent(id)}`, patch);
+// DELETE /api/cameras/:id → 200 {ok:true}. Auth: superadmin.
+export const deleteCamera = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/cameras/${encodeURIComponent(id)}`);

@@ -1,0 +1,29 @@
+/* Câmeras IP/RTSP — cadastro pela home (DashboardPage). Layout leve do formulário dentro do
+   Dialog; a listagem reaproveita as classes de views.css (.views-mgr__row/__name/__foot). */
+
+.cam-ip-form {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/* Toggle "Opções avançadas": alinha o Checkbox ao texto, como os demais .switch do app. */
+.cam-ip-adv-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+/* Campos avançados (fps/largura/qualidade) lado a lado; empilham no mobile. */
+.cam-ip-adv {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+@media (max-width: 560px) {
+  .cam-ip-adv {
+    grid-template-columns: 1fr;
+  }
+}

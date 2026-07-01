@@ -123,6 +123,30 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   await expect(page.locator(".cam")).toBeVisible();
 });
 
+// Câmera IP/RTSP pela home (superadmin). O e2e loga como "admin", que É superadmin, então o
+// botão "+ Câmera IP" aparece. Cobre: abrir o Dialog e a VALIDAÇÃO de url no cliente (url inválida
+// bloqueia antes de chamar a API). Não confirmamos uma url válida aqui para não cadastrar uma
+// câmera real no hub (subiria ffmpeg); a criação em si é coberta pelo unit test do client + backend.
+test("+ Câmera IP: abre o Dialog e a validação de url bloqueia url inválida (superadmin)", async ({
+  page,
+}) => {
+  await login(page);
+
+  const btn = page.getByRole("button", { name: /\+ Câmera IP/i });
+  await expect(btn).toBeVisible(); // visível p/ superadmin
+  await btn.click();
+
+  const dlg = page.getByRole("dialog");
+  await expect(dlg).toBeVisible();
+  await expect(dlg).toContainText(/Câmeras IP/i);
+
+  // URL inválida (sem esquema rtsp/http) → validação no cliente bloqueia com mensagem, sem enviar.
+  await dlg.getByLabel("URL da câmera").fill("nao-e-uma-url");
+  await dlg.getByRole("button", { name: "Adicionar câmera" }).click();
+  await expect(dlg.getByText(/URL inválida/i)).toBeVisible();
+  await expect(dlg).toBeVisible(); // dialog continua aberto (nada foi criado)
+});
+
 // ── R3.3 — cobertura das primitivas Radix da migração (Onda G): Tabs + AlertDialog ──
 
 // Tabs internas do Relatório (Radix Tabs): semântica ARIA (role tab/tabpanel), navegação por
