@@ -21,13 +21,20 @@ export const Switch = forwardRef<ElementRef<typeof RSwitch.Root>, SwitchProps>(f
   return (
     <RSwitch.Root
       ref={ref}
-      className={cx("ui-switch", className)}
+      className={cx(
+        // Tailwind (tokens mapeados no @theme). Tamanho fixo → nunca estica.
+        "box-border inline-flex h-5 w-9 shrink-0 cursor-pointer items-center self-center rounded-full border border-border bg-panel-2 p-0.5 transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        "data-[state=checked]:border-accent data-[state=checked]:bg-accent",
+        className,
+      )}
       checked={checked}
       onCheckedChange={onCheckedChange}
       aria-label={ariaLabel}
       {...rest}
     >
-      <RSwitch.Thumb className="ui-switch-thumb" />
+      <RSwitch.Thumb className="block h-3.5 w-3.5 rounded-full bg-text-dim transition-transform data-[state=checked]:translate-x-4 data-[state=checked]:bg-white" />
     </RSwitch.Root>
   );
 });
@@ -46,14 +53,20 @@ export const Checkbox = forwardRef<ElementRef<typeof RCheckbox.Root>, CheckboxPr
     return (
       <RCheckbox.Root
         ref={ref}
-        className={cx("ui-check", className)}
+        className={cx(
+          "box-border inline-flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded border border-border bg-panel-2 p-0 transition-colors",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          "data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]:text-white",
+          className,
+        )}
         checked={checked}
         onCheckedChange={(v) => onCheckedChange(v === true)}
         id={id}
         aria-label={ariaLabel}
         {...rest}
       >
-        <RCheckbox.Indicator className="ui-check-ind">✓</RCheckbox.Indicator>
+        <RCheckbox.Indicator className="text-[12px] leading-none">✓</RCheckbox.Indicator>
       </RCheckbox.Root>
     );
   },
@@ -72,9 +85,9 @@ export function CheckboxRow({
   id: string;
 }) {
   return (
-    <div className="ui-checkrow">
+    <div className="flex items-center gap-2">
       <Checkbox checked={checked} onCheckedChange={onCheckedChange} id={id} />
-      <Label.Root htmlFor={id} style={{ cursor: "pointer" }}>
+      <Label.Root htmlFor={id} className="cursor-pointer">
         {children}
       </Label.Root>
     </div>

@@ -11,8 +11,6 @@
 .ui-input:focus-visible,
 .ui-textarea:focus-visible,
 .ui-select:focus-visible,
-.ui-switch:focus-visible,
-.ui-check:focus-visible,
 .ui-seg-item:focus-visible,
 .ui-slider-thumb:focus-visible,
 .ui-tab:focus-visible,
@@ -246,109 +244,9 @@
   font-weight: 600;
 }
 
-/* ── Switch / Checkbox (Radix) ──────────────────────────── */
-.ui-switch {
-  /* Radix Switch.Root é <button>: reseta o chrome nativo e TRAVA o tamanho
-     (flex:0 0 auto + align-self:center) p/ nunca esticar dentro de flex/grid. */
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  margin: 0;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  cursor: pointer;
-  transition:
-    background 0.12s,
-    border-color 0.12s;
-}
-.ui-switch[data-state="checked"] {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.ui-switch-thumb {
-  display: block;
-  width: 14px;
-  height: 14px;
-  background: var(--text-dim);
-  border-radius: 999px;
-  transition:
-    transform 0.14s,
-    background 0.12s;
-}
-.ui-switch[data-state="checked"] .ui-switch-thumb {
-  transform: translateX(16px);
-  background: #fff;
-}
-
-.ui-check {
-  /* Radix Checkbox.Root é um <button> — reseta o chrome nativo */
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 0;
-  margin: 0;
-  width: 18px;
-  height: 18px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex: none;
-}
-.ui-check[data-state="checked"] {
-  background: var(--state-info-bg);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* ── ToggleRow (átomo DRY: rótulo + Switch numa linha) ─────── */
-.ui-togglerow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: 8px 2px;
-  border-bottom: 1px solid var(--border);
-}
-.ui-togglerow:last-child {
-  border-bottom: none;
-}
-.ui-togglerow-txt {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.ui-togglerow-label {
-  font-size: 13px;
-  color: var(--text);
-}
-.ui-togglerow-hint {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-.ui-check-ind {
-  font-size: 12px;
-  line-height: 1;
-}
-.ui-checkrow {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font-size: 13px;
-  color: var(--text-dim);
-  cursor: pointer;
-}
+/* ── Switch / Checkbox / CheckboxRow / ToggleRow ──────────────
+   MIGRADOS para Tailwind (piloto da adoção): ver src/ui/controls.tsx e
+   src/ui/ToggleRow.tsx. Estilo agora via utilities + tokens do @theme. ── */
 
 /* ── Slider (Radix) ─────────────────────────────────────── */
 .ui-slider {

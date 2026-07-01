@@ -12,6 +12,7 @@ import { AuthProvider } from "./auth";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TooltipProvider, ToastProvider, ConfirmProvider } from "./ui";
 import "./index.css";
+import "./tailwind.css";
 
 const router = createBrowserRouter([
   {

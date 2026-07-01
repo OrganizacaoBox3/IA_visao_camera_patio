@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // Headers de segurança SÓ do dev/preview (vite). Em produção o CSP é o do nginx (mesma origem).
 // `http:` no connect-src libera o hub local (http://localhost:4000 / IP-da-LAN:4000) p/ o /api/login;
@@ -12,7 +13,7 @@ const securityHeaders = {
 };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: { headers: securityHeaders },
   preview: { headers: securityHeaders },
 });

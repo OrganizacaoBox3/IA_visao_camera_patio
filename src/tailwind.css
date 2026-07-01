@@ -1,0 +1,37 @@
+/* Tailwind v4 — adoção INCREMENTAL e coexistente com o CSS/tokens atuais.
+   IMPORTANTE: importamos só `theme` + `utilities`, SEM o preflight/reset do Tailwind,
+   para NÃO resetar o app existente (migração componente a componente).
+   O @theme abaixo mapeia os tokens do projeto (fonte única em index.css :root) para o
+   Tailwind — DRY: bg-panel/text-accent/etc. usam as MESMAS variáveis do going-gray. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme {
+  /* superfícies / texto (referenciam os tokens de index.css :root) */
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-text: var(--text);
+  --color-text-dim: var(--text-dim);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+
+  /* estados (going-gray) */
+  --color-ok: var(--state-ok);
+  --color-warn: var(--state-warn);
+  --color-critical: var(--state-critical);
+  --color-info: var(--state-info);
+  --color-neutral: var(--state-neutral);
+  --color-neutral-dim: var(--state-neutral-dim);
+
+  /* superfície da câmera (dark) */
+  --color-cam-surface: var(--cam-surface-bg);
+  --color-cam-panel: var(--cam-panel-bg);
+
+  /* raio */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+}

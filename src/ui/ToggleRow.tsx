@@ -17,10 +17,10 @@ export function ToggleRow({
   disabled?: boolean;
 }) {
   return (
-    <div className="ui-togglerow">
-      <span className="ui-togglerow-txt">
-        <span className="ui-togglerow-label">{label}</span>
-        {hint && <span className="ui-togglerow-hint">{hint}</span>}
+    <div className="flex items-center justify-between gap-3 border-b border-border py-2 last:border-b-0">
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-[13px] text-text">{label}</span>
+        {hint && <span className="text-[11px] text-text-dim">{hint}</span>}
       </span>
       <Switch
         checked={checked}
