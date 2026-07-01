@@ -5,6 +5,7 @@ export { Button, IconButton, type ButtonProps } from "./Button";
 export { Input, Textarea, Field, FieldLabel } from "./form";
 export { Select, type SelectOption } from "./Select";
 export { Switch, Checkbox, CheckboxRow, Slider } from "./controls";
+export { ToggleRow } from "./ToggleRow";
 export { SegmentedControl, type SegOption } from "./SegmentedControl";
 export { Tooltip, TooltipProvider } from "./Tooltip";
 export { Dialog } from "./Dialog";

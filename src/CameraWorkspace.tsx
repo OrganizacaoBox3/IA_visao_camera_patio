@@ -61,6 +61,7 @@ import {
   Select,
   Slider,
   Switch,
+  ToggleRow,
   Tabs,
   TabsContent,
   ScrollArea,
@@ -1945,23 +1946,12 @@ export function CameraWorkspace({
                     ["heatmap", "Heatmap de ocupação"],
                   ] as [keyof OverlayLayers, string][]
                 ).map(([k, lbl]) => (
-                  <div
+                  <ToggleRow
                     key={k}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "7px 0",
-                      borderBottom: "1px solid var(--cam-panel-border)",
-                    }}
-                  >
-                    <span>{lbl}</span>
-                    <Switch
-                      checked={layers[k]}
-                      onCheckedChange={(v) => setLayers((s) => ({ ...s, [k]: v }))}
-                      ariaLabel={lbl}
-                    />
-                  </div>
+                    label={lbl}
+                    checked={layers[k]}
+                    onCheckedChange={(v) => setLayers((s) => ({ ...s, [k]: v }))}
+                  />
                 ))}
                 <div style={{ marginTop: "var(--sp-3)" }}>
                   <Field

@@ -264,21 +264,24 @@
   flex: none;
 }
 .ui-switch[data-state="checked"] {
-  background: var(--accent);
+  /* on-state discreto (going-gray): trilho tinta sutil + borda/thumb em accent */
+  background: var(--state-info-bg);
   border-color: var(--accent);
 }
 .ui-switch-thumb {
   display: block;
   width: 16px;
   height: 16px;
-  background: var(--text);
+  background: var(--text-dim);
   border-radius: 999px;
-  transition: transform 0.14s;
+  transition:
+    transform 0.14s,
+    background 0.12s;
   transform: translateX(2px);
 }
 .ui-switch[data-state="checked"] .ui-switch-thumb {
   transform: translateX(18px);
-  background: #fff;
+  background: var(--accent);
 }
 
 .ui-check {
@@ -299,9 +302,36 @@
   flex: none;
 }
 .ui-check[data-state="checked"] {
-  background: var(--accent);
+  background: var(--state-info-bg);
   border-color: var(--accent);
-  color: #04121a;
+  color: var(--accent);
+}
+
+/* ── ToggleRow (átomo DRY: rótulo + Switch numa linha) ─────── */
+.ui-togglerow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.ui-togglerow:last-child {
+  border-bottom: none;
+}
+.ui-togglerow-txt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ui-togglerow-label {
+  font-size: 13px;
+  color: var(--text);
+}
+.ui-togglerow-hint {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 .ui-check-ind {
   font-size: 12px;
