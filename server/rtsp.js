@@ -10,9 +10,51 @@
 //  - status por câmera via evento socket "camera-status" { id, state, fps, lastError };
 //  - transporte flexível: rtsp (tcp/udp/http/auto), HLS (.m3u8) e MJPEG (http) — detectado pela URL.
 
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+
+// Resolve o binário do ffmpeg de forma robusta, INDEPENDENTE do PATH do shell
+// (no Windows o PATH do winget/choco só entra em shells abertos após a instalação).
+// Ordem: 1) FFMPEG_PATH explícito · 2) "ffmpeg" no PATH · 3) locais comuns de instalação.
+function resolveFfmpegBin() {
+  const works = (bin) => {
+    try {
+      execFileSync(bin, ["-version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH; // override explícito (erro aparece no spawn se inválido)
+  if (works("ffmpeg")) return "ffmpeg"; // já no PATH
+  if (process.platform === "win32") {
+    const cands = [];
+    const local = process.env.LOCALAPPDATA;
+    if (local) {
+      const pkgs = path.join(local, "Microsoft", "WinGet", "Packages");
+      try {
+        for (const d of fs.readdirSync(pkgs)) {
+          if (!/^Gyan\.FFmpeg/i.test(d)) continue;
+          const pkgDir = path.join(pkgs, d);
+          for (const sub of fs.readdirSync(pkgDir)) {
+            if (/^ffmpeg-/i.test(sub)) cands.push(path.join(pkgDir, sub, "bin", "ffmpeg.exe"));
+          }
+        }
+      } catch {
+        /* pasta do winget ausente */
+      }
+      cands.push(path.join(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe"));
+    }
+    cands.push("C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe");
+    if (process.env.USERPROFILE)
+      cands.push(path.join(process.env.USERPROFILE, "scoop", "shims", "ffmpeg.exe"));
+    cands.push("C:\\ffmpeg\\bin\\ffmpeg.exe");
+    for (const c of cands) if (fs.existsSync(c)) return c;
+  }
+  return "ffmpeg"; // fallback → ENOENT com mensagem útil
+}
+const FFMPEG_BIN = resolveFfmpegBin();
 
 const SOI = Buffer.from([0xff, 0xd8]); // início de JPEG
 const EOI = Buffer.from([0xff, 0xd9]); // fim de JPEG
@@ -135,17 +177,17 @@ function spawnFfmpeg(st) {
     String(st.cfg.quality),
     "pipe:1",
   ];
-  const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn(FFMPEG_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
   st.proc = proc;
 
   proc.on("error", (e) => {
     if (e.code === "ENOENT") {
       // ffmpeg ausente é um problema global; não adianta reconectar. Marca erro e mantém a câmera listada.
       console.error(
-        "[rtsp] ffmpeg não encontrado no PATH. Instale o ffmpeg para ingestão RTSP. (câmeras de navegador seguem funcionando)",
+        `[rtsp] ffmpeg não encontrado (tentado: ${FFMPEG_BIN}). Instale o ffmpeg OU defina FFMPEG_PATH=<caminho do ffmpeg.exe>. (câmeras de navegador seguem funcionando)`,
       );
       st.stopped = true;
-      st.lastError = "ffmpeg não encontrado no PATH";
+      st.lastError = "ffmpeg não encontrado (defina FFMPEG_PATH)";
       setState(st, "error");
     } else {
       st.lastError = e.message;
@@ -313,6 +355,12 @@ function statuses() {
 function startRtspIngestion({ io, cameras, broadcast, dynamicSources = [] }) {
   ctx = { io, cameras, broadcast };
 
+  console.log(
+    FFMPEG_BIN === "ffmpeg"
+      ? "[rtsp] ffmpeg: usando o do PATH (ou ausente — defina FFMPEG_PATH se a ingestão falhar)"
+      : `[rtsp] ffmpeg resolvido: ${FFMPEG_BIN}`,
+  );
+
   const legacy = loadSources();
   legacy.forEach((src, i) =>
     addSource({ id: `rtsp-${i + 1}`, label: src.label || `IP ${i + 1}`, url: src.url }),
@@ -340,4 +388,6 @@ module.exports = {
   restartSource,
   statuses,
   loadSources,
+  FFMPEG_BIN,
+  resolveFfmpegBin,
 };
