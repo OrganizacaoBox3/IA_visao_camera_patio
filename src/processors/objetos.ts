@@ -72,9 +72,22 @@ export class ObjetosProcessor implements Disposable {
   private lastAccum = 0;
   private lastEmit = 0;
   private lastCargaEvt = 0;
+  // Perfil "longo alcance" (opt-in POR CÂMERA — a frente C chama setLongRange conforme a config).
+  // Default false = comportamento atual. Quando ligado, baixa o limiar de score na filtragem das
+  // detecções de ocupação (longRange.objectScoreThreshold) p/ resgatar objetos distantes/pequenos.
+  private longRange = false;
 
   constructor() {
     void ensureObjectDetector();
+  }
+
+  /**
+   * Liga/desliga o perfil "longo alcance". OPT-IN por câmera: a frente C chama conforme a config da
+   * câmera. (O tiling/minScore são aplicados na chamada de detectFrame pela frente C; aqui é só o
+   * limiar de score/ocupação usado por este processador.)
+   */
+  setLongRange(on: boolean): void {
+    this.longRange = on;
   }
 
   private zoneOf(setores: ObjetosSetor[], cx: number, cy: number): string {
@@ -105,7 +118,11 @@ export class ObjetosProcessor implements Disposable {
       this.lastDetAt = now;
       this.detecting = true;
       const t0 = performance.now();
-      void detectObjects(f.el, f.w, f.h, classes, APP_CONFIG.detection.objectScoreThreshold)
+      // Longo alcance: limiar de score mais baixo p/ não cortar objetos distantes (que pontuam menos).
+      const scoreThr = this.longRange
+        ? APP_CONFIG.detection.longRange.objectScoreThreshold
+        : APP_CONFIG.detection.objectScoreThreshold;
+      void detectObjects(f.el, f.w, f.h, classes, scoreThr)
         .then((res) => {
           this.dets = res;
           this.pendingDetectMs = performance.now() - t0;

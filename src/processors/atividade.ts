@@ -82,6 +82,10 @@ export type AtividadeCtx = {
   tracks: { zone: string | null }[];
   sampleFlow: boolean;
   recEmit: boolean;
+  // Fonte do frame (opcional). Só usada no modo LONGO ALCANCE, em que o processador reamostra a
+  // luma numa resolução MAIOR (detection.longRange.procWidth) que a luma default do frame (ctx.luma,
+  // em detection.procWidth). A frente C a preenche; ausente → cai na luma do ctx (sem regressão).
+  frameEl?: CanvasImageSource;
 };
 
 export type AtividadeResult = {
@@ -120,6 +124,16 @@ type Runtime = {
 /** Estado e lógica de UMA zona de atividade. Uma instância por zona (mantém o runtime). */
 export class AtividadeProcessor implements Disposable {
   private rt: Runtime;
+  // Perfil "longo alcance" (opt-in POR CÂMERA — a frente C chama setLongRange conforme a config).
+  // Default false = comportamento atual. Quando ligado, a detecção de MOVIMENTO usa os valores de
+  // APP_CONFIG.detection.longRange (procWidth maior + ratios menores) e o processador mantém o SEU
+  // próprio canvas/buffers de luma (o frame chega maior que a luma default do ctx).
+  private longRange = false;
+  private lrCanvas: HTMLCanvasElement | null = null;
+  private lrCur: Float32Array | null = null; // buffer da luma atual (ping-pong com lrPrev)
+  private lrPrev: Float32Array | null = null; // buffer da luma anterior
+  private lrW = 0;
+  private lrH = 0;
   constructor(now: number) {
     this.rt = {
       motionEMA: 0,
@@ -139,9 +153,72 @@ export class AtividadeProcessor implements Disposable {
     };
   }
 
+  /**
+   * Liga/desliga o perfil "longo alcance" desta zona. OPT-IN por câmera: a frente C chama conforme
+   * a config da câmera. Ligado → detecção de movimento usa APP_CONFIG.detection.longRange. Ao
+   * desligar, libera o canvas/buffers próprios (não vaza memória entre trocas de perfil).
+   */
+  setLongRange(on: boolean): void {
+    if (on === this.longRange) return;
+    this.longRange = on;
+    if (!on) this.releaseLongRange();
+  }
+
+  // Libera o canvas e os buffers de luma do modo longo alcance (GC os coleta).
+  private releaseLongRange(): void {
+    this.lrCanvas = null;
+    this.lrCur = null;
+    this.lrPrev = null;
+    this.lrW = 0;
+    this.lrH = 0;
+  }
+
   process(z: AtividadeZone, ctx: AtividadeCtx): AtividadeResult {
     const rt = this.rt;
-    const { now, luma, prev, pw, ph } = ctx;
+    const { now } = ctx;
+
+    // Perfil de MOVIMENTO. Default = APP_CONFIG.detection (luma do ctx, em detection.procWidth).
+    // Longo alcance = APP_CONFIG.detection.longRange: reamostra a luma numa resolução MAIOR
+    // (procWidth) p/ captar movimento distante e usa ratios menores (mais sensível). O canvas e os
+    // dois buffers de luma são próprios do processador e só REALOCAM quando a dimensão muda; a cada
+    // frame fazem ping-pong (atual↔anterior), sem alocar por frame → não vaza memória.
+    const lr = this.longRange ? APP_CONFIG.detection.longRange : null;
+    const motionActive = lr ? lr.motionActiveRatio : C.motionActiveRatio;
+    const motionSlow = lr ? lr.motionSlowRatio : C.motionSlowRatio;
+    let luma = ctx.luma,
+      prev = ctx.prev,
+      pw = ctx.pw,
+      ph = ctx.ph;
+    if (lr && ctx.frameEl && ctx.frameW > 0 && ctx.frameH > 0) {
+      const w = lr.procWidth,
+        h = Math.max(1, Math.round((w * ctx.frameH) / ctx.frameW)),
+        size = w * h;
+      if (this.lrW !== w || this.lrH !== h) {
+        if (!this.lrCanvas) this.lrCanvas = document.createElement("canvas");
+        this.lrCanvas.width = w;
+        this.lrCanvas.height = h;
+        this.lrW = w;
+        this.lrH = h;
+        this.lrCur = null;
+        this.lrPrev = null; // dimensão mudou → invalida a luma anterior (não há diff neste frame)
+      }
+      const g = this.lrCanvas!.getContext("2d", { willReadFrequently: true });
+      if (g) {
+        g.drawImage(ctx.frameEl, 0, 0, w, h);
+        const img = g.getImageData(0, 0, w, h).data;
+        let cur = this.lrCur; // recicla o buffer livre (o "anterior" de 2 frames atrás)
+        if (!cur || cur.length !== size) cur = new Float32Array(size);
+        for (let i = 0, j = 0; i < img.length; i += 4, j++)
+          cur[j] = 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
+        luma = cur;
+        prev = this.lrPrev;
+        pw = w;
+        ph = h;
+        // swap: o buffer anterior fica livre p/ o próximo frame; a luma atual vira "anterior"
+        this.lrCur = this.lrPrev;
+        this.lrPrev = cur;
+      }
+    }
 
     // movimento na ROI da zona (diff de luminância); com máscara, só células pintadas contam
     let changed = 0,
@@ -185,8 +262,8 @@ export class AtividadeProcessor implements Disposable {
     rt.occupied = occupied;
 
     const sf = sensitivityFactor(z.sensitivity);
-    const strong = rt.motionEMA > C.motionActiveRatio * sf;
-    const slow = !strong && rt.motionEMA > C.motionSlowRatio * sf;
+    const strong = rt.motionEMA > motionActive * sf;
+    const slow = !strong && rt.motionEMA > motionSlow * sf;
     if (strong || slow) rt.lastActivityAt = now;
     rt.idleMs = now - rt.lastActivityAt;
 
@@ -259,7 +336,7 @@ export class AtividadeProcessor implements Disposable {
     }
 
     if (ctx.sampleFlow) {
-      rt.flow.push(Math.min(1, rt.motionEMA / C.motionActiveRatio));
+      rt.flow.push(Math.min(1, rt.motionEMA / motionActive));
       if (rt.flow.length > 40) rt.flow.shift();
     }
     const flowAvg = rt.flow.length ? rt.flow.reduce((a, b) => a + b, 0) / rt.flow.length : 0;
@@ -269,7 +346,7 @@ export class AtividadeProcessor implements Disposable {
       id: z.id,
       label: z.label,
       state: rt.state,
-      motion: Math.min(1, rt.motionEMA / (C.motionActiveRatio * 6)),
+      motion: Math.min(1, rt.motionEMA / (motionActive * 6)),
       idleMs: rt.idleMs,
       occupied,
       alerts: rt.alerts,
@@ -281,6 +358,6 @@ export class AtividadeProcessor implements Disposable {
   }
 
   dispose(): void {
-    /* sem recursos externos a liberar */
+    this.releaseLongRange(); // libera canvas/buffers do modo longo alcance
   }
 }
