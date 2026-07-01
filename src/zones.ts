@@ -1,10 +1,13 @@
 // Modelo de ZONA com modo + config (base do "Modo por Zona").
 // Uma câmera tem N zonas; cada zona roda o pipeline do seu modo na sua ROI.
-// Persistência por câmera em localStorage `vp-zones-<id>` (estende o formato antigo de atividade).
+// PERSISTÊNCIA (Onda 2): fonte de verdade = BACKEND (compartilhado por câmera, via api.ts
+// getZones/saveZones), com FALLBACK gracioso para o localStorage `vp-zones-<id>` (cache/legado)
+// — a câmera nunca quebra por causa da rede. O formato local estende o antigo (só atividade).
 import { APP_CONFIG } from "./config";
 import { activityForLabel } from "./processors/atividade";
 import { OBJECT_KEYS } from "./objects/catalog";
 import { getCameraCfg } from "./cameraConfig";
+import { getZones as apiGetZones, saveZones as apiSaveZones } from "./api";
 
 export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga";
 export const DEFAULT_GRID = { cols: 32, rows: 18 };
@@ -59,7 +62,8 @@ function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
   };
 }
 
-export function saveZones(cameraId: string, zones: Zone[]) {
+// Cache local (localStorage) — mantido como fallback offline e origem de migração do legado.
+function cacheZones(cameraId: string, zones: Zone[]) {
   try {
     localStorage.setItem(key(cameraId), JSON.stringify(zones));
   } catch {
@@ -67,7 +71,20 @@ export function saveZones(cameraId: string, zones: Zone[]) {
   }
 }
 
-// Carrega as zonas da câmera, migrando o formato antigo (modo-de-câmera + zonas só de atividade).
+// Há zonas LEGADAS realmente salvas no localStorage? (decide migração best-effort × semente padrão).
+function hasStoredZones(cameraId: string): boolean {
+  try {
+    const s = localStorage.getItem(key(cameraId));
+    if (!s) return false;
+    const raw = JSON.parse(s);
+    return Array.isArray(raw) && raw.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Carrega as zonas da câmera do LOCALSTORAGE (fallback/legado), migrando o formato antigo
+// (modo-de-câmera + zonas só de atividade) e semeando as zonas padrão quando não há nada salvo.
 export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
   let raw: unknown;
   try {
@@ -125,6 +142,55 @@ export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
   return APP_CONFIG.defaultZones.map((z) =>
     withDefaults({ label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, modo: "atividade" }, cameraId),
   );
+}
+
+// Carga da câmera com o BACKEND como fonte de verdade + FALLBACK gracioso (Onda 2). ASSÍNCRONA
+// (o backend é remoto). Comportamento:
+// • Backend com zonas → usa (normalizadas) e refresca o cache local.
+// • Backend VAZIO + zonas LEGADAS no localStorage → migração única best-effort (se `canConfigure`,
+//   pois o PUT exige perfil de configuração); sem permissão, usa o legado só nesta sessão.
+// • Backend VAZIO + sem legado → mantém a SEMENTE de zonas padrão (comportamento de hoje — o e2e
+//   depende disso; o hub do e2e roda sem Postgres e devolve []). A semente NÃO é persistida
+//   automaticamente (preserva o comportamento: só grava ao editar).
+// • Backend FALHOU (erro/offline) → degrada para o localStorage (loadZones), sem quebrar a câmera.
+export async function loadZonesForCamera(
+  cameraId: string,
+  cameraLabel: string,
+  canConfigure: boolean,
+): Promise<Zone[]> {
+  let remote: Zone[];
+  try {
+    remote = await apiGetZones(cameraId);
+  } catch (e) {
+    console.error("[zones] carga do backend falhou — usando localStorage", e);
+    return loadZones(cameraId, cameraLabel);
+  }
+  if (remote.length > 0) {
+    const norm = remote.map((z) => withDefaults(z, cameraId));
+    cacheZones(cameraId, norm); // mantém o localStorage como cache/fallback
+    return norm;
+  }
+  // Backend sem zonas → resolve pelo localStorage: migração de legado OU semente padrão.
+  const local = loadZones(cameraId, cameraLabel);
+  if (hasStoredZones(cameraId) && canConfigure) {
+    try {
+      const saved = await apiSaveZones(cameraId, local); // migração única best-effort
+      const norm = saved.map((z) => withDefaults(z, cameraId));
+      cacheZones(cameraId, norm);
+      return norm;
+    } catch (e) {
+      console.error("[zones] migração best-effort falhou — usando legado nesta sessão", e);
+      return local;
+    }
+  }
+  return local; // semente padrão (ou legado sem permissão p/ migrar)
+}
+
+// Write-through: grava no cache local (imediato/offline-safe) e persiste no BACKEND. Rejeita em
+// erro de rede/permissão — o chamador trata com toast SEM perder a edição local (que fica no cache).
+export async function persistZones(cameraId: string, zones: Zone[]): Promise<Zone[]> {
+  cacheZones(cameraId, zones);
+  return apiSaveZones(cameraId, zones);
 }
 
 export const ZONE_MODE_COLOR: Record<ZoneMode, string> = {

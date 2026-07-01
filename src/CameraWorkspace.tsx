@@ -37,14 +37,16 @@ import { type Dataset } from "./report/mock";
 import { predictAlertsPerDay } from "./report/predict";
 import { objClass, OBJECT_CATALOG } from "./objects/catalog";
 import {
-  loadZones,
-  saveZones,
+  loadZonesForCamera,
+  persistZones,
   newZoneId,
   DEFAULT_GRID,
   ZONE_MODE_LABEL,
   type Zone,
   type ZoneMode,
 } from "./zones";
+import { loadCamConfig } from "./cameraConfig";
+import { ApiError } from "./api";
 import {
   decodeMask,
   encodeMask,
@@ -312,6 +314,7 @@ export function CameraWorkspace({
   } = useCineLoop({ mode, cameraId, getFrame, canvasRef, viewportRef });
 
   const [zones, setZones] = useState<Zone[]>([]);
+  const [zonesLoading, setZonesLoading] = useState(true); // carga assíncrona do backend (leve)
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
   const [drawMode, setDrawMode] = useState(false);
   const [paintZoneId, setPaintZoneId] = useState<string | null>(null);
@@ -388,17 +391,35 @@ export function CameraWorkspace({
   useEffect(() => {
     confRef.current = conf;
   }, [conf]);
+  // Zonas: fonte de verdade = BACKEND (compartilhado por câmera), com FALLBACK gracioso p/ o
+  // localStorage e a SEMENTE de zonas padrão. A carga é ASSÍNCRONA (antes era síncrona via
+  // localStorage) → effect com guarda de corrida (cancelled) + estado de "carregando" leve.
   useEffect(() => {
-    const z = loadZones(cameraId, label);
-    setZones(z);
-    // MODO-COMO-PRESET: ao abrir a câmera, carrega o preset do modo predominante (camadas + confiança).
-    // Não toca na GEOMETRIA/zonas persistidas — só governa overlays/visão/métricas da sessão.
-    const dom = dominantMode(z);
-    const p = MODE_PRESETS[dom];
-    setLayers({ ...p.layers });
-    setConf(p.confidenceThreshold);
-    setActivePreset(dom);
-  }, [cameraId, label]);
+    let cancelled = false;
+    setZonesLoading(true);
+    (async () => {
+      const z = await loadZonesForCamera(cameraId, label, canConfigure);
+      if (cancelled) return;
+      setZones(z);
+      // MODO-COMO-PRESET: ao abrir a câmera, carrega o preset do modo predominante (camadas + confiança).
+      // Não toca na GEOMETRIA/zonas persistidas — só governa overlays/visão/métricas da sessão.
+      const dom = dominantMode(z);
+      const p = MODE_PRESETS[dom];
+      setLayers({ ...p.layers });
+      setConf(p.confidenceThreshold);
+      setActivePreset(dom);
+      setZonesLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraId, label, canConfigure]);
+  // Config de câmera (compartilhada): hidrata/migra o cache local a partir do backend ao abrir a
+  // câmera (best-effort, fire-and-forget). A UI de config vive na central, que lê o cache síncrono
+  // getCameraCfg; refrescá-lo aqui faz a config fluir do backend sem acoplar as telas.
+  useEffect(() => {
+    loadCamConfig(cameraId, canConfigure).catch(() => {});
+  }, [cameraId, canConfigure]);
   // Tripwires: load/migração/sync ao vivo + re-set do counter → hook ./camera/useTripwires.
   // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
   useEffect(() => {
@@ -1145,8 +1166,14 @@ export function CameraWorkspace({
     });
   }
 
+  // Write-through: aplica a edição já (retorna `next` p/ o setZones) e persiste no BACKEND, mantendo
+  // o localStorage como cache/fallback. Em erro do PUT: toast (padrão existente) SEM perder a edição
+  // local — o cache local garante a persistência offline; a central re-sincroniza depois.
   function persist(next: Zone[]): Zone[] {
-    saveZones(cameraId, next);
+    persistZones(cameraId, next).catch((e) => {
+      const msg = e instanceof ApiError ? e.message : "Não foi possível salvar as zonas.";
+      onAlertRef.current?.(`⚠ ${label}: ${msg}`);
+    });
     return next;
   }
   function patchZone(id: string, patch: Partial<Zone>) {
@@ -1484,7 +1511,8 @@ export function CameraWorkspace({
           >
             <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
               <TabsContent value="zonas">
-                {zones.length === 0 && (
+                {zonesLoading && <p className="empty-note">Carregando zonas…</p>}
+                {!zonesLoading && zones.length === 0 && (
                   <p className="empty-note">
                     {canConfigure
                       ? "Use “✎ Zona” para desenhar uma área e escolher o modo."
