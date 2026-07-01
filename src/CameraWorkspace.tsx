@@ -45,7 +45,7 @@ import {
   type Zone,
   type ZoneMode,
 } from "./zones";
-import { loadCamConfig } from "./cameraConfig";
+import { loadCamConfig, getCameraCfg, setCameraCfg } from "./cameraConfig";
 import { ApiError } from "./api";
 import {
   decodeMask,
@@ -284,6 +284,9 @@ export function CameraWorkspace({
   const eventIdRef = useRef(0);
   const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers }); // camadas visíveis (lido no rAF)
   const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold); // limiar global de confiança
+  // Perfil "Longo alcance / Panorâmica" (opt-in por câmera). O rAF lê o REF (identidade estável);
+  // o estado governa a UI + persistência. Default false = comportamento atual (zero regressão).
+  const longRangeRef = useRef(false);
   // Ocupação (Onda C item 13): heatmap da lib pura counting.ts (criado sob demanda no rAF).
   // Os tripwires/counter vivem no hook ./camera/useTripwires (ver abaixo).
   const occRef = useRef<Occupancy | null>(null);
@@ -331,6 +334,8 @@ export function CameraWorkspace({
   // Onda 2: camadas + slider de confiança (estado local; inicia de APP_CONFIG.overlay).
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
+  // Perfil "Longo alcance / Panorâmica" (opt-in por câmera; ver cameraConfig.longRange).
+  const [longRange, setLongRange] = useState(false);
   // MODO-COMO-PRESET: modo cujo preset está aplicado à sessão (camadas + confiança + métricas em destaque).
   const [activePreset, setActivePreset] = useState<ModeKey | null>(null);
   // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
@@ -391,6 +396,9 @@ export function CameraWorkspace({
   useEffect(() => {
     confRef.current = conf;
   }, [conf]);
+  useEffect(() => {
+    longRangeRef.current = longRange;
+  }, [longRange]);
   // Zonas: fonte de verdade = BACKEND (compartilhado por câmera), com FALLBACK gracioso p/ o
   // localStorage e a SEMENTE de zonas padrão. A carga é ASSÍNCRONA (antes era síncrona via
   // localStorage) → effect com guarda de corrida (cancelled) + estado de "carregando" leve.
@@ -418,7 +426,17 @@ export function CameraWorkspace({
   // câmera (best-effort, fire-and-forget). A UI de config vive na central, que lê o cache síncrono
   // getCameraCfg; refrescá-lo aqui faz a config fluir do backend sem acoplar as telas.
   useEffect(() => {
-    loadCamConfig(cameraId, canConfigure).catch(() => {});
+    // Perfil "Longo alcance": lê o cache SÍNCRONO já (sem flash), depois hidrata do backend.
+    setLongRange(getCameraCfg(cameraId).longRange);
+    let cancelled = false;
+    loadCamConfig(cameraId, canConfigure)
+      .then((cfg) => {
+        if (!cancelled) setLongRange(cfg.longRange);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [cameraId, canConfigure]);
   // Tripwires: load/migração/sync ao vivo + re-set do counter → hook ./camera/useTripwires.
   // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
@@ -506,9 +524,19 @@ export function CameraWorkspace({
     };
   }, [mode]);
 
+  // Aplica o perfil "Longo alcance" ao processador (só atividade/objetos o consomem). Idempotente:
+  // AtividadeProcessor.setLongRange faz early-return se não mudou; ObjetosProcessor só seta um bool.
+  function applyLongRange(h: Holder) {
+    const lr = longRangeRef.current;
+    if (h.modo === "atividade") (h.proc as AtividadeProcessor).setLongRange(lr);
+    else if (h.modo === "objetos") (h.proc as ObjetosProcessor).setLongRange(lr);
+  }
   function holderFor(z: Zone): Holder {
     const cur = holdersRef.current.get(z.id);
-    if (cur && cur.modo === z.modo) return cur;
+    if (cur && cur.modo === z.modo) {
+      applyLongRange(cur); // mantém o perfil em dia quando o toggle muda em runtime
+      return cur;
+    }
     cur?.proc.dispose();
     if (cur?.modo === "fadiga") cropsRef.current.delete(z.id);
     const proc =
@@ -522,6 +550,7 @@ export function CameraWorkspace({
     if (z.modo === "fadiga") (proc as FadigaProcessor).setThresholds(loadFadigaThresholds()); // calibração global
     const h: Holder = { modo: z.modo, proc };
     holdersRef.current.set(z.id, h);
+    applyLongRange(h); // processador recém-criado herda o perfil atual da câmera
     return h;
   }
 
@@ -562,8 +591,12 @@ export function CameraWorkspace({
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
   function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
     const P = APP_CONFIG.people;
+    // Longo alcance: limiar de confiança de "person" mais baixo (alvos distantes pontuam menos).
+    const personScoreThr = longRangeRef.current
+      ? APP_CONFIG.detection.longRange.peopleScoreThreshold
+      : P.scoreThreshold;
     const persons = dets
-      .filter((d) => d.class === "person" && d.score >= P.scoreThreshold)
+      .filter((d) => d.class === "person" && d.score >= personScoreThr)
       .map((d) => ({
         cx: (d.bbox[0] + d.bbox[2] / 2) / vidW,
         cy: (d.bbox[1] + d.bbox[3] / 2) / vidH,
@@ -684,8 +717,13 @@ export function CameraWorkspace({
             fw = f.w,
             fh = f.h,
             tiled = mode === "full";
+          // Longo alcance: liga o tiling na GRADE (mesmo fora do full) + tile maior + limiar baixo.
+          const LR = APP_CONFIG.detection.longRange;
+          const lrOpts = longRangeRef.current
+            ? { tiles: LR.tiles, tileWidth: LR.detectTileWidth, minScore: LR.minScore }
+            : undefined;
           requestInference(
-            { key: `${cameraId}:atividade`, run: () => detectFrame(el, fw, fh, tiled) },
+            { key: `${cameraId}:atividade`, run: () => detectFrame(el, fw, fh, tiled, lrOpts) },
             { priority: mode === "full" ? "high" : "low" },
           )
             .then((res) => {
@@ -748,6 +786,9 @@ export function CameraWorkspace({
             tracks,
             sampleFlow,
             recEmit,
+            // Fonte do frame p/ o modo longo alcance reamostrar a luma no procWidth maior (480).
+            // O processador só a usa quando longRange está ligado; ausente/ignorada no default.
+            frameEl: f.el,
           };
           const az = {
             id: z.id,
@@ -1186,6 +1227,14 @@ export function CameraWorkspace({
     setLayers({ ...p.layers });
     setConf(p.confidenceThreshold);
     setActivePreset(mode);
+  }
+  // Perfil "Longo alcance / Panorâmica" (por câmera, gated por canConfigure). Aplica na hora
+  // (longRangeRef → próxima detecção usa opts; holderFor propaga setLongRange aos processadores) e
+  // PERSISTE no backend via setCameraCfg (write-through; cache local mantém a UX offline).
+  function onLongRangeChange(on: boolean) {
+    setLongRange(on);
+    longRangeRef.current = on; // efeito imediato no rAF (sem esperar o commit do estado)
+    setCameraCfg(cameraId, { ...getCameraCfg(cameraId), longRange: on });
   }
   // Troca o modo de uma zona PRESERVANDO sua geometria/máscara/parâmetros e reaplica o preset.
   function changeZoneMode(z: Zone, next: ZoneMode) {
@@ -2028,6 +2077,39 @@ export function CameraWorkspace({
                   sessão e sobrepõem o preset (padrões em APP_CONFIG.overlay / MODE_PRESETS).
                   Heatmap acumula a presença de pessoas.
                 </p>
+
+                {/* Perfil de detecção da CÂMERA (persiste no backend) — só engenharia edita. */}
+                {canConfigure && (
+                  <div
+                    style={{
+                      marginTop: "var(--sp-3)",
+                      padding: "var(--sp-2)",
+                      borderRadius: 8,
+                      border: "1px solid var(--cam-panel-border)",
+                      background: "var(--cam-surface-bg)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "var(--sp-2)",
+                      }}
+                    >
+                      <span>Longo alcance / Panorâmica</span>
+                      <Switch
+                        checked={longRange}
+                        onCheckedChange={onLongRangeChange}
+                        ariaLabel="Longo alcance / Panorâmica"
+                      />
+                    </div>
+                    <p className="empty-note" style={{ margin: "6px 0 0" }}>
+                      Para câmeras panorâmicas/de longo alcance (ex.: rua vista de cima): detecta
+                      objetos pequenos/distantes com mais tiles e limiares menores; usa mais CPU.
+                    </p>
+                  </div>
+                )}
               </TabsContent>
             </ScrollArea>
           </Tabs>

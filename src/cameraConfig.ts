@@ -16,6 +16,10 @@ export type CameraCfg = {
   pontoLeitura: string;
   capture: CapturePreset;
   selectedClasses: string[];
+  // Perfil "Longo alcance / Panorâmica" (P0/P1 de `analises/plano-deteccao-objetos.md`). OPT-IN por
+  // câmera; default false = comportamento atual. Ligado → o CameraWorkspace aplica tiling na grade +
+  // tile maior + limiares menores (detection.longRange) e movimento/pessoas mais sensíveis.
+  longRange: boolean;
 };
 
 const DEFAULT: CameraCfg = {
@@ -23,6 +27,7 @@ const DEFAULT: CameraCfg = {
   pontoLeitura: APP_CONFIG.reading.defaultPonto,
   capture: "alta",
   selectedClasses: [...OBJECT_KEYS],
+  longRange: false,
 };
 
 function key(cameraId: string) {
@@ -44,6 +49,7 @@ function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCfg {
         : DEFAULT.pontoLeitura,
     capture: c.capture === "media" || c.capture === "maxima" ? c.capture : "alta",
     selectedClasses: sel.length ? sel : [...OBJECT_KEYS],
+    longRange: c.longRange === true, // opt-in; qualquer coisa != true (inclusive ausente) → false
   };
 }
 
