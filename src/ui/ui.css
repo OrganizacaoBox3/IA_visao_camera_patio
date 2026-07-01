@@ -248,6 +248,11 @@
 
 /* ── Switch / Checkbox (Radix) ──────────────────────────── */
 .ui-switch {
+  /* Radix Switch.Root é um <button> — reseta o chrome nativo (senão fica "zoado") */
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0;
+  margin: 0;
   width: 38px;
   height: 22px;
   background: var(--panel-2);
@@ -259,8 +264,8 @@
   flex: none;
 }
 .ui-switch[data-state="checked"] {
-  background: #0b3a4a;
-  border-color: var(--state-info-border);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .ui-switch-thumb {
   display: block;
@@ -273,10 +278,15 @@
 }
 .ui-switch[data-state="checked"] .ui-switch-thumb {
   transform: translateX(18px);
-  background: var(--state-info-fg);
+  background: #fff;
 }
 
 .ui-check {
+  /* Radix Checkbox.Root é um <button> — reseta o chrome nativo */
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0;
+  margin: 0;
   width: 18px;
   height: 18px;
   background: var(--panel-2);
@@ -289,9 +299,9 @@
   flex: none;
 }
 .ui-check[data-state="checked"] {
-  background: #0b3a4a;
-  border-color: var(--state-info-border);
-  color: var(--state-info-fg);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121a;
 }
 .ui-check-ind {
   font-size: 12px;
