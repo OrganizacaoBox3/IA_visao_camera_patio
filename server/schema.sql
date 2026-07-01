@@ -106,6 +106,19 @@ create table if not exists cam_tripwires (
   camera_id text primary key,
   data jsonb not null default '[]'::jsonb
 );
+-- ZONES: zonas (ROIs + modo/config) por câmera. `data` = array de Zone (src/zones.ts):
+-- { id, label, x,y,w,h (0..1), modo, mask?, idleAlertMs, sensitivity, atividade, ponto, selectedClasses[] }.
+-- SÓ geometria/ids/config — nunca imagem/frame (LGPD).
+create table if not exists cam_zones (
+  camera_id text primary key,
+  data jsonb not null default '[]'::jsonb
+);
+-- CAMCONFIG: config de câmera por câmera. `data` = objeto CameraCfg (src/cameraConfig.ts):
+-- { modo, pontoLeitura, capture, selectedClasses[] }. SÓ metadados de config (LGPD).
+create table if not exists cam_config (
+  camera_id text primary key,
+  data jsonb not null default '{}'::jsonb
+);
 
 -- ── ÍNDICES (consultas: eventos por ts desc; buckets por hora) ───────────────
 create index if not exists idx_ativ_events_ts on ativ_events (ts desc);

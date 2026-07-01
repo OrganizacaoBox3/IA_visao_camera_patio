@@ -272,6 +272,33 @@ export const getTripwires = (cameraId: string) =>
 export const saveTripwires = (cameraId: string, tripwires: Tripwire[]) =>
   apiPut<Tripwire[]>(`/api/tripwires/${encodeURIComponent(cameraId)}`, { tripwires });
 
+// ── ZONES + CAMCONFIG (config de câmera) — COMPARTILHADAS, por câmera ──────────
+// Antes em localStorage (vp-zones-<id> / vp-camcfg-<id>); agora centralizadas para
+// partilhar entre turnos. Reusa os tipos canônicos de src/zones.ts e src/cameraConfig.ts
+// (fonte única — sem duplicar) e os re-exporta para os consumidores importarem via `../api`.
+// SÓ geometria/ids/config (LGPD). GET: qualquer autenticado; PUT: perfil de configuração.
+export type { Zone } from "./zones";
+export type { CameraCfg } from "./cameraConfig";
+import type { Zone } from "./zones";
+import type { CameraCfg } from "./cameraConfig";
+
+// GET /api/zones/:cameraId → Zone[]. Auth: qualquer usuário autenticado.
+export const getZones = (cameraId: string) =>
+  apiGet<Zone[]>(`/api/zones/${encodeURIComponent(cameraId)}`);
+// PUT /api/zones/:cameraId {zones} → substitui as zonas; responde a lista salva.
+// Auth: perfil de configuração (engenharia) — coerente com o gate de edição no front.
+export const saveZones = (cameraId: string, zones: Zone[]) =>
+  apiPut<Zone[]>(`/api/zones/${encodeURIComponent(cameraId)}`, { zones });
+
+// GET /api/camconfig/:cameraId → CameraCfg | null (null quando nunca salva → aplicar
+// defaults no front). Auth: qualquer usuário autenticado.
+export const getCamConfig = (cameraId: string) =>
+  apiGet<CameraCfg | null>(`/api/camconfig/${encodeURIComponent(cameraId)}`);
+// PUT /api/camconfig/:cameraId {config} → substitui a config; responde a config salva.
+// Auth: perfil de configuração (engenharia).
+export const saveCamConfig = (cameraId: string, config: CameraCfg) =>
+  apiPut<CameraCfg>(`/api/camconfig/${encodeURIComponent(cameraId)}`, { config });
+
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
 // POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`

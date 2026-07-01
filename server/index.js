@@ -368,6 +368,45 @@ const httpServer = createServer(async (req, res) => {
         return json(res, 200, saved);
       }
     }
+
+    // ── ZONES (ROIs + modo/config) — COMPARTILHADAS, por câmera ───────────────
+    // GET (qualquer autenticado) lê; PUT exige perfil de configuração (engenharia),
+    // coerente com o gate de edição no front. Substitui as zonas da câmera e persiste.
+    const mzn = path0.match(/^\/api\/zones\/([\w-]+)$/);
+    if (mzn) {
+      const cameraId = decodeURIComponent(mzn[1]);
+      if (req.method === "GET") {
+        if (!requireAuth(req, res)) return;
+        return json(res, 200, camcfg.getZones(cameraId));
+      }
+      if (req.method === "PUT") {
+        if (!requireConfigurer(req, res)) return;
+        const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+        const saved = await camcfg.saveZones(cameraId, body && body.zones);
+        io.to("dashboards").emit("camcfg-updated", { kind: "zones", cameraId });
+        return json(res, 200, saved);
+      }
+    }
+
+    // ── CAMCONFIG (config de câmera) — COMPARTILHADA, por câmera ───────────────
+    // GET (qualquer autenticado) lê (null se nunca salva → front usa defaults);
+    // PUT exige perfil de configuração. Substitui a config da câmera e persiste.
+    const mcc = path0.match(/^\/api\/camconfig\/([\w-]+)$/);
+    if (mcc) {
+      const cameraId = decodeURIComponent(mcc[1]);
+      if (req.method === "GET") {
+        if (!requireAuth(req, res)) return;
+        return json(res, 200, camcfg.getCamConfig(cameraId));
+      }
+      if (req.method === "PUT") {
+        if (!requireConfigurer(req, res)) return;
+        const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+        const saved = await camcfg.saveCamConfig(cameraId, body && body.config);
+        if (!saved) return json(res, 400, { error: "config inválida" });
+        io.to("dashboards").emit("camcfg-updated", { kind: "camconfig", cameraId });
+        return json(res, 200, saved);
+      }
+    }
   } catch {
     return json(res, 400, { error: "requisição inválida" });
   }
