@@ -71,12 +71,18 @@ let ctx = null; // { io, cameras, broadcast }
 /** id -> stream handle */
 const streams = new Map();
 
-/** Defaults globais de captura (env), sobrescritos por câmera quando informado. */
+/**
+ * Defaults globais de captura (env), sobrescritos POR CÂMERA quando informado (campos fps/width/quality
+ * no cadastro). P1 (plano-performance-imagem.md): revertida a super-compressão — o gargalo é
+ * CPU/main-thread, não banda (rede é LAN). Trade-off: +decode/+banda, aceitável.
+ * Obs.: a qualidade final depende do STREAM da câmera IP — prefira um sub-stream de boa qualidade
+ * (ou o main-stream) na URL cadastrada; estes valores só reamostram/re-encodam o que a câmera entrega.
+ */
 function defaultCfg() {
   return {
-    fps: Number(process.env.RTSP_FPS ?? 8),
-    width: Number(process.env.RTSP_WIDTH ?? 480),
-    quality: Number(process.env.RTSP_QUALITY ?? 7),
+    fps: Number(process.env.RTSP_FPS ?? 10), // era 8 — mais fluidez (câmera pode sobrescrever)
+    width: Number(process.env.RTSP_WIDTH ?? 720), // era 480 — mais nitidez p/ câmera IP
+    quality: Number(process.env.RTSP_QUALITY ?? 4), // -q:v do ffmpeg: MENOR = MELHOR (era 7)
   };
 }
 

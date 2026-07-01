@@ -205,12 +205,14 @@ export const APP_CONFIG = {
           : location.origin
         : "http://localhost:4000"),
     // Resolução/fps de EXIBIÇÃO p/ câmeras de ATIVIDADE. A detecção reamostra p/ detection.procWidth
-    // (240/512/640) de qualquer forma, então estes pixels só servem à tela → reduzimos p/ economizar
-    // banda/encode (nó) e createImageBitmap (central). O modo LEITURA sobrepõe com alta resolução
-    // (reading.capturePresets) via evento `capture`, pois código de barras precisa de pixels.
-    frameWidth: 960, // largura do frame enviado (suficiente p/ tile e full; era 1280)
-    frameFps: 12, // frames/s (era 15) — fluidez boa com menos banda/CPU
-    jpegQuality: 0.75, // qualidade do JPEG (era 0.82) — menor payload por frame
+    // (240/512/640) de qualquer forma, então estes pixels só servem à tela e à detecção de atividade.
+    // P1 (plano-performance-imagem.md): o gargalo é CPU/main-thread, NÃO banda (rede é LAN). A
+    // super-compressão só piorava a qualidade sem ganho real → revertida p/ valores mais nítidos.
+    // Trade-off: +decode/+banda por frame, aceitável em LAN. O modo LEITURA continua sobrepondo com
+    // alta resolução própria (reading.capturePresets) via evento `capture` — não é afetado por aqui.
+    frameWidth: 1280, // largura do frame enviado (era 960) — mais nitidez p/ tile/full; leitura usa preset próprio
+    frameFps: 12, // frames/s — mantido (não é o gargalo; 12 dá fluidez sem saturar a main-thread)
+    jpegQuality: 0.85, // qualidade do JPEG (era 0.75) — menos artefato de re-encode da webcam já comprimida
   },
 
   // Zonas iniciais (frações do frame: x,y,w,h em 0..1). Editáveis na tela.
