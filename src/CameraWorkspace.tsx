@@ -113,6 +113,18 @@ const BRUSH_OPTS = [
 const HEAT_COLS = 32,
   HEAT_ROWS = 18;
 
+// ── P0 + P2 (analises/plano-performance-imagem.md): EXIBIÇÃO × ANÁLISE na grade ──
+// Na GRADE (tiles, mode ≠ "full") o vídeo é desenhado TODO frame (drawScene) e a análise LEVE —
+// motion + máquina de estado por zona (ATIVA/LENTA/OCIOSA/VAZIA/ALERTA) + alarmes — segue em TEMPO
+// REAL, pois é a funcionalidade essencial que não pode parar quando a câmera não está aberta. Só a
+// inferência PESADA é rebaixada a uma cadência muito menor, p/ liberar a main thread e deixar o
+// vídeo fluido. Na câmera ABERTA (full) tudo volta à cadência normal (pipeline completo, como hoje).
+// Consequência aceita: na grade, ocupação/contagem (coco), objetos (OWL-ViT), leitura (ZXing) e
+// fadiga (MediaPipe) atualizam mais devagar; ao ABRIR a câmera, tudo volta a atualizar na hora.
+// Constantes locais (NÃO editar config.ts — outra frente). Substituem o throttle de tile p/ o pesado.
+const TILE_OBJECT_INTERVAL_MS = 4000; // coco (detecção de pessoas/objetos) na grade — vs C.objectIntervalMs na aberta
+const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · MediaPipe/coco (fadiga) na grade
+
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
 // CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
@@ -215,6 +227,8 @@ export function CameraWorkspace({
   const lastFrameTsRef = useRef(0);
   const detsRef = useRef<Detection[]>([]);
   const lastObjAtRef = useRef(0);
+  const objInFlightRef = useRef(false); // P0: na grade, pula a detecção coco enquanto já há uma em voo
+  const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // P2: última inferência PESADA por zona (gate de tile)
   const lastFrameAtRef = useRef(0);
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
@@ -671,9 +685,15 @@ export function CameraWorkspace({
         // Inferência FORA da main thread (worker), via SCHEDULER global (fila única + prioridade).
         // A câmera aberta (full) detecta na cadência rápida, com tiling e prioridade "high"; as tiles
         // do mosaico vão mais devagar, sem tiling e com prioridade "low" (cedem a vez à câmera de foco).
-        const objInterval = mode === "full" ? C.objectIntervalMs : C.objectIntervalMsTile;
-        if (now - lastObjAtRef.current > objInterval) {
+        // P0: na câmera ABERTA (full) a detecção coco roda na cadência rápida com prioridade alta
+        // (pipeline completo). Na GRADE (tile) roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS)
+        // e é PULADA quando já há uma inferência em voo — não empilha trabalho no worker e libera a
+        // main thread p/ o vídeo. O motion (acima) e a máquina de estado por zona seguem em tempo real.
+        const objInterval = mode === "full" ? C.objectIntervalMs : TILE_OBJECT_INTERVAL_MS;
+        const objBusy = mode !== "full" && objInFlightRef.current;
+        if (now - lastObjAtRef.current > objInterval && !objBusy) {
           lastObjAtRef.current = now;
+          objInFlightRef.current = true;
           const el = f.el,
             fw = f.w,
             fh = f.h,
@@ -690,7 +710,10 @@ export function CameraWorkspace({
             .then((res) => {
               if (res) detsRef.current = res;
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => {
+              objInFlightRef.current = false;
+            });
         }
       }
       const dets = detsRef.current;
@@ -731,6 +754,17 @@ export function CameraWorkspace({
       // ── por zona ──
       for (const z of zs) {
         const h = holderFor(z);
+        // P0/P2: leitura (ZXing), objetos (OWL-ViT) e fadiga (MediaPipe/coco) rodam o processador na
+        // MAIN THREAD → são a maior fonte de jank na grade. Na GRADE (tile) rebaixamos essa inferência
+        // PESADA a TILE_HEAVY_INTERVAL_MS por zona; nos frames pulados mantemos o ÚLTIMO resultado em
+        // resultsRef (overlay/painel atualizam devagar). Na câmera ABERTA (full) roda todo frame.
+        // ATIVIDADE fica FORA deste gate: motion + máquina de estado + alarme por zona seguem em tempo
+        // real inclusive na grade (análise LEVE essencial — não pode parar com a câmera fechada).
+        if (z.modo !== "atividade" && mode !== "full") {
+          const lastHeavy = lastHeavyAtRef.current.get(z.id) ?? 0;
+          if (now - lastHeavy < TILE_HEAVY_INTERVAL_MS) continue;
+          lastHeavyAtRef.current.set(z.id, now);
+        }
         if (z.modo === "atividade") {
           const ctx: AtividadeCtx = {
             now,
