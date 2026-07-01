@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, cpSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,8 +27,17 @@ async function waitFor(url: string, ms: number): Promise<boolean> {
 export default async function globalSetup() {
   const tmp = mkdtempSync(join(tmpdir(), "visao-e2e-"));
   const srcServer = join(ROOT, "server");
-  for (const f of readdirSync(srcServer))
-    if (f.endsWith(".js") || f.endsWith(".sql")) copyFileSync(join(srcServer, f), join(tmp, f));
+  // Copia o server RECURSIVAMENTE (inclui subdirs como server/alarm/ e server/routes/),
+  // só .js/.sql — nunca credenciais (users.json/wa-auth ficam de fora).
+  cpSync(srcServer, tmp, {
+    recursive: true,
+    filter: (src) => {
+      const base = src.split(/[\\/]/).pop() ?? "";
+      if (base === "wa-auth" || base === "node_modules") return false;
+      if (statSync(src).isDirectory()) return true;
+      return base.endsWith(".js") || base.endsWith(".sql");
+    },
+  });
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
