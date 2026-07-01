@@ -23,6 +23,23 @@ export const APP_CONFIG = {
     tiles: { cols: 2, rows: 2, overlap: 0.12 }, // cols*rows=1 desliga o tiling
     nmsIoU: 0.45, // IoU p/ fundir detecções duplicadas nas bordas dos blocos
 
+    // PERFIL "LONGO ALCANCE" / PANORÂMICA (P0 do plano `analises/plano-deteccao-objetos.md`).
+    // OPT-IN POR CÂMERA: são só os PARÂMETROS do perfil; nada aqui muda o comportamento default.
+    // Quem consome (frentes B/C: cameraConfig/CameraWorkspace/processors) liga o perfil por câmera
+    // e repassa estes valores a `detectFrame(..., opts)` (tiling na grade + tile maior + limiares baixos)
+    // e ao pipeline de movimento (procWidth/ratios mais sensíveis a micro-movimento distante).
+    // Grade mais fina (4×4) + tile maior (640) resgatam objetos pequenos vistos de cima (rooftop/rua).
+    longRange: {
+      tiles: { cols: 4, rows: 4, overlap: 0.12 }, // grade fina p/ objetos pequenos/distantes
+      detectTileWidth: 640, // px por bloco enviado ao modelo (mais pixels no alvo distante)
+      objectScoreThreshold: 0.3, // limiar de OCUPAÇÃO por classe (mais baixo: alvos distantes pontuam menos)
+      minScore: 0.15, // limiar BRUTO do coco no perfil (filtragem por classe vem depois)
+      peopleScoreThreshold: 0.3, // confiança mínima p/ contar "person" no perfil
+      procWidth: 480, // largura do canvas de movimento (mais detalhe p/ micro-movimento distante)
+      motionActiveRatio: 0.004, // fração da zona alterada p/ "ATIVA" no perfil (mais sensível)
+      motionSlowRatio: 0.0015, // fração p/ "LENTA/baixa movimentação" no perfil
+    },
+
     // Máquina de estados / anti-flicker
     activeHoldMs: 1200, // tempo após movimento em que a zona segue "ATIVA"
     stateConfirmationMs: 900, // confirma transição de estado
@@ -206,6 +223,10 @@ export const APP_CONFIG = {
 } as const;
 
 export type ZoneSeed = (typeof APP_CONFIG.defaultZones)[number];
+
+// Perfil "Longo alcance"/Panorâmica (P0) — tipo exportado p/ as frentes B/C que ligam o perfil
+// por câmera consumirem os parâmetros com tipos corretos. É OPT-IN: default segue `detection.*`.
+export type LongRangeProfile = typeof APP_CONFIG.detection.longRange;
 
 // Overlay (Onda A) — tipos exportados p/ a Onda 2 (CameraWorkspace) consumir.
 export type OverlayLayers = typeof APP_CONFIG.overlay.layers;

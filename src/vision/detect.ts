@@ -64,23 +64,32 @@ export function detectReady(): boolean {
   return workerReady || workerFailed;
 }
 
-function detectTile(rgba: ArrayBuffer, w: number, h: number): Promise<WorkerDet[]> {
+function detectTile(
+  rgba: ArrayBuffer,
+  w: number,
+  h: number,
+  maxBoxes: number,
+  minScore: number,
+): Promise<WorkerDet[]> {
   const id = ++reqId;
   return new Promise((resolve) => {
     pending.set(id, resolve);
-    worker!.postMessage(
-      { type: "detect", id, rgba, w, h, maxBoxes: C.maxBoxes, minScore: C.minScore },
-      [rgba],
-    );
+    worker!.postMessage({ type: "detect", id, rgba, w, h, maxBoxes, minScore }, [rgba]);
   });
 }
 
 // ── geometria do tiling (frações 0..1 do frame) ───────────────────────────────
+type TileSpec = { cols: number; rows: number; overlap: number };
 type Tile = { x0: number; y0: number; x1: number; y1: number };
-function tileGrid(tiled: boolean): Tile[] {
-  const cols = tiled ? C.tiles.cols : 1,
-    rows = tiled ? C.tiles.rows : 1,
-    o = C.tiles.overlap;
+// Semântica do grid (perfil LONGO ALCANCE):
+//   • `optTiles` (opts.tiles) TEM PRECEDÊNCIA e aplica o grid MESMO com `tiled === false` — é o que
+//     permite ligar tiling nas câmeras da GRADE de longo alcance (hoje só a câmera aberta faz tiling).
+//   • Sem `optTiles`: comportamento atual — grade `C.tiles` só quando `tiled`; single-shot caso contrário.
+function tileGrid(tiled: boolean, optTiles?: TileSpec): Tile[] {
+  const grid: TileSpec = optTiles ?? (tiled ? C.tiles : { cols: 1, rows: 1, overlap: C.tiles.overlap });
+  const cols = grid.cols,
+    rows = grid.rows,
+    o = grid.overlap;
   if (cols <= 1 && rows <= 1) return [{ x0: 0, y0: 0, x1: 1, y1: 1 }];
   const tw = 1 / cols,
     th = 1 / rows,
@@ -138,12 +147,13 @@ function rasterize(
   nativeW: number,
   nativeH: number,
   t: Tile,
+  tileWidth: number,
 ): { rgba: ArrayBuffer; w: number; h: number } | null {
   const sx = t.x0 * nativeW,
     sy = t.y0 * nativeH,
     sw = Math.max(1, (t.x1 - t.x0) * nativeW),
     sh = Math.max(1, (t.y1 - t.y0) * nativeH);
-  const dw = Math.min(C.detectTileWidth, Math.round(sw)),
+  const dw = Math.min(tileWidth, Math.round(sw)),
     dh = Math.max(1, Math.round((dw * sh) / sw));
   if (!scratch) scratch = document.createElement("canvas");
   if (scratch.width !== dw || scratch.height !== dh) {
@@ -157,29 +167,48 @@ function rasterize(
   return { rgba: img.data.buffer, w: dw, h: dh };
 }
 
+// Opções OPT-IN por chamada (perfil LONGO ALCANCE — ver `config.detection.longRange`).
+// Ausente → tudo idêntico ao comportamento atual (retrocompatível). Frentes B/C montam este `opts`
+// a partir de `APP_CONFIG.detection.longRange` quando a câmera está no perfil panorâmica.
+export type DetectFrameOpts = {
+  tiles?: TileSpec; // grade a aplicar; tem precedência sobre `tiled` (liga tiling na grade tb)
+  tileWidth?: number; // px por bloco enviado ao modelo (default C.detectTileWidth)
+  minScore?: number; // limiar BRUTO do coco (default C.minScore)
+  maxBoxes?: number; // teto de detecções por inferência (default C.maxBoxes)
+};
+
 // Detecta objetos no frame. `tiled` liga o grid (câmera aberta); tiles do mosaico usam single-shot.
+// `opts` (opt-in, perfil longo alcance): `opts.tiles` aplica o grid MESMO com `tiled === false`
+// (tiling nas câmeras da grade), e sobrescreve tileWidth/minScore/maxBoxes. Sem `opts`, idêntico a hoje.
 // Retorna Detection[] com bbox em PIXELS do frame nativo (compatível com o pipeline existente).
 export async function detectFrame(
   el: CanvasImageSource,
   nativeW: number,
   nativeH: number,
   tiled: boolean,
+  opts?: DetectFrameOpts,
 ): Promise<Detection[]> {
+  const tileWidth = opts?.tileWidth ?? C.detectTileWidth;
+  const minScore = opts?.minScore ?? C.minScore;
+  const maxBoxes = opts?.maxBoxes ?? C.maxBoxes;
+
   // Fallback main thread: sem tiling (evita bloquear), só limiar/maxBoxes afinados.
   if (!workerReady || !worker) {
     if (!workerFailed) return []; // ainda carregando o worker; não cai pro main thread à toa
     try {
       const model = await loadDetector();
-      return await model.detect(el as HTMLCanvasElement, C.maxBoxes, C.minScore);
+      return await model.detect(el as HTMLCanvasElement, maxBoxes, minScore);
     } catch {
       return [];
     }
   }
 
-  const tiles = tileGrid(tiled);
-  const raster = tiles.map((t) => ({ t, r: rasterize(el, nativeW, nativeH, t) }));
+  const tiles = tileGrid(tiled, opts?.tiles);
+  const raster = tiles.map((t) => ({ t, r: rasterize(el, nativeW, nativeH, t, tileWidth) }));
   const results = await Promise.all(
-    raster.map(({ r }) => (r ? detectTile(r.rgba, r.w, r.h) : Promise.resolve([] as WorkerDet[]))),
+    raster.map(({ r }) =>
+      r ? detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) : Promise.resolve([] as WorkerDet[]),
+    ),
   );
 
   // remapeia cada caixa do bloco → fração do frame inteiro
@@ -196,7 +225,9 @@ export async function detectFrame(
       });
   });
 
-  const merged = tiled && tiles.length > 1 ? nms(all, C.nmsIoU) : all;
+  // NMS sempre que houver >1 bloco (funde duplicatas nas bordas) — inclui o caso longo-alcance-na-grade,
+  // em que `tiled` pode ser false mas `opts.tiles` gerou vários blocos.
+  const merged = tiles.length > 1 ? nms(all, C.nmsIoU) : all;
   return merged.map((d) => ({
     class: d.cls,
     score: d.score,
