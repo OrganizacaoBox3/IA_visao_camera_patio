@@ -8,9 +8,21 @@ import * as Label from "@radix-ui/react-label";
 
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
+// Base compartilhada por Input e Textarea (tokens mapeados no @theme).
+// Replica .ui-input/.ui-textarea: fonte/tamanho/cor, superfície panel-2, borda,
+// radius-sm, placeholder muted, estado inválido (aria-invalid) e foco em anel accent.
+const fieldControlBase =
+  "box-border font-[family-name:var(--sans)] text-[13px] text-text min-w-[180px] " +
+  "bg-panel-2 border border-border rounded-sm placeholder:text-text-muted " +
+  "aria-[invalid=true]:border-critical " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   function Input({ className, ...rest }, ref) {
-    return <input ref={ref} className={cx("ui-input", className)} {...rest} />;
+    // Altura fixa (34px = --ui-ctrl-h) e padding lateral 12px (--sp-3).
+    return (
+      <input ref={ref} className={cx(fieldControlBase, "h-[34px] px-3", className)} {...rest} />
+    );
   },
 );
 
@@ -18,12 +30,23 @@ export const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement>
 >(function Textarea({ className, ...rest }, ref) {
-  return <textarea ref={ref} className={cx("ui-textarea", className)} {...rest} />;
+  // width:100%, altura automática, padding 8px/12px, altura mínima 64px, resize vertical.
+  return (
+    <textarea
+      ref={ref}
+      className={cx(
+        fieldControlBase,
+        "w-full px-3 py-2 min-h-16 resize-y leading-[1.4]",
+        className,
+      )}
+      {...rest}
+    />
+  );
 });
 
 export function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: ReactNode }) {
   return (
-    <Label.Root className="ui-label" htmlFor={htmlFor}>
+    <Label.Root className="text-[12px] text-text-dim" htmlFor={htmlFor}>
       {children}
     </Label.Root>
   );
@@ -46,13 +69,20 @@ export function Field({
   children: ReactNode;
 }) {
   return (
-    <div className={cx("ui-field", className)}>
+    // Coluna com gap 4px (--sp-1). Dentro do Field, o controle ocupa a largura toda
+    // (replica .ui-field > .ui-input/.ui-textarea { width:100%; min-width:0 }).
+    <div
+      className={cx(
+        "flex flex-col gap-1 [&>input]:w-full [&>input]:min-w-0 [&>textarea]:min-w-0",
+        className,
+      )}
+    >
       {label && <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>}
       {children}
       {error ? (
-        <span className="ui-err">{error}</span>
+        <span className="text-[11px] text-critical">{error}</span>
       ) : hint ? (
-        <span className="ui-hint">{hint}</span>
+        <span className="text-[11px] text-text-muted">{hint}</span>
       ) : null}
     </div>
   );

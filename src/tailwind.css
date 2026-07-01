@@ -31,7 +31,8 @@
   --color-cam-surface: var(--cam-surface-bg);
   --color-cam-panel: var(--cam-panel-bg);
 
-  /* raio */
-  --radius-sm: var(--radius-sm);
-  --radius-md: var(--radius);
+  /* raio — valores literais (o token do projeto tem o MESMO nome --radius-sm,
+     então var(--radius-sm) aqui seria auto-referência/ciclo). 6px/10px = tokens atuais. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
 }

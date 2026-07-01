@@ -112,7 +112,10 @@ export const Slider = forwardRef<ElementRef<typeof RSlider.Root>, SliderProps>(f
   return (
     <RSlider.Root
       ref={ref}
-      className={cx("ui-slider", className)}
+      className={cx(
+        "relative flex h-5 w-full touch-none select-none items-center",
+        className,
+      )}
       value={[value]}
       min={min}
       max={max}
@@ -120,10 +123,16 @@ export const Slider = forwardRef<ElementRef<typeof RSlider.Root>, SliderProps>(f
       onValueChange={(v) => onChange(v[0])}
       {...rest}
     >
-      <RSlider.Track className="ui-slider-track">
-        <RSlider.Range className="ui-slider-range" />
+      <RSlider.Track className="relative h-1.5 flex-1 rounded-full border border-border bg-panel-2">
+        <RSlider.Range className="absolute h-full rounded-full bg-accent" />
       </RSlider.Track>
-      <RSlider.Thumb className="ui-slider-thumb" aria-label={ariaLabel ?? "valor"} />
+      <RSlider.Thumb
+        className={cx(
+          "block size-4 cursor-grab rounded-full border-2 border-accent bg-text active:cursor-grabbing",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        )}
+        aria-label={ariaLabel ?? "valor"}
+      />
     </RSlider.Root>
   );
 });

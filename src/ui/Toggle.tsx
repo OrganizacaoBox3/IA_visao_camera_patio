@@ -4,12 +4,25 @@ import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type Element
 
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
+/* Tailwind (tokens mapeados no @theme). Replica EXATO o antigo `.ui-toggle`:
+   base panel + text-dim, on = estado `info` (going-gray), foco = duplo anel (--ui-focus). */
+const TOGGLE_CLS = cx(
+  "box-border inline-flex h-[var(--ui-ctrl-h)] cursor-pointer items-center justify-center gap-[var(--sp-2)]",
+  "whitespace-nowrap rounded-sm border border-border bg-panel px-[var(--sp-3)]",
+  "font-[family-name:var(--sans)] text-[13px] font-medium text-text-dim",
+  "transition-colors duration-[120ms]",
+  "hover:text-text",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+  "disabled:cursor-not-allowed disabled:opacity-45",
+  "data-[state=on]:border-[var(--state-info-border)] data-[state=on]:bg-[var(--state-info-bg)] data-[state=on]:text-[var(--state-info-fg)]",
+);
+
 // ── Toggle — botão de estado (aria-pressed automático via Radix) ──
 export const Toggle = forwardRef<
   ElementRef<typeof RToggle.Root>,
   ComponentPropsWithoutRef<typeof RToggle.Root>
 >(function Toggle({ className, ...rest }, ref) {
-  return <RToggle.Root ref={ref} className={cx("ui-toggle", className)} {...rest} />;
+  return <RToggle.Root ref={ref} className={cx(TOGGLE_CLS, className)} {...rest} />;
 });
 
 // ── ToggleGroup.Item (baixo nível) ──
@@ -17,13 +30,7 @@ export const ToggleGroupItem = forwardRef<
   ElementRef<typeof RToggleGroup.Item>,
   ComponentPropsWithoutRef<typeof RToggleGroup.Item>
 >(function ToggleGroupItem({ className, ...rest }, ref) {
-  return (
-    <RToggleGroup.Item
-      ref={ref}
-      className={cx("ui-toggle", "ui-toggle-item", className)}
-      {...rest}
-    />
-  );
+  return <RToggleGroup.Item ref={ref} className={cx(TOGGLE_CLS, className)} {...rest} />;
 });
 
 export type ToggleGroupOption = {
@@ -69,7 +76,10 @@ export function ToggleGroup(props: ToggleGroupProps) {
     </ToggleGroupItem>
   ));
   const common = {
-    className: cx("ui-toggle-group", className),
+    className: cx(
+      "inline-flex gap-[var(--sp-2)] data-[orientation=vertical]:flex-col",
+      className,
+    ),
     "aria-label": ariaLabel,
     disabled,
     orientation,

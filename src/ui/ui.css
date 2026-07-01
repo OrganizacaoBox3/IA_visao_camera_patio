@@ -149,16 +149,18 @@
   gap: var(--sp-2);
 }
 /* dentro do drawer estreito da câmera, os controles encolhem e ocupam o espaço */
-.cam-drawer .ui-select,
-.cam-drawer .ui-input {
+/* Migrados p/ Tailwind: re-apontados p/ elemento/atributo estável (Radix trigger =
+   [role="combobox"], Slider = [data-orientation]) em vez das classes .ui-* removidas. */
+.cam-drawer [role="combobox"],
+.cam-drawer input {
   min-width: 0;
   flex: 1;
 }
-.cam-drawer .row .ui-select {
+.cam-drawer .row [role="combobox"] {
   flex: 0 0 auto;
   min-width: 96px;
 }
-.zone-sens .ui-slider {
+.zone-sens [data-orientation] {
   flex: 1;
 }
 .ui-input::placeholder,

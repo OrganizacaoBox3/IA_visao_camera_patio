@@ -1265,7 +1265,7 @@ button.rail-item {
   gap: var(--sp-2);
   align-items: center;
 }
-.enroll .ui-input {
+.enroll input {
   flex: 1;
   min-width: 240px;
   font-family: var(--mono);
@@ -1330,7 +1330,7 @@ button.rail-item {
   align-items: center;
   gap: var(--sp-2);
 }
-.notif-type .ui-input {
+.notif-type input {
   min-width: 0;
 }
 .notif-preview {
@@ -2543,7 +2543,7 @@ button.rail-item {
   cursor: pointer;
 }
 .calib-row input[type="range"],
-.calib-row .ui-slider {
+.calib-row [data-orientation] {
   grid-column: 1 / -1;
   width: 100%;
   margin-top: 3px;

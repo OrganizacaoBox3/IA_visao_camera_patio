@@ -3,7 +3,7 @@
    já existentes (going-gray: base neutra, cor só para anormalidade). NÃO edita index.css/ui.css. */
 
 /* Seletor de view no cabeçalho — discreto (largura contida p/ não dominar a barra). */
-.view-picker .ui-select {
+.view-picker [role="combobox"] {
   min-width: 150px;
 }
 

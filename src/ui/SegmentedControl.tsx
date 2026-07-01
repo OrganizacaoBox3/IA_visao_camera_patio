@@ -19,7 +19,12 @@ function SegmentedControlInner<T extends string>(
     <Toggle.Root
       ref={ref}
       type="single"
-      className="ui-seg"
+      className={
+        // Container: inline-flex, fundo var(--panel), borda var(--border), raio --radius-sm, recorta cantos.
+        // Responsivo (≤640px): permite rolagem horizontal (replica .ui-seg do ui.css).
+        "inline-flex overflow-hidden rounded-sm border border-border bg-panel " +
+        "max-sm:max-w-full max-sm:overflow-x-auto"
+      }
       value={value}
       aria-label={ariaLabel}
       onValueChange={(v) => {
@@ -27,7 +32,22 @@ function SegmentedControlInner<T extends string>(
       }}
     >
       {options.map((o) => (
-        <Toggle.Item key={o.value} value={o.value} className="ui-seg-item">
+        <Toggle.Item
+          key={o.value}
+          value={o.value}
+          className={
+            // Item: 12px, padding lateral var(--sp-3), altura 30px, transparente, texto atenuado.
+            "inline-flex h-[30px] cursor-pointer items-center border-none bg-transparent px-3 text-[12px] text-text-dim " +
+            // Hover: texto pleno.
+            "hover:text-text " +
+            // Foco visível (replica var(--ui-focus): anel accent com offset na cor do fundo).
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg " +
+            // Selecionado (data-state=on): fundo #0b3a4a, texto var(--state-info-fg). Réplica exata do ui.css.
+            "data-[state=on]:bg-[#0b3a4a] data-[state=on]:text-[var(--state-info-fg)] " +
+            // Alvo de toque ≥44px em telas estreitas (WCAG 2.5.5).
+            "max-sm:min-h-[44px]"
+          }
+        >
           {o.label}
         </Toggle.Item>
       ))}
