@@ -8,56 +8,28 @@ import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
-import {
-  Button,
-  IconButton,
-  Switch,
-  Checkbox,
-  Select,
-  Input,
-  Dialog,
-  AlertDialog,
-  Field,
-  Tooltip,
-  ScrollArea,
-  useToast,
-} from "../ui";
+import { Button, Switch, Select, Dialog, Tooltip, useToast } from "../ui";
 import {
   listAlarms,
   ackAlarm,
   forwardAlarm,
   getViews,
   saveViews,
-  listCameras,
-  createCamera,
-  updateCamera,
-  deleteCamera,
-  isValidCameraUrl,
-  maskCameraUrl,
   ApiError,
   type AlarmEvent,
   type AlarmPriority,
   type AlarmState,
   type SavedView,
-  type Camera as IpCamera,
-  type CameraTransport,
-  type NewCamera,
 } from "../api";
+import { type Camera, type CameraStatus } from "./dashboard/types";
+import { CameraTile } from "./dashboard/CameraTile";
+import { AlarmDrawer } from "./dashboard/AlarmDrawer";
+import { ViewsManager } from "./dashboard/ViewsManager";
+import { IpCameraDialog } from "./dashboard/IpCameraDialog";
 import "./alarms.css";
 import "./views.css";
 import "./cameras.css";
 
-type Camera = { id: string; label: string };
-// Status por câmera vindo do hub (contrato A4 — evento socket `camera-status`). Aditivo: se o hub
-// não emitir, a UI assume "online" e nada quebra.
-type CameraStatus = {
-  id: string;
-  state: "connecting" | "online" | "error" | "stopped";
-  fps?: number;
-  lastError?: string | null;
-  label?: string;
-  kind?: "rtsp" | "browser";
-};
 // ImageBitmap decodificado fora da main thread; só guardamos o último frame (descarta atrasados).
 type FrameEntry = {
   bmp: ImageBitmap | null;
@@ -143,10 +115,6 @@ function loadViewPrefs(userId: string): ViewPrefs {
   return { activeViewId: legacy.activeViewId, autoSurface: legacy.autoSurface };
 }
 
-function newViewId(): string {
-  return `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
 // Janela de "atividade recente" para o auto-surface (ver activityScore abaixo).
 const AUTOSURFACE_WINDOW_MS = 10 * 60_000;
 
@@ -179,29 +147,10 @@ export function DashboardPage() {
   // ── Fila de alarmes acionável (Onda B · item 7) — consome o backend B1 (só metadados, LGPD) ──
   const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
   const [alarmsOpen, setAlarmsOpen] = useState(false);
-  const [fPriority, setFPriority] = useState<"all" | AlarmPriority>("all");
-  const [fState, setFState] = useState<"all" | AlarmState>("all");
-  const [hideAcked, setHideAcked] = useState(false); // só filtro de exibição (não apaga no servidor)
   const { toast } = useToast();
 
-  // ── Câmeras IP/RTSP (superadmin) — cadastro + gestão pela home ────────────────────────────────
-  // Cadastra câmeras dinâmicas (POST /api/cameras); a grade se atualiza sozinha pelos eventos socket
-  // `cameras`/`camera-status` (não refazemos o relé). A lista COM url (sensível) vem do GET
-  // /api/cameras e só é buscada com o painel aberto; a url nunca é logada e é mascarada na exibição.
+  // ── Câmeras IP/RTSP (superadmin) — cadastro + gestão pela home (ver IpCameraDialog) ──
   const [ipOpen, setIpOpen] = useState(false);
-  const [ipCameras, setIpCameras] = useState<IpCamera[]>([]);
-  const [ipLoading, setIpLoading] = useState(false);
-  const [ipBusy, setIpBusy] = useState(false); // trava dupla submissão / mutações concorrentes
-  const [confirmDel, setConfirmDel] = useState<IpCamera | null>(null);
-  // Formulário de cadastro.
-  const [fLabel, setFLabel] = useState("");
-  const [fUrl, setFUrl] = useState("");
-  const [fTransport, setFTransport] = useState<CameraTransport>("tcp");
-  const [fUrlError, setFUrlError] = useState<string | null>(null);
-  const [fAdvanced, setFAdvanced] = useState(false);
-  const [fFps, setFFps] = useState("");
-  const [fWidth, setFWidth] = useState("");
-  const [fQuality, setFQuality] = useState("");
 
   // ── Views salvas por setor + auto-surface (Onda C · item 11) ──
   // Lista de views = backend (compartilhada); activeViewId/autoSurface = prefs locais do operador.
@@ -219,10 +168,6 @@ export function DashboardPage() {
   // Cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela câmera; o número
   // é repassado às tiles via prop `tripwiresRev` (CameraWorkspace re-busca os tripwires quando muda).
   const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
-  // Editor do gerenciador: editId = id da view em edição, "new" (criando) ou null (nada aberto).
-  const [editId, setEditId] = useState<string | "new" | null>(null);
-  const [draftName, setDraftName] = useState("");
-  const [draftIds, setDraftIds] = useState<string[]>([]);
   // "Tick" para reordenar periodicamente no auto-surface (a recência decai com o tempo, mesmo sem
   // novos eventos socket). Só roda quando o modo está ligado.
   const [surfaceTick, setSurfaceTick] = useState(0);
@@ -538,18 +483,6 @@ export function DashboardPage() {
     [newAlarms],
   );
 
-  // Lista visível = filtros de prioridade/estado + "ocultar reconhecidos" (só exibição). Mantém ts desc.
-  const visibleAlarms = useMemo(
-    () =>
-      alarms.filter(
-        (a) =>
-          (fPriority === "all" || a.priority === fPriority) &&
-          (fState === "all" || a.state === fState) &&
-          (!hideAcked || a.state === "new"),
-      ),
-    [alarms, fPriority, fState, hideAcked],
-  );
-
   // Ack/forward otimista: reflete o estado já; confirma com a resposta (e o socket `alarm-update` reforça).
   async function actOnAlarm(a: AlarmEvent, kind: "ack" | "forward") {
     if (a.state !== "new") return; // já tratado
@@ -573,97 +506,6 @@ export function DashboardPage() {
         ),
       ); // rollback
       toast(e instanceof ApiError ? e.message : "Não foi possível atualizar o alarme.", "alert");
-    }
-  }
-
-  // Carrega a lista de câmeras IP (com url) do backend — só superadmin, só com o painel aberto.
-  const loadIpCameras = useCallback(async () => {
-    setIpLoading(true);
-    try {
-      setIpCameras(await listCameras());
-    } catch (e) {
-      // Não logar a url; a lista nem carregou aqui, então só a mensagem amigável.
-      toast(e instanceof ApiError ? e.message : "Não foi possível carregar as câmeras IP.", "alert");
-    } finally {
-      setIpLoading(false);
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    if (ipOpen && isSuper) void loadIpCameras();
-  }, [ipOpen, isSuper, loadIpCameras]);
-
-  function resetCameraForm() {
-    setFLabel("");
-    setFUrl("");
-    setFTransport("tcp");
-    setFUrlError(null);
-    setFAdvanced(false);
-    setFFps("");
-    setFWidth("");
-    setFQuality("");
-  }
-
-  // A URL vazia ou rtsp/rtsps mostra o seletor de transporte (só faz sentido p/ rtsp).
-  const urlIsRtsp = fUrl.trim() === "" || /^rtsps?:\/\//i.test(fUrl.trim());
-
-  // Cadastra a câmera: valida a url no cliente ANTES de chamar a API; sucesso → toast + limpa o form
-  // (a câmera entra na grade pelo socket). transport só vai p/ rtsp; avançado (fps/width/quality) é opcional.
-  async function submitCamera() {
-    const url = fUrl.trim();
-    if (!isValidCameraUrl(url)) {
-      setFUrlError("URL inválida. Use rtsp://, rtsps:// ou http(s)://.");
-      return; // bloqueia antes da rede
-    }
-    setFUrlError(null);
-    const body: NewCamera = { url };
-    if (fLabel.trim()) body.label = fLabel.trim();
-    if (urlIsRtsp) body.transport = fTransport;
-    if (fAdvanced) {
-      const fps = Number.parseInt(fFps, 10);
-      const width = Number.parseInt(fWidth, 10);
-      const quality = Number.parseInt(fQuality, 10);
-      if (Number.isFinite(fps)) body.fps = fps;
-      if (Number.isFinite(width)) body.width = width;
-      if (Number.isFinite(quality)) body.quality = quality;
-    }
-    setIpBusy(true);
-    try {
-      await createCamera(body); // o backend valida/clampa; a grade atualiza pelo socket
-      toast("Câmera IP adicionada. Conectando…", "ok");
-      resetCameraForm();
-      await loadIpCameras();
-    } catch (e) {
-      toast(e instanceof ApiError ? e.message : "Não foi possível adicionar a câmera.", "alert");
-    } finally {
-      setIpBusy(false);
-    }
-  }
-
-  async function toggleCameraEnabled(c: IpCamera) {
-    setIpBusy(true);
-    try {
-      await updateCamera(c.id, { enabled: !c.enabled });
-      toast(c.enabled ? "Câmera desabilitada." : "Câmera habilitada.", "ok");
-      await loadIpCameras();
-    } catch (e) {
-      toast(e instanceof ApiError ? e.message : "Não foi possível atualizar a câmera.", "alert");
-    } finally {
-      setIpBusy(false);
-    }
-  }
-
-  async function removeCamera(c: IpCamera) {
-    setIpBusy(true);
-    try {
-      await deleteCamera(c.id);
-      toast("Câmera removida.", "default");
-      await loadIpCameras();
-    } catch (e) {
-      toast(e instanceof ApiError ? e.message : "Não foi possível remover a câmera.", "alert");
-    } finally {
-      setIpBusy(false);
-      setConfirmDel(null);
     }
   }
 
@@ -694,88 +536,10 @@ export function DashboardPage() {
     });
   }
 
-  // ── Handlers do gerenciador de views ──
+  // Seleção da view ativa (preferência local do operador). "__all__" = "Todas as câmeras".
   function pickView(v: string) {
     setActiveViewId(v === "__all__" ? null : v);
   }
-  function startNewView() {
-    setEditId("new");
-    setDraftName("");
-    setDraftIds([]);
-  }
-  function startEditView(v: SavedView) {
-    setEditId(v.id);
-    setDraftName(v.name);
-    setDraftIds([...v.cameraIds]);
-  }
-  function cancelEditView() {
-    setEditId(null);
-  }
-  function toggleDraftCam(id: string) {
-    setDraftIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }
-  function moveDraftCam(id: string, dir: -1 | 1) {
-    setDraftIds((prev) => {
-      const i = prev.indexOf(id);
-      if (i < 0) return prev;
-      const j = i + dir;
-      if (j < 0 || j >= prev.length) return prev;
-      const next = [...prev];
-      const tmp = next[i];
-      next[i] = next[j];
-      next[j] = tmp;
-      return next;
-    });
-  }
-  // Salva a LISTA inteira no backend (PUT /api/views), otimista com rollback + toast em erro —
-  // mesmo padrão dos alarmes. `prev` é a lista antes da mudança (para reverter se a API falhar).
-  async function persistViews(
-    next: SavedView[],
-    prev: SavedView[],
-    okMsg: string,
-    okVariant: "ok" | "default" = "ok",
-  ) {
-    setViews(next); // otimista
-    try {
-      const saved = await saveViews(next);
-      setViews(saved); // adota o que o servidor confirmou
-      toast(okMsg, okVariant);
-    } catch (e) {
-      setViews(prev); // rollback
-      toast(e instanceof ApiError ? e.message : "Não foi possível salvar as views.", "alert");
-    }
-  }
-  function saveEditView() {
-    const name = draftName.trim() || "View sem nome";
-    const prev = views;
-    if (editId === "new") {
-      const id = newViewId();
-      setActiveViewId(id);
-      setEditId(null);
-      void persistViews([...prev, { id, name, cameraIds: draftIds }], prev, "View salva.");
-    } else if (editId) {
-      setEditId(null);
-      void persistViews(
-        prev.map((v) => (v.id === editId ? { ...v, name, cameraIds: draftIds } : v)),
-        prev,
-        "View salva.",
-      );
-    } else {
-      setEditId(null);
-    }
-  }
-  function deleteView(id: string) {
-    const prev = views;
-    setActiveViewId((cur) => (cur === id ? null : cur));
-    if (editId === id) setEditId(null);
-    void persistViews(
-      prev.filter((v) => v.id !== id),
-      prev,
-      "View excluída.",
-      "default",
-    );
-  }
-  const camLabel = (id: string): string => cameras.find((c) => c.id === id)?.label ?? id;
 
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
   const camNodeUrl = `${location.origin}/camera`;
@@ -784,186 +548,6 @@ export function DashboardPage() {
   function handleAlert(msg: string) {
     toast(msg, msg.includes("⚠") ? "alert" : "default");
     socketRef.current?.emit("alert", { text: msg, ts: Date.now() });
-  }
-
-  // Estado de conexão por câmera (contrato A4). Sem evento `camera-status` → assume "online".
-  // "Going gray" (Onda A): base neutra/cinza; cor saturada SÓ para anormalidade. Mapa de tokens
-  // (src/index.css · estado→token): online→neutral (operação normal, evita "árvore de natal");
-  // connecting→info (azul, advisory não-crítico); error→critical (vermelho); stopped→neutral-dim
-  // (cinza apagado). dot = realce; border = borda discreta por estado (glanceable à distância).
-  function statusInfo(id: string): { text: string; dot: string; border: string; fps?: number } {
-    const s = statuses[id];
-    const state = s?.state ?? "online";
-    const text =
-      state === "online"
-        ? "online"
-        : state === "connecting"
-          ? "conectando…"
-          : state === "stopped"
-            ? "parada"
-            : "erro";
-    const dot =
-      state === "connecting"
-        ? "var(--state-info)"
-        : state === "error"
-          ? "var(--state-critical)"
-          : state === "stopped"
-            ? "var(--state-neutral-dim)"
-            : "var(--state-neutral)"; // online (normal) → neutro, sem cor de alarme
-    const border =
-      state === "connecting"
-        ? "var(--state-info-border)"
-        : state === "error"
-          ? "var(--state-critical-border)"
-          : state === "stopped"
-            ? "var(--state-neutral-border)"
-            : "var(--state-neutral-border)";
-    return { text, dot, border, fps: s?.fps };
-  }
-
-  // Prioridade → token de cor (going-gray): advisory=info(azul), high=warn(amarelo), critical=critical(vermelho).
-  function prioColor(p: AlarmPriority): string {
-    return p === "critical"
-      ? "var(--state-critical)"
-      : p === "high"
-        ? "var(--state-warn)"
-        : "var(--state-info)";
-  }
-  function prioBorder(p: AlarmPriority): string {
-    return p === "critical"
-      ? "var(--state-critical-border)"
-      : p === "high"
-        ? "var(--state-warn-border)"
-        : "var(--state-info-border)";
-  }
-  const PRIO_LABEL: Record<AlarmPriority, string> = {
-    advisory: "informativo",
-    high: "alta",
-    critical: "crítico",
-  };
-  const STATE_LABEL: Record<AlarmState, string> = {
-    new: "novo",
-    acknowledged: "reconhecido",
-    forwarded: "encaminhado",
-  };
-
-  function renderAlarmCard(a: AlarmEvent) {
-    const done = a.state !== "new";
-    const when = new Date(a.ts).toLocaleString("pt-BR", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    const local = a.cameraLabel || a.cameraId || a.zona;
-    return (
-      <div
-        key={a.id}
-        className="alarm-card"
-        data-done={done ? 1 : 0}
-        style={{ borderLeftColor: prioBorder(a.priority) }}
-      >
-        <div className="alarm-card__top">
-          <span className="alarm-card__dot" style={{ background: prioColor(a.priority) }} />
-          <span className="alarm-card__prio" style={{ color: prioColor(a.priority) }}>
-            {PRIO_LABEL[a.priority]}
-          </span>
-          <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}>
-            <span className="alarm-card__time">{when}</span>
-          </Tooltip>
-        </div>
-        <div className="alarm-card__text">{a.text}</div>
-        <div className="alarm-card__meta">
-          {local && (
-            <span>
-              📍 {local}
-              {a.zona && a.zona !== local ? ` · ${a.zona}` : ""}
-            </span>
-          )}
-          <span>{a.tipo}</span>
-          <span className="alarm-card__state">
-            {STATE_LABEL[a.state]}
-            {a.ackBy ? ` · ${a.ackBy}` : ""}
-          </span>
-        </div>
-        {!done && (
-          <div className="alarm-card__actions">
-            <Tooltip content="Reconhecer (assumir o alarme)">
-              <Button size="sm" variant="primary" onClick={() => actOnAlarm(a, "ack")}>
-                Reconhecer
-              </Button>
-            </Tooltip>
-            <Tooltip content="Encaminhar a outro operador">
-              <Button size="sm" onClick={() => actOnAlarm(a, "forward")}>
-                Encaminhar
-              </Button>
-            </Tooltip>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderTile(c: Camera) {
-    const st = statusInfo(c.id);
-    const inner =
-      c.id === openId ? (
-        <div className="tile tile-open">aberta no painel</div>
-      ) : isFadiga(c.id) ? (
-        <FadigaView
-          key={`fad-${c.id}`}
-          cameraId={c.id}
-          label={c.label}
-          getFrame={getterFor(c.id)}
-          mode="tile"
-          onOpen={() => setOpenId(c.id)}
-          onAlert={handleAlert}
-          onSample={recordFadigaSamples}
-          onEvent={recordFadigaEvent}
-        />
-      ) : (
-        <CameraWorkspace
-          key={`ws-${c.id}`}
-          cameraId={c.id}
-          label={c.label}
-          getFrame={getterFor(c.id)}
-          mode="tile"
-          demoMode={demoMode}
-          tripwiresRev={revByCamera.get(c.id) ?? 0}
-          onOpen={() => setOpenId(c.id)}
-          onAlert={handleAlert}
-        />
-      );
-    return (
-      <div key={`wrap-${c.id}`} style={{ position: "relative", display: "grid", minHeight: 0 }}>
-        {inner}
-        <Tooltip content={statuses[c.id]?.lastError || st.text}>
-          <span
-            style={{
-              position: "absolute",
-              top: 6,
-              left: 6,
-              zIndex: 2,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontFamily: "var(--mono)",
-              fontSize: 11,
-              background: "var(--cam-overlay-scrim)",
-              color: "var(--cam-overlay-fg)",
-              border: `1px solid ${st.border}`,
-              padding: "2px 7px",
-              borderRadius: 999,
-            }}
-          >
-            {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
-            <span className="dot-status" style={{ background: st.dot }} />
-            {st.text}
-            {st.fps != null ? ` · ${st.fps}fps` : ""}
-          </span>
-        </Tooltip>
-      </div>
-    );
   }
 
   return (
@@ -1103,7 +687,20 @@ export function DashboardPage() {
           </div>
         ) : (
           <div className="dash-grid" data-cols={colsFor(pageCameras.length)}>
-            {pageCameras.map(renderTile)}
+            {pageCameras.map((c) => (
+              <CameraTile
+                key={`wrap-${c.id}`}
+                camera={c}
+                isOpen={c.id === openId}
+                isFadiga={isFadiga(c.id)}
+                getFrame={getterFor(c.id)}
+                demoMode={demoMode}
+                tripwiresRev={revByCamera.get(c.id) ?? 0}
+                status={statuses[c.id]}
+                onOpen={() => setOpenId(c.id)}
+                onAlert={handleAlert}
+              />
+            ))}
           </div>
         )}
 
@@ -1170,385 +767,28 @@ export function DashboardPage() {
           ))}
         </Dialog>
 
-        {/* Câmeras IP/RTSP (superadmin): cadastro + gestão pela home. A grade se atualiza pelos
-            eventos socket (`cameras`/`camera-status`) — aqui só disparamos as chamadas HTTP.
-            LGPD: a url é sensível (credenciais) — mascarada na exibição e nunca logada. */}
-        {isSuper && (
-          <Dialog
-            open={ipOpen}
-            onOpenChange={(o) => {
-              setIpOpen(o);
-              if (!o) {
-                resetCameraForm();
-                setConfirmDel(null);
-              }
-            }}
-            title="Câmeras IP / RTSP"
-            description={
-              <>
-                Cadastre câmeras de rede (RTSP/HLS/MJPEG). Ao salvar, o hub conecta e a câmera
-                aparece na grade automaticamente. A URL pode conter credenciais — é tratada como
-                sensível (exibida com o usuário/senha ocultos).
-              </>
-            }
-          >
-            <form
-              className="cam-ip-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submitCamera();
-              }}
-            >
-              <Field label="Nome (opcional)" htmlFor="cam-label">
-                <Input
-                  id="cam-label"
-                  value={fLabel}
-                  onChange={(e) => setFLabel(e.target.value)}
-                  placeholder="Ex.: Doca 3"
-                />
-              </Field>
-              <Field
-                label="URL da câmera"
-                htmlFor="cam-url"
-                error={fUrlError ?? undefined}
-                hint="rtsp:// · rtsps:// · http(s):// (HLS .m3u8 ou MJPEG)"
-              >
-                <Input
-                  id="cam-url"
-                  value={fUrl}
-                  onChange={(e) => {
-                    setFUrl(e.target.value);
-                    if (fUrlError) setFUrlError(null);
-                  }}
-                  placeholder="rtsp://usuario:senha@10.0.0.52:554/Streaming/Channels/101"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </Field>
-              {urlIsRtsp && (
-                <Field label="Transporte (RTSP)" hint="TCP é o mais compatível; auto deixa o ffmpeg decidir.">
-                  <Select
-                    value={fTransport}
-                    onChange={(v) => setFTransport(v as CameraTransport)}
-                    ariaLabel="Transporte RTSP"
-                    options={[
-                      { value: "tcp", label: "TCP (padrão)" },
-                      { value: "udp", label: "UDP" },
-                      { value: "http", label: "HTTP" },
-                      { value: "auto", label: "Automático" },
-                    ]}
-                  />
-                </Field>
-              )}
-              <label className="cam-ip-adv-toggle">
-                <Checkbox
-                  checked={fAdvanced}
-                  onCheckedChange={(v) => setFAdvanced(!!v)}
-                  ariaLabel="Opções avançadas"
-                />{" "}
-                Opções avançadas (fps / largura / qualidade)
-              </label>
-              {fAdvanced && (
-                <div className="cam-ip-adv">
-                  <Field label="fps (1–30)" htmlFor="cam-fps">
-                    <Input
-                      id="cam-fps"
-                      type="number"
-                      min={1}
-                      max={30}
-                      value={fFps}
-                      onChange={(e) => setFFps(e.target.value)}
-                      placeholder="8"
-                    />
-                  </Field>
-                  <Field label="Largura (160–1920)" htmlFor="cam-width">
-                    <Input
-                      id="cam-width"
-                      type="number"
-                      min={160}
-                      max={1920}
-                      value={fWidth}
-                      onChange={(e) => setFWidth(e.target.value)}
-                      placeholder="480"
-                    />
-                  </Field>
-                  <Field label="Qualidade (1–31)" htmlFor="cam-quality">
-                    <Input
-                      id="cam-quality"
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={fQuality}
-                      onChange={(e) => setFQuality(e.target.value)}
-                      placeholder="7"
-                    />
-                  </Field>
-                </div>
-              )}
-              <div className="views-mgr__foot">
-                <Button type="submit" variant="primary" disabled={ipBusy}>
-                  {ipBusy ? "Salvando…" : "Adicionar câmera"}
-                </Button>
-              </div>
-            </form>
-
-            <div className="views-mgr" style={{ marginTop: "var(--sp-3)" }}>
-              <span className="ui-label">Câmeras IP cadastradas</span>
-              {ipLoading && <p className="empty-note">Carregando…</p>}
-              {!ipLoading && ipCameras.length === 0 && (
-                <p className="empty-note">Nenhuma câmera IP cadastrada ainda.</p>
-              )}
-              {ipCameras.map((c) => (
-                <div key={`ipc-${c.id}`} className="views-mgr__row">
-                  <div className="views-mgr__name">
-                    <b>{c.label || "(sem nome)"}</b>
-                    {/* url mascarada: mostra host, oculta credenciais (LGPD) */}
-                    <span className="muted" title="URL com credenciais ocultas">
-                      {maskCameraUrl(c.url)}
-                    </span>
-                  </div>
-                  <label className="switch">
-                    <Switch
-                      checked={c.enabled}
-                      onCheckedChange={() => void toggleCameraEnabled(c)}
-                      disabled={ipBusy}
-                      ariaLabel={c.enabled ? "Desabilitar câmera" : "Habilitar câmera"}
-                    />{" "}
-                    {c.enabled ? "Ativa" : "Parada"}
-                  </label>
-                  <Tooltip content="Remover câmera">
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={ipBusy}
-                      onClick={() => setConfirmDel(c)}
-                    >
-                      Remover
-                    </Button>
-                  </Tooltip>
-                </div>
-              ))}
-            </div>
-          </Dialog>
-        )}
-
-        {/* Confirmação destrutiva da remoção de câmera IP (Radix AlertDialog controlado). */}
-        <AlertDialog
-          open={confirmDel != null}
-          onOpenChange={(o) => {
-            if (!o) setConfirmDel(null);
-          }}
-          title="Remover câmera?"
-          description={
-            confirmDel
-              ? `A câmera "${confirmDel.label || confirmDel.id}" será desconectada e removida do cadastro.`
-              : ""
-          }
-          confirmLabel="Remover"
-          variant="danger"
-          busy={ipBusy}
-          onConfirm={() => {
-            if (confirmDel) void removeCamera(confirmDel);
-          }}
-          onCancel={() => setConfirmDel(null)}
-        />
+        {/* Câmeras IP/RTSP (superadmin): cadastro + gestão pela home. */}
+        {isSuper && <IpCameraDialog open={ipOpen} onOpenChange={setIpOpen} />}
 
         {/* Gerenciador de views por setor (Onda C · item 11) — criar/renomear/excluir + ordenar */}
-        <Dialog
+        <ViewsManager
           open={viewsMgrOpen}
-          onOpenChange={(o) => {
-            setViewsMgrOpen(o);
-            if (!o) setEditId(null);
-          }}
-          title="Views por setor"
-          description={
-            <>
-              Monte conjuntos de câmeras por setor (ex.: <b>Docas</b>, <b>Expedição</b>) e alterne
-              rápido pelo seletor do cabeçalho. <b>Todas as câmeras</b> é a view padrão.
-              Compartilhadas entre todos os operadores (salvas no servidor).
-            </>
-          }
-        >
-          {editId === null ? (
-            <div className="views-mgr">
-              <div className="views-mgr__row views-mgr__row--all">
-                <div className="views-mgr__name">
-                  <b>Todas as câmeras</b>
-                  <span className="muted">padrão · {cameras.length} câmera(s)</span>
-                </div>
-              </div>
-              {viewsLoading && <p className="empty-note">Carregando views…</p>}
-              {!viewsLoading && views.length === 0 && (
-                <p className="empty-note">Nenhuma view salva ainda.</p>
-              )}
-              {views.map((v) => (
-                <div key={`vrow-${v.id}`} className="views-mgr__row">
-                  <div className="views-mgr__name">
-                    <b>{v.name}</b>
-                    <span className="muted">{v.cameraIds.length} câmera(s)</span>
-                  </div>
-                  <Tooltip content="Editar câmeras, ordem e nome">
-                    <Button size="sm" onClick={() => startEditView(v)}>
-                      Editar
-                    </Button>
-                  </Tooltip>
-                  <Tooltip content="Excluir esta view">
-                    <Button size="sm" variant="danger" onClick={() => deleteView(v.id)}>
-                      Excluir
-                    </Button>
-                  </Tooltip>
-                </div>
-              ))}
-              <div className="views-mgr__foot">
-                <Button variant="primary" onClick={startNewView}>
-                  + Nova view
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="views-mgr views-editor">
-              <label className="views-editor__name">
-                <span className="ui-label">Nome da view</span>
-                <Input
-                  value={draftName}
-                  onChange={(e) => setDraftName(e.target.value)}
-                  placeholder="Ex.: Docas"
-                  autoFocus
-                />
-              </label>
+          onOpenChange={setViewsMgrOpen}
+          views={views}
+          setViews={setViews}
+          setActiveViewId={setActiveViewId}
+          cameras={cameras}
+          viewsLoading={viewsLoading}
+        />
 
-              <div className="views-editor__col">
-                <span className="ui-label">Câmeras na view (ordem dos tiles)</span>
-                {draftIds.length === 0 ? (
-                  <p className="empty-note">Adicione câmeras da lista abaixo.</p>
-                ) : (
-                  <ScrollArea className="views-editor__scroll">
-                    <div className="views-editor__items">
-                      {draftIds.map((id, i) => (
-                        <div key={`sel-${id}`} className="views-editor__item">
-                          <span className="views-editor__pos">{i + 1}</span>
-                          <span className="views-editor__lbl">{camLabel(id)}</span>
-                          <IconButton
-                            label="Subir"
-                            onClick={() => moveDraftCam(id, -1)}
-                            disabled={i === 0}
-                          >
-                            ↑
-                          </IconButton>
-                          <IconButton
-                            label="Descer"
-                            onClick={() => moveDraftCam(id, 1)}
-                            disabled={i === draftIds.length - 1}
-                          >
-                            ↓
-                          </IconButton>
-                          <IconButton label="Remover da view" onClick={() => toggleDraftCam(id)}>
-                            ✕
-                          </IconButton>
-                        </div>
-                      ))}
-                    </div>
-                  </ScrollArea>
-                )}
-              </div>
-
-              <div className="views-editor__col">
-                <span className="ui-label">Câmeras disponíveis</span>
-                {cameras.filter((c) => !draftIds.includes(c.id)).length === 0 ? (
-                  <p className="empty-note">Todas as câmeras conectadas já estão na view.</p>
-                ) : (
-                  <ScrollArea className="views-editor__scroll">
-                    <div className="views-editor__items">
-                      {cameras
-                        .filter((c) => !draftIds.includes(c.id))
-                        .map((c) => (
-                          <div key={`av-${c.id}`} className="views-editor__item">
-                            <span className="views-editor__lbl">{c.label}</span>
-                            <Tooltip content="Adicionar à view">
-                              <Button size="sm" onClick={() => toggleDraftCam(c.id)}>
-                                + Adicionar
-                              </Button>
-                            </Tooltip>
-                          </div>
-                        ))}
-                    </div>
-                  </ScrollArea>
-                )}
-              </div>
-
-              <div className="views-mgr__foot">
-                <Button onClick={cancelEditView}>Cancelar</Button>
-                <Button variant="primary" onClick={saveEditView}>
-                  Salvar view
-                </Button>
-              </div>
-            </div>
-          )}
-        </Dialog>
-
-        {/* Fila de alarmes acionável (Onda B · item 7) — drawer/sheet via Dialog (Radix):
-            foco preso, ESC e portal "de graça"; o .ui-dialog é reposicionado como sheet
-            lateral (e bottom-sheet no mobile) em alarms.css, escopado por :has(.alarm-drawer__list)
-            para não afetar os demais diálogos. Toda a lógica (filtros, ack/forward otimista,
-            contador) é preservada. */}
-        <Dialog
+        {/* Fila de alarmes acionável (Onda B · item 7) */}
+        <AlarmDrawer
           open={alarmsOpen}
           onOpenChange={setAlarmsOpen}
-          title={
-            <>
-              Fila de alarmes{" "}
-              <span className="alarm-drawer__count" data-zero={newCount === 0 ? 1 : 0}>
-                {newCount} novo(s)
-              </span>
-            </>
-          }
-        >
-          <div className="alarm-drawer__filters">
-            <Select
-              value={fPriority}
-              onChange={(v) => setFPriority(v as "all" | AlarmPriority)}
-              ariaLabel="Filtrar por prioridade"
-              options={[
-                { value: "all", label: "Toda prioridade" },
-                { value: "critical", label: "Crítico" },
-                { value: "high", label: "Alta" },
-                { value: "advisory", label: "Informativo" },
-              ]}
-            />
-            <Select
-              value={fState}
-              onChange={(v) => setFState(v as "all" | AlarmState)}
-              ariaLabel="Filtrar por estado"
-              options={[
-                { value: "all", label: "Todo estado" },
-                { value: "new", label: "Novos" },
-                { value: "acknowledged", label: "Reconhecidos" },
-                { value: "forwarded", label: "Encaminhados" },
-              ]}
-            />
-            <label>
-              <Checkbox
-                checked={hideAcked}
-                onCheckedChange={setHideAcked}
-                ariaLabel="Ocultar reconhecidos"
-              />{" "}
-              Limpar reconhecidos
-            </label>
-          </div>
-          <ScrollArea className="alarm-drawer__scroll">
-            <div className="alarm-drawer__list">
-              {visibleAlarms.length === 0 ? (
-                <p className="alarm-drawer__empty">
-                  {alarms.length === 0
-                    ? "Nenhum alarme registrado."
-                    : "Nenhum alarme para os filtros atuais."}
-                </p>
-              ) : (
-                visibleAlarms.map(renderAlarmCard)
-              )}
-            </div>
-          </ScrollArea>
-        </Dialog>
+          alarms={alarms}
+          newCount={newCount}
+          onAct={actOnAlarm}
+        />
       </div>
     </div>
   );
