@@ -1,9 +1,26 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
+import {
+  BarChart3,
+  BellRing,
+  Cctv,
+  ChevronDown,
+  CircleUser,
+  LayoutDashboard,
+  LogOut,
+  ShieldCheck,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { useAuth } from "../auth";
 import type { Papel } from "../auth";
 import { DropdownMenu, Tooltip, type DropdownItem } from "../ui";
 import "./appshell.css";
+
+// Iconografia única do shell (Lucide): 1 tamanho, 1 strokeWidth — consistência
+// visual e stroke em currentColor (obedece o going-gray: cor vem do estado do item).
+const NAV_ICON = { size: 18, strokeWidth: 1.75, "aria-hidden": true } as const;
+const MENU_ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
 // Shell persistente da SPA: rail lateral slim + área de conteúdo (Outlet).
 // O nó de câmera (/camera) fica FORA do shell (é a visão do dispositivo, sem navegação).
@@ -32,7 +49,7 @@ const PAPEL_LABEL: Record<Papel, string> = {
   usuario: "Operador",
 };
 
-type NavItem = { to: string; end?: boolean; icon: string; label: string };
+type NavItem = { to: string; end?: boolean; icon: LucideIcon; label: string };
 
 export function AppShell() {
   const { user, canConfigure, logout } = useAuth();
@@ -51,13 +68,11 @@ export function AppShell() {
   // Itens de navegação por papel (visibilidade preservada: Saúde só p/ canConfigure;
   // Usuários só p/ superadmin). "Meu perfil" permanece um link direto (navegação primária).
   const navItems: NavItem[] = [
-    { to: "/", end: true, icon: "▦", label: "Central" },
-    { to: "/relatorio", icon: "📊", label: "Relatório" },
-    ...(canConfigure ? [{ to: "/alarmes-saude", icon: "🔔", label: "Saúde alarmes" }] : []),
-    ...(user.papel === "superadmin"
-      ? [{ to: "/usuarios", icon: "👤", label: "Usuários" }]
-      : []),
-    { to: "/perfil", icon: "⚙", label: "Meu perfil" },
+    { to: "/", end: true, icon: LayoutDashboard, label: "Central" },
+    { to: "/relatorio", icon: BarChart3, label: "Relatório" },
+    ...(canConfigure ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes" }] : []),
+    ...(user.papel === "superadmin" ? [{ to: "/usuarios", icon: Users, label: "Usuários" }] : []),
+    { to: "/perfil", icon: CircleUser, label: "Meu perfil" },
   ];
 
   // Menu de usuário (Radix DropdownMenu): agrupa as ações de conta ("Meu perfil" + "Sair")
@@ -68,7 +83,7 @@ export function AppShell() {
       label: "Meu perfil",
       icon: (
         <span className="rail-user-mic" aria-hidden>
-          ⚙
+          <CircleUser {...MENU_ICON} />
         </span>
       ),
       onSelect: () => navigate("/perfil"),
@@ -79,7 +94,7 @@ export function AppShell() {
       danger: true,
       icon: (
         <span className="rail-user-mic" aria-hidden>
-          ⎋
+          <LogOut {...MENU_ICON} />
         </span>
       ),
       onSelect: () => logout(),
@@ -93,13 +108,16 @@ export function AppShell() {
       </a>
       <nav className="rail rail--app" aria-label="Navegação principal">
         <Tooltip content="Visão de Pátio">
-          <div className="rail-brand">▣</div>
+          <div className="rail-brand">
+            <Cctv size={20} strokeWidth={1.75} aria-hidden />
+          </div>
         </Tooltip>
         {navItems.map((it) => {
+          const Icon = it.icon;
           const link = (
             <NavLink key={it.to} to={it.to} end={it.end} className={itemCls} aria-label={it.label}>
               <span className="ri-ic" aria-hidden>
-                {it.icon}
+                <Icon {...NAV_ICON} />
               </span>
               <span className="ri-lb">{it.label}</span>
             </NavLink>
@@ -130,14 +148,14 @@ export function AppShell() {
               </span>
               <span className="ri-lb">{user.usuario}</span>
               <span className="ri-caret" aria-hidden>
-                ▾
+                <ChevronDown size={14} strokeWidth={2} />
               </span>
             </button>
           }
         />
         <Tooltip content="Processamento local · sem identificação individual">
           <div className="rail-foot" aria-hidden>
-            ●
+            <ShieldCheck size={16} strokeWidth={1.75} />
           </div>
         </Tooltip>
       </nav>

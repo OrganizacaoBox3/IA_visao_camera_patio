@@ -9,6 +9,30 @@
    para vencer o index.css independente da ordem de import.
    ════════════════════════════════════════════════════════════════════════ */
 
+/* ── Ritmo e alinhamento dos itens (ícones Lucide) ───────────────────────
+   Ícones SVG (stroke = currentColor) substituíram os emojis: caixa fixa de
+   20px centrada por flex → texto de todos os itens alinha na mesma coluna,
+   sem depender de métrica de fonte. Altura mínima única dá ritmo vertical. */
+.rail--app .rail-item {
+  min-height: 36px;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.rail--app .ri-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex: none;
+}
+.rail--app .rail-brand,
+.rail--app .rail-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* ── Foco visível por teclado (mesma linguagem dos átomos de src/ui) ─────── */
 .rail--app .rail-item:focus-visible {
   outline: none;
@@ -72,20 +96,28 @@
   transform: rotate(180deg);
 }
 .rail--app .ri-caret {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-muted);
-  font-size: 10px;
   transition: transform 0.12s;
 }
 
-/* Item do menu de usuário: ícone com largura fixa p/ alinhar rótulos. */
+/* Item do menu de usuário: ícone com caixa fixa p/ alinhar rótulos. */
 .rail-user-mic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
-  text-align: center;
+  flex: none;
   color: var(--text-muted);
 }
 
-/* ── md (≤900px) · rail compacto (só ícones): esconde nome e caret ──────── */
+/* ── md (≤900px) · rail compacto (só ícones): esconde nome e caret;
+   alvo de toque ≥44px (tablet é dedo, não mouse). ─────────────────────── */
 @media (max-width: 900px) {
+  .rail--app .rail-item {
+    min-height: 44px;
+  }
   .rail--app .rail-user .ri-caret {
     display: none;
   }
