@@ -244,9 +244,13 @@ export class AtividadeProcessor implements Disposable {
     rt.motionEMA = rt.motionEMA * (1 - C.signalSmoothingAlpha) + ratio * C.signalSmoothingAlpha;
 
     // ocupação (objetos) — consome o detect já feito no nível do frame
+    // Longo alcance: limiar de score MENOR (longRange.objectScoreThreshold) — pedestre/objeto
+    // distante pontua ~0.2–0.4 no coco-ssd e o corte default (0.5) zerava a ocupação da zona
+    // mesmo com gente visível. Espelha objetos.ts (que já escolhe o limiar pelo perfil).
+    const occScoreThr = lr ? lr.objectScoreThreshold : C.objectScoreThreshold;
     let occupied = false;
     for (const d of ctx.dets) {
-      if (d.score < C.objectScoreThreshold) continue;
+      if (d.score < occScoreThr) continue;
       if (!(C.occupancyClasses as readonly string[]).includes(d.class)) continue;
       const cx = (d.bbox[0] + d.bbox[2] / 2) / ctx.frameW,
         cy = (d.bbox[1] + d.bbox[3] / 2) / ctx.frameH;

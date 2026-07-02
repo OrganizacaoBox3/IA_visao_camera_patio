@@ -4,7 +4,7 @@ import { type FrameSource } from "./frame";
 import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
-import { ensureDetectClient, detectFrame } from "./vision/detect";
+import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
 import {
   AtividadeProcessor,
   sensitivityFactor,
@@ -273,6 +273,7 @@ export function CameraWorkspace({
   const lastPanelSigRef = useRef("");
   const lastTwSigRef = useRef("");
   const lastFpsRef = useRef(-1);
+  const lastDetBackendRef = useRef<string | null>(null);
   const lastPresenceRef = useRef({ now: -1, peak: -1, dwell: -1 });
   const holdersRef = useRef<Map<string, Holder>>(new Map());
   const cropsRef = useRef<Map<string, HTMLCanvasElement>>(new Map()); // recorte por zona de fadiga
@@ -341,6 +342,8 @@ export function CameraWorkspace({
   const [erase, setErase] = useState(false);
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
+  // Backend do tfjs de detecção (worker): null até o worker reportar (não renderiza até saber).
+  const [detBackend, setDetBackend] = useState<string | null>(null);
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [drawerTab, setDrawerTab] = useState<
@@ -595,13 +598,36 @@ export function CameraWorkspace({
     const m = getMask(z);
     return m && anySet(m) ? (nx: number, ny: number) => containsNorm(m, nx, ny) : undefined;
   }
-  function zoneAtAtiv(ativ: Zone[], cx: number, cy: number): string | null {
+  // Zona da pessoa (plano-melhoria-reconhecimento 2.2). Critério PRIMÁRIO: centro do bbox dentro
+  // da zona (respeitando a máscara). Com zonas SOBREPOSTAS, desempata pela MAIOR área de
+  // interseção bbox∩zona (a zona que mais "contém" o corpo vence); persistindo o empate, vence a
+  // zona de MENOR área (a mais específica). Antes valia a PRIMEIRA zona da lista, o que fazia a
+  // contagem cair em zona-semente (ex.: "Espera") em vez da zona desenhada pelo operador
+  // (bug confirmado em runtime — diagnóstico jul/2026). Geometria/persistência de zonas intactas.
+  function zoneAtAtiv(
+    ativ: Zone[],
+    cx: number,
+    cy: number,
+    bbox?: readonly [number, number, number, number], // normalizado [x,y,w,h] (Track.bbox)
+  ): string | null {
+    let best: Zone | null = null;
+    let bestOv = -1;
     for (const z of ativ) {
       if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
       const cn = containsFn(z);
-      if (!cn || cn(cx, cy)) return z.label;
+      if (cn && !cn(cx, cy)) continue;
+      let ov = 0;
+      if (bbox) {
+        const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
+        const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
+        ov = Math.max(0, ix) * Math.max(0, iy);
+      }
+      if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
+        best = z;
+        bestOv = ov;
+      }
     }
-    return null;
+    return best?.label ?? null;
   }
 
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
@@ -642,7 +668,7 @@ export function CameraWorkspace({
         best.cy = p.cy;
         best.bbox = p.bbox;
         best.lastSeen = now;
-        best.zone = zoneAtAtiv(ativ, p.cx, p.cy);
+        best.zone = zoneAtAtiv(ativ, p.cx, p.cy, p.bbox);
         best.score = p.score;
       } else
         tracksRef.current.push({
@@ -652,7 +678,7 @@ export function CameraWorkspace({
           bbox: p.bbox,
           firstSeen: now,
           lastSeen: now,
-          zone: zoneAtAtiv(ativ, p.cx, p.cy),
+          zone: zoneAtAtiv(ativ, p.cx, p.cy, p.bbox),
           score: p.score,
         });
     }
@@ -994,6 +1020,12 @@ export function CameraWorkspace({
         if (fps !== lastFpsRef.current) {
           lastFpsRef.current = fps;
           setPerf({ fps });
+        }
+        // Backend de detecção (2.4): chega assíncrono (worker "ready") — amostra na cadência de UI.
+        const be = getDetectBackend();
+        if (be !== lastDetBackendRef.current) {
+          lastDetBackendRef.current = be;
+          setDetBackend(be);
         }
         const dwellable = tracks.filter((t) => now - t.firstSeen >= APP_CONFIG.people.dwellMinMs);
         const dwell = dwellable.length
@@ -2133,6 +2165,22 @@ export function CameraWorkspace({
           {summary || "sem zonas"}
         </span>
         <span className="kb muted">FPS {perf.fps}</span>
+        {/* Backend de detecção (2.4) — going-gray: neutro em GPU; saturado (warn) SÓ em CPU,
+            que é o modo degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
+        {detBackend != null &&
+          (detBackend === "cpu" ? (
+            <span
+              className="kb"
+              style={{ color: "var(--state-warn-fg, #facc15)" }}
+              title="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)"
+            >
+              detecção: CPU ⚠
+            </span>
+          ) : (
+            <span className="kb muted" title={`Backend de detecção (tfjs): ${detBackend}`}>
+              detecção: {detBackend === "webgl" || detBackend === "webgpu" ? "GPU" : detBackend}
+            </span>
+          ))}
         {paused && <span className="kb muted">⏸ inspecionando</span>}
       </div>
 
