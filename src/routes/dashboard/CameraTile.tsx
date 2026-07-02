@@ -1,3 +1,4 @@
+import { memo, useCallback } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
@@ -52,12 +53,18 @@ type CameraTileProps = {
   demoMode: boolean;
   tripwiresRev: number;
   status: CameraStatus | undefined;
-  onOpen: () => void;
+  // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
+  // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
+  // MESMA função e só re-renderizam quando os próprios dados mudam.
+  onOpen: (id: string) => void;
   onAlert: (msg: string) => void;
 };
 
 // Renderiza um tile da grade: frame (fadiga/atividade) + pílula de status/fps sobreposta.
-export function CameraTile({
+// React.memo (1.6): o `camera-status` (a cada ~5s POR câmera) troca só `statuses[id]` da câmera
+// afetada; com memo + callbacks estáveis, apenas o tile daquela câmera re-renderiza (antes: a
+// grade inteira ×N tiles). Demais props são primitivas ou estáveis (getFrame vem de cache por id).
+export const CameraTile = memo(function CameraTile({
   camera,
   isOpen,
   isFadiga,
@@ -68,6 +75,9 @@ export function CameraTile({
   onOpen,
   onAlert,
 }: CameraTileProps) {
+  // Adapta onOpen(id) → onOpen() esperado por FadigaView/CameraWorkspace (usado só como onClick;
+  // memoizado p/ manter a identidade entre re-renders do próprio tile).
+  const openSelf = useCallback(() => onOpen(camera.id), [onOpen, camera.id]);
   const st = statusInfo(status);
   const inner = isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
@@ -78,7 +88,7 @@ export function CameraTile({
       label={camera.label}
       getFrame={getFrame}
       mode="tile"
-      onOpen={onOpen}
+      onOpen={openSelf}
       onAlert={onAlert}
       onSample={recordFadigaSamples}
       onEvent={recordFadigaEvent}
@@ -92,7 +102,7 @@ export function CameraTile({
       mode="tile"
       demoMode={demoMode}
       tripwiresRev={tripwiresRev}
-      onOpen={onOpen}
+      onOpen={openSelf}
       onAlert={onAlert}
     />
   );
@@ -126,4 +136,4 @@ export function CameraTile({
       </Tooltip>
     </div>
   );
-}
+});

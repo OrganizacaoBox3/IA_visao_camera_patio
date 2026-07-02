@@ -183,6 +183,13 @@ export function DashboardPage() {
     f.decoding = true;
     createImageBitmap(new Blob([buf], { type: "image/jpeg" }))
       .then((bmp) => {
+        // Corrida (1.7): se o feed saiu do conjunto ativo (paginação) ou a entrada foi podada
+        // (câmera removida) enquanto o decode estava em voo, fecha o bitmap recém-criado e não
+        // reatribui — antes ele virava um f.bmp órfão que ninguém fechava (vazamento de GPU/RAM).
+        if (!activeIdsRef.current.has(id) || framesRef.current.get(id) !== f) {
+          bmp.close();
+          return;
+        }
         const old = f.bmp;
         f.bmp = bmp;
         f.w = bmp.width;
@@ -192,7 +199,10 @@ export function DashboardPage() {
       .catch(() => {})
       .finally(() => {
         f.decoding = false;
-        if (f.pending) drainDecode(id);
+        // Só re-agenda se o feed continua ativo e a entrada ainda é a mesma — evita a cadeia
+        // decode→pending→decode se auto-perpetuar para um feed que já saiu da página.
+        if (f.pending && activeIdsRef.current.has(id) && framesRef.current.get(id) === f)
+          drainDecode(id);
       });
   }, []);
 
@@ -266,6 +276,21 @@ export function DashboardPage() {
       frames.forEach((f) => f.bmp?.close());
     };
   }, [token, logout, drainDecode]);
+
+  // Poda entradas de câmeras que saíram da lista (1.7): fecha o bitmap e descarta a entrada
+  // (pending incluso) — antes framesRef/gettersRef só cresciam. Um decode em voo da entrada
+  // removida se auto-descarta no `.then` (a entrada não está mais no Map). Se a câmera voltar,
+  // o handler `frame` recria a entrada e `getterFor` recria o getter.
+  useEffect(() => {
+    if (cameras.length === 0) return; // lista vazia inicial (pré-socket) não é remoção
+    const ids = new Set(cameras.map((c) => c.id));
+    framesRef.current.forEach((f, id) => {
+      if (ids.has(id)) return;
+      f.bmp?.close();
+      framesRef.current.delete(id);
+      gettersRef.current.delete(id);
+    });
+  }, [cameras]);
 
   // garante uma config carregada por câmera (default = atividade → retrocompatível)
   useEffect(() => {
@@ -393,7 +418,12 @@ export function DashboardPage() {
   // Ordem final: auto-surface reordena por atividade; senão mantém a ordem da view/lista.
   const orderedCameras = useMemo<Camera[]>(() => {
     if (!autoSurface) return viewCameras;
-    return [...viewCameras].sort((a, b) => activityScore(b.id) - activityScore(a.id));
+    // Pré-computa o score 1× por câmera (O(N·alarmes)) em vez de recalcular a cada comparação
+    // do sort (O(N·log N·alarmes)).
+    const scores = new Map(viewCameras.map((c) => [c.id, activityScore(c.id)]));
+    return [...viewCameras].sort(
+      (a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewCameras, autoSurface, statuses, alarms, surfaceTick]);
 
@@ -545,10 +575,18 @@ export function DashboardPage() {
   const camNodeUrl = `${location.origin}/camera`;
 
   // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado).
-  function handleAlert(msg: string) {
-    toast(msg, msg.includes("⚠") ? "alert" : "default");
-    socketRef.current?.emit("alert", { text: msg, ts: Date.now() });
-  }
+  // useCallback (1.6): identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável
+  // — useCallback([]) no ToastProvider; o socket vai via ref).
+  const handleAlert = useCallback(
+    (msg: string) => {
+      toast(msg, msg.includes("⚠") ? "alert" : "default");
+      socketRef.current?.emit("alert", { text: msg, ts: Date.now() });
+    },
+    [toast],
+  );
+
+  // Abertura de câmera (1.6): callback único e estável; o tile chama com o próprio id.
+  const handleOpen = useCallback((id: string) => setOpenId(id), []);
 
   return (
     <div className="page">
@@ -697,7 +735,7 @@ export function DashboardPage() {
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
-                onOpen={() => setOpenId(c.id)}
+                onOpen={handleOpen}
                 onAlert={handleAlert}
               />
             ))}
