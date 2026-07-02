@@ -265,13 +265,21 @@ async function grabTile(
   const sy = Math.max(0, Math.round(t.y0 * nativeH));
   const sw = Math.max(1, Math.min(Math.round(nativeW) - sx, Math.round((t.x1 - t.x0) * nativeW)));
   const sh = Math.max(1, Math.min(Math.round(nativeH) - sy, Math.round((t.y1 - t.y0) * nativeH)));
-  const dw = Math.min(tileWidth, sw);
+  // (2.3) UPSCALE CONTROLADO: quando a fonte do tile é MENOR que o alvo (ex.: fonte 720 na grade
+  // 4×4 do LR → ~223px << 640), sobe até `tileWidth` AQUI — a reamostragem do createImageBitmap
+  // ("high" ≈ bicúbica) é melhor que o resize bilinear interno do grafo do modelo, então o pedestre
+  // pequeno chega mais nítido ao 300×300 do SSD. Cap de segurança 2×: acima disso o upscale não cria
+  // informação (só borra) e paga área à toa. CUSTO DECLARADO: a área do tile transferido ao worker
+  // cresce até 4× (2× por eixo) no pior caso; como o coco reamostra p/ 300×300 de qualquer forma,
+  // o ganho é a QUALIDADE da reamostragem, não o tamanho final visto pelo modelo.
+  const dw = Math.max(1, Math.min(tileWidth, sw * 2));
   const dh = Math.max(1, Math.round((dw * sh) / sw));
   try {
     return await createImageBitmap(el, sx, sy, sw, sh, {
       resizeWidth: dw,
       resizeHeight: dh,
-      resizeQuality: "low",
+      // "high" só no UPSCALE (tile pequeno → barato); downscale/1:1 continua "low" (mais rápido).
+      resizeQuality: dw > sw ? "high" : "low",
     });
   } catch {
     return null;
@@ -296,7 +304,9 @@ function rasterize(
     sy = t.y0 * nativeH,
     sw = Math.max(1, (t.x1 - t.x0) * nativeW),
     sh = Math.max(1, (t.y1 - t.y0) * nativeH);
-  const dw = Math.min(tileWidth, Math.round(sw)),
+  // (2.3) UPSCALE CONTROLADO (mesma regra do grabTile): fonte menor que o alvo → sobe até
+  // `tileWidth`, com cap de 2× a fonte (além disso só borra e custa área — até 4× no worker).
+  const dw = Math.max(1, Math.min(tileWidth, Math.round(sw) * 2)),
     dh = Math.max(1, Math.round((dw * sh) / sw));
   if (!scratch) scratch = document.createElement("canvas");
   if (scratch.width !== dw || scratch.height !== dh) {
@@ -305,6 +315,9 @@ function rasterize(
   }
   const ctx = scratch.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
+  // "high" (≈ bicúbico) só no upscale; downscale mantém "low" (mais barato, qualidade suficiente).
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = dw > sw ? "high" : "low";
   ctx.drawImage(el, sx, sy, sw, sh, 0, 0, dw, dh);
   const img = ctx.getImageData(0, 0, dw, dh);
   return { rgba: img.data.buffer, w: dw, h: dh };
