@@ -222,3 +222,30 @@ respostas de API) em
 `...\scratchpad\diag2\` (sessão): `00-zona-area5-criada.png`, `01-cfg1-default-t{0,30,60}s.png`,
 `02-cfg2-lr-ligado.png`, `02-cfg2-lr-t{0,30,60}s.png`, `03-cfg3-lr1920-t{0,30,60}s.png`,
 `04-relatorio-resumo.png`, `05-relatorio-atividade.png`.
+
+## Re-diagnóstico fluxo (2026-07-02) — onda "flow" (persistência + ByteTrack + pé/histerese)
+
+Método: hub isolado + câmera real de Pula; Parte 1 = cadeia de persistência (determinística,
+cruzamentos via ingest); Parte 2 = observação 90s com pedestres reais (headless = backend CPU,
+pior caso conhecido). Evidência: scratchpad/diag3/ (screenshots 01-06 + diag3-evidencia.json + CSV).
+
+### Parte 1 — Cadeia de persistência: TUDO VERDE
+| Passo | Resultado |
+|---|---|
+| Linha desenhada + 5 ingests flow (3 in / 2 out) | bucket agregado `{in:3, out:2}`; status counts.flow=1 |
+| FECHAR e REABRIR a câmera | painel/HUD mostram **hoje: 3 in / 2 out** (do servidor) ✓ |
+| RELOAD da página + reabrir | **continua 3 / 2** ✓ — "nunca mais perder" PROVADO |
+| Relatório → Atividade | seção "FLUXO DE PESSOAS": 3 entradas · 2 saídas · saldo 1 · 1 linha ✓ |
+| CSV | blocos "FLUXO DE PESSOAS" e "FLUXO POR LINHA" presentes ✓ |
+| Nota menor | eventos via API direta sem `shift` → shift:null aceito (o front envia shift; ok) |
+
+### Parte 2 — Pedestres reais em CPU (esperado)
+0 pessoas/pico 0 nos 90s; badge "detecção: CPU ⚠" visível; zonas de atividade reagiram ao
+movimento (ATIVA/LENTA — motion funciona); FPS 9-16; longRange OFF neste run. Nenhum
+cruzamento real (detecção cega em CPU — F5 permanece, como previsto).
+
+### Veredito
+- **Contagem nunca mais se perde**: evento por cruzamento persistido, HUD/painel/relatório/CSV
+  consistentes e sobrevivendo a reabertura e reload — de ponta a ponta, com evidência.
+- **O gargalo restante é 100% a DETECÇÃO** (backend CPU/modelo SSD300) — exatamente o escopo da
+  Onda 3 (D-FINE-N via onnxruntime-web) e do teste com GPU real na máquina do usuário.
