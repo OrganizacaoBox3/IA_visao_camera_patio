@@ -77,6 +77,7 @@ import { useAuth } from "./auth";
 import {
   getContentRect,
   stateVar,
+  cssVar,
   drawOccupancyHeatmap,
   drawTracks,
   drawTripwires,
@@ -263,6 +264,8 @@ export function CameraWorkspace({
   const objInFlightRef = useRef(false); // P0: na grade, pula a detecção coco enquanto já há uma em voo
   const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // P2: última inferência PESADA por zona (gate de tile)
   const lastFrameAtRef = useRef(0);
+  const gridParityRef = useRef(false); // (3.4) alterna a análise de atividade na GRADE (frame sim, frame não)
+  const activityDtRef = useRef(0); // (3.4) dt acumulado dos frames pulados → entregue inteiro no frame analisado
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
   const lastUiRef = useRef(0);
@@ -693,6 +696,20 @@ export function CameraWorkspace({
       if (pausedRef.current) return; // ⏸ inspeção: congela o frame (não processa nem redesenha)
       const frameDt = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0;
       lastFrameAtRef.current = now;
+      // ── (3.4) GRADE: análise de ATIVIDADE em frames ALTERNADOS ──
+      // No tile (mode !== "full"), o bloco de luma/motion (readback getImageData + loop O(pw·ph))
+      // e o process() das zonas de atividade rodam em 1 de cada 2 frames novos (~12fps → ~6fps
+      // efetivos). Folga real: o alarme de atividade CONFIRMA transições em ~900ms ≫ 166ms de
+      // intervalo a 6fps — nenhuma mudança de estado observável se perde. O dt do frame pulado é
+      // ACUMULADO (activityDtRef) e entregue inteiro no frame analisado, então totalIdleMs/recIdleMs
+      // seguem contando tempo REAL. O draw do palco continua TODO frame (fluidez intacta); a câmera
+      // ABERTA (full) analisa todo frame como antes. A luma long-range (2.5, 1×/câmera) preserva o
+      // caminho — só passa a ser produzida na cadência que sobra (a dos frames analisados).
+      gridParityRef.current = !gridParityRef.current;
+      const analyzeActivity = mode === "full" || gridParityRef.current;
+      activityDtRef.current += frameDt;
+      const activityDt = activityDtRef.current;
+      if (analyzeActivity) activityDtRef.current = 0;
       const zs = zonesRef.current;
       const ativ = zs.filter((z) => z.modo === "atividade");
 
@@ -706,7 +723,10 @@ export function CameraWorkspace({
         ph = Math.max(1, Math.round((pw * f.h) / f.w));
       let luma: Float32Array | null = null;
       let prev = prevLumaRef.current;
-      if (ativ.length) {
+      // (3.4) meio-frame da grade: sem luma nova (readback pulado); o swap lá embaixo não roda
+      // (luma === null), então `prev` continua sendo a luma do último frame ANALISADO — o diff do
+      // próximo frame analisado cobre o intervalo inteiro (~166ms), sem perder movimento.
+      if (ativ.length && analyzeActivity) {
         const size = pw * ph;
         if (proc.width !== pw || proc.height !== ph || lumaSizeRef.current !== size) {
           proc.width = pw;
@@ -795,8 +815,10 @@ export function CameraWorkspace({
       if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
       occ.add(tps.map((t) => ({ x: t.cx, y: t.cy }))); // decai + acumula ocupação 1x/frame (heatmap)
 
-      const sampleFlow = now - lastFlowAtRef.current > 500;
-      const recEmit = now - lastRecAtRef.current > 3000;
+      // (3.4) flow/rec só fecham janela em frame ANALISADO (senão o recEmit cairia num frame pulado,
+      // resetaria lastRecAt sem coletar amostra e a cadência de gravação dobraria esporadicamente).
+      const sampleFlow = analyzeActivity && now - lastFlowAtRef.current > 500;
+      const recEmit = analyzeActivity && now - lastRecAtRef.current > 3000;
       const recSamples: ZoneSample[] = [];
 
       // ── por zona ──
@@ -814,9 +836,12 @@ export function CameraWorkspace({
           lastHeavyAtRef.current.set(z.id, now);
         }
         if (z.modo === "atividade") {
+          // (3.4) meio-frame da grade: sem luma nova → sem process(); resultsRef mantém o último
+          // estado p/ o draw (que continua todo frame). O dt pulado já está acumulado em activityDt.
+          if (!analyzeActivity) continue;
           const ctx: AtividadeCtx = {
             now,
-            frameDt,
+            frameDt: activityDt, // (3.4) inclui o dt dos frames pulados na grade (tempo real)
             demoMode,
             paused: pausedRef.current,
             luma,
@@ -997,9 +1022,18 @@ export function CameraWorkspace({
       canvas.width = Math.round(vpW * dpr);
       canvas.height = Math.round(vpH * dpr);
     }
-    const ctx = canvas.getContext("2d")!;
+    // (3.3) PALCO opaco: alpha:false dispensa o blending do canvas com a página no compositor
+    // (frame inteiro, todo repaint); desynchronized é HINT p/ tirar o palco do caminho síncrono de
+    // apresentação onde suportado (ignorado nos demais). Com alpha:false a área NÃO pintada fica
+    // PRETA — por isso o clearRect virou fillRect na MESMA cor do fundo do tile/palco
+    // (--cam-surface-bg, index.css): o frame cobre o retângulo de conteúdo e o letterbox é a única
+    // área restante, agora pintada na cor de sempre → zero mudança visual.
+    // NOTA: mesmo canvas do drawReviewFrame (camera/draw.ts) — os atributos do 1º getContext valem
+    // p/ sempre; os dois pedem os MESMOS atributos p/ não depender de quem chama primeiro.
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true })!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, vpW, vpH);
+    ctx.fillStyle = cssVar("--cam-surface-bg", "#05080c");
+    ctx.fillRect(0, 0, vpW, vpH);
     const cr = getContentRect(vpW, vpH, f.w, f.h);
     ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
     const detailed = mode === "full";

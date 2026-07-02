@@ -2,6 +2,7 @@
 // Adaptado de sensor_fadiga_mvp: aqui o frame é desenhado SEM espelhar (o nó envia o frame cru),
 // então os landmarks são mapeados com x direto (sem 1-x).
 import { APP_CONFIG } from "../config";
+import { cssVar } from "../camera/draw"; // token --cam-surface-bg cacheado (camera/draw importa daqui só TYPE — sem ciclo em runtime)
 import type {
   Landmark,
   Rect,
@@ -52,10 +53,15 @@ export function drawFadigaScene(
     canvas.width = Math.round(vpW * dpr);
     canvas.height = Math.round(vpH * dpr);
   }
-  const ctx = canvas.getContext("2d");
+  // (3.3) PALCO opaco (canvas visível do FadigaView): alpha:false dispensa o blending com a página;
+  // desynchronized é hint (ignorado onde não suportado). Com alpha:false a área não pintada fica
+  // PRETA — o letterbox vira fillRect na cor do fundo do palco (--cam-surface-bg, index.css);
+  // o frame cobre o retângulo de conteúdo, o letterbox é a única área restante → zero mudança visual.
+  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, vpW, vpH);
+  ctx.fillStyle = cssVar("--cam-surface-bg", "#05080c");
+  ctx.fillRect(0, 0, vpW, vpH);
   const cr = contentRect(vpW, vpH, fW, fH);
   ctx.drawImage(frame, cr.x, cr.y, cr.width, cr.height);
 

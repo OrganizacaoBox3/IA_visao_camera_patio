@@ -187,9 +187,15 @@ export function drawReviewFrame(
     canvas.width = Math.round(vpW * dpr);
     canvas.height = Math.round(vpH * dpr);
   }
-  const ctx = canvas.getContext("2d")!;
+  // (3.3) MESMO canvas de palco do drawScene (canvasRef do CameraWorkspace): os atributos do 1º
+  // getContext valem p/ sempre — pedir os MESMOS {alpha:false, desynchronized} evita depender da
+  // ordem de chamada. Com alpha:false o letterbox é pintado (fillRect) na cor do fundo do palco
+  // (--cam-surface-bg) em vez de clearRect (que ficaria PRETO opaco… mesma cor por sorte, mas
+  // pintar explícito mantém o token como fonte da verdade).
+  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true })!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, vpW, vpH);
+  ctx.fillStyle = cssVar("--cam-surface-bg", "#05080c");
+  ctx.fillRect(0, 0, vpW, vpH);
   const cr = getContentRect(vpW, vpH, fr.w, fr.h);
   ctx.drawImage(fr.bmp, cr.x, cr.y, cr.w, cr.h);
 }
