@@ -84,6 +84,18 @@ export type CounterOptions = {
   minMove?: number;
   /** TTL de um track sem ser visto antes de descartar seu last-pos (mesma unidade de `now`). Default 1500. */
   ttl?: number;
+  /**
+   * Salto máximo (norm.) de um MESMO track entre avaliações. Acima disso é TELEPORTE
+   * (continuidade do rastreio perdida — ex.: detecção esparsa, troca de alvo): re-ancora a
+   * posição SEM avaliar cruzamento (não inventa contagem). Default Infinity (desligado).
+   */
+  maxDist?: number;
+  /**
+   * Janela pós-cruzamento (mesma unidade de `now`) em que NOVOS cruzamentos do MESMO track
+   * na MESMA linha são ignorados — anti-oscilação de quem fica "em cima" da linha.
+   * Default 0 (desligado).
+   */
+  debounceMs?: number;
 };
 
 /** Instância do contador de linhas. Estado encapsulado; determinístico dado o histórico. */
@@ -166,7 +178,13 @@ export function centroidOfBBox(
 
 // ── Contador de tripwire (estado encapsulado) ────────────────────────────────
 
-type TrackState = { x: number; y: number; lastSeen: number };
+type TrackState = {
+  x: number;
+  y: number;
+  lastSeen: number;
+  /** último cruzamento contado por tripwire (id → t) — lazily criado quando debounceMs > 0 */
+  crossAt?: Map<string, number>;
+};
 
 /**
  * Cria um contador de linhas de contagem.
@@ -179,6 +197,8 @@ export function createCounter(
 ): Counter {
   const minMove = opts.minMove ?? 0.01;
   const ttl = opts.ttl ?? 1500;
+  const maxDist = opts.maxDist ?? Number.POSITIVE_INFINITY;
+  const debounceMs = opts.debounceMs ?? 0;
 
   let wires: Tripwire[] = tripwires.map(cloneWire);
   const counts = new Map<string, TripwireCounts>();
@@ -200,9 +220,18 @@ export function createCounter(
         last.set(tr.id, { x: cur.x, y: cur.y, lastSeen: t });
         continue;
       }
+      const stale = t - prev.lastSeen > ttl; // gap sem update (ex.: contagem pausada) → continuidade perdida
       prev.lastSeen = t; // visto neste frame (mantém vivo p/ TTL)
+      const moved = Math.hypot(cur.x - prev.x, cur.y - prev.y);
       // micro-jitter: acumula deslocamento (NÃO atualiza last-pos) até passar o limiar.
-      if (Math.hypot(cur.x - prev.x, cur.y - prev.y) < minMove) continue;
+      if (moved < minMove) continue;
+      // continuidade perdida (gap > ttl) ou TELEPORTE (salto > maxDist — o rastreio não
+      // acompanhou o alvo): re-ancora a posição sem avaliar cruzamento (não inventa contagem).
+      if (stale || moved > maxDist) {
+        prev.x = cur.x;
+        prev.y = cur.y;
+        continue;
+      }
 
       const from = { x: prev.x, y: prev.y };
       for (const w of wires) {
@@ -213,6 +242,12 @@ export function createCounter(
         if (d1 < 0 && d2 > 0) dir = "in";
         else if (d1 > 0 && d2 < 0) dir = "out";
         if (!dir) continue;
+        // debounce por (track, linha): oscilação rápida sobre a linha não recontagem.
+        if (debounceMs > 0) {
+          const lastAt = prev.crossAt?.get(w.id);
+          if (lastAt !== undefined && t - lastAt < debounceMs) continue;
+          (prev.crossAt ??= new Map()).set(w.id, t);
+        }
         const c = counts.get(w.id) ?? { in: 0, out: 0 };
         c[dir] += 1;
         counts.set(w.id, c);

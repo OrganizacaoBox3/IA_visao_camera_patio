@@ -738,6 +738,17 @@ export function CameraWorkspace({
       if (analyzeActivity) activityDtRef.current = 0;
       const zs = zonesRef.current;
       const ativ = zs.filter((z) => z.modo === "atividade");
+      // ── Tripwires precisam de DETECÇÃO DE PESSOAS mesmo SEM zona de atividade ──
+      // BUGFIX: detectFrame/updateTracks eram gated por `ativ.length` — câmera só com linhas de
+      // contagem (sem zona de atividade) nunca detectava/rastreava ninguém e as linhas NUNCA
+      // contavam. Na GRADE a detecção roda a cada TILE_OBJECT_INTERVAL_MS (4s): um alvo em
+      // movimento "teleporta" além de trackMaxDist (0.12) entre rodadas → vira track NOVO de cada
+      // lado da linha e o cruzamento (que exige o MESMO track atravessar) não existe. Contar assim
+      // seria inventar número: na grade a contagem fica PAUSADA (HUD indica "abra a câmera") e a
+      // detecção NÃO é agendada só por causa das linhas. Na câmera ABERTA (350ms) conta normal.
+      const hasWires = tripwiresRef.current.length > 0;
+      const countingActive = hasWires && mode === "full";
+      const needPersons = ativ.length > 0 || countingActive;
 
       // ── nível de frame: motion luma + coco-ssd (só se houver zona de atividade) ──
       // (2.5) LONGO ALCANCE: a luma de movimento é produzida AQUI, 1× por câmera, já na resolução
@@ -771,17 +782,21 @@ export function CameraWorkspace({
         for (let i = 0, j = 0; i < img.length; i += 4, j++)
           cur[j] = 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
         luma = cur;
-        // Inferência FORA da main thread (worker), via SCHEDULER global (fila única + prioridade).
-        // (2.4a) 1 TILE = 1 TAREFA: `detectFrame` recebe `schedule` e enfileira CADA tile como uma
-        // tarefa própria (`${key}:t<i>`) — a câmera ABERTA (high) intercala entre os tiles de um
-        // lote da grade (low) em vez de esperar o lote inteiro (~0,5–1,3s com 16 tiles LR). Por isso
-        // NÃO se embrulha mais detectFrame em requestInference (deadlock com maxConcurrent=1).
-        // O gate de voo (objBusy) agora vale TAMBÉM no full: com os tiles em tarefas separadas, a
-        // coalescência por key única deixou de descartar o lote pendente — o gate garante no máximo
-        // 1 detectFrame em voo por câmera (o próximo dispara com o frame mais novo ao concluir).
-        // Na GRADE roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS); com longo alcance,
-        // detect.ts ainda faz TILE ROTATION (K de 16 tiles por chamada, fundindo com cache — 2.4b).
-        // O motion (acima) e a máquina de estado por zona seguem em tempo real.
+      }
+      // Inferência FORA da main thread (worker), via SCHEDULER global (fila única + prioridade).
+      // (2.4a) 1 TILE = 1 TAREFA: `detectFrame` recebe `schedule` e enfileira CADA tile como uma
+      // tarefa própria (`${key}:t<i>`) — a câmera ABERTA (high) intercala entre os tiles de um
+      // lote da grade (low) em vez de esperar o lote inteiro (~0,5–1,3s com 16 tiles LR). Por isso
+      // NÃO se embrulha mais detectFrame em requestInference (deadlock com maxConcurrent=1).
+      // O gate de voo (objBusy) agora vale TAMBÉM no full: com os tiles em tarefas separadas, a
+      // coalescência por key única deixou de descartar o lote pendente — o gate garante no máximo
+      // 1 detectFrame em voo por câmera (o próximo dispara com o frame mais novo ao concluir).
+      // Na GRADE roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS); com longo alcance,
+      // detect.ts ainda faz TILE ROTATION (K de 16 tiles por chamada, fundindo com cache — 2.4b).
+      // O motion (acima) e a máquina de estado por zona seguem em tempo real.
+      // BUGFIX tripwires: este bloco vivia DENTRO de `if (ativ.length && analyzeActivity)` —
+      // agora agenda por `needPersons` (zona de atividade OU tripwire com câmera aberta).
+      if (needPersons) {
         const objInterval = mode === "full" ? C.objectIntervalMs : TILE_OBJECT_INTERVAL_MS;
         const objBusy = objInFlightRef.current;
         if (now - lastObjAtRef.current > objInterval && !objBusy) {
@@ -811,15 +826,24 @@ export function CameraWorkspace({
         }
       }
       const dets = detsRef.current;
-      if (ativ.length) updateTracks(dets, ativ, f.w, f.h, now);
+      if (needPersons) updateTracks(dets, ativ, f.w, f.h, now);
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
 
       // ── Tripwires + ocupação (Onda C item 13) — REUSA os tracks já existentes (sem inferência extra) ──
       // counter/occupancy criados 1x (sob demanda); a geometria é re-setada via effect quando as linhas mudam.
+      // maxDist 0.25: teleporte de um MESMO id (perda de continuidade) re-ancora sem contar —
+      // defesa extra além do trackMaxDist do updateTracks. debounceMs 800: quem oscila "em cima"
+      // da linha (jitter de bbox) não infla in/out; um vai-e-volta real leva ≥ 2 rodadas de
+      // detecção (~700ms na câmera aberta) e segue contando após a janela.
       const counter =
         counterRef.current ??
-        (counterRef.current = createCounter(tripwiresRef.current, { minMove: 0.01, ttl: 1500 }));
+        (counterRef.current = createCounter(tripwiresRef.current, {
+          minMove: 0.01,
+          ttl: 1500,
+          maxDist: 0.25,
+          debounceMs: 800,
+        }));
       const occ =
         occRef.current ??
         (occRef.current = createOccupancy({
@@ -830,15 +854,20 @@ export function CameraWorkspace({
           max: 6,
         }));
       const tps = tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy }));
-      const crossings = counter.update(tps, now);
-      for (const ev of crossings) {
-        const wi = tripwiresRef.current.findIndex((w) => w.id === ev.tripwireId);
-        pushTimeline(
-          `${ev.dir === "in" ? "Entrada" : "Saída"} · Linha ${wi >= 0 ? wi + 1 : "?"}`,
-          "info",
-        );
+      // Na GRADE a contagem fica PAUSADA (ver comentário `countingActive` acima): não alimentar o
+      // counter com tracks "teleportados" evita contagem falsa; o gap > ttl na retomada faz o
+      // counter re-ancorar as posições sem contar (counting.ts). O HUD indica o estado pausado.
+      if (countingActive) {
+        const crossings = counter.update(tps, now);
+        for (const ev of crossings) {
+          const wi = tripwiresRef.current.findIndex((w) => w.id === ev.tripwireId);
+          pushTimeline(
+            `${ev.dir === "in" ? "Entrada" : "Saída"} · Linha ${wi >= 0 ? wi + 1 : "?"}`,
+            "info",
+          );
+        }
+        if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
       }
-      if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
       occ.add(tps.map((t) => ({ x: t.cx, y: t.cy }))); // decai + acumula ocupação 1x/frame (heatmap)
 
       // (3.4) flow/rec só fecham janela em frame ANALISADO (senão o recEmit cairia num frame pulado,
@@ -1094,7 +1123,7 @@ export function CameraWorkspace({
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
     // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral) + HUD in/out.
-    drawTripwires(ctx, cr, tripwiresRef.current, twCountsRef.current);
+    drawTripwires(ctx, cr, tripwiresRef.current, twCountsRef.current, mode !== "full");
 
     // grade de pintura (ao editar a máscara de uma zona)
     if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows);

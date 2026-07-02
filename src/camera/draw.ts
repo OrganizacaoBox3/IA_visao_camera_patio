@@ -279,6 +279,9 @@ export function drawTripwires(
   cr: Rect,
   wires: ReadonlyArray<Tripwire>,
   counts: Record<string, TripwireCounts>,
+  // Na GRADE a contagem fica pausada (detecção esparsa "teleporta" os tracks — contar seria
+  // inventar número); o HUD declara o estado em vez de mostrar contadores parados sem explicação.
+  paused = false,
 ) {
   if (!wires.length) return;
   const info = cssVar("--state-info", "#38bdf8");
@@ -332,7 +335,9 @@ export function drawTripwires(
     ctx.stroke();
     // HUD discreto: in/out por linha (do lado oposto à seta p/ não cobri-la)
     const c = counts[w.id] ?? { in: 0, out: 0 };
-    const tag = `L${wi + 1}  in ${c.in}  out ${c.out}`;
+    const tag = paused
+      ? `L${wi + 1} ⏸ conta na câmera aberta`
+      : `L${wi + 1}  in ${c.in}  out ${c.out}`;
     ctx.font = "bold 11px ui-sans-serif, system-ui";
     const tw = ctx.measureText(tag).width + 10;
     const hx = mx - dx - tw / 2,

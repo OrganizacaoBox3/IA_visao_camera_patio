@@ -153,6 +153,93 @@ describe("createCounter — contagem direcional", () => {
     expect(c.counts().w).toBeUndefined(); // removido
   });
 
+  it("track que atravessa em N passos conta 1 'in'; a volta (após a janela de debounce) conta 1 'out'", () => {
+    const c = createCounter([vWire], { debounceMs: 500 });
+    c.update([{ id: 1, cx: 0.8, cy: 0.5 }], 0); // registra
+    expect(c.update([{ id: 1, cx: 0.7, cy: 0.5 }], 300)).toHaveLength(0); // aproxima (sem cruzar)
+    expect(c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 600)).toHaveLength(0);
+    const inEv = c.update([{ id: 1, cx: 0.45, cy: 0.5 }], 900); // cruza leste→oeste = in
+    expect(inEv).toHaveLength(1);
+    expect(inEv[0].dir).toBe("in");
+    const outEv = c.update([{ id: 1, cx: 0.62, cy: 0.5 }], 2000); // volta após a janela → out
+    expect(outEv).toHaveLength(1);
+    expect(outEv[0].dir).toBe("out");
+    expect(c.counts().w).toEqual({ in: 1, out: 1 });
+  });
+
+  it("teleporte > maxDist NÃO conta (re-ancora); movimento contínuo seguinte volta a contar", () => {
+    const c = createCounter([vWire], { maxDist: 0.25 });
+    c.update([{ id: 1, cx: 0.7, cy: 0.5 }], 1);
+    // salto de 0.4 cruzando a linha — continuidade perdida (ex.: detecção esparsa) → não conta
+    const ev = c.update([{ id: 1, cx: 0.3, cy: 0.5 }], 2);
+    expect(ev).toHaveLength(0);
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+    // re-ancorado em 0.3: cruzamento contínuo (0.22 ≤ maxDist) volta a contar normalmente
+    const ev2 = c.update([{ id: 1, cx: 0.52, cy: 0.5 }], 3);
+    expect(ev2).toHaveLength(1);
+    expect(ev2[0].dir).toBe("out");
+    expect(c.counts().w).toEqual({ in: 0, out: 1 });
+  });
+
+  it("debounce: 2 cruzamentos rápidos do MESMO track na MESMA linha = 1; após a janela reconta", () => {
+    const c = createCounter([vWire], { debounceMs: 1000 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    expect(c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 100)).toHaveLength(1); // in (contado)
+    // oscila de volta 100ms depois — dentro da janela → ignorado (não vira 'out')
+    expect(c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 200)).toHaveLength(0);
+    expect(c.counts().w).toEqual({ in: 1, out: 0 });
+    // após a janela, um cruzamento real volta a contar
+    const ev = c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 1200);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("in");
+    expect(c.counts().w).toEqual({ in: 2, out: 0 });
+  });
+
+  it("track fantasma PARADO (mesma posição repetida por muitos frames) nunca conta", () => {
+    // simula o detsRef 'stale' do CameraWorkspace: updateTracks repete a mesma posição todo frame
+    const c = createCounter([vWire]);
+    for (let t = 1; t <= 30; t++) {
+      expect(c.update([{ id: 7, cx: 0.49, cy: 0.5 }], t * 33)).toHaveLength(0);
+    }
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+  });
+
+  it("linha invertida (a↔b): o mesmo movimento troca in↔out", () => {
+    const inv: Tripwire = { id: "w", a: vWire.b, b: vWire.a }; // seta p/ CIMA
+    const c = createCounter([inv]);
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    const ev = c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2); // leste→oeste: 'in' na vWire, 'out' na invertida
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("out");
+    expect(c.counts().w).toEqual({ in: 0, out: 1 });
+  });
+
+  it("setTripwires com a↔b (invertTripwire) preserva contadores e passa a contar invertido", () => {
+    const c = createCounter([vWire]);
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2); // in (1)
+    c.setTripwires([{ id: "w", a: vWire.b, b: vWire.a }]); // inverte (mesmo id → contadores mantidos)
+    expect(c.counts().w).toEqual({ in: 1, out: 0 });
+    const ev = c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 3); // oeste→leste: seria 'out' na original
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("in"); // direção invertida
+    expect(c.counts().w).toEqual({ in: 2, out: 0 });
+  });
+
+  it("gap > ttl com o MESMO track presente (pausa/retomada) re-ancora sem contar", () => {
+    // fiação real: na GRADE o counter fica pausado; ao reabrir a câmera o mesmo id pode
+    // reaparecer do outro lado da linha — não pode virar contagem.
+    const c = createCounter([vWire], { ttl: 100 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 0);
+    const ev = c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 500); // gap 500 > ttl → re-ancora
+    expect(ev).toHaveLength(0);
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+    // continuidade retomada: próximo cruzamento real conta
+    const ev2 = c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 600);
+    expect(ev2).toHaveLength(1);
+    expect(ev2[0].dir).toBe("out");
+  });
+
   it("reset zera contadores e histórico de posições", () => {
     const c = createCounter([vWire]);
     c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
