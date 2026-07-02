@@ -42,6 +42,8 @@ export function CameraPage() {
   useEffect(() => {
     let alive = true;
     let timer: number | null = null;
+    let rvfcHandle: number | null = null;
+    let rvfcVideo: HTMLVideoElement | null = null; // elemento onde o rVFC foi registrado (p/ cancelar no cleanup)
 
     (async () => {
       try {
@@ -87,6 +89,9 @@ export function CameraPage() {
       let jpegQuality: number = APP_CONFIG.net.jpegQuality;
 
       let encoding = false; // descarta frame se o encode anterior ainda não terminou (evita backlog)
+      // Contexto 2D hoisted (criado 1×): alpha:false — JPEG não tem alfa; canvas opaco evita
+      // composição/limpeza de canal alfa a cada drawImage.
+      let ctx: CanvasRenderingContext2D | null = null;
       const sendFrame = () => {
         const v = videoRef.current,
           c = canvasRef.current;
@@ -97,7 +102,7 @@ export function CameraPage() {
           c.width = w;
           c.height = h;
         }
-        const ctx = c.getContext("2d")!;
+        ctx ??= c.getContext("2d", { alpha: false })!;
         ctx.drawImage(v, 0, 0, w, h);
         encoding = true;
         // JPEG BINÁRIO (não base64): ~⅓ menor e sem custo de string no transporte.
@@ -123,11 +128,34 @@ export function CameraPage() {
           jpegQuality,
         );
       };
+      // Captura alinhada a frames REAIS da câmera: requestVideoFrameCallback dispara só quando
+      // o vídeo entrega um frame novo — webcam a 8fps em cena escura/estática deixa de ser
+      // re-encodada 12×/s. O gate de fps alvo lê `frameFps` (mutável) a cada callback, então o
+      // evento `capture` (presets de leitura E o shed a 2fps) muda a cadência sem re-registrar nada.
+      // rVFC é one-shot: re-agendamos a cada callback. Honestidade: com a aba em segundo plano o
+      // browser estrangula tanto rVFC quanto timers — o requisito operacional segue sendo aba
+      // visível (limitação de plataforma, igual ao setInterval anterior).
+      const video = videoRef.current!;
+      const useRvfc = typeof video.requestVideoFrameCallback === "function"; // feature-detect 1×
+      let lastSent = 0;
+      const rvfcLoop = (now: DOMHighResTimeStamp) => {
+        if (!alive) return;
+        rvfcHandle = video.requestVideoFrameCallback(rvfcLoop); // re-agenda ANTES de processar
+        const interval = 1000 / frameFps;
+        if (now - lastSent >= interval - 1) {
+          // -1ms de folga: absorve jitter do timestamp p/ não pular frames no fps alvo exato
+          lastSent = now;
+          sendFrame();
+        }
+      };
       const startTimer = () => {
         if (timer) clearInterval(timer);
         timer = window.setInterval(sendFrame, Math.round(1000 / frameFps));
       };
-      startTimer();
+      if (useRvfc) {
+        rvfcVideo = video;
+        rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
+      } else startTimer(); // fallback: navegador sem rVFC mantém o comportamento anterior
 
       // A central pode pedir um perfil de captura (ex.: leitura de código → alta resolução).
       socket.on("capture", (cfg: { width?: number; quality?: number; fps?: number }) => {
@@ -135,7 +163,7 @@ export function CameraPage() {
         if (cfg?.quality) jpegQuality = cfg.quality;
         if (cfg?.fps && cfg.fps !== frameFps) {
           frameFps = cfg.fps;
-          startTimer();
+          if (!useRvfc) startTimer(); // no caminho rVFC o gate já lê frameFps a cada callback
         }
         setProfile(`${frameWidth}px · q${Math.round(jpegQuality * 100)}`);
       });
@@ -144,6 +172,7 @@ export function CameraPage() {
     return () => {
       alive = false;
       if (timer) clearInterval(timer);
+      if (rvfcHandle !== null) rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
       socketRef.current?.disconnect();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
