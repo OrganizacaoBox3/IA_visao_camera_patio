@@ -1,8 +1,9 @@
-// Processador — modo FADIGA (operador). Domínio puro: dona os modelos (MediaPipe Face/Hand +
-// coco-ssd), faz EAR/MAR+EMA, gesto, score adaptativo de celular, motor de risco e recorder.
+// Processador — modo FADIGA (operador). Domínio puro: dona os modelos MediaPipe (Face/Hand);
+// a detecção de celular (coco-ssd) vai pelo WORKER compartilhado de detecção (vision/detect),
+// faz EAR/MAR+EMA, gesto, score adaptativo de celular, motor de risco e recorder.
 // Devolve snapshot + cena (p/ desenho) + efeitos; a view cuida de IO (toast/beep/gravação/desenho).
 import { APP_CONFIG } from "../config";
-import { loadDetector } from "../vision/model";
+import { ensureDetectClient, detectReady, detectFrame } from "../vision/detect";
 import { createFaceLandmarker, createHandLandmarker } from "../fadiga/models";
 import {
   calcEar,
@@ -26,10 +27,16 @@ import type { Disposable } from "./types";
 
 const F = APP_CONFIG.fadiga;
 
-// O detector de celular (coco-ssd) roda na MAIN THREAD (P3) e bloqueia o desenho/UI por
-// dezenas de ms. Sem tocar a config, aplicamos um piso de cadência maior que F.objectIntervalMs
-// (220ms) para reduzir a frequência desse bloqueio. (face/mãos seguem a cadência da config.)
+// O detector de celular roda no WORKER de detecção compartilhado (plano-performance-bit 2.3);
+// mesmo assim mantemos o piso de cadência acima de F.objectIntervalMs (220ms) da onda anterior —
+// cada chamada custa rasterização na main + uma inferência que disputa o worker com o coco das zonas.
 const PHONE_DETECT_MIN_INTERVAL_MS = 500;
+
+// Limiar BRUTO/maxBoxes passados ao coco p/ o celular — preservam a sensibilidade do caminho
+// antigo (`this.obj.detect(el, 24, 0.18)`), abaixo do C.minScore default (0.25) de propósito:
+// a filtragem fina (F.phoneMinRawScore=0.28 + score adaptativo) acontece AQUI no processador.
+const PHONE_DETECT_MAX_BOXES = 24;
+const PHONE_DETECT_MIN_SCORE = 0.18;
 
 // Cadências REBAIXADAS quando `ctx.slow` (view em modo GRADE/tile): na grade não há operador
 // olhando o overlay de perto, então inferir a 66/90ms é desperdício de CPU/GPU × N tiles.
@@ -99,9 +106,7 @@ export type FadigaResult = {
 export class FadigaProcessor implements Disposable {
   private face: FaceLandmarker | null = null;
   private hand: HandLandmarker | null = null;
-  private obj: Awaited<ReturnType<typeof loadDetector>> | null = null;
   private faceState: FadigaModelState = "loading";
-  private objState: FadigaModelState = "loading";
   private alive = true;
 
   private det = {
@@ -171,16 +176,9 @@ export class FadigaProcessor implements Disposable {
         else m.close();
       })
       .catch(() => {});
-    loadDetector()
-      .then((m) => {
-        if (this.alive) {
-          this.obj = m;
-          this.objState = "ready";
-        }
-      })
-      .catch(() => {
-        this.objState = "error";
-      });
+    // Celular via worker de detecção compartilhado (singleton): garante o init; a prontidão
+    // é consultada por detectReady() no process() (cobre também o fallback main-thread do cliente).
+    ensureDetectClient();
   }
 
   // motor de risco — muta estado interno e devolve eventos/alerta desta chamada
@@ -360,11 +358,13 @@ export class FadigaProcessor implements Disposable {
       }
     }
 
-    // CELULAR (coco-ssd async + score adaptativo por contexto)
+    // CELULAR (coco-ssd no worker compartilhado, async + score adaptativo por contexto).
+    // `tiled: false` = single-shot (sem grid), como o caminho main-thread antigo; minScore/maxBoxes
+    // explícitos preservam a sensibilidade original (ver PHONE_DETECT_* acima). Flag `objInFlight`
+    // impede empilhar chamadas enquanto a anterior não voltou.
     if (
       flags.phone &&
-      this.obj &&
-      this.objState === "ready" &&
+      detectReady() &&
       newFrame &&
       now - snap.lastObjAt >= objEveryMs &&
       !snap.objInFlight
@@ -372,8 +372,10 @@ export class FadigaProcessor implements Disposable {
       snap.lastObjAt = now;
       snap.objInFlight = true;
       const tObj = performance.now();
-      void this.obj
-        .detect(f.el as unknown as HTMLCanvasElement, 24, 0.18)
+      void detectFrame(f.el, f.w, f.h, false, {
+        maxBoxes: PHONE_DETECT_MAX_BOXES,
+        minScore: PHONE_DETECT_MIN_SCORE,
+      })
         .then((preds) => {
           snap.pendingObjMs = performance.now() - tObj;
           const vw = f.w,
@@ -497,6 +499,5 @@ export class FadigaProcessor implements Disposable {
     this.face = null;
     this.hand?.close();
     this.hand = null;
-    this.obj = null;
   }
 }
