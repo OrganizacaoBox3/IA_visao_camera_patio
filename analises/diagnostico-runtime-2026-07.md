@@ -141,3 +141,84 @@ Console do browser (capturado desde o boot da página):
   navegação Central↔Relatório, estados de loading/vazio do relatório (sem erro JS).
 - O front **envia** o histórico corretamente (43 ingests com payload válido) — o problema do
   relatório é 100% servidor/configuração, não o pipeline do navegador.
+
+## Re-diagnóstico pós-correções (2026-07-02)
+
+> **Objetivo:** medir o efeito das correções Rec-A..E (commits `b989065..c6524d6`) com o MESMO
+> método do baseline acima. Spec temporário `e2e/diag2.spec.ts` (já **deletado**, não commitado).
+> Hub isolado 4100 sem PG, mesma câmera HLS de Pula, Chromium headless (sem WebGL → detecção CPU,
+> pior caso — igual ao baseline). Modo demo OFF (`aria-checked=false`). Zona "Área 5" desenhada
+> sobre a metade inferior do frame. 1 teste, verde, 3.7min; câmera removida ao final.
+>
+> **Caveats de comparabilidade (declarados):** (1) a câmera de Pula é PTZ e **mudou de preset**
+> entre os testes — a cena agora é ~2/3 telhado + faixa de rua à direita (pedestres menores e menos
+> numerosos que no baseline; ~1–3 visíveis por screenshot contra 2–4 no baseline); (2) janela de
+> observação de **60s por config** (5 amostras a cada 15s) contra 90s no baseline, por limite do
+> runner. As conclusões abaixo consideram os dois fatores.
+
+### A) Relatório (Rec-A/B) — antes × depois
+
+| Item                        | Antes (baseline)                                   | Depois (Rec-A/B)                                                                                          |
+| --------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `POST /api/ingest`          | 43× `200 {ok:true}` e dado **descartado**          | 44× `200` e dado **persistido**                                                                            |
+| `GET /api/data/status`      | (endpoint não existia)                             | `{"persistence":"json","counts":{"ativ":5,"read":0,"obj":0,"fad":0}}`                                      |
+| `GET /api/data/ativ/buckets`| `[]` sempre                                        | **5 buckets** (1 por zona; ~1204 samples/zona; `peoplePeak` presente — "Área 5" com `peoplePeak: 1`)       |
+| Relatório (UI)              | "Sem histórico de atividade ainda." sempre         | **Com dados**: Resumo com cards (50% tempo ativo, 9m parado, Destaques); Atividade com heatmap "Quando para" |
+| KPI "pico de pessoas"       | inexistente                                        | presente na aba Atividade: **"1 · pico de pessoas"**                                                       |
+| Fonte da persistência na UI | invisível (só log no terminal)                     | rodapé dos filtros: **"histórico: arquivo local"**                                                         |
+| Log de boot do hub          | só `[db] Postgres NÃO configurado`                 | + **`[data] histórico em fallback JSON (sem Postgres)`**                                                   |
+| `data-hist.json`            | não existia (sem fallback)                         | existe no dir do hub (`visao-e2e-*/data-hist.json`, 1.6KB, 5 buckets — flush atômico confirmado em disco)  |
+
+**F1/F2/F3: corrigidas de ponta a ponta** (ingest→memória→arquivo→API→UI). Resíduo cosmético novo:
+o rodapé INFERIOR do painel Atividade ainda diz "Histórico (Postgres)" hardcoded
+(`src/routes/report/chrome.tsx`) enquanto o rodapé dos filtros diz "arquivo local" — inconsistência
+de texto, não de dado. A telemetria de ingest (Rec-B) também funcionou: numa execução descartada
+(com processos órfãos de um run anterior interferindo) o front avisou
+`[ingest] hub sem confirmar 3 lote(s) de indicadores — permanecendo em fila local (últ. erro: HTTP 400)`
+— o warn 1×-por-sequência existe e dispara; não ocorreu na execução limpa.
+
+### B) Reconhecimento (Rec-C/D/E) — 3 configurações na mesma cena, antes × depois
+
+Série do painel (5 amostras/60s por config; "visíveis" = contagem manual nos screenshots):
+
+| Config                          | Pessoas visíveis | Contadas (t0→t60)  | Pico | Zona da contagem       | Badge backend       | FPS workspace |
+| ------------------------------- | ---------------- | ------------------- | ---- | ---------------------- | ------------------- | ------------- |
+| Baseline (default, 90s)         | 2–4              | 0,0,0,0,**3**,3,**1**| 4   | **"Espera" (errada)**  | inexistente         | 4–29          |
+| 1. Default (width 720, LR off)  | ~1–3             | 0,0,0,0,0           | 0    | —                      | **"detecção: CPU ⚠"** (aparece ~t30) | 11–26 |
+| 2. +LR (Longo alcance ON)       | ~1–3             | 0,0,0,0,0           | 0    | —                      | "detecção: CPU ⚠"   | **1–17** (LR pesa) |
+| 3. +LR + width 1920 (PATCH ok, ffmpeg reiniciou) | ~1–3 | 0,0,0,0,**1**  | 1    | **"Área 5" (a desenhada!) · 1p** | "detecção: CPU ⚠" | **0–25** (quedas a 0–4) |
+
+- **Fix da zona (Rec-C, F6): funcionou.** A única contagem do teste caiu na zona desenhada pelo
+  operador ("Área 5 · ATIVA · 1p" na pill do canvas e `peoplePeak:1` no bucket da "Área 5"), não
+  mais na zona-semente "Espera". Evidência n=1 — direção certa, amostra pequena.
+- **Badge de backend (Rec-C, F4-visibilidade): entregue.** "detecção: CPU ⚠" visível na kpibar
+  (saturado, com tooltip); o fallback deixou de ser invisível ao operador.
+- **Console:** mesmos warns do baseline (WebGL indisponível → worker em CPU); **nenhum erro novo**.
+- **Reconhecimento em si: AINDA FALHA no pior caso (CPU).** Mesmo na config 3 (a "receita"
+  completa: LR + upscale de tile + 1920), foi **1 detecção em 60s** numa cena com ~1–3 pedestres
+  visíveis; configs 1 e 2 ficaram em **0 absoluto**. LR + 1920 elevam o custo (FPS da workspace
+  despenca a 0–4 em CPU) sem ganho material de recall neste ambiente. A cena PTZ menos favorável e
+  a janela menor explicam parte da queda vs baseline (pico 4), mas **não** o padrão: coco-ssd/tfjs
+  em CPU segue com subcontagem severa em cena de rua/panorâmica (F5 permanece).
+
+### Veredito honesto
+
+1. **Relatório vazio (F1–F3): resolvido.** Persistência JSON + status + vazio honesto + fonte na
+   UI + pico de pessoas — confirmado por API, arquivo em disco e screenshot.
+2. **Atribuição de zona (F6): resolvida** na evidência disponível (n=1).
+3. **Invisibilidade do fallback de CPU (F4-UI): resolvida** (badge saturado na telemetria).
+4. **Subcontagem (F5): NÃO resolvida em CPU — gatilho do P3/YOLO atingido.** As correções Rec-C/D/E
+   são necessárias mas não suficientes: com tfjs/coco-ssd em CPU, nem a config completa conta
+   pedestres de rua de forma utilizável. Recomendação: avançar o P3 (modelo de detecção melhor —
+   YOLO-family — e/ou garantir backend GPU/WebGL no ambiente alvo). Ressalva: este re-teste rodou
+   headless SEM WebGL (pior caso); vale UMA medição da config 3 em máquina com GPU/WebGL real antes
+   de dimensionar o P3 — se com GPU o recall subir a nível utilizável, o P3 vira otimização, não
+   correção.
+5. **F7 (pico zera ao reabrir) e F8 (modelo do fallback main-thread): não endereçadas nesta onda**
+   (fora do escopo Rec-A..E), seguem em aberto.
+
+Evidências: screenshots + `diag2-evidencia.json` (console, 44 ingests, série completa do painel,
+respostas de API) em
+`...\scratchpad\diag2\` (sessão): `00-zona-area5-criada.png`, `01-cfg1-default-t{0,30,60}s.png`,
+`02-cfg2-lr-ligado.png`, `02-cfg2-lr-t{0,30,60}s.png`, `03-cfg3-lr1920-t{0,30,60}s.png`,
+`04-relatorio-resumo.png`, `05-relatorio-atividade.png`.

@@ -32,7 +32,8 @@ export function RepLens({ lens }: { lens: string }) {
 export function HistoryFooter({ onClear, busy }: { onClear: () => void; busy: boolean }) {
   return (
     <div className="rep-foot">
-      Histórico (Postgres) · indicadores agregados, sem imagens ·{" "}
+      {/* fonte real (banco/arquivo) aparece na barra de filtros via /api/data/status */}
+      Histórico do servidor · indicadores agregados, sem imagens ·{" "}
       <button onClick={onClear} disabled={busy} className="linkbtn">
         limpar histórico
       </button>
