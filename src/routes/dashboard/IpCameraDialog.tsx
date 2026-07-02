@@ -223,7 +223,14 @@ export function IpCameraDialog({ open, onOpenChange }: IpCameraDialogProps) {
           </label>
           {fAdvanced && (
             <div className="cam-ip-adv">
-              <Field label="fps (1–30)" htmlFor="cam-fps">
+              {/* Placeholders = defaults reais do hub (server/rtsp.js defaultCfg): fps 10 · width 720 · q 4.
+                  Hints orientam o caso rua/panorâmica (item 2.5 do plano-melhoria-reconhecimento):
+                  720 px encolhe pedestre distante p/ ~5–11 px — abaixo do mínimo do detector. */}
+              <Field
+                label="fps (1–30)"
+                htmlFor="cam-fps"
+                hint="Quadros/s que o hub extrai do stream; padrão 10. Menos fps = menos CPU."
+              >
                 <Input
                   id="cam-fps"
                   type="number"
@@ -231,10 +238,14 @@ export function IpCameraDialog({ open, onOpenChange }: IpCameraDialogProps) {
                   max={30}
                   value={fFps}
                   onChange={(e) => setFFps(e.target.value)}
-                  placeholder="8"
+                  placeholder="10"
                 />
               </Field>
-              <Field label="Largura (160–1920)" htmlFor="cam-width">
+              <Field
+                label="Largura (px, 160–1920)"
+                htmlFor="cam-width"
+                hint="Padrão 720. Use 1280–1920 p/ câmeras de rua/panorâmicas — em 720 um pedestre distante fica pequeno demais p/ o detector. Mais largura = mais CPU."
+              >
                 <Input
                   id="cam-width"
                   type="number"
@@ -242,10 +253,14 @@ export function IpCameraDialog({ open, onOpenChange }: IpCameraDialogProps) {
                   max={1920}
                   value={fWidth}
                   onChange={(e) => setFWidth(e.target.value)}
-                  placeholder="480"
+                  placeholder="720"
                 />
               </Field>
-              <Field label="Qualidade (1–31)" htmlFor="cam-quality">
+              <Field
+                label="Qualidade (1–31)"
+                htmlFor="cam-quality"
+                hint="Compressão JPEG do ffmpeg — MENOR = melhor imagem; padrão 4."
+              >
                 <Input
                   id="cam-quality"
                   type="number"
@@ -253,7 +268,7 @@ export function IpCameraDialog({ open, onOpenChange }: IpCameraDialogProps) {
                   max={31}
                   value={fQuality}
                   onChange={(e) => setFQuality(e.target.value)}
-                  placeholder="7"
+                  placeholder="4"
                 />
               </Field>
             </div>

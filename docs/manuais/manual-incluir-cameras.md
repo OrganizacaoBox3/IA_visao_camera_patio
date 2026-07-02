@@ -60,7 +60,7 @@ Use a **porta 554** e, sempre que possível, o **sub-stream** (resolução menor
    - **Nome (label):** ex. "Doca 3".
    - **URL:** a URL RTSP do Passo 3.
    - **Transporte:** **TCP** (mais estável).
-   - *(Opcional, avançado)* fps / largura / qualidade.
+   - *(Opcional, avançado)* fps / largura / qualidade — **câmera de rua/panorâmica? Suba a largura para 1280–1920** (ver a [receita abaixo](#câmeras-de-ruapanorâmicas--receita-para-reconhecer-pedestres)).
 4. Clique **Adicionar**. A câmera aparece na grade e o status do tile evolui:
    - **connecting** → conectando; **online** → recebendo vídeo; **error** → ver Troubleshooting.
 5. **Gestão:** na mesma tela você pode **habilitar/desabilitar** ou **remover** câmeras IP cadastradas.
@@ -78,6 +78,33 @@ Com a câmera **online**, clique nela para abrir em tela cheia e:
 5. **❄ Congelar** — pausa e permite revisar os últimos segundos (útil para conferir um evento).
 
 As zonas/linhas ficam salvas por câmera. Perfis **operador** só visualizam; **engenheiro/superadmin** editam a configuração.
+
+---
+
+## Câmeras de rua/panorâmicas — receita para reconhecer pedestres
+
+Cena aberta (rua, pátio, doca vista de longe): o pedestre distante ocupa **20–40 px** no stream original.
+Com a largura padrão (**720**), depois do corte do detector ele vira **~5–11 px** — abaixo do mínimo físico
+do modelo, e a contagem fica em zero mesmo com gente visível. A receita:
+
+1. **Largura 1280–1920 no cadastro.** Em **"+ Câmera IP" → Opções avançadas → Largura**, informe
+   `1280` a `1920` (em câmera já cadastrada: remova e recadastre com a largura nova, ou ajuste via
+   `PATCH /api/cameras/:id`). O padrão 720 serve para doca/corredor de perto, **não** para cena de rua.
+2. **Ligue "Longo alcance / Panorâmica".** Abra a câmera em tela cheia → aba **Camadas** → ative
+   **Longo alcance / Panorâmica**. Isso liga o tiling (varredura por blocos) e baixa os limiares para
+   alvos pequenos — sem ele, a largura extra ajuda pouco.
+3. **Abra a câmera para analisar.** A detecção roda **no navegador**: com a câmera **aberta em tela
+   cheia** ela analisa em cadência completa; na grade a cadência é reduzida (rotação entre tiles) e
+   quem anda rápido pode escapar do rastreio. Para medir/validar, deixe a câmera aberta.
+4. **Trade-off honesto:** mais largura = mais CPU no servidor (ffmpeg) **e** no navegador (decode +
+   tiles maiores). Aplique **por câmera** (só nas panorâmicas), não como padrão global; se o hub
+   pesar, reduza o fps dessa câmera (ex.: 6–8).
+
+**Exemplo (câmera pública de Pula, HR — rua com pedestres, 1080p):** cadastre
+`https://cdn-004.whatsupcams.com/hls/hr_pula01.m3u8` com **Largura 1920**, ligue **Longo alcance /
+Panorâmica** na aba Camadas, desenhe a zona sobre a calçada/rua e deixe a câmera aberta ~2 min.
+Com o padrão 720 e o perfil desligado, essa mesma cena conta **zero** pedestres — foi exatamente o
+caso do diagnóstico de jul/2026 (`analises/diagnostico-runtime-2026-07.md`).
 
 ---
 
