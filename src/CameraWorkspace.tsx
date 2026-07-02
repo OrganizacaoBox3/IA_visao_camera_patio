@@ -21,6 +21,7 @@ import {
   recordAlert,
   recordReads,
   recordPass,
+  recordFlow,
   recordObjectSamples,
   recordObjectEvent,
   recordFadigaSamples,
@@ -54,6 +55,7 @@ import {
   type Mask,
 } from "./zoneMask";
 import { createCounter, createOccupancy, type Occupancy } from "./vision/counting";
+import { createByteTracker, type ByteTracker } from "./vision/bytetrack";
 import {
   Button,
   IconButton,
@@ -209,6 +211,8 @@ type Track = {
   id: number;
   cx: number;
   cy: number;
+  /** PÉ do bbox (bottom-center, normalizado) — âncora da contagem por linha (item 1.4). */
+  foot: { x: number; y: number };
   bbox: [number, number, number, number];
   firstSeen: number;
   lastSeen: number;
@@ -295,7 +299,12 @@ export function CameraWorkspace({
   const paintingRef = useRef(false);
   const eraseRef = useRef(false);
   const tracksRef = useRef<Track[]>([]); // presença (IDs anônimos + permanência)
-  const trackIdRef = useRef(0);
+  // ByteTrack-lite (Onda 2): tracker criado sob demanda no rAF; roda SÓ em rodada NOVA de
+  // detecção (detsRev), não a cada frame — realimentar o mesmo resultado stale zeraria a
+  // velocidade estimada e mataria a predição p/ rodadas lentas.
+  const trackerRef = useRef<ByteTracker | null>(null);
+  const detsRevRef = useRef(0); // incrementa quando detectFrame entrega resultado novo
+  const consumedDetsRevRef = useRef(0); // última rodada consumida pelo tracker/counter
   const peakRef = useRef(0);
   const pausedRef = useRef(false);
   const eventIdRef = useRef(0);
@@ -369,12 +378,14 @@ export function CameraWorkspace({
     tripwires,
     tripwireMode,
     twCounts,
+    flowBase,
     setTripwireMode,
     setTwCounts,
     counterRef,
     tripwiresRef,
     twCountsRef,
     twDrawRef,
+    flowBaseRef,
     commitTripwire,
     invertTripwire,
     removeTripwire,
@@ -631,58 +642,47 @@ export function CameraWorkspace({
   }
 
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
+  // Onda 2 (plano-contagem-pessoas): ByteTrack-lite (vision/bytetrack.ts) no lugar do greedy
+  // por distância. Associação em 2 passadas por IoU: score ALTO associa/nasce; score BAIXO
+  // (minScore..limiar — as detecções 0.15-0.4 que antes eram jogadas fora) só SUSTENTA tracks
+  // existentes. Predição linear no gate mantém o id vivo em rodadas lentas (LR full).
+  // O contrato downstream é o MESMO: tracks alimentam presença/zona/counter/heatmap.
   function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
-    const P = APP_CONFIG.people;
-    // Longo alcance: limiar de confiança de "person" mais baixo (alvos distantes pontuam menos).
+    const T = APP_CONFIG.people.track;
+    const tracker =
+      trackerRef.current ??
+      (trackerRef.current = createByteTracker({
+        highScore: APP_CONFIG.people.scoreThreshold,
+        iouThreshold: T.iouThreshold,
+        ttlMs: T.ttlMs,
+      }));
+    // Longo alcance: limiar de "person" mais baixo (alvos distantes pontuam menos) — vira o
+    // corte da 1ª passada/nascimento; abaixo dele a detecção ainda entra na 2ª passada.
     const personScoreThr = longRangeRef.current
       ? APP_CONFIG.detection.longRange.peopleScoreThreshold
-      : P.scoreThreshold;
+      : APP_CONFIG.people.scoreThreshold;
     const persons = dets
-      .filter((d) => d.class === "person" && d.score >= personScoreThr)
+      .filter((d) => d.class === "person") // filtro de CLASSE apenas; o score é do tracker
       .map((d) => ({
-        cx: (d.bbox[0] + d.bbox[2] / 2) / vidW,
-        cy: (d.bbox[1] + d.bbox[3] / 2) / vidH,
+        score: d.score,
         bbox: [d.bbox[0] / vidW, d.bbox[1] / vidH, d.bbox[2] / vidW, d.bbox[3] / vidH] as [
           number,
           number,
           number,
           number,
         ],
-        score: d.score,
       }));
-    const used = new Set<number>();
-    for (const p of persons) {
-      let best: Track | null = null;
-      let bestD: number = P.trackMaxDist;
-      for (const t of tracksRef.current) {
-        if (used.has(t.id)) continue;
-        const d = Math.hypot(t.cx - p.cx, t.cy - p.cy);
-        if (d < bestD) {
-          bestD = d;
-          best = t;
-        }
-      }
-      if (best) {
-        used.add(best.id);
-        best.cx = p.cx;
-        best.cy = p.cy;
-        best.bbox = p.bbox;
-        best.lastSeen = now;
-        best.zone = zoneAtAtiv(ativ, p.cx, p.cy, p.bbox);
-        best.score = p.score;
-      } else
-        tracksRef.current.push({
-          id: ++trackIdRef.current,
-          cx: p.cx,
-          cy: p.cy,
-          bbox: p.bbox,
-          firstSeen: now,
-          lastSeen: now,
-          zone: zoneAtAtiv(ativ, p.cx, p.cy, p.bbox),
-          score: p.score,
-        });
-    }
-    tracksRef.current = tracksRef.current.filter((t) => now - t.lastSeen <= P.trackTimeoutMs);
+    tracksRef.current = tracker.update(persons, now, personScoreThr).map((t) => ({
+      id: t.id,
+      cx: t.cx,
+      cy: t.cy,
+      foot: t.foot,
+      bbox: t.bbox,
+      firstSeen: t.firstSeen,
+      lastSeen: t.lastSeen,
+      zone: zoneAtAtiv(ativ, t.cx, t.cy, t.bbox), // zona por overlap — continua
+      score: t.score,
+    }));
   }
 
   function pushTimeline(text: string, sev: TimelineItem["sev"]) {
@@ -817,7 +817,10 @@ export function CameraWorkspace({
             : { schedule };
           detectFrame(el, fw, fh, tiled, opts)
             .then((res) => {
-              if (res) detsRef.current = res;
+              if (res) {
+                detsRef.current = res;
+                detsRevRef.current++; // rodada NOVA de detecção (gate do tracker abaixo)
+              }
             })
             .catch(() => {})
             .finally(() => {
@@ -826,23 +829,31 @@ export function CameraWorkspace({
         }
       }
       const dets = detsRef.current;
-      if (needPersons) updateTracks(dets, ativ, f.w, f.h, now);
+      // (Onda 2) O ByteTracker roda SÓ em rodada NOVA de detecção — não a cada frame de vídeo
+      // com o mesmo detsRef stale (que zeraria a velocidade estimada e mataria a predição).
+      // Entre rodadas, tracksRef mantém as últimas posições (draw/presença seguem fluidos).
+      const freshDets = detsRevRef.current !== consumedDetsRevRef.current;
+      if (needPersons && freshDets) {
+        consumedDetsRevRef.current = detsRevRef.current;
+        updateTracks(dets, ativ, f.w, f.h, now);
+      }
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
 
       // ── Tripwires + ocupação (Onda C item 13) — REUSA os tracks já existentes (sem inferência extra) ──
       // counter/occupancy criados 1x (sob demanda); a geometria é re-setada via effect quando as linhas mudam.
-      // maxDist 0.25: teleporte de um MESMO id (perda de continuidade) re-ancora sem contar —
-      // defesa extra além do trackMaxDist do updateTracks. debounceMs 800: quem oscila "em cima"
-      // da linha (jitter de bbox) não infla in/out; um vai-e-volta real leva ≥ 2 rodadas de
-      // detecção (~700ms na câmera aberta) e segue contando após a janela.
+      // Parâmetros em config.people.track: counterMaxDist (teleporte de um MESMO id re-ancora sem
+      // contar — defesa extra além do gate de IoU do ByteTracker), debounceMs (anti-oscilação
+      // pós-contagem) e minCrossingFrames (histerese: o lado novo precisa se sustentar ≥2 rodadas
+      // de detecção — jitter de 1 rodada não conta). Âncora no PÉ do bbox (Track.foot, item 1.4).
       const counter =
         counterRef.current ??
         (counterRef.current = createCounter(tripwiresRef.current, {
           minMove: 0.01,
           ttl: 1500,
-          maxDist: 0.25,
-          debounceMs: 800,
+          maxDist: APP_CONFIG.people.track.counterMaxDist,
+          debounceMs: APP_CONFIG.people.track.debounceMs,
+          minCrossingFrames: APP_CONFIG.people.track.minCrossingFrames,
         }));
       const occ =
         occRef.current ??
@@ -853,11 +864,13 @@ export function CameraWorkspace({
           addAmount: 0.6,
           max: 6,
         }));
-      const tps = tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy }));
+      const tps = tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy, foot: t.foot }));
       // Na GRADE a contagem fica PAUSADA (ver comentário `countingActive` acima): não alimentar o
       // counter com tracks "teleportados" evita contagem falsa; o gap > ttl na retomada faz o
       // counter re-ancorar as posições sem contar (counting.ts). O HUD indica o estado pausado.
-      if (countingActive) {
+      // `freshDets`: o counter avança na cadência das RODADAS de detecção (mesma dos tracks) —
+      // é o "update" da histerese (minCrossingFrames) e evita reprocessar posições repetidas.
+      if (countingActive && freshDets) {
         const crossings = counter.update(tps, now);
         for (const ev of crossings) {
           const wi = tripwiresRef.current.findIndex((w) => w.id === ev.tripwireId);
@@ -865,6 +878,15 @@ export function CameraWorkspace({
             `${ev.dir === "in" ? "Entrada" : "Saída"} · Linha ${wi >= 0 ? wi + 1 : "?"}`,
             "info",
           );
+          // (1.1) Evento de cruzamento PERSISTIDO — só metadados (LGPD ok / ADR-002).
+          // Fire-and-forget: o store é resiliente (nunca lança dentro do loop de vídeo).
+          void recordFlow({
+            cameraId,
+            cameraLabel: label,
+            tripwireId: ev.tripwireId,
+            dir: ev.dir,
+            ts: Date.now(),
+          });
         }
         if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
       }
@@ -1122,8 +1144,16 @@ export function CameraWorkspace({
     );
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
-    // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral) + HUD in/out.
-    drawTripwires(ctx, cr, tripwiresRef.current, twCountsRef.current, mode !== "full");
+    // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral)
+    // + HUD in/out "hoje" (acumulado do servidor via flowBaseRef + sessão corrente — item 1.2).
+    drawTripwires(
+      ctx,
+      cr,
+      tripwiresRef.current,
+      twCountsRef.current,
+      mode !== "full",
+      flowBaseRef.current,
+    );
 
     // grade de pintura (ao editar a máscara de uma zona)
     if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows);
@@ -1918,7 +1948,7 @@ export function CameraWorkspace({
                   <Button
                     size="sm"
                     onClick={resetCounts}
-                    title="Zera os contadores in/out desta sessão (geometria mantida)"
+                    title="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece."
                   >
                     ↺ Zerar contagem
                   </Button>
@@ -1931,7 +1961,10 @@ export function CameraWorkspace({
                   </p>
                 )}
                 {tripwires.map((w, i) => {
+                  // (1.2) "hoje" = acumulado do DIA no servidor (flowBase, sobrevive a reload)
+                  // + sessão corrente (twCounts). Load falhou/hub antigo → flowBase vazio (só sessão).
                   const c = twCounts[w.id] ?? { in: 0, out: 0 };
+                  const b = flowBase[w.id] ?? { in: 0, out: 0 };
                   return (
                     <div key={w.id} className="zone">
                       <div className="row">
@@ -1973,17 +2006,17 @@ export function CameraWorkspace({
                         </span>
                       </div>
                       <div className="kpis ws-kpis">
-                        <div className="kpi">
+                        <div className="kpi" title={`sessão ${c.in} · dia (servidor) ${b.in}`}>
                           <div className="v" style={{ color: "var(--state-info)" }}>
-                            {c.in}
+                            {b.in + c.in}
                           </div>
-                          <div className="l">entradas</div>
+                          <div className="l">entradas hoje</div>
                         </div>
-                        <div className="kpi">
+                        <div className="kpi" title={`sessão ${c.out} · dia (servidor) ${b.out}`}>
                           <div className="v" style={{ color: "var(--state-neutral)" }}>
-                            {c.out}
+                            {b.out + c.out}
                           </div>
-                          <div className="l">saídas</div>
+                          <div className="l">saídas hoje</div>
                         </div>
                       </div>
                     </div>

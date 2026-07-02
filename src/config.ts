@@ -52,6 +52,21 @@ export const APP_CONFIG = {
     trackMaxDist: 0.12, // distância normalizada p/ casar detecção com track existente
     trackTimeoutMs: 1500, // remove o track se a pessoa some por mais que isso
     dwellMinMs: 800, // ignora aparições muito curtas (flicker)
+    // ByteTrack-lite (Onda 2 do plano-contagem-pessoas): associação em 2 PASSADAS por IoU —
+    // score alto associa/nasce; score BAIXO (minScore..scoreThreshold, antes descartado) só
+    // SUSTENTA tracks existentes. Substitui o greedy por distância (trackMaxDist/trackTimeoutMs
+    // acima ficam como legado do caminho antigo). Consumido por vision/bytetrack.ts + counter.
+    track: {
+      iouThreshold: 0.25, // IoU mínimo p/ associar detecção×track (contra a bbox PREDITA)
+      ttlMs: 1500, // morte do track sem associação (ms) — espelha trackTimeoutMs
+      // Gate de TELEPORTE do counter (counting.ts maxDist). Era 0.25; com o ByteTracker o id só
+      // avança por IoU com a predição (deslocamentos de id são estruturalmente plausíveis) e uma
+      // rodada LENTA (LR full ~0,5-1,3s) desloca até ~0.3 do frame — 0.35 deixa o cruzamento real
+      // contar sem abrir mão da defesa contra troca de alvo grosseira.
+      counterMaxDist: 0.35,
+      minCrossingFrames: 2, // histerese: lado novo sustentado N updates consecutivos antes de contar
+      debounceMs: 800, // janela anti-oscilação por (track, linha) pós-cruzamento (counting.ts)
+    },
   },
 
   zones: {

@@ -282,6 +282,9 @@ export function drawTripwires(
   // Na GRADE a contagem fica pausada (detecção esparsa "teleporta" os tracks — contar seria
   // inventar número); o HUD declara o estado em vez de mostrar contadores parados sem explicação.
   paused = false,
+  // (1.2) Acumulado do DIA vindo do servidor (loadFlowToday), somado à sessão no HUD — a
+  // contagem exibida sobrevive a reload/reabertura. Ausente/erro de load → só a sessão (como antes).
+  base?: Record<string, TripwireCounts>,
 ) {
   if (!wires.length) return;
   const info = cssVar("--state-info", "#38bdf8");
@@ -333,11 +336,15 @@ export function drawTripwires(
     ctx.moveTo(ex, ey);
     ctx.lineTo(ex - hl * Math.cos(ang + ha), ey - hl * Math.sin(ang + ha));
     ctx.stroke();
-    // HUD discreto: in/out por linha (do lado oposto à seta p/ não cobri-la)
+    // HUD discreto: in/out "hoje" por linha (acumulado do servidor + sessão corrente),
+    // do lado oposto à seta p/ não cobri-la.
     const c = counts[w.id] ?? { in: 0, out: 0 };
+    const b = base?.[w.id];
+    const tin = (b?.in ?? 0) + c.in,
+      tout = (b?.out ?? 0) + c.out;
     const tag = paused
       ? `L${wi + 1} ⏸ conta na câmera aberta`
-      : `L${wi + 1}  in ${c.in}  out ${c.out}`;
+      : `L${wi + 1}  in ${tin}  out ${tout}`;
     ctx.font = "bold 11px ui-sans-serif, system-ui";
     const tw = ctx.measureText(tag).width + 10;
     const hx = mx - dx - tw / 2,

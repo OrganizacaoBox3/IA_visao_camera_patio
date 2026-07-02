@@ -252,6 +252,112 @@ describe("createCounter — contagem direcional", () => {
   });
 });
 
+describe("createCounter — âncora no PÉ do bbox (item 1.4)", () => {
+  // Tripwire horizontal (a→b p/ a direita): cruzar de CIMA p/ BAIXO = "in" (inwardNormal +y).
+  const hWire: Tripwire = { id: "h", a: { x: 0, y: 0.5 }, b: { x: 1, y: 0.5 } };
+
+  it("bbox alto: centróide cruza 'no ar' mas o pé não → NÃO conta", () => {
+    const c = createCounter([hWire]);
+    // câmera em ângulo: pessoa atrás da linha; o centróide (meio do corpo) passa sobre a
+    // linha na imagem, mas o pé (chão) permanece do mesmo lado.
+    c.update([{ id: 1, cx: 0.5, cy: 0.4, foot: { x: 0.5, y: 0.75 } }], 1);
+    const ev = c.update([{ id: 1, cx: 0.5, cy: 0.6, foot: { x: 0.5, y: 0.8 } }], 2);
+    expect(ev).toHaveLength(0);
+    expect(c.counts().h).toEqual({ in: 0, out: 0 });
+  });
+
+  it("pé cruza (mesmo com centróide ainda do lado antigo) → conta na direção do PÉ", () => {
+    const c = createCounter([hWire]);
+    c.update([{ id: 1, cx: 0.5, cy: 0.2, foot: { x: 0.5, y: 0.45 } }], 1);
+    const ev = c.update([{ id: 1, cx: 0.5, cy: 0.25, foot: { x: 0.5, y: 0.55 } }], 2);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("in"); // cima→baixo = in
+    expect(ev[0].y).toBeCloseTo(0.5, 6); // interseção calculada na trajetória do pé
+    expect(c.counts().h).toEqual({ in: 1, out: 0 });
+  });
+
+  it("minMove vale sobre o PÉ: micro-jitter do pé não conta mesmo com centróide 'andando'", () => {
+    const c = createCounter([hWire], { minMove: 0.01 });
+    c.update([{ id: 1, cx: 0.5, cy: 0.3, foot: { x: 0.5, y: 0.499 } }], 1);
+    const ev = c.update([{ id: 1, cx: 0.5, cy: 0.45, foot: { x: 0.5, y: 0.501 } }], 2);
+    expect(ev).toHaveLength(0); // |Δpé| = 0.002 < 0.01 (o centróide moveu 0.15, irrelevante)
+  });
+
+  it("sem foot, segue valendo o centróide (retrocompatível)", () => {
+    const c = createCounter([hWire]);
+    c.update([{ id: 1, cx: 0.5, cy: 0.4 }], 1);
+    const ev = c.update([{ id: 1, cx: 0.5, cy: 0.6 }], 2);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("in");
+  });
+});
+
+describe("createCounter — histerese multi-update (minCrossingFrames)", () => {
+  it("jitter de 1 frame (cruza e volta) NÃO conta", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    expect(c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2)).toHaveLength(0); // cruzou → pendente
+    expect(c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 3)).toHaveLength(0); // voltou → cancelado
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+  });
+
+  it("lado novo sustentado no update seguinte → conta 1 'in' (evento sai na confirmação)", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    expect(c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2)).toHaveLength(0); // pendente (1º update)
+    const ev = c.update([{ id: 1, cx: 0.38, cy: 0.5 }], 3); // sustentou (2º) → confirma
+    expect(ev).toHaveLength(1);
+    expect(ev[0].dir).toBe("in");
+    expect(ev[0].x).toBeCloseTo(0.5, 6); // ponto do CRUZAMENTO original, não da confirmação
+    expect(c.counts().w).toEqual({ in: 1, out: 0 });
+  });
+
+  it("cruza e PARA em cima do lado novo (abaixo de minMove) → ainda confirma", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2, minMove: 0.01 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    expect(c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2)).toHaveLength(0);
+    const ev = c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 3); // parado (moved 0 < minMove)
+    expect(ev).toHaveLength(1); // a pendência é avaliada ANTES do gate de jitter
+    expect(c.counts().w).toEqual({ in: 1, out: 0 });
+  });
+
+  it("default (sem minCrossingFrames) conta imediato — comportamento anterior preservado", () => {
+    const c = createCounter([vWire]);
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    expect(c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2)).toHaveLength(1);
+  });
+
+  it("debounce complementa: confirmação dentro da janela de um cruzamento já contado é suprimida", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2, debounceMs: 1000 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 0);
+    c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 100); // pendente in
+    expect(c.update([{ id: 1, cx: 0.38, cy: 0.5 }], 200)).toHaveLength(1); // in contado (t=200)
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 300); // volta a cruzar → pendente out
+    expect(c.update([{ id: 1, cx: 0.62, cy: 0.5 }], 400)).toHaveLength(0); // 400-200 < 1000 → suprimido
+    expect(c.counts().w).toEqual({ in: 1, out: 0 });
+  });
+
+  it("teleporte (> maxDist) descarta a pendência — não confirma do outro lado do salto", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2, maxDist: 0.25 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 1);
+    c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 2); // pendente in
+    // salto p/ (0.1,0.9): dist 0.5 > maxDist → re-ancora e limpa pendências…
+    expect(c.update([{ id: 1, cx: 0.1, cy: 0.9 }], 3)).toHaveLength(0);
+    // …ainda no lado "in" (x<0.5): se a pendência tivesse sobrevivido, confirmaria aqui.
+    expect(c.update([{ id: 1, cx: 0.12, cy: 0.9 }], 4)).toHaveLength(0);
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+  });
+
+  it("gap > ttl (contagem pausada/retomada) descarta a pendência", () => {
+    const c = createCounter([vWire], { minCrossingFrames: 2, ttl: 100 });
+    c.update([{ id: 1, cx: 0.6, cy: 0.5 }], 0);
+    c.update([{ id: 1, cx: 0.4, cy: 0.5 }], 10); // pendente in
+    expect(c.update([{ id: 1, cx: 0.38, cy: 0.5 }], 500)).toHaveLength(0); // gap 490 > ttl → limpa
+    expect(c.update([{ id: 1, cx: 0.35, cy: 0.5 }], 510)).toHaveLength(0); // nada pendente
+    expect(c.counts().w).toEqual({ in: 0, out: 0 });
+  });
+});
+
 describe("createOccupancy — heatmap com decaimento", () => {
   it("add acumula nas células certas e grid() normaliza 0..1", () => {
     const occ = createOccupancy({ cols: 2, rows: 2, decay: 1 }); // decay 1 = sem decaimento

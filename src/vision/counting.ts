@@ -65,8 +65,14 @@ export type CrossDir = "in" | "out";
 /** Contadores acumulados por tripwire. */
 export type TripwireCounts = { in: number; out: number };
 
-/** Entrada mínima de track por frame (compatível com Track do CameraWorkspace). */
-export type TrackPoint = { id: number | string; cx: number; cy: number };
+/**
+ * Entrada mínima de track por frame (compatível com Track do CameraWorkspace).
+ * `foot` (opcional, item 1.4): âncora no PÉ do bbox (bottom-center). Quando presente,
+ * TODO o julgamento de cruzamento usa o pé — em câmera em ângulo, o centróide de um
+ * bbox alto cruza a linha "no ar" antes de a pessoa pisar do outro lado. Ausente →
+ * comportamento anterior (centróide cx/cy).
+ */
+export type TrackPoint = { id: number | string; cx: number; cy: number; foot?: Point };
 
 /** Evento de cruzamento emitido por `update()` no frame em que ocorre. */
 export type CrossEvent = {
@@ -96,6 +102,13 @@ export type CounterOptions = {
    * Default 0 (desligado).
    */
   debounceMs?: number;
+  /**
+   * HISTERESE multi-update (item 1.4): o lado NOVO precisa se sustentar por N updates
+   * consecutivos antes de o cruzamento contar (o update do cruzamento é o 1º). Jitter de
+   * 1 frame (bbox que "pula" a linha e volta) não conta. Complementa o debounceMs (que age
+   * DEPOIS de contar). Default 1 = conta imediato (comportamento anterior).
+   */
+  minCrossingFrames?: number;
 };
 
 /** Instância do contador de linhas. Estado encapsulado; determinístico dado o histórico. */
@@ -178,12 +191,17 @@ export function centroidOfBBox(
 
 // ── Contador de tripwire (estado encapsulado) ────────────────────────────────
 
+/** Cruzamento PENDENTE de confirmação (histerese) — criado quando minCrossingFrames > 1. */
+type PendingCross = { dir: CrossDir; x: number; y: number; sustained: number };
+
 type TrackState = {
   x: number;
   y: number;
   lastSeen: number;
   /** último cruzamento contado por tripwire (id → t) — lazily criado quando debounceMs > 0 */
   crossAt?: Map<string, number>;
+  /** cruzamentos aguardando sustentação do lado novo (tripwire id → pendência) */
+  pending?: Map<string, PendingCross>;
 };
 
 /**
@@ -199,6 +217,7 @@ export function createCounter(
   const ttl = opts.ttl ?? 1500;
   const maxDist = opts.maxDist ?? Number.POSITIVE_INFINITY;
   const debounceMs = opts.debounceMs ?? 0;
+  const minCrossingFrames = Math.max(1, opts.minCrossingFrames ?? 1);
 
   let wires: Tripwire[] = tripwires.map(cloneWire);
   const counts = new Map<string, TripwireCounts>();
@@ -206,6 +225,29 @@ export function createCounter(
   let frameClock = 0; // relógio de fallback (frames) quando `now` não é informado
 
   for (const w of wires) counts.set(w.id, { in: 0, out: 0 });
+
+  // Conta 1 cruzamento (respeitando o debounce por track×linha) e emite o evento.
+  // Usado no caminho imediato (minCrossingFrames=1) e na CONFIRMAÇÃO da histerese.
+  function tryCount(
+    prev: TrackState,
+    trackId: number | string,
+    w: Tripwire,
+    dir: CrossDir,
+    x: number,
+    y: number,
+    t: number,
+    events: CrossEvent[],
+  ): void {
+    if (debounceMs > 0) {
+      const lastAt = prev.crossAt?.get(w.id);
+      if (lastAt !== undefined && t - lastAt < debounceMs) return;
+      (prev.crossAt ??= new Map()).set(w.id, t);
+    }
+    const c = counts.get(w.id) ?? { in: 0, out: 0 };
+    c[dir] += 1;
+    counts.set(w.id, c);
+    events.push({ tripwireId: w.id, trackId, dir, x, y });
+  }
 
   function update(tracks: ReadonlyArray<TrackPoint>, now?: number): CrossEvent[] {
     const t = now ?? ++frameClock;
@@ -215,7 +257,8 @@ export function createCounter(
     for (const tr of tracks) {
       seen.add(tr.id);
       const prev = last.get(tr.id);
-      const cur = { x: tr.cx, y: tr.cy };
+      // Âncora do julgamento (item 1.4): PÉ do bbox quando presente; senão o centróide.
+      const cur = tr.foot ? { x: tr.foot.x, y: tr.foot.y } : { x: tr.cx, y: tr.cy };
       if (!prev) {
         last.set(tr.id, { x: cur.x, y: cur.y, lastSeen: t });
         continue;
@@ -223,13 +266,34 @@ export function createCounter(
       const stale = t - prev.lastSeen > ttl; // gap sem update (ex.: contagem pausada) → continuidade perdida
       prev.lastSeen = t; // visto neste frame (mantém vivo p/ TTL)
       const moved = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+      const lost = stale || moved > maxDist; // continuidade perdida (gap/teleporte)
+      // HISTERESE (item 1.4): confirma/cancela pendências ANTES do gate de minMove — quem
+      // cruza e PARA em cima do lado novo também confirma (parado ele nunca passaria o gate).
+      // Num frame de continuidade perdida não se confirma nada (não inventa contagem).
+      if (!lost && prev.pending?.size) {
+        for (const w of wires) {
+          const pd = prev.pending.get(w.id);
+          if (!pd) continue;
+          const s = orient(w.a, w.b, cur);
+          const side = pd.dir === "in" ? s : -s; // >0 sustenta o lado novo; <0 voltou (jitter)
+          if (side > 0) {
+            pd.sustained += 1;
+            if (pd.sustained >= minCrossingFrames) {
+              prev.pending.delete(w.id);
+              tryCount(prev, tr.id, w, pd.dir, pd.x, pd.y, t, events);
+            }
+          } else if (side < 0) prev.pending.delete(w.id); // jitter de 1 frame: não conta
+        }
+      }
       // micro-jitter: acumula deslocamento (NÃO atualiza last-pos) até passar o limiar.
       if (moved < minMove) continue;
       // continuidade perdida (gap > ttl) ou TELEPORTE (salto > maxDist — o rastreio não
-      // acompanhou o alvo): re-ancora a posição sem avaliar cruzamento (não inventa contagem).
-      if (stale || moved > maxDist) {
+      // acompanhou o alvo): re-ancora a posição sem avaliar cruzamento (não inventa contagem)
+      // e descarta pendências (a sustentação exigiria continuidade).
+      if (lost) {
         prev.x = cur.x;
         prev.y = cur.y;
+        prev.pending?.clear();
         continue;
       }
 
@@ -242,17 +306,14 @@ export function createCounter(
         if (d1 < 0 && d2 > 0) dir = "in";
         else if (d1 > 0 && d2 < 0) dir = "out";
         if (!dir) continue;
-        // debounce por (track, linha): oscilação rápida sobre a linha não recontagem.
-        if (debounceMs > 0) {
-          const lastAt = prev.crossAt?.get(w.id);
-          if (lastAt !== undefined && t - lastAt < debounceMs) continue;
-          (prev.crossAt ??= new Map()).set(w.id, t);
-        }
-        const c = counts.get(w.id) ?? { in: 0, out: 0 };
-        c[dir] += 1;
-        counts.set(w.id, c);
         const ip = intersectionPoint(from, cur, w.a, w.b);
-        events.push({ tripwireId: w.id, trackId: tr.id, dir, x: ip.x, y: ip.y });
+        if (minCrossingFrames > 1) {
+          // histerese ligada: NÃO conta ainda — o lado novo precisa se sustentar nos
+          // próximos updates (este é o 1º). Um novo cruzamento substitui a pendência.
+          (prev.pending ??= new Map()).set(w.id, { dir, x: ip.x, y: ip.y, sustained: 1 });
+        } else {
+          tryCount(prev, tr.id, w, dir, ip.x, ip.y, t, events);
+        }
       }
       // avança o last-pos só após mover além do jitter (evita dupla contagem)
       prev.x = cur.x;

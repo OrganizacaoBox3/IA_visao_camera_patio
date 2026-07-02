@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { type FrameSource } from "../frame";
 import { getTripwires, saveTripwires, ApiError, type Tripwire } from "../api";
 import { type Counter, type TripwireCounts } from "../vision/counting";
+import { loadFlowToday } from "../report/store";
 import { getContentRect } from "./draw";
 
 const tripwireKey = (cameraId: string) => `vp-tripwires-${cameraId}`;
@@ -95,6 +96,32 @@ export function useTripwires({
   const [tripwires, setTripwires] = useState<Tripwire[]>([]);
   const [tripwireMode, setTripwireMode] = useState(false); // editor de linha ativo (gated por canConfigure)
   const [twCounts, setTwCounts] = useState<Record<string, TripwireCounts>>({}); // contadores in/out p/ o painel lateral
+
+  // (1.2) ACUMULADO DO DIA por linha, vindo do servidor (agregação dos eventos `flow` que o
+  // rAF grava via recordFlow a cada cruzamento). Exibido como "hoje" = base + sessão corrente
+  // (HUD no canvas via flowBaseRef; painel via flowBase). Carregado 1× ao abrir/trocar a câmera.
+  // "↺ Zerar contagem" zera SÓ a sessão (counter.reset) — o histórico do servidor permanece.
+  const flowBaseRef = useRef<Record<string, TripwireCounts>>({}); // lido no rAF (HUD, sem alocar)
+  const [flowBase, setFlowBase] = useState<Record<string, TripwireCounts>>({});
+  useEffect(() => {
+    let cancelled = false;
+    flowBaseRef.current = {};
+    setFlowBase({});
+    loadFlowToday(cameraId)
+      .then((acc) => {
+        if (cancelled) return;
+        flowBaseRef.current = acc;
+        setFlowBase(acc);
+      })
+      .catch((e) => {
+        // hub antigo sem o kind "flow" / API fora: degrada p/ SÓ a sessão (comportamento
+        // anterior), sem crash — a contagem local segue funcionando normalmente.
+        console.warn("[tripwires] acumulado do dia indisponível — exibindo só a sessão", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraId]);
 
   // Tripwires: carrega do BACKEND ao abrir/trocar a câmera (compartilhado; leitura p/ todos).
   // Robustez: se o load falhar, degrada p/ lista vazia (contagem/heatmap seguem). Migração única
@@ -230,6 +257,7 @@ export function useTripwires({
     );
   }
   // Zera os contadores da SESSÃO (geometria mantida); reflete no HUD e no painel.
+  // O acumulado do dia (flowBase, servidor) NÃO é apagado — "zerar" é um marco local.
   function resetCounts() {
     counterRef.current?.reset();
     twCountsRef.current = counterRef.current ? counterRef.current.counts() : {};
@@ -249,6 +277,7 @@ export function useTripwires({
     tripwires,
     tripwireMode,
     twCounts,
+    flowBase, // (1.2) acumulado do dia (servidor) — painel soma à sessão
     setTripwireMode,
     setTwCounts,
     // refs lidos/criados pelo rAF + desenho do componente
@@ -256,6 +285,7 @@ export function useTripwires({
     tripwiresRef,
     twCountsRef,
     twDrawRef,
+    flowBaseRef, // (1.2) idem p/ o HUD no canvas (lido no rAF)
     // handlers do editor
     commitTripwire,
     invertTripwire,
