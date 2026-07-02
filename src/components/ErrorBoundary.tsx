@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button } from "../ui";
 
 // ErrorBoundary global: captura erros de render/lifecycle e mostra uma tela amigável (com a
 // identidade do produto) em vez de tela branca. O detalhe técnico fica só no console.
@@ -26,9 +27,9 @@ export class ErrorBoundary extends Component<Props, State> {
           <p className="error-sub">
             Encontramos um problema inesperado ao exibir esta tela. Recarregar costuma resolver.
           </p>
-          <button className="ui-btn ui-btn--primary" onClick={() => window.location.reload()}>
+          <Button variant="primary" onClick={() => window.location.reload()}>
             Recarregar
-          </button>
+          </Button>
         </div>
       </div>
     );

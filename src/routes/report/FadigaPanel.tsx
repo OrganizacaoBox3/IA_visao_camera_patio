@@ -5,7 +5,7 @@ import {
   type FadigaEventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { TrendChart } from "./TrendChart";
@@ -67,9 +67,7 @@ export function FadigaPanel({
         <Kpi value={fBocejos} label="bocejos" />
         <Kpi value={`${String(fk.peakHour).padStart(2, "0")}h`} label="horário crítico" />
       </KpiRow>
-      <section className="insight">
-        <b>💡 Operador</b> {ftips.join(" · ")}
-      </section>
+      <Insight label="💡 Operador" tips={ftips} />
       <Tabs
         className="rep-tabs"
         ariaLabel="Seção"

@@ -5,22 +5,18 @@ import {
   ranking,
   evolution,
   fmtMin,
-  type Shift,
   type EventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, SHIFTS, type RepTab, type ByShift } from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
 import { TrendChart } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
 
-const SHIFTS: Shift[] = ["Manhã", "Tarde", "Noite"];
-
 type Kpis = ReturnType<typeof kpis>;
 type ByAtiv = { rows: { atividade: string; idleMin: number; alerts: number }[]; max: number };
-type ByShift = { m: Record<Shift, number>; max: number };
 
 export function AtividadePanel({
   lens,
@@ -77,9 +73,7 @@ export function AtividadePanel({
         <Kpi value={`${String(k.peakHour).padStart(2, "0")}h`} label="horário crítico" />
         <Kpi value={`${k.activePct}%`} label="tempo ativo" valueStyle={{ color: "var(--ok)" }} />
       </KpiRow>
-      <section className="insight">
-        <b>💡 Oportunidades</b> {tips.join(" · ")}
-      </section>
+      <Insight label="💡 Oportunidades" tips={tips} />
       <Tabs
         className="rep-tabs"
         ariaLabel="Seção"

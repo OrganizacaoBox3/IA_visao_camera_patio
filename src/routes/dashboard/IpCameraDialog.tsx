@@ -8,6 +8,7 @@ import {
   Dialog,
   AlertDialog,
   Field,
+  FieldLabel,
   Tooltip,
   useToast,
 } from "../../ui";
@@ -264,8 +265,8 @@ export function IpCameraDialog({ open, onOpenChange }: IpCameraDialogProps) {
           </div>
         </form>
 
-        <div className="views-mgr" style={{ marginTop: "var(--sp-3)" }}>
-          <span className="ui-label">Câmeras IP cadastradas</span>
+        <div className="views-mgr mt-3">
+          <FieldLabel>Câmeras IP cadastradas</FieldLabel>
           {ipLoading && <p className="empty-note">Carregando…</p>}
           {!ipLoading && ipCameras.length === 0 && (
             <p className="empty-note">Nenhuma câmera IP cadastrada ainda.</p>

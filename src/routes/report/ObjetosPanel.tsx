@@ -9,7 +9,7 @@ import {
 } from "../../report/mock";
 import { objClass } from "../../objects/catalog";
 import { Tabs, TabsContent, ScrollArea } from "../../ui";
-import { RepLens, HistoryFooter, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
@@ -76,9 +76,7 @@ export function ObjetosPanel({
           valueStyle={{ color: oLoads ? "var(--idle)" : undefined }}
         />
       </KpiRow>
-      <section className="insight">
-        <b>💡 Objetos</b> {otips.join(" · ")}
-      </section>
+      <Insight label="💡 Objetos" tips={otips} />
       <Tabs
         className="rep-tabs"
         ariaLabel="Seção"
@@ -119,9 +117,9 @@ export function ObjetosPanel({
                 <table className="obj-matrix">
                   <thead>
                     <tr>
-                      <th>Setor</th>
+                      <th scope="col">Setor</th>
                       {classes.map((cl) => (
-                        <th key={cl} title={cl}>
+                        <th key={cl} scope="col" title={cl}>
                           {objClass(cl)?.emoji ?? cl}
                         </th>
                       ))}

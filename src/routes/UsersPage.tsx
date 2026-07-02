@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Button, IconButton, Tabs, TabsContent, AlertDialog, EmptyState, Alert } from "../ui";
+import {
+  Button,
+  IconButton,
+  Tabs,
+  TabsContent,
+  AlertDialog,
+  EmptyState,
+  Alert,
+  PageHeader,
+} from "../ui";
 import {
   listUsers,
   getCameraEnroll,
@@ -78,9 +87,7 @@ export function UsersPage() {
   if (user.papel !== "superadmin") {
     return (
       <div className="page">
-        <header className="page-head">
-          <h1 className="page-title">Usuários</h1>
-        </header>
+        <PageHeader title="Usuários" />
         <EmptyState>Acesso restrito ao superadmin.</EmptyState>
       </div>
     );
@@ -88,13 +95,11 @@ export function UsersPage() {
 
   return (
     <div className="page">
-      <header className="page-head">
-        <h1 className="page-title">Usuários</h1>
-        <div className="spacer" />
+      <PageHeader title="Usuários">
         <IconButton label="Recarregar" onClick={refresh}>
           ↻
         </IconButton>
-      </header>
+      </PageHeader>
 
       <div className="users-body">
         {reveal && (

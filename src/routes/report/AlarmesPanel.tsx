@@ -2,6 +2,7 @@ import { type RefObject } from "react";
 import { alarmKpis, alarmTrend, alarmHeatmap, type AlarmWindow } from "../../report/mock";
 import type { AlarmEvent, AlarmPriority, AlarmState } from "../../types/alarm";
 import { ScrollArea } from "../../ui";
+import { Insight } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
 
@@ -109,16 +110,12 @@ export function AlarmesPanel({
               valueStyle={{ color: ak.news ? "var(--state-warn)" : undefined }}
             />
           </KpiRow>
-          <section className="insight">
-            <b>🔔 Alarmes</b> {aTips.join(" · ")}
-          </section>
+          <Insight label="🔔 Alarmes" tips={aTips} />
           <div className="rep-2col" ref={trendRef}>
             <section className="panel">
               <h3>
                 Tendência (14 dias){" "}
-                <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-                  — clique p/ filtrar o dia
-                </span>
+                <span className="muted text-[11px] font-normal">— clique p/ filtrar o dia</span>
               </h3>
               <div className="evo">
                 {aTrend.bars.map((b) => {
@@ -150,9 +147,7 @@ export function AlarmesPanel({
             <section className="panel">
               <h3>
                 Quando — prioridade × hora{" "}
-                <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-                  — clique p/ filtrar a hora
-                </span>
+                <span className="muted text-[11px] font-normal">— clique p/ filtrar a hora</span>
               </h3>
               <Heatmap
                 rows={aHeat.rows.map((row) => ({

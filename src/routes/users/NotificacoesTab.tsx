@@ -173,49 +173,50 @@ export function NotificacoesTab({
           )}
         </h3>
         {!wa || !wa.enabled ? (
-          <p className="meta-text muted">
+          <p className="muted">
             Desligado. Defina <code>WHATSAPP_ENABLED=1</code> no hub (systemd) e pareie aqui. Use um
             número dedicado (Baileys é não-oficial).
           </p>
         ) : wa.connected ? (
-          <div className="wa-conn">
-            <p className="meta-text">
-              <b style={{ color: "var(--ok)" }}>Conectado.</b> Os alertas elegíveis serão enviados
-              aos usuários com WhatsApp ativo.
+          <div>
+            <p>
+              <b className="text-ok">Conectado.</b> Os alertas elegíveis serão enviados aos
+              usuários com WhatsApp ativo.
             </p>
             <div className="wa-test">
               <Input
                 placeholder="Número p/ teste (+55…)"
+                aria-label="Número do WhatsApp para teste"
                 value={waNum}
                 onChange={(e) => setWaNum(e.target.value)}
               />
               <Button onClick={onWaTest} disabled={waNum.replace(/\D/g, "").length < 10}>
                 Enviar teste
               </Button>
-              {waMsg && <span className="meta-text muted">{waMsg}</span>}
+              {waMsg && <span className="muted">{waMsg}</span>}
             </div>
           </div>
         ) : wa.qr ? (
           <div className="wa-qr">
             <img src={wa.qr} alt="QR de pareamento do WhatsApp" width={220} height={220} />
-            <p className="meta-text muted">
+            <p className="muted">
               Abra o WhatsApp do número remetente → Aparelhos conectados → Conectar aparelho →
               escaneie. O QR atualiza sozinho.
             </p>
           </div>
         ) : (
-          <p className="meta-text muted">Iniciando conexão… aguarde o QR aparecer.</p>
+          <p className="muted">Iniciando conexão… aguarde o QR aparecer.</p>
         )}
       </section>
 
       {notif && (
         <section className="panel">
           <h3>Mensagens & alertas</h3>
-          <p className="meta-text muted">
+          <p className="muted">
             Defina o que cada notificação envia. Vale para todos os destinatários.
           </p>
           <div className="users-new">
-            <Field label="Marca / assinatura" htmlFor="notif-marca" className="ui-grow">
+            <Field label="Marca / assinatura" htmlFor="notif-marca" className="flex-1 min-w-0">
               <Input
                 id="notif-marca"
                 value={notif.marca}
@@ -258,11 +259,13 @@ export function NotificacoesTab({
                 </div>
                 <Input
                   placeholder="Título"
+                  aria-label={`Título — ${TIPO_LABEL[k] ?? k}`}
                   value={notif.tipos[k].titulo}
                   onChange={(e) => setTipo(k, { titulo: e.target.value })}
                 />
                 <Input
                   placeholder="Instrução extra (opcional, ex.: acionar o supervisor)"
+                  aria-label={`Instrução extra — ${TIPO_LABEL[k] ?? k}`}
                   value={notif.tipos[k].instrucao}
                   onChange={(e) => setTipo(k, { instrucao: e.target.value })}
                 />
@@ -299,11 +302,13 @@ export function NotificacoesTab({
         <form className="users-new" onSubmit={onAddDest}>
           <Input
             placeholder="Nome (ex.: Supervisor)"
+            aria-label="Nome do destinatário"
             value={novoDest.nome}
             onChange={(e) => setNovoDest((d) => ({ ...d, nome: e.target.value }))}
           />
           <Input
             placeholder="Número +55…"
+            aria-label="Número do destinatário"
             value={novoDest.numero}
             onChange={(e) => setNovoDest((d) => ({ ...d, numero: e.target.value }))}
           />
@@ -322,7 +327,7 @@ export function NotificacoesTab({
             Adicionar
           </Button>
         </form>
-        <ScrollArea orientation="both" style={{ maxHeight: 320, marginTop: "var(--sp-2)" }}>
+        <ScrollArea orientation="both" className="mt-2 max-h-[320px]">
           <table className="rtable">
             <thead>
               <tr>

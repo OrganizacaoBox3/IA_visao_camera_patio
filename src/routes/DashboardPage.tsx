@@ -722,9 +722,11 @@ export function DashboardPage() {
         <Tooltip content="Definir o tipo de cada câmera (área × operador)">
           <Button onClick={() => setShowConfig(true)}>⚙ Câmeras</Button>
         </Tooltip>
-        <a className="ui-btn" href={camNodeUrl} target="_blank" rel="noreferrer">
-          + Nó de câmera
-        </a>
+        <Button asChild>
+          <a href={camNodeUrl} target="_blank" rel="noreferrer">
+            + Nó de câmera
+          </a>
+        </Button>
         {/* Câmera IP/RTSP: cadastro pela home. Só superadmin (guarda `isSuper`); operador não vê. */}
         {isSuper && (
           <Tooltip content="Cadastrar câmera IP/RTSP (entra na grade automaticamente)">
@@ -733,8 +735,13 @@ export function DashboardPage() {
             </Button>
           </Tooltip>
         )}
+        {/* Paginação: réplica do .switch em utilities (gap 4px, como o inline anterior): utility
+            em layer não vence o gap:6px do .switch (index.css não-layered) — por isso sem a classe. */}
         {pageCount > 1 && (
-          <span className="switch" style={{ gap: 4 }} aria-label="Paginação de feeds">
+          <span
+            className="inline-flex items-center gap-1 text-[12px] text-text-dim"
+            aria-label="Paginação de feeds"
+          >
             <Tooltip content="Página anterior">
               <Button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page <= 0}>
                 ‹
@@ -791,15 +798,12 @@ export function DashboardPage() {
               Abra <code>/camera</code> neste computador (webcam) ou no celular apontando para o IP
               do hub.
             </p>
-            <a
-              className="ui-btn ui-btn--primary"
-              href={camNodeUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Abrir um nó de câmera
-            </a>
-            <p className="muted" style={{ marginTop: 12 }}>
+            <Button asChild variant="primary">
+              <a href={camNodeUrl} target="_blank" rel="noreferrer">
+                Abrir um nó de câmera
+              </a>
+            </Button>
+            <p className="muted mt-3">
               Hub: <code>{APP_CONFIG.net.serverUrl}</code> ·{" "}
               {connected ? "conectado" : "desconectado"}
             </p>

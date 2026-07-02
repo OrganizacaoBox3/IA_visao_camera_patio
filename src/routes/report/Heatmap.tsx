@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import { ScrollArea } from "../../ui";
 
-export const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 // Escala "quente" para valores negativos (ociosidade/risco) — âmbar→vermelho.
 export function heatColor(v: number, max: number): string {
@@ -25,7 +25,7 @@ const HEATMAP_MIN_WIDTH = 640;
 
 // Heatmap (.hm-row) com rolagem horizontal previsível em telas estreitas, sem alterar o desktop.
 // Reusa a classe .rep-matrixscroll (mesmo tratamento de impressão da matriz Setor×Classe).
-export function HeatScroll({ children }: { children: ReactNode }) {
+function HeatScroll({ children }: { children: ReactNode }) {
   return (
     <ScrollArea className="rep-matrixscroll" orientation="horizontal">
       <div className="heatmap" style={{ minWidth: HEATMAP_MIN_WIDTH }}>

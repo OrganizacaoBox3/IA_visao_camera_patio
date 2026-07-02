@@ -8,12 +8,12 @@ export function NotFoundPage() {
   return (
     <div className="page">
       <div className="dash-empty" role="alert">
-        <p style={{ fontSize: 32, margin: 0 }}>404</p>
+        <p className="m-0 text-[32px]">404</p>
         <p>
           <b>Página não encontrada.</b>
         </p>
         <p className="muted">O endereço acessado não existe ou foi movido.</p>
-        <p style={{ marginTop: "var(--sp-3)" }}>
+        <p className="mt-3">
           <Button variant="primary" onClick={() => navigate("/")}>
             Voltar para a Central
           </Button>

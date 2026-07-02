@@ -187,7 +187,7 @@ export function AlarmHealthPage() {
                 <span className="ah-kpi__label">Taxa de alarmes</span>
                 <span className="ah-kpi__value">
                   {metrics.ratePerMin.toFixed(1)}
-                  <small style={{ fontSize: 12 }}> /min</small>
+                  <small className="text-[12px]"> /min</small>
                 </span>
                 <Sparkline
                   values={rateHist.length ? rateHist : [metrics.ratePerMin]}
@@ -224,7 +224,7 @@ export function AlarmHealthPage() {
                 <span className="ah-kpi__label">Último minuto / hora</span>
                 <span className="ah-kpi__value">
                   {metrics.lastMinute}
-                  <small style={{ fontSize: 12, color: "var(--state-neutral-fg)" }}>
+                  <small className="text-[12px] text-[color:var(--state-neutral-fg)]">
                     {" "}
                     · {metrics.lastHour}/h
                   </small>
@@ -264,7 +264,7 @@ export function AlarmHealthPage() {
                     Nenhum alarme silenciado. Os alertas seguem o fluxo normal.
                   </EmptyState>
                 ) : (
-                  <ScrollArea className="ah-shelves-scroll" style={{ maxHeight: 360 }}>
+                  <ScrollArea className="max-h-[360px]">
                     <div className="ah-shelves">
                       {shelves.map((s) => (
                         <div className="ah-shelve" key={s.key}>

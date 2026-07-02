@@ -107,29 +107,18 @@ export const CameraTile = memo(function CameraTile({
     />
   );
   return (
-    <div key={`wrap-${camera.id}`} style={{ position: "relative", display: "grid", minHeight: 0 }}>
+    <div className="relative grid min-h-0">
       {inner}
       <Tooltip content={status?.lastError || st.text}>
+        {/* Pílula de status: estático em utilities; só a COR da borda é dinâmica (token por
+            estado, going-gray) e fica no style. border-solid explícito: sem preflight, o
+            border-style default do <span> é none. */}
         <span
-          style={{
-            position: "absolute",
-            top: 6,
-            left: 6,
-            zIndex: 2,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            fontFamily: "var(--mono)",
-            fontSize: 11,
-            background: "var(--cam-overlay-scrim)",
-            color: "var(--cam-overlay-fg)",
-            border: `1px solid ${st.border}`,
-            padding: "2px 7px",
-            borderRadius: 999,
-          }}
+          className="absolute top-1.5 left-1.5 z-[2] inline-flex items-center gap-[5px] [font-family:var(--mono)] text-[11px] bg-[var(--cam-overlay-scrim)] text-[var(--cam-overlay-fg)] border border-solid rounded-full px-[7px] py-[2px]"
+          style={{ borderColor: st.border }}
         >
           {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
-          <span className="dot-status" style={{ background: st.dot }} />
+          <span className="dot-status" aria-hidden="true" style={{ background: st.dot }} />
           {st.text}
           {st.fps != null ? ` · ${st.fps}fps` : ""}
         </span>

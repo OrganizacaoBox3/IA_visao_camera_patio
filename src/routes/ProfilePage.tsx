@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Button, Input, Field, CheckboxRow, Alert, ToggleGroup, useToast } from "../ui";
+import { Button, Input, Field, CheckboxRow, Alert, ToggleGroup, PageHeader, useToast } from "../ui";
 import { getMe, updateMe, type MeProfile, type NotifPrefs } from "../api";
 
 // "Meu perfil": o próprio usuário cadastra o WhatsApp que recebe os alertas + preferências + opt-in.
@@ -59,13 +59,11 @@ export function ProfilePage() {
 
   return (
     <div className="page">
-      <header className="page-head">
-        <h1 className="page-title">Meu perfil</h1>
-      </header>
+      <PageHeader title="Meu perfil" />
       <div className="users-body">
         <section className="panel">
           <h3>Conta</h3>
-          <p className="meta-text">
+          <p>
             Usuário <b>{user.usuario}</b> · papel <b>{user.papel}</b>
           </p>
         </section>
@@ -123,7 +121,7 @@ export function ProfilePage() {
           {status && <Alert tone="ok">{status}</Alert>}
           {err && <Alert tone="alert">{err}</Alert>}
           {me?.optInEm ? (
-            <p className="meta-text muted">
+            <p className="muted">
               Consentimento registrado em {new Date(me.optInEm).toLocaleString("pt-BR")}.
             </p>
           ) : null}

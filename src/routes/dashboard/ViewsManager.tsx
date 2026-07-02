@@ -1,5 +1,14 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
-import { Button, IconButton, Input, Dialog, Tooltip, ScrollArea, useToast } from "../../ui";
+import {
+  Button,
+  IconButton,
+  Input,
+  FieldLabel,
+  Dialog,
+  Tooltip,
+  ScrollArea,
+  useToast,
+} from "../../ui";
 import { saveViews, ApiError, type SavedView } from "../../api";
 import { type Camera } from "./types";
 
@@ -170,18 +179,19 @@ export function ViewsManager({
         </div>
       ) : (
         <div className="views-mgr views-editor">
-          <label className="views-editor__name">
-            <span className="ui-label">Nome da view</span>
+          <div className="views-editor__name">
+            <FieldLabel htmlFor="view-name">Nome da view</FieldLabel>
             <Input
+              id="view-name"
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
               placeholder="Ex.: Docas"
               autoFocus
             />
-          </label>
+          </div>
 
           <div className="views-editor__col">
-            <span className="ui-label">Câmeras na view (ordem dos tiles)</span>
+            <FieldLabel>Câmeras na view (ordem dos tiles)</FieldLabel>
             {draftIds.length === 0 ? (
               <p className="empty-note">Adicione câmeras da lista abaixo.</p>
             ) : (
@@ -216,7 +226,7 @@ export function ViewsManager({
           </div>
 
           <div className="views-editor__col">
-            <span className="ui-label">Câmeras disponíveis</span>
+            <FieldLabel>Câmeras disponíveis</FieldLabel>
             {cameras.filter((c) => !draftIds.includes(c.id)).length === 0 ? (
               <p className="empty-note">Todas as câmeras conectadas já estão na view.</p>
             ) : (

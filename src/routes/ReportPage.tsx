@@ -74,6 +74,7 @@ import {
   AlertDialog,
 } from "../ui";
 import "../report/alarms.css";
+import { SHIFTS } from "./report/chrome";
 import { AtividadePanel } from "./report/AtividadePanel";
 import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel, classLabel } from "./report/ObjetosPanel";
@@ -407,7 +408,6 @@ export function ReportPage() {
           ? `${PERIOD_LABEL[period]} · ${posto === "Todos" ? "Todos os postos" : posto} · Turno: ${shift === "Todos" ? "todos" : shift}`
           : `${PERIOD_LABEL[period]} · ${area === "Todas" ? "Todas as áreas" : area} · Turno: ${shift === "Todos" ? "todos" : shift}`;
 
-  const SHIFTS: Shift[] = ["Manhã", "Tarde", "Noite"];
   const filtroLabel = isAlarmes
     ? `Prioridade ${alarmPriority === "Todas" ? "todas" : PRIORITY_LABEL[alarmPriority]} · Estado ${alarmState === "Todos" ? "todos" : STATE_LABEL[alarmState]}`
     : isReading
@@ -639,7 +639,7 @@ export function ReportPage() {
         />
         <span className="privacy">● indicadores · sem imagens</span>
         <div className="spacer" />
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted text-[11px]">
           {isAlarmes
             ? "alarmes · fila de eventos (metadados)"
             : isReading
@@ -784,7 +784,7 @@ export function ReportPage() {
               <b>Não foi possível carregar o histórico.</b>
             </p>
             <p className="muted">{error}</p>
-            <p style={{ marginTop: "var(--sp-3)" }}>
+            <p className="mt-[var(--sp-3)]">
               <Button variant="primary" onClick={refresh}>
                 Tentar novamente
               </Button>

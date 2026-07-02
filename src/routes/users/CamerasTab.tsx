@@ -25,15 +25,20 @@ export function CamerasTab({ camToken }: Props) {
       <h3>Câmeras — link de enrolamento</h3>
       {enrollUrl ? (
         <div className="enroll">
-          <Input readOnly value={enrollUrl} onFocus={(e) => e.currentTarget.select()} />
+          <Input
+            readOnly
+            aria-label="Link de enrolamento da câmera"
+            value={enrollUrl}
+            onFocus={(e) => e.currentTarget.select()}
+          />
           <Button onClick={onCopyEnroll}>Copiar</Button>
-          <p className="meta-text muted">
+          <p className="muted">
             Abra este link no dispositivo (celular/PC) que será a câmera — ele conecta sem login
             humano.
           </p>
         </div>
       ) : (
-        <p className="meta-text muted">
+        <p className="muted">
           Defina <code>CAMERA_TOKEN</code> no hub (systemd) para gerar o link de enrolamento. Sem
           ele, a câmera usa a sessão de um usuário logado no mesmo navegador.
         </p>

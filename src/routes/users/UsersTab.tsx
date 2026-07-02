@@ -117,12 +117,14 @@ export function UsersTab({
         <form className="users-new" onSubmit={onCreate}>
           <Input
             placeholder="Usuário"
+            aria-label="Nome do novo usuário"
             value={novo.usuario}
             onChange={(e) => setNovo((n) => ({ ...n, usuario: e.target.value }))}
           />
           <span className="users-pwd">
             <Input
               placeholder="Senha (vazio = gerar)"
+              aria-label="Senha do novo usuário (vazio = gerar)"
               value={novo.senha}
               onChange={(e) => setNovo((n) => ({ ...n, senha: e.target.value }))}
             />
@@ -147,7 +149,7 @@ export function UsersTab({
 
       <section className="panel panel-events">
         <h3>{loading ? "Carregando…" : `${rows.length} usuário(s)`}</h3>
-        <ScrollArea orientation="both" style={{ maxHeight: 460 }}>
+        <ScrollArea orientation="both" className="max-h-[460px]">
           <table className="rtable">
             <thead>
               <tr>

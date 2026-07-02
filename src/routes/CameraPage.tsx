@@ -181,7 +181,7 @@ export function CameraPage() {
   return (
     <div className="cam-node">
       <video ref={videoRef} playsInline muted />
-      <canvas ref={canvasRef} style={{ display: "none" }} />
+      <canvas ref={canvasRef} className="hidden" />
       <div className="cam-node-badge">
         <span
           className={`dot-status ${status === "on" ? (hubConnected ? "on" : "connecting") : status}`}

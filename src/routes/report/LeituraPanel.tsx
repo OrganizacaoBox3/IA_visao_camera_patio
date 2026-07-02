@@ -5,21 +5,17 @@ import {
   readingRanking,
   readingByCamera,
   readingEvolution,
-  type Shift,
   type ReadingEventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, SHIFTS, type RepTab, type ByShift } from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
 import { TrendChart } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
 
-const SHIFTS: Shift[] = ["Manhã", "Tarde", "Noite"];
-
 type RKpis = ReturnType<typeof readingKpis>;
-type ByShift = { m: Record<Shift, number>; max: number };
 
 export function LeituraPanel({
   lens,
@@ -80,9 +76,7 @@ export function LeituraPanel({
         <Kpi value={rk.topPonto} label="ponto de maior volume" valueStyle={{ fontSize: 15 }} />
         <Kpi value={`${String(rk.peakHour).padStart(2, "0")}h`} label="horário de pico" />
       </KpiRow>
-      <section className="insight">
-        <b>💡 Leitura</b> {rtips.join(" · ")}
-      </section>
+      <Insight label="💡 Leitura" tips={rtips} />
       <Tabs
         className="rep-tabs"
         ariaLabel="Seção"
