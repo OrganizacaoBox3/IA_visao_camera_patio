@@ -6,7 +6,8 @@ import { type FrameSource } from "../frame";
 import { CameraWorkspace } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
-import { getCameraCfg, setCameraCfg, type CameraCfg } from "../cameraConfig";
+import { getCameraCfg, setCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
+import { loadZonesForCamera } from "../zones";
 import { useAuth } from "../auth";
 import { Button, Switch, Select, Dialog, Tooltip, useToast } from "../ui";
 import {
@@ -31,14 +32,22 @@ import "./views.css";
 import "./cameras.css";
 
 // ImageBitmap decodificado fora da main thread; só guardamos o último frame (descarta atrasados).
+// INVARIANTE (2.2): w/h refletem SEMPRE o tamanho do BITMAP decodificado (bmp.width/height) — que
+// pode ser MENOR que o frame nativo quando o decode de tile aplica resize. Os consumidores
+// (cropFor/motion no CameraWorkspace) usam zonas normalizadas 0..1 sobre f.w/f.h, então crops e
+// leituras de luma permanecem consistentes com o bitmap entregue.
 type FrameEntry = {
   bmp: ImageBitmap | null;
   w: number;
   h: number;
+  srcW: number; // largura NATIVA informada no payload (0 = desconhecida; RTSP não envia w/h)
   ts: number;
   pending: ArrayBuffer | null;
   decoding: boolean;
 };
+
+// Largura do decode reduzido para feeds que estão SÓ em tile (a grade exibe ~400px).
+const TILE_DECODE_WIDTH = 640;
 
 function colsFor(n: number): number {
   return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
@@ -125,6 +134,14 @@ export function DashboardPage() {
   const gettersRef = useRef<Map<string, () => FrameSource | null>>(new Map());
   // Conjunto de feeds ATIVOS (página atual + câmera aberta). Só estes são decodificados/processados.
   const activeIdsRef = useRef<Set<string>>(new Set());
+  // Câmera aberta espelhada em ref: drainDecode (estável, useCallback []) decide o resize sem
+  // religar efeitos; atualizada no efeito de feeds ativos (que já depende de openId).
+  const openIdRef = useRef<string | null>(null);
+  // 2.2 — cache: a câmera TEM zona de modo "leitura"? (true/false). AUSENTE = ainda não carregado
+  // → default SEGURO é decode nativo (ZXing precisa de pixels). Carregado 1× por câmera quando a
+  // lista chega (loadZonesForCamera) e invalidado/recarregado no `camcfg-updated { kind:"zones" }`.
+  const readingZoneRef = useRef<Map<string, boolean>>(new Map());
+  const readingLoadingRef = useRef<Set<string>>(new Set());
 
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CameraStatus>>({});
@@ -181,7 +198,28 @@ export function DashboardPage() {
     const buf = f.pending;
     f.pending = null;
     f.decoding = true;
-    createImageBitmap(new Blob([buf], { type: "image/jpeg" }))
+    // 2.2 — decode com RESIZE p/ tiles: feed que está só na grade não precisa de pixels nativos
+    // (o tile exibe ~400px; decodificar 1280×720 RGBA p/ isso desperdiça CPU/GPU/memória).
+    // Exceções — decode NATIVO sempre:
+    //  (a) câmera ABERTA (id === openIdRef): zoom/cine-loop/análise full usam o frame inteiro;
+    //  (b) `getCameraCfg(id).longRange === true`: o tiling 4×4 NA GRADE recorta o frame nativo;
+    //  (c) câmera com zona de modo "leitura": ZXing decodifica código de barras (precisa de
+    //      pixels). Enquanto as zonas da câmera não carregaram (flag ausente), assume leitura —
+    //      default seguro é nativo;
+    //  (d) frame nativo já ≤ TILE_DECODE_WIDTH (quando conhecido): resize só faria upscale.
+    // Consistência: f.w/f.h recebem SEMPRE bmp.width/height (abaixo), então os consumidores veem
+    // as dimensões REAIS do bitmap (não as nativas) — crops/motion normalizam por proporção.
+    const tileOnly = id !== openIdRef.current;
+    const mayResize =
+      tileOnly &&
+      readingZoneRef.current.get(id) === false &&
+      getCameraCfg(id).longRange !== true &&
+      !(f.srcW > 0 && f.srcW <= TILE_DECODE_WIDTH);
+    // Sem resizeHeight: createImageBitmap preserva a proporção sozinho (RTSP não manda w/h).
+    const opts: ImageBitmapOptions | undefined = mayResize
+      ? { resizeWidth: TILE_DECODE_WIDTH, resizeQuality: "low" }
+      : undefined;
+    createImageBitmap(new Blob([buf], { type: "image/jpeg" }), opts)
       .then((bmp) => {
         // Corrida (1.7): se o feed saiu do conjunto ativo (paginação) ou a entrada foi podada
         // (câmera removida) enquanto o decode estava em voo, fecha o bitmap recém-criado e não
@@ -206,6 +244,27 @@ export function DashboardPage() {
       });
   }, []);
 
+  // 2.2 — carrega (1× por câmera) o flag "tem zona de leitura?" usado nas exceções do resize.
+  // canConfigure=false: leitura pura, sem disparar a migração best-effort de zonas do legado.
+  // Em falha, o flag fica AUSENTE → drainDecode segue no decode nativo (default seguro).
+  const loadReadingFlag = useCallback((id: string, label: string) => {
+    if (readingZoneRef.current.has(id) || readingLoadingRef.current.has(id)) return;
+    readingLoadingRef.current.add(id);
+    loadZonesForCamera(id, label, false)
+      .then((zones) => {
+        readingZoneRef.current.set(
+          id,
+          zones.some((z) => z.modo === "leitura"),
+        );
+      })
+      .catch(() => {
+        /* flag ausente = decode nativo (seguro) */
+      })
+      .finally(() => {
+        readingLoadingRef.current.delete(id);
+      });
+  }, []);
+
   useEffect(() => {
     const socket = io(APP_CONFIG.net.serverUrl, {
       transports: ["websocket"],
@@ -216,7 +275,12 @@ export function DashboardPage() {
     // Cópia local do Map de frames (estável) p/ usar no cleanup sem ler `framesRef.current` lá
     // (evita o aviso de ref que "pode ter mudado"); é o mesmo Map, então fecha todos os bitmaps.
     const frames = framesRef.current;
-    socket.on("connect", () => setConnected(true));
+    socket.on("connect", () => {
+      setConnected(true);
+      // 2.1 — a reconexão perde as rooms no servidor: reanuncia o conjunto assistido para voltar
+      // a receber frames (o efeito de feeds ativos cobre as MUDANÇAS; aqui cobre o re-connect).
+      socket.emit("watch", { ids: [...activeIdsRef.current] });
+    });
     socket.on("disconnect", () => setConnected(false));
     socket.on("connect_error", (err) => {
       if (err.message === "unauthorized") logout("Sessão expirada. Entre novamente.");
@@ -236,13 +300,16 @@ export function DashboardPage() {
         return found ? next : [a, ...next];
       }),
     );
-    socket.on("frame", (p: { id: string; buf: ArrayBuffer; w: number; h: number }) => {
+    socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
-        f = { bmp: null, w: 0, h: 0, ts: 0, pending: null, decoding: false };
+        f = { bmp: null, w: 0, h: 0, srcW: 0, ts: 0, pending: null, decoding: false };
         framesRef.current.set(p.id, f);
       }
       f.pending = p.buf;
+      // Largura NATIVA do payload (webcam envia w/h; RTSP não) — usada só p/ evitar UPSCALE no
+      // resize de tile (2.2). f.w/f.h continuam sendo as dimensões do bitmap decodificado.
+      if (typeof p.w === "number" && p.w > 0) f.srcW = p.w;
       f.ts = Date.now();
       // Só decodifica feeds ATIVOS: feeds fora da página atual não pagam createImageBitmap (CPU/memória).
       if (activeIdsRef.current.has(p.id)) drainDecode(p.id);
@@ -255,7 +322,11 @@ export function DashboardPage() {
     //   • kind:"tripwires" → incrementa a revisão daquela câmera; a prop `tripwiresRev` faz a tile re-buscar.
     socket.on(
       "camcfg-updated",
-      (p: { kind: "views" } | { kind: "tripwires"; cameraId: string }) => {
+      (
+        p:
+          | { kind: "views" }
+          | { kind: "tripwires" | "zones" | "camconfig"; cameraId: string },
+      ) => {
         if (p?.kind === "views") {
           getViews()
             .then((remote) => setViews(remote))
@@ -268,6 +339,15 @@ export function DashboardPage() {
             next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
             return next;
           });
+        } else if (p?.kind === "zones" && typeof p.cameraId === "string") {
+          // 2.2 — zonas mudaram (talvez ganhou/perdeu zona de leitura): invalida o flag e
+          // recarrega; enquanto recarrega, o flag ausente força decode NATIVO (seguro p/ ZXing).
+          readingZoneRef.current.delete(p.cameraId);
+          loadReadingFlag(p.cameraId, p.cameraId);
+        } else if (p?.kind === "camconfig" && typeof p.cameraId === "string") {
+          // 2.2 — longRange pode ter mudado em OUTRO posto: refresca o cache local (localStorage)
+          // que o leitor síncrono getCameraCfg usa na exceção do resize.
+          loadCamConfig(p.cameraId, false).catch(() => {});
         }
       },
     );
@@ -275,7 +355,7 @@ export function DashboardPage() {
       socket.disconnect();
       frames.forEach((f) => f.bmp?.close());
     };
-  }, [token, logout, drainDecode]);
+  }, [token, logout, drainDecode, loadReadingFlag]);
 
   // Poda entradas de câmeras que saíram da lista (1.7): fecha o bitmap e descarta a entrada
   // (pending incluso) — antes framesRef/gettersRef só cresciam. Um decode em voo da entrada
@@ -291,6 +371,12 @@ export function DashboardPage() {
       gettersRef.current.delete(id);
     });
   }, [cameras]);
+
+  // 2.2 — quando a lista de câmeras chega/muda, carrega 1× por câmera o flag "tem zona de
+  // leitura?" (async; até resolver, o decode de tile fica NATIVO — ver drainDecode).
+  useEffect(() => {
+    for (const c of cameras) loadReadingFlag(c.id, c.label);
+  }, [cameras, loadReadingFlag]);
 
   // garante uma config carregada por câmera (default = atividade → retrocompatível)
   useEffect(() => {
@@ -451,8 +537,13 @@ export function DashboardPage() {
   useEffect(() => {
     const active = new Set<string>(pageCameras.map((c) => c.id));
     if (openId) active.add(openId);
+    openIdRef.current = openId; // ref lida pelo drainDecode (aberta = decode nativo, sem resize)
     const prev = activeIdsRef.current;
     activeIdsRef.current = active;
+    // 2.1 — assinatura por câmera (contrato ADITIVO): anuncia ao hub o conjunto COMPLETO que este
+    // dashboard quer receber; o hub passa a filtrar o evento `frame` por room (`cam:<id>`).
+    // O (re)connect reanuncia no handler "connect" (reconexão perde as rooms no servidor).
+    socketRef.current?.emit("watch", { ids: [...active] });
     prev.forEach((id) => {
       if (!active.has(id)) {
         const f = framesRef.current.get(id);

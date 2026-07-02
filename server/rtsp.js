@@ -171,7 +171,7 @@ function setState(st, state) {
 }
 
 function spawnFfmpeg(st) {
-  if (st.stopped) return;
+  if (st.stopped || st.idle) return; // idle (shed 2.1): não (re)spawnar sem espectador
   st.lastStderr = ""; // diagnóstico é por tentativa: não misturar erro de um spawn anterior
   const args = [
     // Globais: sem stats de progresso; stderr só com erros REAIS (viabiliza o lastStderr abaixo).
@@ -223,6 +223,7 @@ function spawnFfmpeg(st) {
     if (line) st.lastStderr = line;
   });
   proc.stdout.on("data", (chunk) => {
+    if (st.stopped || st.idle) return; // descarta resíduo de um proc morrendo (idle/remoção)
     st.buf = Buffer.concat([st.buf, chunk]);
     st.buf = drainFrames(st.buf, (jpeg) => {
       st.lastFrameAt = Date.now();
@@ -234,12 +235,17 @@ function spawnFfmpeg(st) {
       // JPEG binário (mesmo formato dos nós webcam) — socket.io entrega como ArrayBuffer no cliente.
       // VOLATILE (último-vence, como o relé de webcam em index.js): dashboard lento DESCARTA o
       // frame em vez de enfileirar — vídeo prefere o frame mais novo a acumular latência/backlog.
-      ctx.io.to("dashboards").volatile.emit("frame", { id: st.id, buf: jpeg, ts: Date.now() });
+      // Rooms (2.1): dashboards novos assistem por câmera (`cam:<id>`); antigos, pela `dash-legacy`.
+      ctx.io
+        .to(`cam:${st.id}`)
+        .to("dash-legacy")
+        .volatile.emit("frame", { id: st.id, buf: jpeg, ts: Date.now() });
     });
   });
   proc.on("close", (code) => {
+    if (st.proc !== proc) return; // proc antigo (wake já spawnou um novo) — não mexer no estado
     st.proc = null;
-    if (st.stopped) return;
+    if (st.stopped || st.idle) return; // morte esperada (remoção/shed) — sem reconexão/erro
     // Enriquece o diagnóstico com o erro REAL do ffmpeg (última linha do stderr sob -loglevel error).
     if (st.lastStderr) st.lastError = st.lastStderr;
     st.attempt++;
@@ -266,6 +272,7 @@ function spawnFfmpeg(st) {
 function startTimer(st) {
   st.fpsWindowStart = Date.now();
   st.statusTimer = setInterval(() => {
+    if (st.idle) return; // em idle (shed) não há frames por design: sem health-check nem refresh
     const now = Date.now();
     const elapsed = (now - st.fpsWindowStart) / 1000;
     st.fps = elapsed > 0 ? Math.round((st.frameCount / elapsed) * 10) / 10 : 0;
@@ -314,6 +321,7 @@ function addSource(src) {
     },
     proc: null,
     stopped: false,
+    idle: false, // shed (2.1): pausada por falta de espectador (≠ stopped: religável via wakeSource)
     buf: Buffer.alloc(0),
     attempt: 0,
     lastFrameAt: 0,
@@ -369,6 +377,47 @@ function restartSource(src) {
   return addSource(src);
 }
 
+// ── Shed por audiência (2.1) — chamado pelo hub (index.js), que conta espectadores por room ──
+
+/** Pausa uma fonte SEM espectador: mata o ffmpeg e congela a reconexão, SEM contar como erro
+ *  (attempt não incrementa; estado vira "idle" via camera-status p/ transparência). Idempotente. */
+function idleSource(id) {
+  const st = streams.get(String(id));
+  if (!st || st.stopped || st.idle) return false;
+  st.idle = true;
+  if (st.reconnectTimer) {
+    clearTimeout(st.reconnectTimer);
+    st.reconnectTimer = null;
+  }
+  if (st.proc) {
+    try {
+      st.proc.kill("SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
+  st.buf = Buffer.alloc(0);
+  st.fps = 0;
+  st.attempt = 0;
+  setState(st, "idle");
+  console.log(`[rtsp:${st.id}] idle — sem espectador (ffmpeg pausado)`);
+  return true;
+}
+
+/** Religa uma fonte pausada pelo shed (ganhou espectador): spawn imediato, backoff zerado. Idempotente. */
+function wakeSource(id) {
+  const st = streams.get(String(id));
+  if (!st || st.stopped || !st.idle) return false;
+  st.idle = false;
+  st.frameCount = 0;
+  st.fpsWindowStart = Date.now();
+  st.lastFrameAt = 0;
+  setState(st, "connecting");
+  console.log(`[rtsp:${st.id}] religando — ganhou espectador`);
+  spawnFfmpeg(st);
+  return true;
+}
+
 /** Snapshot do status de todas as fontes RTSP (para enviar a um dashboard que acabou de conectar). */
 function statuses() {
   return [...streams.values()].map((st) => ({
@@ -416,6 +465,8 @@ module.exports = {
   addSource,
   removeSource,
   restartSource,
+  idleSource,
+  wakeSource,
   statuses,
   loadSources,
   FFMPEG_BIN,

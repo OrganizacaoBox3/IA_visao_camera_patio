@@ -131,6 +131,80 @@ const socketById = new Map();
 const cameraList = () => [...cameras.values()];
 const broadcast = () => io.to("dashboards").emit("cameras", cameraList());
 
+// ── 2.1 — Assinatura por câmera (rooms) + shed de câmeras sem espectador ─────────────────────
+// Contrato ADITIVO: dashboard NOVO emite `watch { ids }` (conjunto COMPLETO do que quer receber)
+// e entra nas rooms `cam:<id>`; dashboard ANTIGO nunca emite `watch` e permanece na room
+// `dash-legacy`, recebendo TODOS os frames (comportamento atual preservado). Só o evento `frame`
+// é filtrado por room — `cameras`/`camera-status`/`alarm-*`/`camcfg-updated` seguem em "dashboards".
+//
+// ESPECTADOR de uma câmera = socket em `cam:<id>` OU em `dash-legacy`. Sem espectador por
+// SHED_IDLE_MS (debounce — paginar não derruba stream), a câmera é REBAIXADA: RTSP entra em
+// "idle" (ffmpeg morto, sem contar como erro/reconexão) e webcam recebe `capture { fps: baixo }`.
+// Ao ganhar espectador, religa IMEDIATAMENTE (sweepShed roda no `watch`/conexão além do timer).
+const SHED_IDLE_MS = Number(process.env.SHED_IDLE_MS ?? 60_000);
+const SHED_SWEEP_MS = Number(process.env.SHED_SWEEP_MS ?? 5_000);
+const SHED_WEBCAM_FPS = Number(process.env.SHED_WEBCAM_FPS ?? 2);
+// fps default do nó webcam (espelha APP_CONFIG.net.frameFps em src/config.ts): o hub não conhece
+// o default do nó, então restaura com este valor quando NÃO há um set-capture manual guardado.
+const WEBCAM_DEFAULT_FPS = Number(process.env.WEBCAM_DEFAULT_FPS ?? 12);
+
+/** id -> último perfil pedido via `set-capture` (não deixar o shed sobrescrever o operador) */
+const lastCaptureCfg = new Map();
+/** id -> epoch ms de quando ficou SEM espectador (debounce do shed) */
+const idleSince = new Map();
+/** ids de webcam atualmente rebaixadas para fps baixo */
+const shedWebcams = new Set();
+
+function viewersOf(id) {
+  const rooms = io.sockets.adapter.rooms;
+  return (rooms.get(`cam:${id}`)?.size ?? 0) + (rooms.get("dash-legacy")?.size ?? 0);
+}
+
+function shedCamera(cam) {
+  if (cam.kind === "rtsp") {
+    rtsp.idleSource(cam.id); // idempotente: no-op se já idle/parada
+    return;
+  }
+  if (shedWebcams.has(cam.id)) return;
+  const target = socketById.get(cam.id);
+  if (!target) return;
+  shedWebcams.add(cam.id);
+  target.emit("capture", { fps: SHED_WEBCAM_FPS });
+  console.log(`[shed] ${cam.id} sem espectador — webcam rebaixada p/ ${SHED_WEBCAM_FPS}fps`);
+}
+
+function restoreCamera(cam) {
+  if (cam.kind === "rtsp") {
+    rtsp.wakeSource(cam.id); // idempotente: no-op se não está idle
+    return;
+  }
+  if (!shedWebcams.has(cam.id)) return;
+  shedWebcams.delete(cam.id);
+  const target = socketById.get(cam.id);
+  if (!target) return;
+  const manual = lastCaptureCfg.get(cam.id);
+  target.emit("capture", manual ?? { fps: WEBCAM_DEFAULT_FPS });
+  console.log(`[shed] ${cam.id} ganhou espectador — perfil de captura restaurado`);
+}
+
+function sweepShed() {
+  const now = Date.now();
+  for (const cam of cameras.values()) {
+    if (viewersOf(cam.id) > 0) {
+      idleSince.delete(cam.id);
+      restoreCamera(cam);
+    } else if (!idleSince.has(cam.id)) {
+      idleSince.set(cam.id, now);
+    } else if (now - idleSince.get(cam.id) >= SHED_IDLE_MS) {
+      shedCamera(cam);
+    }
+  }
+  // poda estado de câmeras que saíram da lista
+  for (const id of idleSince.keys()) if (!cameras.has(id)) idleSince.delete(id);
+  for (const id of shedWebcams) if (!cameras.has(id)) shedWebcams.delete(id);
+}
+setInterval(sweepShed, SHED_SWEEP_MS);
+
 io.on("connection", (socket) => {
   const role = socket.handshake.query.role;
 
@@ -140,14 +214,17 @@ io.on("connection", (socket) => {
     cameras.set(id, { id, label });
     socketById.set(id, socket);
     socket.data.cameraId = id;
+    shedWebcams.delete(id); // nó (re)conectou no perfil default — estado de shed anterior não vale mais
     io.to("dashboards").emit("cameras", cameraList());
     io.to("dashboards").emit("camera-status", { id, state: "online", label, kind: "browser" });
     console.log(`[camera+] ${label} (${id}) · total=${cameras.size}`);
 
     // Relé de frames (payload: { buf, w, h, ts }). VOLATILE: se um dashboard está lento, o frame
     // é DESCARTADO em vez de enfileirar — vídeo prefere o frame mais novo a acumular latência/backlog.
+    // Rooms (2.1): dashboards novos assistem por câmera (`cam:<id>`, via `watch`); antigos recebem
+    // tudo pela `dash-legacy`. União de rooms — socket.io deduplica destinos.
     socket.on("frame", (payload) => {
-      io.to("dashboards").volatile.emit("frame", { id, ...payload });
+      io.to(`cam:${id}`).to("dash-legacy").volatile.emit("frame", { id, ...payload });
     });
 
     socket.on("disconnect", () => {
@@ -160,6 +237,10 @@ io.on("connection", (socket) => {
   } else {
     // dashboard
     socket.join("dashboards");
+    // Retrocompat (2.1): todo dashboard começa na room LEGADA (recebe TODOS os frames, como hoje).
+    // Um dashboard novo emite `watch` e migra para rooms por câmera; um antigo segue recebendo tudo.
+    socket.join("dash-legacy");
+    sweepShed(); // espectador legado chegou — religa imediatamente câmeras que estavam em shed
     socket.emit("cameras", cameraList());
     // Estado inicial por câmera p/ este dashboard (RTSP: do ingestor; navegador: já conectadas = online).
     for (const s of rtsp.statuses()) socket.emit("camera-status", s);
@@ -173,10 +254,30 @@ io.on("connection", (socket) => {
         });
     console.log(`[dashboard+] ${socket.id}`);
 
+    // 2.1 — assinatura por câmera (contrato ADITIVO): o dashboard anuncia o conjunto COMPLETO de
+    // câmeras que quer receber (`{ ids }` substitui o anterior — idempotente, sem unwatch). O
+    // socket sai da room legada e das `cam:*` que não quer mais, e entra nas pedidas. A partir do
+    // 1º `watch`, este dashboard só recebe `frame` das câmeras assistidas; os demais eventos
+    // (cameras/camera-status/alarm-*/camcfg-updated) continuam chegando pela room "dashboards".
+    socket.on("watch", (p) => {
+      const ids = p && Array.isArray(p.ids) ? p.ids.map(String) : [];
+      socket.data.usesWatch = true;
+      socket.leave("dash-legacy");
+      const want = new Set(ids.map((id) => `cam:${id}`));
+      for (const room of [...socket.rooms]) {
+        if (room.startsWith("cam:") && !want.has(room)) socket.leave(room);
+      }
+      for (const room of want) socket.join(room);
+      sweepShed(); // religa NA HORA câmeras que ganharam espectador (o debounce só vale p/ shed)
+    });
+
     // Central define o perfil de captura por câmera (ex.: leitura = alta resolução).
     // payload: { id, width, quality, fps }
     socket.on("set-capture", (cfg) => {
       if (!cfg || !cfg.id) return;
+      // Guarda o último perfil pedido pelo operador: o shed (2.1) restaura ESTE perfil ao religar,
+      // não o default — o rebaixamento automático nunca sobrescreve uma intenção manual.
+      lastCaptureCfg.set(String(cfg.id), { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
       const target = socketById.get(String(cfg.id));
       if (target) target.emit("capture", { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
     });
