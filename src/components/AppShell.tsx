@@ -1,5 +1,11 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   BarChart3,
   BellRing,
@@ -8,12 +14,16 @@ import {
   CircleUser,
   LayoutDashboard,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
   ShieldCheck,
   Users,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "../auth";
 import type { Papel } from "../auth";
+import { listCameras, type Camera } from "../api";
 import { DropdownMenu, Tooltip, type DropdownItem } from "../ui";
 import "./appshell.css";
 
@@ -22,25 +32,43 @@ import "./appshell.css";
 const NAV_ICON = { size: 18, strokeWidth: 1.75, "aria-hidden": true } as const;
 const MENU_ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
-// Shell persistente da SPA: rail lateral slim + área de conteúdo (Outlet).
+// Shell persistente da SPA: sidebar colapsável (expandida 240px ↔ rail 60px) + conteúdo (Outlet).
 // O nó de câmera (/camera) fica FORA do shell (é a visão do dispositivo, sem navegação).
-// A11y: skip-link, <nav> rotulado, e o foco vai para o conteúdo ao trocar de rota (SPA).
+// A11y: skip-link, <nav> rotulado, foco no conteúdo ao trocar de rota, aria-label em todo link
+// (nome acessível estável mesmo com o rótulo visualmente oculto no modo colapsado — o e2e
+// depende de getByRole('link', { name })).
 
-// Rail "compacto" = md (641–900px): index.css esconde os rótulos (só ícones). Nesse
-// modo mostramos Tooltip nos ícones (fora dele o próprio rótulo já é visível).
-function useCompactRail(): boolean {
-  const query = "(min-width: 641px) and (max-width: 900px)";
-  const [compact, setCompact] = useState(
+function useMediaQuery(query: string): boolean {
+  const [match, setMatch] = useState(
     () => typeof window !== "undefined" && window.matchMedia(query).matches,
   );
   useEffect(() => {
     const mq = window.matchMedia(query);
-    const onChange = () => setCompact(mq.matches);
+    const onChange = () => setMatch(mq.matches);
     onChange();
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return compact;
+  }, [query]);
+  return match;
+}
+
+// Persistência do colapso (padrão shadcn/ui sidebar: estado por usuário, atalho Ctrl+B).
+// Default EXPANDIDA (chave ausente) — o e2e roda no default. localStorage pode falhar
+// (Safari privado etc.): try/catch e segue sem persistir.
+const COLLAPSE_KEY = "shell.nav.collapsed";
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeCollapsed(v: boolean) {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, v ? "1" : "0");
+  } catch {
+    /* sem persistência — estado só em memória */
+  }
 }
 
 const PAPEL_LABEL: Record<Papel, string> = {
@@ -50,30 +78,187 @@ const PAPEL_LABEL: Record<Papel, string> = {
 };
 
 type NavItem = { to: string; end?: boolean; icon: LucideIcon; label: string };
+type NavGroup = { id: string; title: string; items: NavItem[] };
+// Resultado da busca: item de menu ou câmera. Câmera navega p/ a Central ("/") — não há
+// deep-link de câmera aberta hoje; quando houver, troque o `to` aqui.
+type SearchHit = { id: string; label: string; hint: string; icon: LucideIcon; to: string };
+
+// Busca acento-insensível (relatório/relatorio, câmera/camera).
+const norm = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 
 export function AppShell() {
   const { user, canConfigure, logout } = useAuth();
   const navigate = useNavigate();
   const mainRef = useRef<HTMLElement>(null);
   const { pathname } = useLocation();
-  const compact = useCompactRail();
+  // md (641–900px): index.css fixa o rail em 52px só-ícones (comportamento pré-existente).
+  // desktop (>900px): entra o colapso manual expandida ↔ rail.
+  const compact = useMediaQuery("(min-width: 641px) and (max-width: 900px)");
+  const desktop = useMediaQuery("(min-width: 901px)");
   useEffect(() => {
     mainRef.current?.focus();
   }, [pathname]);
+
+  // ── Colapso (desktop): persistido; Ctrl+B alterna (padrão VSCode/shadcn) ──
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggleNav = useCallback(() => {
+    setCollapsed((c) => {
+      writeCollapsed(!c);
+      return !c;
+    });
+  }, []);
+  // Só-ícones = md automático OU colapso manual no desktop → Tooltip revela o rótulo.
+  const iconOnly = compact || (desktop && collapsed);
+
+  // ── Busca (menu + câmeras) ────────────────────────────────────────────────
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [listOpen, setListOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  // Câmeras carregadas 1× no primeiro foco da busca (lazy). listCameras é superadmin;
+  // para os demais papéis o catch degrada silenciosamente p/ [] (busca só de menu).
+  const [cams, setCams] = useState<Camera[]>([]);
+  const camsRequested = useRef(false);
+  const loadCams = useCallback(() => {
+    if (camsRequested.current) return;
+    camsRequested.current = true;
+    listCameras()
+      .then(setCams)
+      .catch(() => setCams([]));
+  }, []);
+
+  // Colapsada, o campo vira botão-ícone: clicar (ou Ctrl+K) EXPANDE a sidebar e foca a
+  // busca (o mais simples dos dois padrões shadcn; sem estado "temporário" para desfazer).
+  const [pendingFocus, setPendingFocus] = useState(false);
+  useEffect(() => {
+    if (pendingFocus && !collapsed) {
+      searchRef.current?.focus();
+      setPendingFocus(false);
+    }
+  }, [pendingFocus, collapsed]);
+  const openSearch = useCallback(() => {
+    setPendingFocus(true);
+    setCollapsed((c) => {
+      if (c) writeCollapsed(false);
+      return false;
+    });
+  }, []);
+
+  // Atalhos globais (só desktop; no mobile a busca/colapso não existem):
+  // Ctrl/Cmd+B alterna o menu; Ctrl/Cmd+K e "/" focam a busca. "/" não rouba
+  // digitação: ignorado quando o foco já está em input/textarea/select/editable.
+  useEffect(() => {
+    if (!desktop) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable);
+      const k = e.key.toLowerCase();
+      const mod = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+      if (mod && k === "b") {
+        e.preventDefault();
+        toggleNav();
+      } else if (mod && k === "k") {
+        e.preventDefault();
+        openSearch();
+      } else if (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        openSearch();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [desktop, toggleNav, openSearch]);
 
   // NavLink aplica aria-current="page" automaticamente no item ativo; a classe .on
   // dispara o realce discreto (going-gray) definido em appshell.css.
   const itemCls = ({ isActive }: { isActive: boolean }) => `rail-item ${isActive ? "on" : ""}`;
 
-  // Itens de navegação por papel (visibilidade preservada: Saúde só p/ canConfigure;
-  // Usuários só p/ superadmin). "Meu perfil" permanece um link direto (navegação primária).
-  const navItems: NavItem[] = [
-    { to: "/", end: true, icon: LayoutDashboard, label: "Central" },
-    { to: "/relatorio", icon: BarChart3, label: "Relatório" },
-    ...(canConfigure ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes" }] : []),
-    ...(user.papel === "superadmin" ? [{ to: "/usuarios", icon: Users, label: "Usuários" }] : []),
-    { to: "/perfil", icon: CircleUser, label: "Meu perfil" },
-  ];
+  // Grupos com micro-headers (padrão Grafana/Datadog: zonear por frequência de uso).
+  // RBAC preservado: Saúde alarmes só canConfigure; Usuários só superadmin. Grupo vazio
+  // (ex.: Administração p/ operador) não renderiza nem o header.
+  const groups: NavGroup[] = [
+    {
+      id: "op",
+      title: "Operação",
+      items: [
+        { to: "/", end: true, icon: LayoutDashboard, label: "Central" },
+        { to: "/relatorio", icon: BarChart3, label: "Relatório" },
+      ],
+    },
+    {
+      id: "adm",
+      title: "Administração",
+      items: [
+        ...(canConfigure ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes" }] : []),
+        ...(user.papel === "superadmin" ? [{ to: "/usuarios", icon: Users, label: "Usuários" }] : []),
+      ],
+    },
+    {
+      id: "conta",
+      title: "Conta",
+      items: [{ to: "/perfil", icon: CircleUser, label: "Meu perfil" }],
+    },
+  ].filter((g) => g.items.length > 0);
+
+  // Resultados: itens do menu (sempre) + câmeras (quando carregadas), acento-insensível.
+  const q = norm(query.trim());
+  const hits: SearchHit[] = !q
+    ? []
+    : [
+        ...groups
+          .flatMap((g) => g.items)
+          .filter((i) => norm(i.label).includes(q))
+          .map((i) => ({ id: `nav:${i.to}`, label: i.label, hint: "Menu", icon: i.icon, to: i.to })),
+        ...cams
+          .filter((c) => norm(c.label || c.id).includes(q))
+          .slice(0, 6)
+          .map((c) => ({
+            id: `cam:${c.id}`,
+            label: c.label || c.id,
+            hint: "Câmera",
+            icon: Cctv,
+            to: "/",
+          })),
+      ];
+  const sel = Math.min(activeIdx, Math.max(hits.length - 1, 0));
+
+  const go = (h: SearchHit) => {
+    setQuery("");
+    setListOpen(false);
+    navigate(h.to);
+  };
+
+  const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, hits.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      if (hits[sel]) {
+        e.preventDefault();
+        go(hits[sel]);
+      }
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      if (listOpen || query) {
+        setListOpen(false);
+        setQuery("");
+      } else {
+        searchRef.current?.blur();
+      }
+    }
+  };
 
   // Menu de usuário (Radix DropdownMenu): agrupa as ações de conta ("Meu perfil" + "Sair")
   // sob o nome/ícone do usuário no rodapé — Radix cuida de portal, teclado, foco e ARIA.
@@ -101,36 +286,157 @@ export function AppShell() {
     },
   ];
 
+  const searchOpen = listOpen && !!q;
+
   return (
-    <div className="shell">
+    <div className={`shell shell--nav ${desktop && collapsed ? "nav-min" : ""}`}>
       <a href="#main-content" className="skip-link">
         Pular para o conteúdo
       </a>
       <nav className="rail rail--app" aria-label="Navegação principal">
-        <Tooltip content="Visão de Pátio">
-          <div className="rail-brand">
-            <Cctv size={20} strokeWidth={1.75} aria-hidden />
-          </div>
-        </Tooltip>
-        {navItems.map((it) => {
-          const Icon = it.icon;
-          const link = (
-            <NavLink key={it.to} to={it.to} end={it.end} className={itemCls} aria-label={it.label}>
-              <span className="ri-ic" aria-hidden>
-                <Icon {...NAV_ICON} />
-              </span>
-              <span className="ri-lb">{it.label}</span>
-            </NavLink>
-          );
-          // No modo compacto (só ícones) o Tooltip revela o rótulo; fora dele seria redundante.
-          return compact ? (
-            <Tooltip key={it.to} content={it.label}>
-              {link}
+        {/* ── Header: brand + toggle de colapso (PanelLeft, padrão shadcn/VSCode) ── */}
+        <div className="rail-head">
+          {iconOnly ? (
+            <Tooltip content="Visão de Pátio">
+              <div className="rail-brand">
+                <Cctv size={20} strokeWidth={1.75} aria-hidden />
+                <span className="rail-brand-lb">Visão de Pátio</span>
+              </div>
             </Tooltip>
           ) : (
-            link
-          );
-        })}
+            <div className="rail-brand">
+              <Cctv size={20} strokeWidth={1.75} aria-hidden />
+              <span className="rail-brand-lb">Visão de Pátio</span>
+            </div>
+          )}
+          {desktop && (
+            <Tooltip content={collapsed ? "Expandir menu (Ctrl+B)" : "Recolher menu (Ctrl+B)"}>
+              <button
+                type="button"
+                className="rail-toggle"
+                aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
+                aria-expanded={!collapsed}
+                aria-keyshortcuts="Control+B"
+                onClick={toggleNav}
+              >
+                {collapsed ? <PanelLeftOpen {...NAV_ICON} /> : <PanelLeftClose {...NAV_ICON} />}
+              </button>
+            </Tooltip>
+          )}
+        </div>
+
+        {/* ── Busca: menu + câmeras (Ctrl+K ou "/"); colapsada vira botão-ícone ── */}
+        {desktop &&
+          (collapsed ? (
+            <Tooltip content="Buscar (Ctrl+K)">
+              <button
+                type="button"
+                className="rail-item rail-search-btn"
+                aria-label="Buscar — expande o menu"
+                onClick={openSearch}
+              >
+                <span className="ri-ic" aria-hidden>
+                  <Search {...NAV_ICON} />
+                </span>
+              </button>
+            </Tooltip>
+          ) : (
+            <div className="rail-search">
+              <span className="rs-ic" aria-hidden>
+                <Search size={15} strokeWidth={1.75} />
+              </span>
+              <input
+                ref={searchRef}
+                className="rail-search-in"
+                type="text"
+                role="combobox"
+                aria-label="Buscar no menu e câmeras"
+                aria-expanded={searchOpen}
+                aria-controls={searchOpen ? "rail-search-list" : undefined}
+                aria-activedescendant={searchOpen && hits[sel] ? `rs-opt-${sel}` : undefined}
+                aria-autocomplete="list"
+                placeholder="Buscar… (Ctrl+K)"
+                value={query}
+                onFocus={() => {
+                  loadCams();
+                  if (query.trim()) setListOpen(true);
+                }}
+                onBlur={() => setListOpen(false)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setListOpen(e.target.value.trim().length > 0);
+                  setActiveIdx(0);
+                }}
+                onKeyDown={onSearchKey}
+              />
+              {searchOpen && (
+                // mousedown preventDefault: não rouba o foco do input (o clique ainda navega).
+                <div className="rail-search-pop" onMouseDown={(e) => e.preventDefault()}>
+                  <ul id="rail-search-list" role="listbox" aria-label="Resultados da busca">
+                    {hits.length === 0 && (
+                      <li className="rail-search-empty" role="presentation">
+                        Nada encontrado
+                      </li>
+                    )}
+                    {hits.map((h, i) => {
+                      const Ic = h.icon;
+                      return (
+                        <li
+                          key={h.id}
+                          id={`rs-opt-${i}`}
+                          role="option"
+                          aria-selected={i === sel}
+                          className={`rail-search-opt ${i === sel ? "sel" : ""}`}
+                          onMouseEnter={() => setActiveIdx(i)}
+                          onClick={() => go(h)}
+                        >
+                          <span className="ri-ic" aria-hidden>
+                            <Ic size={16} strokeWidth={1.75} />
+                          </span>
+                          <span className="rs-lb">{h.label}</span>
+                          <span className="rs-hint">{h.hint}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ))}
+
+        {/* ── Grupos de navegação (micro-headers somem no modo só-ícones) ── */}
+        {groups.map((g) => (
+          <div key={g.id} className="rail-group">
+            <div className="rail-group-h" aria-hidden>
+              {g.title}
+            </div>
+            {g.items.map((it) => {
+              const Icon = it.icon;
+              const link = (
+                <NavLink
+                  key={it.to}
+                  to={it.to}
+                  end={it.end}
+                  className={itemCls}
+                  aria-label={it.label}
+                >
+                  <span className="ri-ic" aria-hidden>
+                    <Icon {...NAV_ICON} />
+                  </span>
+                  <span className="ri-lb">{it.label}</span>
+                </NavLink>
+              );
+              // No modo só-ícones o Tooltip revela o rótulo; fora dele seria redundante.
+              return iconOnly ? (
+                <Tooltip key={it.to} content={it.label}>
+                  {link}
+                </Tooltip>
+              ) : (
+                link
+              );
+            })}
+          </div>
+        ))}
         <div className="spacer" />
         <DropdownMenu
           side="top"

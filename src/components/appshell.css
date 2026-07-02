@@ -1,19 +1,54 @@
 /* ════════════════════════════════════════════════════════════════════════
-   AppShell — polimento do MENU LATERAL (rail desktop + bottom-nav mobile).
+   AppShell — MENU LATERAL v2: colapsável + busca + grupos (rail desktop +
+   bottom-nav mobile).
    ────────────────────────────────────────────────────────────────────────
-   IMPORTADO SÓ pelo AppShell. A ESTRUTURA/RESPONSIVIDADE do rail (colapso p/
-   ícones no md, virar bottom-nav no sm, alvos ≥44px) permanece em index.css
+   IMPORTADO SÓ pelo AppShell. A ESTRUTURA base do rail (grid do .shell,
+   compacto 52px no md, bottom-nav no sm, alvos ≥44px) permanece em index.css
    e é reaproveitada: mantemos as classes .rail / .rail-item / .rail-brand /
-   .rail-foot / .spacer. Aqui só ADICIONAMOS acabamento (estado ativo going-gray,
-   foco visível, menu de usuário) com seletores mais específicos (.rail--app …)
-   para vencer o index.css independente da ordem de import.
+   .rail-foot / .spacer. Aqui ADICIONAMOS, com seletores mais específicos
+   (.shell--nav / .rail--app) para vencer o index.css independente da ordem
+   de import:
+     • colapso desktop (>900px): expandida 240px ↔ rail 60px ("nav-min"),
+       transição 180ms (shadcn/ui sidebar; Grafana docked mega menu);
+     • busca com popover de resultados (listbox própria);
+     • grupos com micro-headers uppercase (Grafana/Datadog);
+     • grid de espaçamento: item 36px, padding lateral 12px, gap 12px,
+       ícone em caixa 20px.
+   Going-gray: base neutra; --accent só no item ativo; nenhuma cor nova.
    ════════════════════════════════════════════════════════════════════════ */
 
-/* ── Ritmo e alinhamento dos itens (ícones Lucide) ───────────────────────
-   Ícones SVG (stroke = currentColor) substituíram os emojis: caixa fixa de
-   20px centrada por flex → texto de todos os itens alinha na mesma coluna,
-   sem depender de métrica de fonte. Altura mínima única dá ritmo vertical. */
+/* ── Larguras + colapso (só desktop; no md/sm mandam os breakpoints do
+   index.css). Expandida 240px (mercado: shadcn 256px, Grafana ~250px,
+   Notion/Linear ~240px) ↔ rail 60px (shadcn icon 48px + folga p/ alvo 44px
+   com padding). grid-template-columns anima em navegadores modernos; onde
+   não animar, degrada p/ snap sem quebrar layout. ─────────────────────── */
+@media (min-width: 901px) {
+  .shell.shell--nav {
+    grid-template-columns: 240px 1fr;
+    transition: grid-template-columns 180ms ease;
+  }
+  .shell.shell--nav.nav-min {
+    grid-template-columns: 60px 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell.shell--nav {
+    transition: none;
+  }
+}
+
+/* ── Ritmo e alinhamento dos itens (grid do menu) ────────────────────────
+   Caixa fixa de 20px p/ o ícone (alinha a coluna sem depender de fonte),
+   gap ícone-rótulo 12px, padding lateral único 12px, altura 36px. Rótulos
+   nowrap+ellipsis: não quebram durante a animação de largura. */
+.rail--app {
+  gap: 2px;
+  padding: var(--sp-2);
+  overflow-x: hidden;
+}
 .rail--app .rail-item {
+  gap: 12px;
+  padding: 8px 12px;
   min-height: 36px;
   transition:
     background-color 0.12s,
@@ -26,11 +61,176 @@
   width: 20px;
   flex: none;
 }
-.rail--app .rail-brand,
+.rail--app .ri-lb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rail--app .rail-foot {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* ── Header: brand (ícone + nome) + toggle de colapso ──────────────────── */
+.rail--app .rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 40px;
+  padding: 0 0 var(--sp-2);
+  margin-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border-soft);
+}
+.rail--app .rail-brand {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) 4px;
+  color: var(--accent);
+  font-size: 13px;
+  text-align: left;
+}
+.rail--app .rail-brand-lb {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail--app .rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.rail--app .rail-toggle:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.rail--app .rail-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus);
+}
+
+/* ── Busca (campo + popover de resultados) ──────────────────────────────── */
+.rail--app .rail-search {
+  position: relative;
+  margin: 0 0 var(--sp-2);
+}
+.rail--app .rail-search .rs-ic {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.rail--app .rail-search-in {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px 0 32px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.rail--app .rail-search-in::placeholder {
+  color: var(--text-muted);
+}
+.rail--app .rail-search-in:focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus);
+}
+.rail--app .rail-search-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.rail--app .rail-search-pop ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.rail--app .rail-search-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rail--app .rail-search-opt.sel {
+  background: var(--state-neutral-bg);
+  color: var(--text);
+}
+.rail--app .rail-search-opt .rs-lb {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail--app .rail-search-opt .rs-hint {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: none;
+}
+.rail--app .rail-search-empty {
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── Grupos: micro-headers uppercase 11px (some no modo só-ícones) ──────── */
+.rail--app .rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail--app .rail-group + .rail-group {
+  margin-top: var(--sp-3);
+}
+.rail--app .rail-group-h {
+  padding: 0 12px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* ── Foco visível por teclado (mesma linguagem dos átomos de src/ui) ─────── */
@@ -112,19 +312,93 @@
   color: var(--text-muted);
 }
 
-/* ── md (≤900px) · rail compacto (só ícones): esconde nome e caret;
-   alvo de toque ≥44px (tablet é dedo, não mouse). ─────────────────────── */
+/* ── COLAPSADA (desktop >900px, .nav-min): só ícones centrados; headers de
+   grupo viram separadores sutis; rótulos/caret somem (Tooltip revela o nome;
+   aria-label preserva o nome acessível p/ leitores de tela e e2e). ─────── */
+@media (min-width: 901px) {
+  .nav-min .rail--app .ri-lb,
+  .nav-min .rail--app .ri-caret,
+  .nav-min .rail--app .rail-brand-lb,
+  .nav-min .rail--app .rail-group-h {
+    display: none;
+  }
+  .nav-min .rail--app .rail-item {
+    justify-content: center;
+    padding: 8px;
+  }
+  .nav-min .rail--app .rail-head {
+    flex-direction: column;
+    gap: var(--sp-1);
+    padding-bottom: var(--sp-2);
+  }
+  .nav-min .rail--app .rail-brand {
+    flex: none;
+    justify-content: center;
+    padding: var(--sp-1);
+  }
+  .nav-min .rail--app .rail-group + .rail-group {
+    margin-top: var(--sp-2);
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--border-soft);
+  }
+}
+
+/* ── md (≤900px) · rail compacto do index.css (52px, só ícones): headers,
+   nome do brand, toggle e busca não existem (o TSX nem os renderiza fora do
+   desktop; aqui é cinto-e-suspensório durante resize). Alvo ≥44px (tablet
+   é dedo, não mouse). ─────────────────────────────────────────────────── */
 @media (max-width: 900px) {
+  /* Reassume o compacto do index.css (nossa base 8px/12px tem especificidade maior). */
   .rail--app .rail-item {
     min-height: 44px;
+    justify-content: center;
+    padding: var(--sp-2);
+    gap: var(--sp-2);
+  }
+  .rail--app .rail-group-h,
+  .rail--app .rail-brand-lb,
+  .rail--app .rail-toggle,
+  .rail--app .rail-search {
+    display: none;
+  }
+  .rail--app .rail-head {
+    justify-content: center;
+    border-bottom: none;
+    padding: 0;
+    margin: 0;
+  }
+  .rail--app .rail-brand {
+    flex: none;
+    justify-content: center;
+  }
+  .rail--app .rail-group + .rail-group {
+    margin-top: var(--sp-2);
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--border-soft);
   }
   .rail--app .rail-user .ri-caret {
     display: none;
   }
 }
 
-/* ── sm (≤640px) · bottom-nav: indicador de ativo migra p/ o topo do item ─ */
+/* ── sm (≤640px) · bottom-nav: grupos "desaparecem" (display: contents →
+   itens voltam a ser filhos diretos do flex row do index.css); header do
+   shell some; indicador de ativo migra p/ o topo do item. ──────────────── */
 @media (max-width: 640px) {
+  .rail--app .rail-head {
+    display: none;
+  }
+  .rail--app .rail-group {
+    display: contents;
+  }
+  /* Reassume o layout de tab do index.css (ícone sobre rótulo, alvo ≥44px). */
+  .rail--app .rail-item {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: var(--sp-1) var(--sp-2);
+    min-height: 44px;
+  }
   .rail--app .rail-item.on::before {
     left: 22%;
     right: 22%;
