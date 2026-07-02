@@ -63,6 +63,12 @@ import {
   loadFadigaEvents,
   loadAlarms,
   peoplePeakOf,
+  loadFlowDataset,
+  flowWindow,
+  flowKpis,
+  flowByHour,
+  flowByLine,
+  type FlowDataset,
 } from "../report/store";
 import { getDataStatus, type DataPersistence } from "../api";
 import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
@@ -128,6 +134,8 @@ export function ReportPage() {
   const [fds, setFds] = useState<FadigaDataset | null>(null);
   const [fEvents, setFEvents] = useState<FadigaEventRow[]>([]);
   const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
+  // Fluxo de pessoas (plano 1.3). null = hub sem o kind "flow" (ou falha) → seção oculta.
+  const [flowDs, setFlowDs] = useState<FlowDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Fonte da persistência do histórico (contrato aditivo GET /api/data/status).
@@ -161,6 +169,9 @@ export function ReportPage() {
     getDataStatus()
       .then((s) => setDataSource(s.persistence === "pg" || s.persistence === "json" ? s.persistence : null))
       .catch(() => setDataSource(null));
+    // Fluxo (kind "flow", plano 1.3) com falha ISOLADA (mesmo padrão do status acima): num hub
+    // antigo sem o kind, o GET falha/404 → seção de fluxo não aparece, sem derrubar o relatório.
+    const flowP = loadFlowDataset().catch(() => null);
     try {
       const [d, e, rd, re, od, oe, fd, fe, al] = await Promise.all([
         loadDataset(),
@@ -182,6 +193,7 @@ export function ReportPage() {
       setFds(fd);
       setFEvents(fe);
       setAlarms(al);
+      setFlowDs(await flowP); // nunca rejeita (catch acima) — só habilita/oculta a seção
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Falha ao carregar o histórico.";
       setError(msg);
@@ -250,6 +262,22 @@ export function ReportPage() {
     for (const c of aCur) m[shiftOf(c.hour)] += c.idleMin;
     return { m, max: Math.max(1, ...Object.values(m)) };
   }, [aCur]);
+  // ── Fluxo de pessoas (plano 1.3) — dentro da história de Atividade. Respeita período/turno;
+  // o filtro de ÁREA não se aplica (buckets são câmera×linha, sem área — documentado no painel).
+  const flowCur = useMemo(
+    () => (flowDs ? flowWindow(flowDs, period, shift) : []),
+    [flowDs, period, shift],
+  );
+  const flowK = useMemo(() => flowKpis(flowCur), [flowCur]);
+  const flowHours = useMemo(() => flowByHour(flowCur), [flowCur]);
+  const flowLines = useMemo(() => flowByLine(flowCur), [flowCur]);
+  const flowView = useMemo(
+    () =>
+      flowDs
+        ? { hasAny: flowDs.cells.length > 0, k: flowK, byHour: flowHours, byLine: flowLines }
+        : null,
+    [flowDs, flowK, flowHours, flowLines],
+  );
 
   // ── Leitura ──
   const rdataset = rds ?? EMPTY_RDS;
@@ -504,6 +532,25 @@ export function ReportPage() {
         headers: ["Turno", "Tempo parado"],
         rows: SHIFTS.map((s) => [s, fmtMin(byShiftA.m[s])]),
       });
+      // Fluxo de pessoas (plano 1.3): só quando o hub expõe o kind "flow" (hub antigo → omite).
+      // Recorte período/turno; o filtro de área NÃO se aplica ao fluxo (câmera×linha, sem área).
+      if (flowDs) {
+        sections.push({
+          title: "FLUXO DE PESSOAS (linhas de contagem)",
+          headers: ["Indicador", "Valor"],
+          rows: [
+            ["Entradas", flowK.in],
+            ["Saídas", flowK.out],
+            ["Saldo (entradas − saídas)", flowK.in - flowK.out],
+            ["Linhas com cruzamento", flowK.lines],
+          ],
+        });
+        sections.push({
+          title: "FLUXO POR LINHA",
+          headers: ["Câmera", "Linha (id)", "Entradas", "Saídas"],
+          rows: flowLines.rows.map((r) => [r.cameraLabel || r.cameraId, r.tripwireId, r.in, r.out]),
+        });
+      }
       sections.push({
         title: `EVENTOS (${evt.length})`,
         headers: ["Data/hora", "Área", "Câmera", "Duração (min)", "Turno"],
@@ -997,6 +1044,7 @@ export function ReportPage() {
             evo={evo}
             byShiftA={byShiftA}
             evt={evt}
+            flow={flowView}
             tab={tab}
             onTabChange={setTab}
             busy={busy}

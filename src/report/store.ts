@@ -5,6 +5,8 @@
 import { apiGet, apiSend } from "../api";
 import {
   shiftOf,
+  type Period,
+  type Shift,
   type Dataset,
   type Cell,
   type EventRow,
@@ -195,6 +197,152 @@ type ReadingBucket = {
 export function recordPass(ponto: string, ts: number): Promise<void> {
   return ingest("read", "pass", { ponto, ts });
 }
+
+// ── Fluxo de pessoas (tripwire) — evento por CRUZAMENTO, só metadados (LGPD ok). ──
+// Contrato do kind "flow": op "cross" { cameraId, cameraLabel, tripwireId, dir, ts, shift }.
+// O servidor agrega em buckets hora×câmera×linha (in/out) + guarda o evento cru.
+export type FlowCross = {
+  cameraId: string;
+  cameraLabel: string;
+  tripwireId: string;
+  dir: "in" | "out";
+  ts: number;
+};
+export function recordFlow(ev: FlowCross): Promise<void> {
+  return ingest("flow", "cross", { ...ev, shift: shiftFor(ev.ts) });
+}
+/** Bucket de fluxo devolvido pelo servidor (hora×câmera×linha). */
+export type FlowBucket = {
+  cameraId: string;
+  cameraLabel: string;
+  tripwireId: string;
+  hourStart: number;
+  in: number;
+  out: number;
+};
+/** Acumulado do DIA por linha (p/ o HUD/painel sobreviverem a reload). Erro propaga. */
+export async function loadFlowToday(
+  cameraId: string,
+): Promise<Record<string, { in: number; out: number }>> {
+  const dayStart = new Date().setHours(0, 0, 0, 0);
+  const buckets = await fetchBuckets<FlowBucket>("flow");
+  const acc: Record<string, { in: number; out: number }> = {};
+  for (const b of buckets) {
+    if (b.cameraId !== cameraId || b.hourStart < dayStart) continue;
+    const a = (acc[b.tripwireId] ??= { in: 0, out: 0 });
+    a.in += b.in;
+    a.out += b.out;
+  }
+  return acc;
+}
+// ── Fluxo no RELATÓRIO (plano 1.3) — dataset + agregações puras (tudo ADITIVO). ──
+// Os cálculos ficam AQUI (calc/ é de outra frente). Filtros suportados: PERÍODO e TURNO —
+// mesma geometria de janela de calc/windows(). O filtro de ÁREA do modo Atividade NÃO se
+// aplica: os buckets de flow são hora×câmera×linha, sem noção de área.
+export type FlowCell = {
+  cameraId: string;
+  cameraLabel: string;
+  tripwireId: string;
+  dayIndex: number;
+  hour: number;
+  in: number;
+  out: number;
+};
+export type FlowDataset = { days: number; cells: FlowCell[]; startMs: number };
+
+// periodDays é interno ao pacote calc/ (não re-exportado por mock) — espelho local.
+const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
+
+/** Buckets de flow → dataset (mesmo padrão de loadDataset/loadReadingDataset). Erro PROPAGA:
+ *  num hub antigo sem o kind "flow" o GET falha e quem chama oculta a seção (graceful). */
+export async function loadFlowDataset(): Promise<FlowDataset> {
+  const buckets = await fetchBuckets<FlowBucket>("flow");
+  if (!buckets.length) return { days: 0, cells: [], startMs: Date.now() };
+  const now = Date.now();
+  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
+  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const cells: FlowCell[] = buckets.map((b) => ({
+    cameraId: b.cameraId,
+    cameraLabel: b.cameraLabel,
+    tripwireId: b.tripwireId,
+    dayIndex: Math.floor((b.hourStart - startMs) / DAY),
+    hour: new Date(b.hourStart).getHours(),
+    in: b.in,
+    out: b.out,
+  }));
+  return { days, cells, startMs };
+}
+
+/** Recorte "current" do período/turno (janela idêntica à de calc/windows — sem previous:
+ *  o fluxo não exibe delta vs. período anterior). Pura. */
+export function flowWindow(ds: FlowDataset, period: Period, shift: Shift | "Todos"): FlowCell[] {
+  const W = PERIOD_DAYS[period];
+  const lo = ds.days - W;
+  const hi = ds.days - 1;
+  return ds.cells.filter(
+    (c) =>
+      c.dayIndex >= lo &&
+      c.dayIndex <= hi &&
+      (shift === "Todos" || shiftOf(c.hour) === shift),
+  );
+}
+
+/** Totais do recorte: entradas, saídas e nº de linhas distintas com cruzamento. Pura. */
+export function flowKpis(cells: FlowCell[]): { in: number; out: number; lines: number } {
+  let inSum = 0;
+  let outSum = 0;
+  const lines = new Set<string>();
+  for (const c of cells) {
+    inSum += c.in;
+    outSum += c.out;
+    lines.add(`${c.cameraId}|${c.tripwireId}`);
+  }
+  return { in: inSum, out: outSum, lines: lines.size };
+}
+
+/** Série por hora do dia (0..23) com in/out somados + máximo p/ escala das barras. Pura. */
+export function flowByHour(cells: FlowCell[]): {
+  hours: { in: number; out: number }[];
+  max: number;
+} {
+  const hours = Array.from({ length: 24 }, () => ({ in: 0, out: 0 }));
+  for (const c of cells) {
+    hours[c.hour].in += c.in;
+    hours[c.hour].out += c.out;
+  }
+  const max = Math.max(1, ...hours.map((h) => Math.max(h.in, h.out)));
+  return { hours, max };
+}
+
+export type FlowLineRow = {
+  cameraId: string;
+  cameraLabel: string;
+  tripwireId: string;
+  in: number;
+  out: number;
+};
+/** Agregado por linha×câmera, ordenado por movimento total (ranking). Pura. */
+export function flowByLine(cells: FlowCell[]): { rows: FlowLineRow[]; max: number } {
+  const m = new Map<string, FlowLineRow>();
+  for (const c of cells) {
+    const key = `${c.cameraId}|${c.tripwireId}`;
+    const r = m.get(key) ?? {
+      cameraId: c.cameraId,
+      cameraLabel: c.cameraLabel,
+      tripwireId: c.tripwireId,
+      in: 0,
+      out: 0,
+    };
+    r.in += c.in;
+    r.out += c.out;
+    if (c.cameraLabel) r.cameraLabel = c.cameraLabel; // label mais recente vence o vazio
+    m.set(key, r);
+  }
+  const rows = [...m.values()].sort((a, b) => b.in + b.out - (a.in + a.out));
+  const max = Math.max(1, ...rows.map((r) => r.in + r.out));
+  return { rows, max };
+}
+
 export function recordReads(r: ReadRecord): Promise<void> {
   return ingest("read", "read", { ...r, shift: shiftFor(r.ts) });
 }

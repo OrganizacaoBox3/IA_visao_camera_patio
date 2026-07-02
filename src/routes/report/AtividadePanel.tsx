@@ -14,9 +14,19 @@ import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
 import { TrendChart } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
+import type { FlowLineRow } from "../../report/store";
 
 type Kpis = ReturnType<typeof kpis>;
 type ByAtiv = { rows: { atividade: string; idleMin: number; alerts: number }[]; max: number };
+
+// Fluxo de pessoas (plano 1.3) já agregado pelo ReportPage (store.flow*): recorte período/turno.
+// `null` no prop = hub antigo sem o kind "flow" → a seção inteira some (graceful).
+export type FlowView = {
+  hasAny: boolean; // existe ALGUM cruzamento no histórico (independente do recorte)
+  k: { in: number; out: number; lines: number };
+  byHour: { hours: { in: number; out: number }[]; max: number };
+  byLine: { rows: FlowLineRow[]; max: number };
+};
 
 export function AtividadePanel({
   lens,
@@ -30,6 +40,7 @@ export function AtividadePanel({
   evo,
   byShiftA,
   evt,
+  flow,
   tab,
   onTabChange,
   busy,
@@ -46,6 +57,7 @@ export function AtividadePanel({
   evo: ReturnType<typeof evolution>;
   byShiftA: ByShift;
   evt: EventRow[];
+  flow: FlowView | null; // null = hub sem o kind "flow" → seção oculta
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
   busy: boolean;
@@ -185,7 +197,103 @@ export function AtividadePanel({
           />
         </TabsContent>
       </Tabs>
+      {/* Fluxo de pessoas (plano 1.3) — parte da história de atividade, não um modo novo. */}
+      {flow && <FlowSection flow={flow} />}
       <HistoryFooter onClear={onClear} busy={busy} />
+    </>
+  );
+}
+
+// ── Fluxo (linhas de contagem) — in/out agregados dos buckets persistidos no hub ──
+// Respeita período/turno (recorte feito no ReportPage via store.flowWindow). O filtro de
+// ÁREA não se aplica: cruzamentos são registrados por câmera×linha, sem área.
+const pad2 = (h: number) => String(h).padStart(2, "0");
+
+function FlowSection({ flow }: { flow: FlowView }) {
+  const { hasAny, k, byHour, byLine } = flow;
+  if (!hasAny || k.in + k.out === 0) {
+    // Estados vazios curtos (padrão das notas existentes): sem linha/cruzamento × recorte vazio.
+    return (
+      <section className="panel">
+        <h3>Fluxo de pessoas — linhas de contagem</h3>
+        <p className="empty-note">
+          {hasAny
+            ? "Sem cruzamentos no período/turno selecionado."
+            : "Nenhum cruzamento registrado ainda. Desenhe uma linha de contagem na câmera (Central) — cada passagem vira entrada/saída aqui."}
+        </p>
+      </section>
+    );
+  }
+  // Rótulo humano por linha: nome da câmera; com 2+ linhas na mesma câmera, sufixo "linha N"
+  // (ordem estável pelo id — o tripwireId cru só vai ao CSV/tooltip).
+  const linesOfCam = new Map<string, string[]>();
+  for (const r of byLine.rows) {
+    const arr = linesOfCam.get(r.cameraId) ?? [];
+    arr.push(r.tripwireId);
+    linesOfCam.set(r.cameraId, arr);
+  }
+  for (const arr of linesOfCam.values()) arr.sort();
+  const lineLabel = (r: FlowLineRow) => {
+    const cam = r.cameraLabel || r.cameraId;
+    const ids = linesOfCam.get(r.cameraId) ?? [];
+    return ids.length > 1 ? `${cam} · linha ${ids.indexOf(r.tripwireId) + 1}` : cam;
+  };
+  return (
+    <>
+      <section className="panel">
+        <h3>Fluxo de pessoas — linhas de contagem</h3>
+        {/* going-gray: fluxo é informação neutra — sem cor saturada */}
+        <KpiRow>
+          <Kpi value={k.in} label="entradas no período" />
+          <Kpi value={k.out} label="saídas no período" />
+          <Kpi value={k.in - k.out} label="saldo (entradas − saídas)" />
+          <Kpi value={k.lines} label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"} />
+        </KpiRow>
+        <p className="muted text-[11px]">
+          Respeita período e turno. O filtro de área não se aplica ao fluxo (cruzamentos são por
+          câmera × linha, sem área).
+        </p>
+      </section>
+      <div className="rep-2col">
+        <section className="panel">
+          <h3>Entradas por hora</h3>
+          <TrendChart
+            bars={byHour.hours.map((v, h) => ({
+              key: h,
+              label: h % 3 === 0 ? `${pad2(h)}h` : "",
+              value: v.in,
+              title: `${pad2(h)}h · ${v.in} entradas`,
+            }))}
+            max={byHour.max}
+          />
+        </section>
+        <section className="panel">
+          <h3>Saídas por hora</h3>
+          <TrendChart
+            read
+            bars={byHour.hours.map((v, h) => ({
+              key: h,
+              label: h % 3 === 0 ? `${pad2(h)}h` : "",
+              value: v.out,
+              title: `${pad2(h)}h · ${v.out} saídas`,
+            }))}
+            max={byHour.max}
+          />
+        </section>
+      </div>
+      <section className="panel">
+        <h3>Por linha / câmera</h3>
+        <RankingBars
+          rows={byLine.rows.map((r) => ({
+            key: `${r.cameraId}|${r.tripwireId}`,
+            label: <span title={r.tripwireId}>{lineLabel(r)}</span>,
+            value: r.in + r.out,
+            valueText: `${r.in} entradas · ${r.out} saídas`,
+          }))}
+          max={byLine.max}
+          emptyNote="Sem cruzamentos no período."
+        />
+      </section>
     </>
   );
 }
