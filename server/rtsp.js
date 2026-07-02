@@ -172,7 +172,23 @@ function setState(st, state) {
 
 function spawnFfmpeg(st) {
   if (st.stopped) return;
+  st.lastStderr = ""; // diagnóstico é por tentativa: não misturar erro de um spawn anterior
   const args = [
+    // Globais: sem stats de progresso; stderr só com erros REAIS (viabiliza o lastStderr abaixo).
+    "-nostats",
+    "-loglevel",
+    "error",
+    // Baixa latência (input, antes do -i): sem buffer de demux/decoder e sondagem mínima do stream
+    // — corta 0,5–2s de atraso na conexão e no regime. Convive com -rtsp_transport/-extension_picky
+    // (inputArgs), que continuam sendo aplicados por esquema de URL.
+    "-fflags",
+    "nobuffer",
+    "-flags",
+    "low_delay",
+    "-probesize",
+    "500000",
+    "-analyzeduration",
+    "0",
     ...inputArgs(st),
     "-an",
     "-vf",
@@ -200,8 +216,11 @@ function spawnFfmpeg(st) {
       console.error(`[rtsp:${st.id}] erro:`, e.message);
     }
   });
-  proc.stderr.on("data", () => {
-    /* logs verbosos do ffmpeg — silenciados */
+  proc.stderr.on("data", (d) => {
+    // Com -loglevel error o stderr só traz erros reais (raro). Guardamos a ÚLTIMA linha
+    // para diagnosticar a queda no "close" — antes era drenado e descartado (morte cega).
+    const line = String(d).trim().split(/\r?\n/).pop();
+    if (line) st.lastStderr = line;
   });
   proc.stdout.on("data", (chunk) => {
     st.buf = Buffer.concat([st.buf, chunk]);
@@ -213,16 +232,20 @@ function spawnFfmpeg(st) {
         setState(st, "online");
       } // 1º frame após (re)conexão = online
       // JPEG binário (mesmo formato dos nós webcam) — socket.io entrega como ArrayBuffer no cliente.
-      ctx.io.to("dashboards").emit("frame", { id: st.id, buf: jpeg, ts: Date.now() });
+      // VOLATILE (último-vence, como o relé de webcam em index.js): dashboard lento DESCARTA o
+      // frame em vez de enfileirar — vídeo prefere o frame mais novo a acumular latência/backlog.
+      ctx.io.to("dashboards").volatile.emit("frame", { id: st.id, buf: jpeg, ts: Date.now() });
     });
   });
   proc.on("close", (code) => {
     st.proc = null;
     if (st.stopped) return;
+    // Enriquece o diagnóstico com o erro REAL do ffmpeg (última linha do stderr sob -loglevel error).
+    if (st.lastStderr) st.lastError = st.lastStderr;
     st.attempt++;
     if (MAX_RETRIES > 0 && st.attempt > MAX_RETRIES) {
       st.stopped = true;
-      st.lastError = `desistiu após ${st.attempt - 1} tentativas`;
+      st.lastError = `desistiu após ${st.attempt - 1} tentativas${st.lastStderr ? ` — ${st.lastStderr}` : ""}`;
       setState(st, "error");
       console.error(
         `[rtsp:${st.id}] desistindo após ${st.attempt - 1} tentativas (defina RTSP_MAX_RETRIES=0 p/ ilimitado)`,
@@ -232,7 +255,7 @@ function spawnFfmpeg(st) {
     const delay = Math.min(BASE_DELAY * 2 ** (st.attempt - 1), MAX_DELAY);
     setState(st, "connecting");
     console.warn(
-      `[rtsp:${st.id}] stream caiu (code=${code}) — reconectando em ${delay}ms (tentativa ${st.attempt})`,
+      `[rtsp:${st.id}] stream caiu (code=${code}${st.lastStderr ? `: ${st.lastStderr}` : ""}) — reconectando em ${delay}ms (tentativa ${st.attempt})`,
     );
     st.buf = Buffer.alloc(0);
     st.reconnectTimer = setTimeout(() => spawnFfmpeg(st), delay);
@@ -299,6 +322,7 @@ function addSource(src) {
     fps: 0,
     state: "connecting",
     lastError: null,
+    lastStderr: "", // última linha de erro do ffmpeg (-loglevel error) — diagnóstico do "close"
     reconnectTimer: null,
     statusTimer: null,
   };

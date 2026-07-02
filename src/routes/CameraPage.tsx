@@ -110,7 +110,10 @@ export function CameraPage() {
             blob
               .arrayBuffer()
               .then((buf) => {
-                socket.emit("frame", { buf, w, h, ts: Date.now() });
+                // VOLATILE: o socket.io-client bufferiza emits enquanto offline (sendBuffer) e
+                // despeja TUDO no reconnect — frames velhos não interessam; volatile descarta
+                // quando o transporte não está pronto (semântica "último-vence" do vídeo).
+                socket.volatile.emit("frame", { buf, w, h, ts: Date.now() });
               })
               .finally(() => {
                 encoding = false;
