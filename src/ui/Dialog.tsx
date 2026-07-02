@@ -32,7 +32,9 @@ export const DIALOG_HEAD_CLS =
 // Footer do Dialog: mesmo padding do head, borda em cima, alinhado à direita (sem gap, como antes).
 const FOOT_CLS = "flex items-center justify-end p-[var(--sp-3)] border-t border-border";
 export const DIALOG_TITLE_CLS = "text-[14px] font-semibold text-text";
-export const DIALOG_BODY_CLS = "p-[var(--sp-3)] overflow-auto";
+// "ui-dialog-body" é MARCADOR (sem regra em ui.css): alarms.css estiliza o corpo do
+// drawer de alarmes via .ui-dialog:has(.alarm-drawer__list) .ui-dialog-body.
+export const DIALOG_BODY_CLS = "ui-dialog-body p-[var(--sp-3)] overflow-auto";
 // ex-.ui-hint + padding lateral que era inline style.
 const DESC_CLS = "text-[11px] text-text-muted px-[var(--sp-3)]";
 

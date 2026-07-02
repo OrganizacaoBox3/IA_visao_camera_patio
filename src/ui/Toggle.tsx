@@ -7,6 +7,9 @@ const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ")
 /* Tailwind (tokens mapeados no @theme). Replica EXATO o antigo `.ui-toggle`:
    base panel + text-dim, on = estado `info` (going-gray), foco = duplo anel (--ui-focus). */
 const TOGGLE_CLS = cx(
+  // "ui-toggle" é MARCADOR (sem regra em ui.css): cine.css compacta o play/pause
+  // da barra do cine-loop via .cine-bar .ui-toggle.
+  "ui-toggle",
   "box-border inline-flex h-[var(--ui-ctrl-h)] cursor-pointer items-center justify-center gap-[var(--sp-2)]",
   "whitespace-nowrap rounded-sm border border-border bg-panel px-[var(--sp-3)]",
   "font-[family-name:var(--sans)] text-[13px] font-medium text-text-dim",
