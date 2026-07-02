@@ -14,18 +14,47 @@ import fs from "node:fs";
 import path from "node:path";
 
 // ── Catálogo (cena qualquer — o objetivo é validar acesso a câmera real via rede) ──
+// WhatsUpCams (HLS público, sem token). Se alguma der 404, o slug pode ter migrado de CDN:
+// teste o mesmo slug em cdn-001…cdn-008.whatsupcams.com. Verificadas em 2026-07-02.
 const DIRECT = [
   {
-    label: "Mux BBB (teste de pipeline, sempre-online)",
+    label: "Nova Gorica (SI) — Bevkov trg (praça central, pedestres)",
+    url: "https://cdn-006.whatsupcams.com/hls/si_ngbevkovtrg.m3u8",
+  },
+  {
+    label: "Gorizia (IT) — Piazza Vittoria (praça, pedestres/ciclistas/carros)",
+    url: "https://cdn-008.whatsupcams.com/hls/it_gorizia06.m3u8",
+  },
+  {
+    label: "Pula (HR) — rua do centro (pedestres)",
+    url: "https://cdn-004.whatsupcams.com/hls/hr_pula01.m3u8",
+  },
+  {
+    label: "Mošćenička Draga (HR) — centro à beira-mar (pedestres)",
+    url: "https://cdn-007.whatsupcams.com/hls/hr_mdraga04.m3u8",
+  },
+  {
+    label: "Bled (SI) — lago, panorâmica (movimento ao longe)",
+    url: "https://cdn-001.whatsupcams.com/hls/si_bled1.m3u8",
+  },
+  {
+    label: "Mux BBB (teste de pipeline, sempre-online, cena sintética)",
     url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
   },
 ];
-// YouTube lives (câmeras reais 24/7). Nem todas estarão no ar sempre — o script pula as offline.
+// YouTube lives (câmeras reais 24/7, pedestres). Nem todas estarão no ar sempre — o script pula
+// as offline. IDs rotacionam quando o canal reinicia a live; URLs de canal com /live são um
+// ponteiro estável para "a live atual" do canal. Lista revisada em 2026-07-02.
 const YOUTUBE = [
+  { label: "Times Square, NYC — Crossroads (pedestres, EarthCam)", id: "z-jYdOIKcTQ" },
+  { label: "Dublin — Temple Bar (pedestres, EarthCam)", id: "3nyPER2kzqk" },
+  { label: "Shibuya Scramble Crossing, Tóquio (ANN)", id: "8H3nRCFVR6Y" },
+  { label: "Shibuya Scramble Crossing, Tóquio (alternativa)", id: "dfVK7ld38Ys" },
+  {
+    label: "Shinjuku Kabukicho, Tóquio (ponteiro /live do canal)",
+    id: "https://www.youtube.com/channel/UChKERpE7Um0Uq1btm_a9g5A/live",
+  },
   { label: "Porto de Santos (contêineres/navios)", id: "tMYtrEBNVAU" },
-  { label: "Port of Southampton — Box Cam (terminal de contêineres)", id: "OdeqPpGXh9o" },
-  { label: "Port of Los Angeles", id: "iaDgpTnagy4" },
-  { label: "Times Square, NYC (rua/pessoas/veículos)", id: "rnXIjl_Rzy4" },
 ];
 
 // ── Resolução de binários independente do PATH (winget/choco/scoop no Windows) ──

@@ -81,15 +81,38 @@ As zonas/linhas ficam salvas por câmera. Perfis **operador** só visualizam; **
 
 ---
 
-## Passo 6 — Testar sem uma câmera de LAN à mão
-Rode **`npm run cameras`** — ele gera URLs de câmeras reais **prontas para copiar e colar** na "+ Câmera IP"
-(um HLS de teste sempre-online + câmeras ao vivo do YouTube resolvidas na hora). As do YouTube **expiram (~6h)**;
-é só rodar de novo para renovar, ou passar seu próprio link: `npm run cameras "<url-youtube-live>"`.
-Requer `yt-dlp` (`winget install yt-dlp.yt-dlp`) e ffmpeg (auto-detectados).
+## Passo 6 — Testar sem uma câmera de LAN à mão (fontes públicas verificadas)
 
-HLS de teste sempre-online (funciona igual a uma câmera): `https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8`.
+### 6.1 Copy-paste: câmeras públicas diretas (HLS, sem token — colam direto)
+Como usar (3 passos): **1)** abra a **Central** (login superadmin) → **2)** clique **"+ Câmera IP"** →
+**3)** cole a URL da tabela, transporte **TCP**, dê um label → **Adicionar**.
 
-Para **cenas industriais reais** de demonstração (portos etc.), veja o catálogo em `analises/cameras-industriais/00-guia.md` (com as ressalvas: YouTube expira, EarthCam/Skyline proíbem, trânsito BR é snapshot).
+| Nome | Tipo | URL pronta | O que mostra | Verificada em |
+|------|------|------------|--------------|---------------|
+| Nova Gorica (SI) — Bevkov trg | hls | `https://cdn-006.whatsupcams.com/hls/si_ngbevkovtrg.m3u8` | Praça central, pedestres cruzando (720p) | 2026-07-02 (ffprobe h264 1280x720 + frame com pessoas) |
+| Gorizia (IT) — Piazza Vittoria | hls | `https://cdn-008.whatsupcams.com/hls/it_gorizia06.m3u8` | Praça com cafés, pedestres/ciclistas/carros (1080p) | 2026-07-02 (ffprobe h264 1920x1080 + frame com pessoas) |
+| Pula (HR) — rua do centro | hls | `https://cdn-004.whatsupcams.com/hls/hr_pula01.m3u8` | Rua/calçada com pedestres (1080p) | 2026-07-02 (ffprobe h264 1920x1080 + frame com pessoas) |
+| Mošćenička Draga (HR) — centro | hls | `https://cdn-007.whatsupcams.com/hls/hr_mdraga04.m3u8` | Vila à beira-mar, pedestres na rua (1080p) | 2026-07-02 (ffprobe h264 1920x1080 + frame com pessoas) |
+| Bled (SI) — lago (panorâmica) | hls | `https://cdn-001.whatsupcams.com/hls/si_bled1.m3u8` | Lago/promenade, movimento ao longe (1080p) | 2026-07-02 (ffprobe h264 1920x1080) |
+| Mux BBB — teste de pipeline | hls | `https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8` | Vídeo sintético em loop (sempre-online) | 2026-07-02 (ffprobe h264 1280x720) |
+
+> **Aviso honesto:** fonte pública cai **sem aviso**. Se uma der erro: (a) o slug do WhatsUpCams às vezes
+> **migra de CDN** — teste a mesma URL trocando `cdn-006` por `cdn-001`…`cdn-008`; (b) rode `npm run cameras`
+> (ele testa tudo com ffprobe e imprime só o que está no ar); (c) pegue outra da tabela.
+>
+> **MJPEG http direto:** em 2026-07-02 **não encontramos** nenhuma fonte MJPEG pública *intencional* estável
+> (as clássicas de universidades/Axis morreram; diretórios tipo insecam ficam fora por princípio — são câmeras
+> privadas expostas sem intenção). Use as HLS acima — para o hub é igual (o ffmpeg detecta pelo URL).
+
+### 6.2 YouTube lives (pedestres 24/7) — use `npm run cameras`
+**Não cole o `.m3u8` do YouTube no cadastro:** a URL resolvida **expira em ~6h** (token com validade) — a
+câmera cairia sozinha. Por isso existe o script: **`npm run cameras`** resolve as lives do catálogo
+(Times Square, Temple Bar/Dublin, Shibuya ×2, Kabukicho, Porto de Santos) para HLS **na hora**, verifica com
+ffprobe e imprime URLs prontas para colar. Caiu depois de umas horas? **Rode de novo** para renovar.
+Também aceita qualquer live: `npm run cameras "<url-youtube-live>"`.
+Requer `yt-dlp` (`winget install yt-dlp.yt-dlp`) e ffmpeg (auto-detectados mesmo fora do PATH).
+
+Para **cenas industriais reais** de demonstração (portos etc.), veja o catálogo em `analises/cameras-industriais/00-guia.md` (com as ressalvas: YouTube expira, EarthCam/Skyline proíbem extração dos sites deles, trânsito BR é snapshot).
 
 ---
 
