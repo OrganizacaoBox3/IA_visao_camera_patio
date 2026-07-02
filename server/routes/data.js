@@ -1,4 +1,5 @@
-// Rotas de histórico/indicadores no Postgres: /api/ingest, /api/data/* e /api/data/clear.
+// Rotas de histórico/indicadores (Postgres com fallback JSON): /api/ingest,
+// /api/data/*, /api/data/status e /api/data/clear.
 const pgstore = require("../pgstore");
 
 async function handle(req, res, ctx) {
@@ -10,6 +11,13 @@ async function handle(req, res, ctx) {
     const { kind, op, payload } = JSON.parse((await readBody(req, 200_000)) || "{}");
     await pgstore.ingest(kind, op, payload);
     json(res, 200, { ok: true });
+    return true;
+  }
+
+  // Status da persistência do histórico (aditivo): "pg" ou "json" (fallback ativo).
+  if (req.url === "/api/data/status" && req.method === "GET") {
+    if (!requireAuth(req, res)) return true;
+    json(res, 200, await pgstore.status());
     return true;
   }
 

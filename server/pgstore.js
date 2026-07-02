@@ -1,16 +1,285 @@
 // Histórico/indicadores no Postgres (substitui o IndexedDB do browser → dado centralizado).
 // Espelha a lógica de merge do antigo store.ts (acúmulo por bucket) em UPSERT SQL.
 // Buckets/eventos voltam em camelCase (alias) para o front montar os mesmos "cells" de hoje.
+//
+// FALLBACK JSON (padrão da casa, espelha events.js): sem Postgres — ou com PG
+// falhando — o ingest agrega EM MEMÓRIA por bucket (hora×chave, mesma chave do
+// schema.sql) e persiste em server/data-hist.json com escrita atômica
+// (tmp+rename) e flush com debounce. Os objetos guardados têm EXATAMENTE a
+// forma camelCase dos SELECTs abaixo, então o front não distingue PG de JSON.
+// LGPD: só indicadores agregados/metadados — nunca imagens/frames.
+const fs = require("node:fs");
+const path = require("node:path");
 const db = require("./db");
 
 const HOUR = 3_600_000;
 const hourOf = (ts) => Math.floor(ts / HOUR) * HOUR;
 
+// ── FALLBACK JSON: estado + persistência ─────────────────────────────────────
+const FILE = path.join(__dirname, "data-hist.json");
+const KINDS = ["ativ", "read", "obj", "fad"];
+const RETENTION_DAYS = Math.max(1, Number(process.env.DATA_HIST_RETENTION_DAYS ?? 30));
+const DAY_MS = 86_400_000;
+const FLUSH_MS = 2_000;
+
+const emptyStore = () => ({
+  buckets: { ativ: {}, read: {}, obj: {}, fad: {} }, // id → bucket (upsert em memória)
+  events: { ativ: [], read: [], obj: [], fad: [] }, // linhas cruas (ts desc na leitura)
+});
+let mem = emptyStore();
+let flushTimer = null;
+let warnedPgDown = false;
+
+// Poda por idade (~RETENTION_DAYS): buckets por hourStart, eventos por ts.
+function prune() {
+  const cutoff = Date.now() - RETENTION_DAYS * DAY_MS;
+  for (const k of KINDS) {
+    for (const [id, b] of Object.entries(mem.buckets[k]))
+      if (!(Number(b?.hourStart) >= cutoff)) delete mem.buckets[k][id];
+    mem.events[k] = mem.events[k].filter((e) => Number(e?.ts) >= cutoff);
+  }
+}
+
+// Carrega o arquivo no boot (require) — estrutura inválida/ausente ⇒ começa vazio.
+(function loadFile() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(FILE, "utf8"));
+    for (const k of KINDS) {
+      const bk = raw?.buckets?.[k];
+      if (bk && typeof bk === "object" && !Array.isArray(bk)) mem.buckets[k] = bk;
+      if (Array.isArray(raw?.events?.[k])) mem.events[k] = raw.events[k];
+    }
+    prune();
+  } catch {
+    mem = emptyStore(); // sem arquivo ainda (ou corrompido) — começa vazio
+  }
+})();
+
+// Log de boot 1× (o módulo carrega uma vez): deixa claro onde o histórico vive.
+if (!db.configured()) console.log("[data] histórico em fallback JSON (sem Postgres)");
+
+// PG configurado mas falhando em runtime → avisa 1× e segue no JSON.
+function warnPgDown(e) {
+  if (warnedPgDown) return;
+  warnedPgDown = true;
+  console.error("[data] Postgres falhou — histórico segue em fallback JSON:", e.message);
+}
+
+// Escrita ATÔMICA (tmp+rename): nunca deixa data-hist.json truncado no disco.
+function flushNow() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  prune();
+  try {
+    fs.writeFileSync(FILE + ".tmp", JSON.stringify(mem));
+    fs.renameSync(FILE + ".tmp", FILE);
+  } catch (e) {
+    console.error("[data] falha ao salvar data-hist.json:", e.message);
+  }
+}
+// Debounce ~2s: o ingest chega a cada amostra; agrupamos escritas em disco.
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(flushNow, FLUSH_MS);
+  if (flushTimer.unref) flushTimer.unref();
+}
+
+// ── FALLBACK JSON: agregação por bucket (mesma semântica dos UPSERTs SQL) ────
+const J_INGEST = {
+  "ativ:samples"(p) {
+    const hs = hourOf(Date.now());
+    for (const sm of p.samples || []) {
+      const id = `${p.cameraId}|${sm.zoneId}|${hs}`;
+      let b = mem.buckets.ativ[id];
+      if (!b)
+        b = mem.buckets.ativ[id] = {
+          id,
+          cameraId: p.cameraId ?? null,
+          area: null,
+          atividade: null,
+          hourStart: hs,
+          idleMs: 0,
+          alerts: 0,
+          samples: 0,
+          activeSamples: 0,
+          peoplePeak: 0,
+        };
+      b.idleMs += Number(sm.idleMs) || 0;
+      b.samples += Number(sm.frames) || 0;
+      b.activeSamples += Number(sm.activeFrames) || 0;
+      b.peoplePeak = Math.max(b.peoplePeak, Number(sm.people) || 0);
+      b.area = sm.label ?? null; // como o UPSERT: area/atividade = excluded
+      b.atividade = sm.atividade ?? null;
+    }
+  },
+  "ativ:alert"(a) {
+    mem.events.ativ.push({
+      ts: a.ts,
+      camera: a.cameraLabel ?? null,
+      cameraId: a.cameraId ?? null,
+      area: a.area ?? null,
+      atividade: a.atividade ?? null,
+      durationMin: a.durationMin ?? null,
+      shift: a.shift ?? null,
+    });
+    const hs = hourOf(a.ts);
+    const id = `${a.cameraId}|${a.zoneId}|${hs}`;
+    const b = mem.buckets.ativ[id];
+    if (b) b.alerts += 1; // como o SQL: on conflict só incrementa alerts
+    else
+      mem.buckets.ativ[id] = {
+        id,
+        cameraId: a.cameraId ?? null,
+        area: a.area ?? null,
+        atividade: a.atividade ?? null,
+        hourStart: hs,
+        idleMs: 0,
+        alerts: 1,
+        samples: 0,
+        activeSamples: 0,
+        peoplePeak: 0,
+      };
+  },
+  "read:read"(r) {
+    const hs = hourOf(r.ts);
+    const id = `${r.ponto}|${hs}`;
+    let b = mem.buckets.read[id];
+    if (!b)
+      b = mem.buckets.read[id] = {
+        id,
+        ponto: r.ponto ?? null,
+        hourStart: hs,
+        boxes: 0,
+        reads: 0,
+        multiReads: 0,
+        passages: 0,
+        perCamera: {},
+      };
+    b.reads += 1;
+    b.boxes += r.newBox ? 1 : 0;
+    b.multiReads += r.becameMulti ? 1 : 0;
+    b.perCamera[r.cameraId] = {
+      label: r.cameraLabel,
+      reads: (Number(b.perCamera[r.cameraId]?.reads) || 0) + 1,
+    };
+    if (r.newBox)
+      mem.events.read.push({
+        ts: r.ts,
+        ponto: r.ponto ?? null,
+        code: r.code ?? null,
+        cameras: 1,
+        shift: r.shift ?? null,
+      });
+  },
+  "read:pass"(p) {
+    const hs = hourOf(p.ts);
+    const id = `${p.ponto}|${hs}`;
+    let b = mem.buckets.read[id];
+    if (!b)
+      b = mem.buckets.read[id] = {
+        id,
+        ponto: p.ponto ?? null,
+        hourStart: hs,
+        boxes: 0,
+        reads: 0,
+        multiReads: 0,
+        passages: 0,
+        perCamera: {},
+      };
+    b.passages += 1;
+  },
+  "obj:samples"(p) {
+    const hs = hourOf(Date.now());
+    for (const sm of p.samples || []) {
+      const id = `${sm.setor}|${sm.classe}|${hs}`;
+      let b = mem.buckets.obj[id];
+      if (!b)
+        b = mem.buckets.obj[id] = {
+          id,
+          setor: sm.setor ?? null,
+          classe: sm.classe ?? null,
+          hourStart: hs,
+          samples: 0,
+          countSum: 0,
+          peak: 0,
+          present: 0,
+        };
+      b.samples += Number(sm.samples) || 0;
+      b.countSum += Number(sm.countSum) || 0;
+      b.peak = Math.max(b.peak, Number(sm.peak) || 0);
+      b.present += Number(sm.present) || 0;
+    }
+  },
+  "obj:event"(e) {
+    mem.events.obj.push({
+      ts: e.ts,
+      type: e.type ?? null,
+      setor: e.setor ?? null,
+      classe: e.classe ?? null,
+      shift: e.shift ?? null,
+    });
+  },
+  "fad:samples"(p) {
+    const hs = hourOf(Date.now());
+    const id = `${p.posto}|${hs}`;
+    let b = mem.buckets.fad[id];
+    if (!b)
+      b = mem.buckets.fad[id] = {
+        id,
+        posto: p.posto ?? null,
+        hourStart: hs,
+        samples: 0,
+        ok: 0,
+        fadiga: 0,
+        celular: 0,
+        duplo: 0,
+        earSum: 0,
+        earSamples: 0,
+      };
+    b.samples += Number(p.samples) || 0;
+    b.ok += Number(p.ok) || 0;
+    b.fadiga += Number(p.fadiga) || 0;
+    b.celular += Number(p.celular) || 0;
+    b.duplo += Number(p.duplo) || 0;
+    b.earSum += Number(p.earSum) || 0;
+    b.earSamples += Number(p.earSamples) || 0;
+  },
+  "fad:event"(e) {
+    mem.events.fad.push({
+      ts: e.ts,
+      posto: e.posto ?? null,
+      type: e.type ?? null,
+      shift: e.shift ?? null,
+    });
+  },
+};
+
+function jsonIngest(key, p) {
+  const fn = J_INGEST[key];
+  if (!fn) return;
+  fn(p);
+  scheduleFlush();
+}
+
 // ── INGEST (incremental, ao vivo) ─────────────────────────────────────────────
+// PG preferencial quando configurado (caminho intocado); sem PG — ou com PG
+// lançando erro — a mesma gravação cai no fallback JSON.
 async function ingest(kind, op, p) {
-  if (!db.configured() || !p) return;
-  const fn = INGEST[`${kind}:${op}`];
-  if (fn) await fn(p);
+  if (!p) return;
+  const key = `${kind}:${op}`;
+  if (db.configured()) {
+    const fn = INGEST[key];
+    if (!fn) return;
+    try {
+      await fn(p);
+      return;
+    } catch (e) {
+      warnPgDown(e);
+    }
+  }
+  jsonIngest(key, p);
 }
 
 const INGEST = {
@@ -161,19 +430,57 @@ const EVENT_SQL = {
   fad: `select ts, posto, type, shift from fad_events order by ts desc`,
 };
 async function buckets(kind) {
-  if (!db.configured()) return [];
-  return (await db.query(BUCKET_SQL[kind])).rows;
+  if (!KINDS.includes(kind)) return [];
+  if (db.configured()) {
+    try {
+      return (await db.query(BUCKET_SQL[kind])).rows;
+    } catch (e) {
+      warnPgDown(e);
+    }
+  }
+  return Object.values(mem.buckets[kind]);
 }
 async function events(kind) {
-  if (!db.configured()) return [];
-  return (await db.query(EVENT_SQL[kind])).rows;
+  if (!KINDS.includes(kind)) return [];
+  if (db.configured()) {
+    try {
+      return (await db.query(EVENT_SQL[kind])).rows;
+    } catch (e) {
+      warnPgDown(e);
+    }
+  }
+  return [...mem.events[kind]].sort((a, b) => b.ts - a.ts); // como o SQL: ts desc
+}
+
+// Status da persistência do histórico (p/ "vazio honesto" na UI):
+// { persistence: "pg"|"json", counts: { ativ, read, obj, fad } } — counts = nº de buckets.
+async function status() {
+  if (db.configured()) {
+    try {
+      const r = await db.query(
+        `select (select count(*)::int from ativ_buckets) as "ativ",
+                (select count(*)::int from read_buckets) as "read",
+                (select count(*)::int from obj_buckets) as "obj",
+                (select count(*)::int from fad_buckets) as "fad"`,
+      );
+      return { persistence: "pg", counts: r.rows[0] };
+    } catch (e) {
+      warnPgDown(e);
+    }
+  }
+  const counts = {};
+  for (const k of KINDS) counts[k] = Object.keys(mem.buckets[k]).length;
+  return { persistence: "json", counts };
 }
 
 async function clear() {
+  // Fallback JSON: zera memória e grava já (ação explícita — sem debounce).
+  mem = emptyStore();
+  flushNow();
   if (!db.configured()) return;
   await db.query(
     `truncate ativ_buckets, ativ_events, read_buckets, read_events, obj_buckets, obj_events, fad_buckets, fad_events`,
   );
 }
 
-module.exports = { ingest, buckets, events, clear };
+module.exports = { ingest, buckets, events, status, clear };

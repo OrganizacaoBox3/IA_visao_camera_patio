@@ -41,3 +41,7 @@ server/alarm-shelves.json
 # Segredos / runtime que NÃO devem ser versionados (R0)
 deploy/visao-hub.service
 server/users.json
+
+# Histórico em fallback JSON (runtime — só indicadores agregados)
+server/data-hist.json
+server/data-hist.json.tmp
