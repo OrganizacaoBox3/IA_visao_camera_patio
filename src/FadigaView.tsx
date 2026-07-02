@@ -78,6 +78,10 @@ export function FadigaView({
   const handMeterRef = useRef(new FrameMeter()); // latência de mãos
   const objMeterRef = useRef(new FrameMeter()); // latência de celular
   const lastUiRef = useRef(0);
+  const lastFrameElRef = useRef<unknown>(null); // gate de "frame novo" (padrão CameraWorkspace)
+  const lastFrameTsRef = useRef(0);
+  const lastVpWRef = useRef(0); // tamanho do viewport no último draw — resize força redraw
+  const lastVpHRef = useRef(0);
   const mutedRef = useRef(false); // refs lidos no loop sem re-subscrever
   const flagsRef = useRef<FadigaFlags>({ ...FADIGA_FLAGS_ALL });
   const ackRef = useRef(false); // alerta reconhecido por gesto (silencia o episódio)
@@ -158,6 +162,7 @@ export function FadigaView({
 
   useEffect(() => {
     let stopped = false;
+    lastFrameElRef.current = null; // remonte de canvas (tile↔full) exige redraw no 1º frame
     const loop = () => {
       if (stopped) return;
       rafRef.current = requestAnimationFrame(loop);
@@ -166,10 +171,33 @@ export function FadigaView({
       if (!canvas || !viewport) return;
       const f = getFrame();
       if (!f || !f.w || !f.h) return;
+      // ── GATE de "frame novo": o rAF roda a ~60Hz, mas o vídeo chega a ~12fps. Se o frame
+      //    (identidade do `el` / `ts`) não mudou desde o último tick processado, pula
+      //    process()+draw — mesmo padrão do CameraWorkspace. Exceção: resize do viewport sem
+      //    frame novo ainda redesenha (o draw depende do tamanho de exibição). ──
+      const vpW = viewport.clientWidth,
+        vpH = viewport.clientHeight;
+      if (
+        f.el === lastFrameElRef.current &&
+        (f.ts == null || f.ts === lastFrameTsRef.current) &&
+        vpW === lastVpWRef.current &&
+        vpH === lastVpHRef.current
+      )
+        return;
+      lastFrameElRef.current = f.el;
+      lastFrameTsRef.current = f.ts ?? 0;
+      lastVpWRef.current = vpW;
+      lastVpHRef.current = vpH;
       const now = performance.now();
       meterRef.current.tick(now);
 
-      const r = engineRef.current.process({ frame: f, now, flags: flagsRef.current }); // domínio
+      // Na GRADE (tile) a cadência de inferência é rebaixada (slow) — ver FadigaProcessor.
+      const r = engineRef.current.process({
+        frame: f,
+        now,
+        flags: flagsRef.current,
+        slow: mode === "tile",
+      }); // domínio
       if (r.faceMs != null) meterRef.current.pushProc(r.faceMs);
       if (r.handMs != null) handMeterRef.current.pushProc(r.handMs);
       if (r.objMs != null) objMeterRef.current.pushProc(r.objMs);

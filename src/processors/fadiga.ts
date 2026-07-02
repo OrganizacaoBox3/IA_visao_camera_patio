@@ -31,6 +31,15 @@ const F = APP_CONFIG.fadiga;
 // (220ms) para reduzir a frequência desse bloqueio. (face/mãos seguem a cadência da config.)
 const PHONE_DETECT_MIN_INTERVAL_MS = 500;
 
+// Cadências REBAIXADAS quando `ctx.slow` (view em modo GRADE/tile): na grade não há operador
+// olhando o overlay de perto, então inferir a 66/90ms é desperdício de CPU/GPU × N tiles.
+// A semântica dos alertas (janelas de confirmação/histerese em updateRisk) fica INTACTA —
+// só a latência de detecção aumenta (~0,6s face/mãos, ~1,5s celular), aceitável na grade.
+// Na câmera ABERTA (full) valem os intervalos da config, como antes.
+const SLOW_FACE_INTERVAL_MS = 600;
+const SLOW_HAND_INTERVAL_MS = 600;
+const SLOW_OBJECT_INTERVAL_MS = 1500;
+
 export type FadigaModelState = "loading" | "ready" | "error";
 export type FadigaCounters = { fadiga: number; bocejo: number; celular: number; duplo: number };
 // Liga/desliga cada pipeline em runtime (operador). `risk` desligado força risco OK (sem alertas).
@@ -240,11 +249,19 @@ export class FadigaProcessor implements Disposable {
     now: number;
     flags?: FadigaFlags;
     srcEl?: unknown;
+    /** true = view em GRADE (tile): rebaixa a cadência de inferência (ver SLOW_*_INTERVAL_MS). */
+    slow?: boolean;
   }): FadigaResult {
     const f = ctx.frame,
       now = ctx.now,
       snap = this.det;
     const flags = ctx.flags ?? FADIGA_FLAGS_ALL;
+    const faceEveryMs = ctx.slow ? Math.max(F.faceIntervalMs, SLOW_FACE_INTERVAL_MS) : F.faceIntervalMs;
+    const handEveryMs = ctx.slow ? Math.max(F.handIntervalMs, SLOW_HAND_INTERVAL_MS) : F.handIntervalMs;
+    const objEveryMs = Math.max(
+      F.objectIntervalMs,
+      ctx.slow ? SLOW_OBJECT_INTERVAL_MS : PHONE_DETECT_MIN_INTERVAL_MS,
+    );
     let faceMs: number | null = null,
       handMs: number | null = null;
     const idEl = ctx.srcEl ?? f.el;
@@ -278,7 +295,7 @@ export class FadigaProcessor implements Disposable {
       this.face &&
       this.faceState === "ready" &&
       newFrame &&
-      now - snap.lastFaceAt >= F.faceIntervalMs
+      now - snap.lastFaceAt >= faceEveryMs
     ) {
       snap.lastFaceAt = now;
       const t0 = performance.now();
@@ -310,7 +327,7 @@ export class FadigaProcessor implements Disposable {
     }
 
     // MÃOS (gesto)
-    if (flags.hands && this.hand && newFrame && now - snap.lastHandAt >= F.handIntervalMs) {
+    if (flags.hands && this.hand && newFrame && now - snap.lastHandAt >= handEveryMs) {
       snap.lastHandAt = now;
       const t0 = performance.now();
       try {
@@ -349,7 +366,7 @@ export class FadigaProcessor implements Disposable {
       this.obj &&
       this.objState === "ready" &&
       newFrame &&
-      now - snap.lastObjAt >= Math.max(F.objectIntervalMs, PHONE_DETECT_MIN_INTERVAL_MS) &&
+      now - snap.lastObjAt >= objEveryMs &&
       !snap.objInFlight
     ) {
       snap.lastObjAt = now;

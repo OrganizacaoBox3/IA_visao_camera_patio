@@ -12,22 +12,48 @@ function fileset() {
   return filesetPromise;
 }
 
+// Preferimos delegate GPU (WebGL): a inferência CPU/WASM é síncrona na main thread e causa
+// jank a cada 66/90ms. Se a criação com GPU falhar (sem WebGL2, driver ruim, blacklist),
+// caímos automaticamente para CPU — fadiga NUNCA pode quebrar por falta de GPU.
+let gpuFallbackLogged = false;
+async function createWithGpuFallback<T>(
+  name: string,
+  create: (delegate: "GPU" | "CPU") => Promise<T>,
+): Promise<T> {
+  try {
+    return await create("GPU");
+  } catch (err) {
+    if (!gpuFallbackLogged) {
+      gpuFallbackLogged = true;
+      console.warn(
+        `[fadiga] MediaPipe ${name}: delegate GPU indisponível; usando CPU (WASM).`,
+        err,
+      );
+    }
+    return create("CPU");
+  }
+}
+
 export async function createFaceLandmarker(): Promise<FaceLandmarker> {
   const vision = await fileset();
-  return FaceLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: APP_CONFIG.fadiga.faceModelAssetUrl },
-    runningMode: "VIDEO",
-    numFaces: 1,
-    outputFaceBlendshapes: false,
-    outputFacialTransformationMatrixes: false,
-  });
+  return createWithGpuFallback("FaceLandmarker", (delegate) =>
+    FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: APP_CONFIG.fadiga.faceModelAssetUrl, delegate },
+      runningMode: "VIDEO",
+      numFaces: 1,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: false,
+    }),
+  );
 }
 
 export async function createHandLandmarker(): Promise<HandLandmarker> {
   const vision = await fileset();
-  return HandLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: APP_CONFIG.fadiga.handModelAssetUrl },
-    runningMode: "VIDEO",
-    numHands: 2,
-  });
+  return createWithGpuFallback("HandLandmarker", (delegate) =>
+    HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: APP_CONFIG.fadiga.handModelAssetUrl, delegate },
+      runningMode: "VIDEO",
+      numHands: 2,
+    }),
+  );
 }
