@@ -7,7 +7,7 @@
 // Protocolo: recebe pixels RGBA (ImageData transferível) de UM bloco (tile) + params;
 // devolve [{cls, score, bbox}] com bbox NORMALIZADO (0..1) ao próprio bloco. O cliente
 // na main thread faz o tiling (recorte), remapeia p/ o frame inteiro e funde com NMS.
-import "@tensorflow/tfjs";
+import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
 type Base = "mobilenet_v1" | "mobilenet_v2" | "lite_mobilenet_v2";
@@ -42,7 +42,11 @@ self.onmessage = async (e: MessageEvent<InitMsg | DetMsg>) => {
   if (m.type === "init") {
     try {
       await ensure(m.base);
-      post({ type: "ready" });
+      // Telemetria de backend (plano-performance-bit 1.9): o tfjs cai SILENCIOSAMENTE p/ CPU
+      // quando WebGL não está disponível no worker — ordem de magnitude mais lento. Informa o
+      // backend real no `ready` p/ o cliente alertar/expor (fallback invisível vira visível).
+      await tf.ready();
+      post({ type: "ready", backend: tf.getBackend() });
     } catch (err) {
       post({ type: "error", error: String(err) });
     }

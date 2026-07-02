@@ -147,6 +147,39 @@ const RISK_TONE: Record<RiskState, Tone> = {
   ALERTA_DUPLO: "alert",
 };
 
+// ── (plano-performance-bit 1.10) assinatura BARATA do snapshot do painel ──
+// Serializa, por zona, SÓ o que o JSX do painel exibe (id + estado + números na granularidade
+// mostrada: % de motion, segundos de parada, EAR com 2 casas…). O tick de UI compara a assinatura
+// com a anterior e só chama setPanel quando algo VISÍVEL mudou — sem mudança, zero re-render
+// (antes, objetos novos a cada 200/500ms re-renderizavam ~800 linhas de JSX à toa).
+// Campos NÃO exibidos no painel (dets de objetos, scene de fadiga, occupied/alerts de atividade)
+// ficam de fora de propósito: eles alimentam o overlay do canvas via resultsRef, não o JSX.
+function panelSig(results: Map<string, ZoneResult>): string {
+  let sig = "";
+  for (const [id, r] of results) {
+    if (r.modo === "atividade") {
+      const v = r.view;
+      sig += `${id}|a|${v.state}|${Math.round(v.motion * 100)}|${Math.floor(v.idleMs / 1000)}|${v.people}|${v.flowLevel}|${v.flow.map((s) => Math.round(s * 100)).join(",")};`;
+    } else if (r.modo === "leitura") {
+      sig += `${id}|l|${r.lastCode ?? ""}|${r.ratePct}|${r.perMin}|${r.noReads}|${r.passes};`;
+    } else if (r.modo === "objetos") {
+      let c = "";
+      for (const k in r.counts) c += `${k}:${r.counts[k]},`;
+      sig += `${id}|o|${r.total}|${c};`;
+    } else {
+      sig += `${id}|f|${r.risk}|${r.ear == null ? "" : r.ear.toFixed(2)}|${r.phone ? 1 : 0}|${r.faceState};`;
+    }
+  }
+  return sig;
+}
+
+// Idem p/ os contadores de tripwire mostrados no painel "linhas" ({ [wireId]: {in,out} }).
+function twSig(counts: Record<string, { in: number; out: number }>): string {
+  let sig = "";
+  for (const id in counts) sig += `${id}:${counts[id].in}:${counts[id].out};`;
+  return sig;
+}
+
 // taxa de leitura → cor (verde ≥95 · âmbar ≥80 · vermelho abaixo). Espelha a semântica do relatório.
 const MODE_TONE: Record<ZoneMode, Tone> = {
   atividade: "ok",
@@ -234,6 +267,11 @@ export function CameraWorkspace({
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
   const lastUiRef = useRef(0);
+  // (1.10) últimas versões ENVIADAS ao estado pelo tick de UI — comparar antes de setar.
+  const lastPanelSigRef = useRef("");
+  const lastTwSigRef = useRef("");
+  const lastFpsRef = useRef(-1);
+  const lastPresenceRef = useRef({ now: -1, peak: -1, dwell: -1 });
   const holdersRef = useRef<Map<string, Holder>>(new Map());
   const cropsRef = useRef<Map<string, HTMLCanvasElement>>(new Map()); // recorte por zona de fadiga
   const resultsRef = useRef<Map<string, ZoneResult>>(new Map());
@@ -903,14 +941,34 @@ export function CameraWorkspace({
             pushHist(zid, "ear", r.ear);
           }
         }
-        setPanel(new Map(resultsRef.current));
-        setTwCounts(counterRef.current ? counterRef.current.counts() : {}); // reflete contadores in/out no painel lateral
-        setPerf({ fps: Math.round(meterRef.current.fps) });
+        // (1.10) comparar antes de setar: cada setState abaixo criava objeto NOVO a cada tick e
+        // re-renderizava todo o JSX mesmo sem mudança visível. Mesma cadência, mesmo formato de
+        // dado — só que sem mudança → nenhum setState → zero re-render.
+        const pSig = panelSig(resultsRef.current);
+        if (pSig !== lastPanelSigRef.current) {
+          lastPanelSigRef.current = pSig;
+          setPanel(new Map(resultsRef.current));
+        }
+        const tw = counterRef.current ? counterRef.current.counts() : {}; // contadores in/out do painel lateral
+        const tSig = twSig(tw);
+        if (tSig !== lastTwSigRef.current) {
+          lastTwSigRef.current = tSig;
+          setTwCounts(tw);
+        }
+        const fps = Math.round(meterRef.current.fps);
+        if (fps !== lastFpsRef.current) {
+          lastFpsRef.current = fps;
+          setPerf({ fps });
+        }
         const dwellable = tracks.filter((t) => now - t.firstSeen >= APP_CONFIG.people.dwellMinMs);
         const dwell = dwellable.length
           ? dwellable.reduce((a, t) => a + (now - t.firstSeen), 0) / dwellable.length
           : 0;
-        setPresence({ now: tracks.length, peak: peakRef.current, dwell });
+        const lp = lastPresenceRef.current;
+        if (tracks.length !== lp.now || peakRef.current !== lp.peak || dwell !== lp.dwell) {
+          lastPresenceRef.current = { now: tracks.length, peak: peakRef.current, dwell };
+          setPresence({ now: tracks.length, peak: peakRef.current, dwell });
+        }
       }
     };
     rafRef.current = requestAnimationFrame(loop);

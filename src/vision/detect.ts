@@ -17,6 +17,14 @@ let workerFailed = false;
 let reqId = 0;
 const pending = new Map<number, (d: WorkerDet[]) => void>();
 
+// Backend do tfjs DENTRO do worker (plano-performance-bit 1.9). `null` = worker ainda não pronto
+// ou caminho de fallback main-thread (workerFailed). Exposto p/ telemetria futura.
+let detectBackend: string | null = null;
+
+export function getDetectBackend(): string | null {
+  return detectBackend;
+}
+
 // Aquece o detector de main thread SOMENTE quando o worker falha (P5: evita carregar
 // dois modelos coco — worker mobilenet_v2 + main lite_mobilenet_v2 — no caminho feliz).
 function warmFallback(): void {
@@ -27,10 +35,20 @@ export function ensureDetectClient(): void {
   if (worker || workerFailed) return;
   try {
     worker = new Worker(new URL("./detectWorker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent<{ type: string; id?: number; dets?: WorkerDet[] }>) => {
+    worker.onmessage = (
+      e: MessageEvent<{ type: string; id?: number; dets?: WorkerDet[]; backend?: string }>,
+    ) => {
       const m = e.data;
       if (m.type === "ready") {
         workerReady = true;
+        detectBackend = m.backend ?? null;
+        // Fallback silencioso do tfjs p/ CPU no worker (sem WebGL) é o modo catastrófico:
+        // mesma API, ~10× mais lento. Alerta 1× p/ ficar visível no console.
+        if (detectBackend === "cpu")
+          console.warn(
+            "[detect] tfjs no worker caiu para backend CPU — detecção em CPU é uma ordem de " +
+              "magnitude mais lenta; verifique o suporte a WebGL/OffscreenCanvas no worker.",
+          );
         return;
       }
       if (m.type === "error") {
