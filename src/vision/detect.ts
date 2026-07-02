@@ -1,5 +1,9 @@
 // Cliente de detecção de objetos (coco-ssd). Orquestra o WORKER (detectWorker.ts) e o TILING:
-//   - rasteriza cada bloco do frame na main thread (barato), manda os pixels ao worker (transferível);
+//   - recorta cada bloco do frame via createImageBitmap (crop+downscale FORA da main no Chrome) e
+//     TRANSFERE o ImageBitmap ao worker — zero drawImage+getImageData (readback GPU→CPU) na main
+//     (plano-performance-bit 3.1);
+//   - FALLBACK de compatibilidade: browser sem createImageBitmap(crop+resize) → rasterize atual
+//     (canvas 2D + getImageData, pixels RGBA transferíveis) — feature-detect 1×, não por chamada;
 //   - remapeia as caixas do bloco → frame inteiro e funde duplicatas das bordas com NMS;
 //   - FALLBACK: se o worker não inicia (sem OffscreenCanvas/WebGL no worker), detecta na main thread
 //     (sem tiling, p/ não travar) via o detector compartilhado do vision/model.
@@ -34,6 +38,7 @@ function warmFallback(): void {
 
 export function ensureDetectClient(): void {
   if (worker || workerFailed) return;
+  probeBitmapPath();
   try {
     worker = new Worker(new URL("./detectWorker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (
@@ -94,6 +99,31 @@ function detectTile(
   return new Promise((resolve) => {
     pending.set(id, resolve);
     worker!.postMessage({ type: "detect", id, rgba, w, h, maxBoxes, minScore }, [rgba]);
+  });
+}
+
+// (3.1) Variante sem readback: TRANSFERE o ImageBitmap ao worker (ownership passa ao worker, que
+// fecha após o detect). Se o postMessage falhar (worker morreu no meio), fecha aqui e resolve vazio
+// — tile sem resultado, sem crashar a rodada e sem vazar o bitmap.
+function detectTileBitmap(
+  bitmap: ImageBitmap,
+  maxBoxes: number,
+  minScore: number,
+): Promise<WorkerDet[]> {
+  const id = ++reqId;
+  return new Promise((resolve) => {
+    pending.set(id, resolve);
+    try {
+      worker!.postMessage({ type: "detect-bitmap", id, bitmap, maxBoxes, minScore }, [bitmap]);
+    } catch {
+      pending.delete(id);
+      try {
+        bitmap.close();
+      } catch {
+        /* já detached/fechado */
+      }
+      resolve([]);
+    }
   });
 }
 
@@ -192,7 +222,68 @@ function rotationFor(key: string, tileCount: number, sig: string): RotationState
   return st;
 }
 
-// ── canvas de rasterização (reuso; draw→getImageData é síncrono, seguro entre câmeras) ──
+// ── (3.1) caminho preferido: createImageBitmap com crop+resize, sem readback na main ─────────
+// Feature-detect 1× (não por chamada): alguns browsers antigos não suportam as opções de resize no
+// crop (ou nem têm createImageBitmap) — nesses, `bitmapPath` fica `false` e TODAS as chamadas usam o
+// rasterize atual. Enquanto o probe (assíncrono, ~1 tick) não resolve, as primeiras chamadas também
+// caem no rasterize — seguro e raríssimo (o probe dispara junto com o init do worker).
+let bitmapPath: boolean | null = null; // null = probe ainda não resolveu
+let bitmapProbe: Promise<void> | null = null;
+function probeBitmapPath(): void {
+  if (bitmapProbe) return;
+  bitmapProbe = (async () => {
+    try {
+      if (typeof createImageBitmap !== "function") {
+        bitmapPath = false;
+        return;
+      }
+      const bmp = await createImageBitmap(new ImageData(4, 4), 0, 0, 4, 4, {
+        resizeWidth: 2,
+        resizeHeight: 2,
+        resizeQuality: "low",
+      });
+      bitmapPath = bmp.width === 2 && bmp.height === 2; // browser velho ignora resize → cai no fallback
+      bmp.close();
+    } catch {
+      bitmapPath = false;
+    }
+  })();
+}
+
+// Recorta+reduz UM tile via createImageBitmap (crop e downscale fora da main no Chrome; nada de
+// drawImage/getImageData). `el` pode ser ImageBitmap (dashboard/fadiga), HTMLVideoElement ou Canvas
+// (demais callers) — todos são ImageBitmapSource. Fonte indisponível no meio (ex.: ImageBitmap do
+// feed fechado/reciclado entre a chamada e o snapshot) → null = tile sem resultado, rodada segue.
+async function grabTile(
+  el: CanvasImageSource,
+  nativeW: number,
+  nativeH: number,
+  t: Tile,
+  tileWidth: number,
+): Promise<ImageBitmap | null> {
+  const sx = Math.max(0, Math.round(t.x0 * nativeW));
+  const sy = Math.max(0, Math.round(t.y0 * nativeH));
+  const sw = Math.max(1, Math.min(Math.round(nativeW) - sx, Math.round((t.x1 - t.x0) * nativeW)));
+  const sh = Math.max(1, Math.min(Math.round(nativeH) - sy, Math.round((t.y1 - t.y0) * nativeH)));
+  const dw = Math.min(tileWidth, sw);
+  const dh = Math.max(1, Math.round((dw * sh) / sw));
+  try {
+    return await createImageBitmap(el, sx, sy, sw, sh, {
+      resizeWidth: dw,
+      resizeHeight: dh,
+      resizeQuality: "low",
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Payload de um tile já "fotografado": bitmap (caminho novo, transferível) ou RGBA (fallback).
+type TilePayload =
+  | { kind: "bmp"; bitmap: ImageBitmap }
+  | { kind: "rgba"; rgba: ArrayBuffer; w: number; h: number };
+
+// ── canvas de rasterização (FALLBACK de compatibilidade; draw→getImageData é síncrono) ──
 let scratch: HTMLCanvasElement | null = null;
 function rasterize(
   el: CanvasImageSource,
@@ -287,13 +378,24 @@ export async function detectFrame(
     st.pos = (st.pos + k) % tiles.length;
   }
 
-  // Rasteriza AGORA (síncrono, só os tiles desta chamada): `el` é a imagem viva do feed — o
-  // snapshot é tirado no momento da chamada, mesmo que o worker processe o tile mais tarde.
-  const raster = indices.map((i) => ({
-    i,
-    t: tiles[i],
-    r: rasterize(el, nativeW, nativeH, tiles[i], tileWidth),
-  }));
+  // Snapshot AGORA (só os tiles desta chamada): `el` é a imagem viva do feed — o recorte é tirado
+  // no momento da chamada, mesmo que o worker processe o tile mais tarde. (3.1) Caminho preferido:
+  // createImageBitmap dispara SÍNCRONO p/ todos os tiles no mesmo tick (o snapshot da fonte é do
+  // instante da chamada; só a conclusão é assíncrona) — semântica igual à do rasterize.
+  const grabOne = async (i: number): Promise<{ i: number; t: Tile; p: TilePayload | null }> => {
+    if (bitmapPath === true) {
+      const bitmap = await grabTile(el, nativeW, nativeH, tiles[i], tileWidth);
+      return { i, t: tiles[i], p: bitmap ? { kind: "bmp", bitmap } : null };
+    }
+    const r = rasterize(el, nativeW, nativeH, tiles[i], tileWidth);
+    return { i, t: tiles[i], p: r ? { kind: "rgba", ...r } : null };
+  };
+  const raster = await Promise.all(indices.map(grabOne));
+
+  const sendTile = (p: TilePayload): Promise<WorkerDet[]> =>
+    p.kind === "bmp"
+      ? detectTileBitmap(p.bitmap, maxBoxes, minScore)
+      : detectTile(p.rgba, p.w, p.h, maxBoxes, minScore);
 
   // (2.4a) Execução: com `schedule`, 1 tile = 1 tarefa do scheduler, awaited em SEQUÊNCIA —
   // entre um tile e o próximo o scheduler serve tarefas "high" (a câmera aberta não espera mais o
@@ -302,24 +404,31 @@ export async function detectFrame(
   // resultado novo" (mantém o cache da rodada anterior). Sem `schedule`: caminho legado.
   const results: (WorkerDet[] | undefined)[] = [];
   if (schedule) {
-    for (const { i, r } of raster) {
-      if (!r) {
+    for (const { i, p } of raster) {
+      if (!p) {
         results.push([]);
         continue;
       }
-      results.push(
-        await requestInference(
-          { key: `${schedule.key}:t${i}`, run: () => detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) },
-          { priority: schedule.priority },
-        ),
+      const res = await requestInference(
+        { key: `${schedule.key}:t${i}`, run: () => sendTile(p) },
+        { priority: schedule.priority },
       );
+      // Gestão do bitmap no caminho agendado: se a tarefa RODOU, o handle local já foi transferido
+      // (detached) e close() é no-op; se foi COALESCIDA (`undefined`, tarefa nunca rodou), o bitmap
+      // nunca saiu da main — fechar aqui evita vazar o backing store a cada rodada coalescida.
+      if (p.kind === "bmp") {
+        try {
+          p.bitmap.close();
+        } catch {
+          /* já detached */
+        }
+      }
+      results.push(res);
     }
   } else {
     results.push(
       ...(await Promise.all(
-        raster.map(({ r }) =>
-          r ? detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) : Promise.resolve([] as WorkerDet[]),
-        ),
+        raster.map(({ p }) => (p ? sendTile(p) : Promise.resolve([] as WorkerDet[]))),
       )),
     );
   }
