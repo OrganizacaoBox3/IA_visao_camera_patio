@@ -225,27 +225,79 @@ respostas de API) em
 
 ## Re-diagnóstico fluxo (2026-07-02) — onda "flow" (persistência + ByteTrack + pé/histerese)
 
-Método: hub isolado + câmera real de Pula; Parte 1 = cadeia de persistência (determinística,
-cruzamentos via ingest); Parte 2 = observação 90s com pedestres reais (headless = backend CPU,
-pior caso conhecido). Evidência: scratchpad/diag3/ (screenshots 01-06 + diag3-evidencia.json + CSV).
+> **Objetivo:** medir a onda "flow" (evento por cruzamento persistido + ByteTrack + pé/histerese +
+> contadores que sobrevivem) com o MESMO método dos diagnósticos acima. Spec temporário
+> `e2e/diag3.spec.ts` (já **deletado**, não commitado). Hub isolado 4100 sem PG (persistência
+> **json**), mesma câmera HLS de Pula (`cam-b6b681d19f`), Chromium headless — **sem WebGL ⇒
+> detecção em CPU, pior caso CONHECIDO**. Por isso o teste tem duas partes: a **cadeia de
+> persistência** (determinística, via `POST /api/ingest` direto com ids REAIS de câmera e linha —
+> independe de detecção) e a **observação com pedestres reais** (dependente). 1 teste, verde,
+> 3.8min; câmera removida ao final; portas 4100/5180 livres.
+>
+> **Caveat de cena (declarado):** a PTZ de Pula mudou de preset de novo — a cena agora é ~80%
+> parede/toldo em primeiro plano com faixa estreita de rua à direita; **pedestres ~0–1 visíveis
+> por screenshot** (contra 2–4 no baseline). A Parte 2 fica POUCO informativa sobre recall nesta
+> rodada; a Parte 1 não depende disso.
 
 ### Parte 1 — Cadeia de persistência: TUDO VERDE
-| Passo | Resultado |
-|---|---|
-| Linha desenhada + 5 ingests flow (3 in / 2 out) | bucket agregado `{in:3, out:2}`; status counts.flow=1 |
-| FECHAR e REABRIR a câmera | painel/HUD mostram **hoje: 3 in / 2 out** (do servidor) ✓ |
-| RELOAD da página + reabrir | **continua 3 / 2** ✓ — "nunca mais perder" PROVADO |
-| Relatório → Atividade | seção "FLUXO DE PESSOAS": 3 entradas · 2 saídas · saldo 1 · 1 linha ✓ |
-| CSV | blocos "FLUXO DE PESSOAS" e "FLUXO POR LINHA" presentes ✓ |
-| Nota menor | eventos via API direta sem `shift` → shift:null aceito (o front envia shift; ok) |
 
-### Parte 2 — Pedestres reais em CPU (esperado)
-0 pessoas/pico 0 nos 90s; badge "detecção: CPU ⚠" visível; zonas de atividade reagiram ao
-movimento (ATIVA/LENTA — motion funciona); FPS 9-16; longRange OFF neste run. Nenhum
-cruzamento real (detecção cega em CPU — F5 permanece, como previsto).
+Linha desenhada por drag real no `.cam-stage` (editor "⇄ Linha") → tripwire
+`cam-b6b681d19f-twmr3nmg0j1` salvo no backend → 5× `POST /api/ingest` `{kind:"flow", op:"cross"}`
+com cameraId/tripwireId REAIS (3 `in`, 2 `out`, ts=agora).
 
-### Veredito
-- **Contagem nunca mais se perde**: evento por cruzamento persistido, HUD/painel/relatório/CSV
-  consistentes e sobrevivendo a reabertura e reload — de ponta a ponta, com evidência.
-- **O gargalo restante é 100% a DETECÇÃO** (backend CPU/modelo SSD300) — exatamente o escopo da
-  Onda 3 (D-FINE-N via onnxruntime-web) e do teste com GPU real na máquina do usuário.
+| Passo                                       | Resultado                                                                                                                                                                 |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Câmera HLS cadastrada + online              | 201; pílula `online · fps`; FPS da workspace 8–16 durante o teste                                                                                                            |
+| Tripwire por drag + `GET /api/tripwires/:id`| **PASS** — 1 linha, coords normalizadas coerentes com o drag (a≈{0.343,0.420}, b≈{0.657,0.579})                                                                              |
+| 5× ingest flow/cross (3 in, 2 out)          | **PASS** — 5× `200`; `GET /api/data/flow/buckets` → **1 bucket hora×câmera×linha `{in:3, out:2}`**; `/api/data/flow/events` → **5 eventos crus** (3 in, 2 out, só metadados) |
+| `GET /api/data/status`                      | `{"persistence":"json","counts":{...,"flow":1}}` — kind `flow` presente no status e no fallback JSON                                                                         |
+| FECHAR e REABRIR a câmera                   | **PASS** — painel "Linhas": **3 entradas hoje / 2 saídas hoje**; HUD no canvas: **"L1 in 3 out 2"** (acumulado do dia vindo do servidor via `loadFlowToday`)                 |
+| RELOAD da página inteira + reabrir          | **PASS** — **3 / 2 de novo** — "nunca mais perder" PROVADO (o acumulado vive no hub, não na sessão)                                                                          |
+| Relatório → Atividade → seção "Fluxo"       | **PASS** — "FLUXO DE PESSOAS — LINHAS DE CONTAGEM": **3 entradas · 2 saídas · saldo 1 · 1 linha** + gráficos por hora; rodapé "histórico: arquivo local"                     |
+| CSV (⬇ CSV do relatório)                    | **PASS** — blocos `FLUXO DE PESSOAS (linhas de contagem)` (Entradas 3; Saídas 2; Saldo 1) e `FLUXO POR LINHA` presentes no arquivo baixado                                    |
+| Nota menor                                  | ingest direto sem `shift` → gravado `shift:null` (contrato tolera; o caminho real do front, `recordFlow`, envia `shiftFor(ts)`) — sem impacto na agregação                    |
+
+### Parte 2 — Pedestres reais em CPU (~90s, honesta)
+
+Zona "Área 5" desenhada sobre a faixa inferior (persistiu junto às 4 sementes), camada **Caixas
+ON**, Longo alcance **OFF** (default). Série a cada 15s (7 amostras):
+
+| t      | kpibar (pessoas · pico) | badge backend        | in/out "hoje" | flow/events (total) | zonas                          |
+| ------ | ----------------------- | -------------------- | ------------- | ------------------- | ------------------------------ |
+| 0s     | 0 · 0                   | (ainda não reportou) | 3 / 2         | 5                   | todas VAZIA                    |
+| 15s    | 0 · 0                   | —                    | 3 / 2         | 5                   | Espera:ATIVA · Área 5:ATIVA    |
+| 30–45s | 0 · 0                   | **detecção: CPU ⚠**  | 3 / 2         | 5                   | Área 5:ATIVA                   |
+| 60–90s | 0 · 0                   | detecção: CPU ⚠      | 3 / 2         | 5                   | Área 5:LENTA/ATIVA (movimento) |
+
+- **Nenhum cruzamento real** (flow/events ficou em 5 = só os sintéticos; in/out não mudou) —
+  esperado: 0 pessoas detectadas em CPU numa cena onde pedestres mal aparecem (PTZ na parede).
+  A cadeia detecção→ByteTrack→pé/histerese→`recordFlow` **não foi exercitada com gente real**
+  nesta rodada.
+- O que a Parte 2 confirmou: badge "detecção: CPU ⚠" visível na kpibar, atividade por movimento
+  na zona desenhada (Área 5 ATIVA/LENTA), acumulado 3/2 estável nos 90s, FPS 8–16, **nenhum erro
+  novo de console** (mesmos warns de WebGL do baseline).
+
+### Veredito honesto
+
+1. **PROVADO (determinístico): a cadeia de persistência do fluxo funciona de ponta a ponta.**
+   Cruzamento (`flow:cross`) → bucket hora×câmera×linha no hub (fallback JSON, mesmo sem PG) →
+   API (`/api/data/flow/*`, `status` com `flow`) → HUD/painel "hoje" ao reabrir → **sobrevive a
+   fechar/reabrir E a reload** → Relatório (seção Fluxo + por hora + por linha) → CSV. O
+   "contador que sobrevive" do plano 1.2/1.3 está entregue e verificado com ids reais.
+2. **NÃO PROVADO nesta rodada (depende de detecção): o cruzamento REAL vindo do vídeo.** Em CPU
+   (headless, pior caso conhecido) e com a PTZ na parede, houve 0 detecções em 90s — ByteTrack +
+   âncora no pé + histerese não chegaram a ser exercitados com pedestres reais. É o MESMO gargalo
+   F5 já medido acima, não uma regressão da onda "flow".
+3. **Conclusão operacional:** a entrega da onda "flow" (persistência/contadores) está sólida; o
+   elo que falta para o fluxo contar sozinho é o motor de detecção — segue valendo o gatilho da
+   **Onda 3 (D-FINE-N via onnxruntime-web / backend GPU-WebGL)** e a medição única em máquina com
+   GPU real antes de dimensioná-la.
+4. **F7 fica parcialmente endereçada:** o fluxo (in/out) agora sobrevive a fechar/reabrir/reload;
+   o **pico de presença da sessão** continua zerando ao reabrir (fora do escopo desta onda; o
+   pico horário persiste via `peoplePeak` nos buckets ativ).
+
+Evidências: screenshots + `diag3-evidencia.json` (console desde o boot, tripwire salvo, buckets/
+eventos/status de flow, série completa) + `relatorio-atividade.csv` em `...\scratchpad\diag3\`
+(sessão): `01-linha-desenhada.png`, `02-linhas-hoje-apos-reabrir.png`,
+`03-linhas-hoje-apos-reload.png`, `04-relatorio-fluxo.png`, `05-obs-t{00,15,30,45,60,75,90}s.png`,
+`06-workspace-final.png`.
