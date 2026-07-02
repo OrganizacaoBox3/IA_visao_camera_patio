@@ -11,8 +11,25 @@ import {
   type ElementRef,
 } from "react";
 import { Button } from "./Button";
+import {
+  OVERLAY_CLS,
+  DIALOG_CONTENT_CLS,
+  DIALOG_HEAD_CLS,
+  DIALOG_TITLE_CLS,
+  DIALOG_BODY_CLS,
+} from "./Dialog";
 
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+
+// Tailwind v4 — reaproveita a casca do Dialog; só a largura muda (ex-.ui-alertdialog: 440px).
+// O nome `ui-alertdialog` permanece enquanto o ui.css viver: `.ui-dialog{width:...}` (unlayered,
+// hook do e2e na casca) venceria a utility de largura; `.ui-alertdialog` restaura os 440px.
+const ALERTDIALOG_WIDTH_CLS = "ui-alertdialog w-[min(440px,92vw)]";
+// ex-.ui-hint (descrição).
+const DESC_CLS = "text-[11px] text-text-muted";
+// ex-.ui-dialog-foot: ações à direita com gap.
+const FOOT_CLS =
+  "flex items-center justify-end gap-[var(--sp-2)] p-[var(--sp-3)] border-t border-border";
 
 // ── Compound (baixo nível) — Radix faz foco preso, ESC, scroll-lock e ARIA alertdialog ──
 const Root = RAlert.Root;
@@ -30,8 +47,12 @@ const Content = forwardRef<
 >(function ADContent({ className, children, ...rest }, ref) {
   return (
     <RAlert.Portal>
-      <RAlert.Overlay className="ui-overlay" />
-      <RAlert.Content ref={ref} className={cx("ui-dialog", "ui-alertdialog", className)} {...rest}>
+      <RAlert.Overlay className={OVERLAY_CLS} />
+      <RAlert.Content
+        ref={ref}
+        className={cx(DIALOG_CONTENT_CLS, ALERTDIALOG_WIDTH_CLS, className)}
+        {...rest}
+      >
         {children}
       </RAlert.Content>
     </RAlert.Portal>
@@ -42,14 +63,14 @@ const Title = forwardRef<
   ElementRef<typeof RAlert.Title>,
   ComponentPropsWithoutRef<typeof RAlert.Title>
 >(function ADTitle({ className, ...rest }, ref) {
-  return <RAlert.Title ref={ref} className={cx("ui-dialog-title", className)} {...rest} />;
+  return <RAlert.Title ref={ref} className={cx(DIALOG_TITLE_CLS, className)} {...rest} />;
 });
 
 const Description = forwardRef<
   ElementRef<typeof RAlert.Description>,
   ComponentPropsWithoutRef<typeof RAlert.Description>
 >(function ADDescription({ className, ...rest }, ref) {
-  return <RAlert.Description ref={ref} className={cx("ui-hint", className)} {...rest} />;
+  return <RAlert.Description ref={ref} className={cx(DESC_CLS, className)} {...rest} />;
 });
 
 const Cancel = RAlert.Cancel;
@@ -92,15 +113,15 @@ function AlertDialogComponent({
     <Root open={open} onOpenChange={onOpenChange}>
       {trigger && <Trigger asChild>{trigger}</Trigger>}
       <Content>
-        <div className="ui-dialog-head">
+        <div className={DIALOG_HEAD_CLS}>
           <Title>{title}</Title>
         </div>
         {description && (
-          <div className="ui-dialog-body">
+          <div className={DIALOG_BODY_CLS}>
             <Description>{description}</Description>
           </div>
         )}
-        <div className="ui-dialog-foot">
+        <div className={FOOT_CLS}>
           <RAlert.Cancel asChild>
             <Button onClick={onCancel}>{cancelLabel}</Button>
           </RAlert.Cancel>

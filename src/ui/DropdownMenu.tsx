@@ -3,6 +3,26 @@ import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type Element
 
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
+// Estilo migrado de .ui-menu* (ui.css) para utilities Tailwind (tokens @theme). Visual idêntico.
+const menuContentCls = cx(
+  "z-[150] min-w-[180px] rounded-sm border border-border bg-panel p-1",
+  "shadow-[0_12px_32px_rgba(0,0,0,0.5)]",
+  // portado p/ o body; garante clique mesmo dentro de Dialog modal
+  "pointer-events-auto",
+);
+
+const menuItemCls = cx(
+  "flex cursor-pointer select-none items-center gap-2 rounded-[4px] px-2 py-1",
+  "text-[13px] text-text outline-none",
+  // highlight: tokens -bg/-fg não mapeados no @theme → var() literal (mesma decisão do Select)
+  "data-[highlighted]:bg-[var(--state-info-bg)] data-[highlighted]:text-[var(--state-info-fg)]",
+  "data-[danger]:text-[var(--state-critical-fg)]",
+  "data-[danger]:data-[highlighted]:bg-[var(--state-critical-bg)]",
+  "data-[danger]:data-[highlighted]:text-[var(--state-critical-fg)]",
+  "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45",
+  "focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--bg),0_0_0_4px_var(--accent)]",
+);
+
 // ── Compound (baixo nível) — Radix faz portal, teclado, foco e ARIA menu ──
 const Root = RDropdown.Root;
 
@@ -21,7 +41,7 @@ const Content = forwardRef<
     <RDropdown.Portal>
       <RDropdown.Content
         ref={ref}
-        className={cx("ui-menu", className)}
+        className={cx(menuContentCls, className)}
         sideOffset={sideOffset}
         {...rest}
       >
@@ -39,7 +59,7 @@ const Item = forwardRef<ElementRef<typeof RDropdown.Item>, ItemProps>(function D
   return (
     <RDropdown.Item
       ref={ref}
-      className={cx("ui-menu-item", className)}
+      className={cx(menuItemCls, className)}
       data-danger={danger ? "" : undefined}
       {...rest}
     />
@@ -50,14 +70,25 @@ const Separator = forwardRef<
   ElementRef<typeof RDropdown.Separator>,
   ComponentPropsWithoutRef<typeof RDropdown.Separator>
 >(function DMSeparator({ className, ...rest }, ref) {
-  return <RDropdown.Separator ref={ref} className={cx("ui-menu-sep", className)} {...rest} />;
+  return (
+    <RDropdown.Separator ref={ref} className={cx("my-1 h-px bg-border", className)} {...rest} />
+  );
 });
 
 const MenuLabel = forwardRef<
   ElementRef<typeof RDropdown.Label>,
   ComponentPropsWithoutRef<typeof RDropdown.Label>
 >(function DMLabel({ className, ...rest }, ref) {
-  return <RDropdown.Label ref={ref} className={cx("ui-menu-label", className)} {...rest} />;
+  return (
+    <RDropdown.Label
+      ref={ref}
+      className={cx(
+        "px-2 py-1 text-[11px] uppercase tracking-[0.3px] text-text-muted",
+        className,
+      )}
+      {...rest}
+    />
+  );
 });
 
 export type DropdownItem =
