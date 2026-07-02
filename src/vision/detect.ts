@@ -5,6 +5,7 @@
 //     (sem tiling, p/ não travar) via o detector compartilhado do vision/model.
 import { APP_CONFIG } from "../config";
 import { loadDetector, type Detection } from "./model";
+import { requestInference, type InferencePriority } from "./scheduler";
 
 const C = APP_CONFIG.detection;
 
@@ -158,6 +159,39 @@ function nms(dets: NormDet[], thr: number): NormDet[] {
   return kept;
 }
 
+// ── (2.4b) TILE ROTATION na GRADE (perfil longo alcance) ─────────────────────
+// Estado por CALLER, keyed por `opts.schedule.key` (ex.: `${cameraId}:atividade`) — vive AQUI
+// (module-level) porque o caller já passa uma key estável p/ o scheduler; nada muda na API.
+// Na GRADE (`tiled === false`) com grid multi-tile, cada chamada processa só K dos N tiles
+// (round-robin persistente) e FUNDE as detecções novas com o cache dos tiles não processados,
+// aplicando o NMS no conjunto fundido. Entradas do cache expiram após ~2 varreduras completas sem
+// refresh (em regime cada tile é re-processado a cada varredura; o TTL protege contra rotação
+// interrompida — ex.: câmera que alternou p/ full e voltou).
+// TRADE-OFF DECLARADO: na grade, a bbox de um tile só atualiza quando a rotação volta nele
+// (até N/K = 4 chamadas ≈ 4 × TILE_OBJECT_INTERVAL_MS); motion/alarme não dependem disso.
+// Na câmera ABERTA (`tiled === true`) a grade é processada COMPLETA por chamada (recall preservado).
+const GRID_TILES_PER_CALL = 4; // K tiles processados por chamada na grade (de N=16 no perfil LR)
+const GRID_CACHE_TTL_SWEEPS = 2; // expira entrada não refrescada após ~2 varreduras completas
+type TileCacheEntry = { dets: NormDet[]; round: number };
+type RotationState = { sig: string; pos: number; round: number; cache: (TileCacheEntry | null)[] };
+const rotationByKey = new Map<string, RotationState>();
+
+// Obtém (ou cria) o estado de rotação do caller; reseta se a geometria do grid mudou.
+// LRU simples com teto — evita acumular estado de câmeras que saíram da grade.
+function rotationFor(key: string, tileCount: number, sig: string): RotationState {
+  let st = rotationByKey.get(key) ?? null;
+  if (!st || st.sig !== sig) {
+    st = { sig, pos: 0, round: 0, cache: new Array<TileCacheEntry | null>(tileCount).fill(null) };
+  }
+  rotationByKey.delete(key); // touch (mantém ordem de uso p/ o teto abaixo)
+  rotationByKey.set(key, st);
+  if (rotationByKey.size > 64) {
+    const oldest = rotationByKey.keys().next().value;
+    if (oldest !== undefined) rotationByKey.delete(oldest);
+  }
+  return st;
+}
+
 // ── canvas de rasterização (reuso; draw→getImageData é síncrono, seguro entre câmeras) ──
 let scratch: HTMLCanvasElement | null = null;
 function rasterize(
@@ -193,6 +227,13 @@ export type DetectFrameOpts = {
   tileWidth?: number; // px por bloco enviado ao modelo (default C.detectTileWidth)
   minScore?: number; // limiar BRUTO do coco (default C.minScore)
   maxBoxes?: number; // teto de detecções por inferência (default C.maxBoxes)
+  // (2.4a) Integração com o SCHEDULER global: quando presente, CADA tile vira UMA tarefa própria
+  // (`${key}:t<i>`, awaited em sequência) — entre um tile e o próximo, tarefas de prioridade maior
+  // (câmera aberta, "high") intercalam em vez de esperar o lote inteiro. O CALLER que passa
+  // `schedule` NÃO deve embrulhar detectFrame em requestInference (deadlock com maxConcurrent=1) e
+  // deve manter seu próprio gate de voo (1 detectFrame em voo por key). Ausente → comportamento
+  // legado: Promise.all direto no worker, sem scheduler (ex.: fadiga.ts). ADITIVO.
+  schedule?: { key: string; priority: InferencePriority };
 };
 
 // Detecta objetos no frame. `tiled` liga o grid (câmera aberta); tiles do mosaico usam single-shot.
@@ -209,42 +250,116 @@ export async function detectFrame(
   const tileWidth = opts?.tileWidth ?? C.detectTileWidth;
   const minScore = opts?.minScore ?? C.minScore;
   const maxBoxes = opts?.maxBoxes ?? C.maxBoxes;
+  const schedule = opts?.schedule;
 
   // Fallback main thread: sem tiling (evita bloquear), só limiar/maxBoxes afinados.
+  // Com `schedule`, serializa via scheduler (o caller deixou de embrulhar em requestInference).
   if (!workerReady || !worker) {
     if (!workerFailed) return []; // ainda carregando o worker; não cai pro main thread à toa
-    try {
-      const model = await loadDetector();
-      return await model.detect(el as HTMLCanvasElement, maxBoxes, minScore);
-    } catch {
-      return [];
-    }
+    const runMain = async (): Promise<Detection[]> => {
+      try {
+        const model = await loadDetector();
+        return await model.detect(el as HTMLCanvasElement, maxBoxes, minScore);
+      } catch {
+        return [];
+      }
+    };
+    if (!schedule) return runMain();
+    const res = await requestInference(
+      { key: schedule.key, run: runMain },
+      { priority: schedule.priority },
+    );
+    return res ?? [];
   }
 
   const tiles = tileGrid(tiled, opts?.tiles);
-  const raster = tiles.map((t) => ({ t, r: rasterize(el, nativeW, nativeH, t, tileWidth) }));
-  const results = await Promise.all(
-    raster.map(({ r }) =>
-      r ? detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) : Promise.resolve([] as WorkerDet[]),
-    ),
-  );
 
-  // remapeia cada caixa do bloco → fração do frame inteiro
+  // (2.4b) TILE ROTATION: só na GRADE (`tiled === false`) com grid multi-tile e caller identificado
+  // (schedule.key). Na câmera aberta (`tiled === true`), grade completa como sempre.
+  let rot: RotationState | null = null;
+  let indices = tiles.map((_, i) => i);
+  if (schedule && !tiled && tiles.length > 1) {
+    const st = rotationFor(schedule.key, tiles.length, `${tiles.length}:${tileWidth}`);
+    rot = st;
+    st.round++;
+    const k = Math.min(GRID_TILES_PER_CALL, tiles.length);
+    indices = Array.from({ length: k }, (_, i) => (st.pos + i) % tiles.length);
+    st.pos = (st.pos + k) % tiles.length;
+  }
+
+  // Rasteriza AGORA (síncrono, só os tiles desta chamada): `el` é a imagem viva do feed — o
+  // snapshot é tirado no momento da chamada, mesmo que o worker processe o tile mais tarde.
+  const raster = indices.map((i) => ({
+    i,
+    t: tiles[i],
+    r: rasterize(el, nativeW, nativeH, tiles[i], tileWidth),
+  }));
+
+  // (2.4a) Execução: com `schedule`, 1 tile = 1 tarefa do scheduler, awaited em SEQUÊNCIA —
+  // entre um tile e o próximo o scheduler serve tarefas "high" (a câmera aberta não espera mais o
+  // lote inteiro de uma câmera da grade). `undefined` = tile coalescido por um pedido mais novo da
+  // MESMA key de tile (só ocorre com instância full+grade da mesma câmera) → tratado como "sem
+  // resultado novo" (mantém o cache da rodada anterior). Sem `schedule`: caminho legado.
+  const results: (WorkerDet[] | undefined)[] = [];
+  if (schedule) {
+    for (const { i, r } of raster) {
+      if (!r) {
+        results.push([]);
+        continue;
+      }
+      results.push(
+        await requestInference(
+          { key: `${schedule.key}:t${i}`, run: () => detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) },
+          { priority: schedule.priority },
+        ),
+      );
+    }
+  } else {
+    results.push(
+      ...(await Promise.all(
+        raster.map(({ r }) =>
+          r ? detectTile(r.rgba, r.w, r.h, maxBoxes, minScore) : Promise.resolve([] as WorkerDet[]),
+        ),
+      )),
+    );
+  }
+
+  // remapeia cada caixa do bloco → fração do frame inteiro (+ atualiza o cache da rotação)
   const all: NormDet[] = [];
+  const freshIdx = new Set<number>();
   results.forEach((dets, idx) => {
+    if (!dets) return; // tile coalescido — a entrada anterior do cache continua valendo
     const t = raster[idx].t,
       tw = t.x1 - t.x0,
       th = t.y1 - t.y0;
-    for (const d of dets)
-      all.push({
+    const norm = dets.map(
+      (d): NormDet => ({
         cls: d.cls,
         score: d.score,
         bbox: [t.x0 + d.bbox[0] * tw, t.y0 + d.bbox[1] * th, d.bbox[2] * tw, d.bbox[3] * th],
-      });
+      }),
+    );
+    freshIdx.add(raster[idx].i);
+    if (rot) rot.cache[raster[idx].i] = { dets: norm, round: rot.round };
+    all.push(...norm);
   });
 
-  // NMS sempre que houver >1 bloco (funde duplicatas nas bordas) — inclui o caso longo-alcance-na-grade,
-  // em que `tiled` pode ser false mas `opts.tiles` gerou vários blocos.
+  // (2.4b) funde o cache dos tiles NÃO processados nesta chamada; expira entradas velhas.
+  if (rot) {
+    const st = rot;
+    const ttl = Math.ceil(tiles.length / GRID_TILES_PER_CALL) * GRID_CACHE_TTL_SWEEPS;
+    st.cache.forEach((entry, i) => {
+      if (!entry) return;
+      if (st.round - entry.round > ttl) {
+        st.cache[i] = null;
+        return;
+      }
+      if (!freshIdx.has(i)) all.push(...entry.dets);
+    });
+  }
+
+  // NMS sempre que houver >1 bloco (funde duplicatas nas bordas) — inclui o caso longo-alcance-na-grade
+  // (`tiled` false + `opts.tiles` multi-bloco) e o conjunto FUNDIDO da rotação (frescos + cache).
   const merged = tiles.length > 1 ? nms(all, C.nmsIoU) : all;
   return merged.map((d) => ({
     class: d.cls,

@@ -27,7 +27,8 @@
 //       ignorar resultados `undefined` (não sobrescrever o último estado válido).
 //
 //   setInferencePriority(key, priority): muda a prioridade de uma key já enfileirada
-//       (ex.: ao ABRIR uma câmera, A2 pode elevar sua key p/ "high").
+//       (ex.: ao ABRIR uma câmera, A2 pode elevar sua key p/ "high"). Alcança também as
+//       sub-tarefas derivadas `<key>:...` (tiles individuais enfileirados por detect.ts — 2.4a).
 //
 //   schedulerStats(): { running, queued } — telemetria/diagnóstico (profundidade da fila).
 //
@@ -84,8 +85,13 @@ class InferenceScheduler {
   }
 
   setPriority(key: string, priority: InferencePriority): void {
-    const item = this.queue.find((q) => q.key === key);
-    if (item) item.priority = priority;
+    // Casa a key EXATA e também sub-tarefas derivadas (`<key>:...`): com "1 tile = 1 tarefa"
+    // (detect.ts, plano-performance-bit 2.4a), os tiles de um frame entram como `<key>:t<i>` e a
+    // elevação ao abrir a câmera (DashboardPage) precisa alcançá-los. Aditivo: key exata segue igual.
+    const prefix = key + ":";
+    for (const item of this.queue) {
+      if (item.key === key || item.key.startsWith(prefix)) item.priority = priority;
+    }
   }
 
   stats(): { running: number; queued: number } {

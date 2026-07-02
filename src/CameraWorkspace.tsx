@@ -5,7 +5,6 @@ import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame } from "./vision/detect";
-import { requestInference } from "./vision/scheduler";
 import {
   AtividadeProcessor,
   sensitivityFactor,
@@ -698,7 +697,12 @@ export function CameraWorkspace({
       const ativ = zs.filter((z) => z.modo === "atividade");
 
       // ── nível de frame: motion luma + coco-ssd (só se houver zona de atividade) ──
-      const pw = C.procWidth,
+      // (2.5) LONGO ALCANCE: a luma de movimento é produzida AQUI, 1× por câmera, já na resolução
+      // do perfil (longRange.procWidth=480) e compartilhada com TODAS as zonas via ctx.luma — antes
+      // cada AtividadeProcessor re-rasterizava o frame inteiro a 480px por frame. Os ratios/limiares
+      // LR seguem no processador (inalterados). Toggle em runtime: pw muda → o check de tamanho
+      // abaixo invalida canvas/buffers de luma (sem vazamento, sem diff entre resoluções distintas).
+      const pw = longRangeRef.current ? APP_CONFIG.detection.longRange.procWidth : C.procWidth,
         ph = Math.max(1, Math.round((pw * f.h) / f.w));
       let luma: Float32Array | null = null;
       let prev = prevLumaRef.current;
@@ -722,14 +726,18 @@ export function CameraWorkspace({
           cur[j] = 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
         luma = cur;
         // Inferência FORA da main thread (worker), via SCHEDULER global (fila única + prioridade).
-        // A câmera aberta (full) detecta na cadência rápida, com tiling e prioridade "high"; as tiles
-        // do mosaico vão mais devagar, sem tiling e com prioridade "low" (cedem a vez à câmera de foco).
-        // P0: na câmera ABERTA (full) a detecção coco roda na cadência rápida com prioridade alta
-        // (pipeline completo). Na GRADE (tile) roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS)
-        // e é PULADA quando já há uma inferência em voo — não empilha trabalho no worker e libera a
-        // main thread p/ o vídeo. O motion (acima) e a máquina de estado por zona seguem em tempo real.
+        // (2.4a) 1 TILE = 1 TAREFA: `detectFrame` recebe `schedule` e enfileira CADA tile como uma
+        // tarefa própria (`${key}:t<i>`) — a câmera ABERTA (high) intercala entre os tiles de um
+        // lote da grade (low) em vez de esperar o lote inteiro (~0,5–1,3s com 16 tiles LR). Por isso
+        // NÃO se embrulha mais detectFrame em requestInference (deadlock com maxConcurrent=1).
+        // O gate de voo (objBusy) agora vale TAMBÉM no full: com os tiles em tarefas separadas, a
+        // coalescência por key única deixou de descartar o lote pendente — o gate garante no máximo
+        // 1 detectFrame em voo por câmera (o próximo dispara com o frame mais novo ao concluir).
+        // Na GRADE roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS); com longo alcance,
+        // detect.ts ainda faz TILE ROTATION (K de 16 tiles por chamada, fundindo com cache — 2.4b).
+        // O motion (acima) e a máquina de estado por zona seguem em tempo real.
         const objInterval = mode === "full" ? C.objectIntervalMs : TILE_OBJECT_INTERVAL_MS;
-        const objBusy = mode !== "full" && objInFlightRef.current;
+        const objBusy = objInFlightRef.current;
         if (now - lastObjAtRef.current > objInterval && !objBusy) {
           lastObjAtRef.current = now;
           objInFlightRef.current = true;
@@ -739,13 +747,14 @@ export function CameraWorkspace({
             tiled = mode === "full";
           // Longo alcance: liga o tiling na GRADE (mesmo fora do full) + tile maior + limiar baixo.
           const LR = APP_CONFIG.detection.longRange;
-          const lrOpts = longRangeRef.current
-            ? { tiles: LR.tiles, tileWidth: LR.detectTileWidth, minScore: LR.minScore }
-            : undefined;
-          requestInference(
-            { key: `${cameraId}:atividade`, run: () => detectFrame(el, fw, fh, tiled, lrOpts) },
-            { priority: mode === "full" ? "high" : "low" },
-          )
+          const schedule = {
+            key: `${cameraId}:atividade`,
+            priority: mode === "full" ? ("high" as const) : ("low" as const),
+          };
+          const opts = longRangeRef.current
+            ? { tiles: LR.tiles, tileWidth: LR.detectTileWidth, minScore: LR.minScore, schedule }
+            : { schedule };
+          detectFrame(el, fw, fh, tiled, opts)
             .then((res) => {
               if (res) detsRef.current = res;
             })
@@ -820,8 +829,9 @@ export function CameraWorkspace({
             tracks,
             sampleFlow,
             recEmit,
-            // Fonte do frame p/ o modo longo alcance reamostrar a luma no procWidth maior (480).
-            // O processador só a usa quando longRange está ligado; ausente/ignorada no default.
+            // (2.5) Fallback do modo longo alcance: a luma LR já é produzida ACIMA (1× por câmera,
+            // em longRange.procWidth) e chega via ctx.luma; o processador só re-rasteriza a partir
+            // de frameEl se ctx.luma vier ausente (callers que não produzem a luma no frame).
             frameEl: f.el,
           };
           const az = {

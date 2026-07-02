@@ -82,9 +82,10 @@ export type AtividadeCtx = {
   tracks: { zone: string | null }[];
   sampleFlow: boolean;
   recEmit: boolean;
-  // Fonte do frame (opcional). Só usada no modo LONGO ALCANCE, em que o processador reamostra a
-  // luma numa resolução MAIOR (detection.longRange.procWidth) que a luma default do frame (ctx.luma,
-  // em detection.procWidth). A frente C a preenche; ausente → cai na luma do ctx (sem regressão).
+  // Fonte do frame (opcional) — FALLBACK do modo LONGO ALCANCE. Desde 2.5 (plano-performance-bit),
+  // a view produz a luma LR 1× por câmera (ctx.luma já em detection.longRange.procWidth) e o
+  // processador a consome direto; frameEl só é re-rasterizado internamente quando ctx.luma vem
+  // ausente (callers que não produzem a luma no nível do frame). Ausente + sem luma → sem motion.
   frameEl?: CanvasImageSource;
 };
 
@@ -178,10 +179,11 @@ export class AtividadeProcessor implements Disposable {
     const { now } = ctx;
 
     // Perfil de MOVIMENTO. Default = APP_CONFIG.detection (luma do ctx, em detection.procWidth).
-    // Longo alcance = APP_CONFIG.detection.longRange: reamostra a luma numa resolução MAIOR
-    // (procWidth) p/ captar movimento distante e usa ratios menores (mais sensível). O canvas e os
-    // dois buffers de luma são próprios do processador e só REALOCAM quando a dimensão muda; a cada
-    // frame fazem ping-pong (atual↔anterior), sem alocar por frame → não vaza memória.
+    // Longo alcance = APP_CONFIG.detection.longRange: luma em resolução MAIOR (procWidth=480) p/
+    // captar movimento distante + ratios menores (mais sensível). (2.5) A luma LR agora chega PRONTA
+    // via ctx.luma (produzida 1× por câmera pela view, compartilhada entre as zonas); o bloco abaixo
+    // — canvas/buffers próprios com ping-pong, sem alocar por frame — é só FALLBACK p/ callers que
+    // passam frameEl sem produzir a luma no nível do frame. Ratios/limiares LR inalterados.
     const lr = this.longRange ? APP_CONFIG.detection.longRange : null;
     const motionActive = lr ? lr.motionActiveRatio : C.motionActiveRatio;
     const motionSlow = lr ? lr.motionSlowRatio : C.motionSlowRatio;
@@ -189,7 +191,7 @@ export class AtividadeProcessor implements Disposable {
       prev = ctx.prev,
       pw = ctx.pw,
       ph = ctx.ph;
-    if (lr && ctx.frameEl && ctx.frameW > 0 && ctx.frameH > 0) {
+    if (lr && !ctx.luma && ctx.frameEl && ctx.frameW > 0 && ctx.frameH > 0) {
       const w = lr.procWidth,
         h = Math.max(1, Math.round((w * ctx.frameH) / ctx.frameW)),
         size = w * h;
