@@ -88,6 +88,13 @@ export function apiSend<T>(
   );
 }
 
+// ── Status da persistência do histórico (contrato ADITIVO da frente server) ──
+// GET /api/data/status → { persistence: "pg" | "json", counts?: {...} }. Num hub antigo a rota
+// não existe (404/erro): quem chama trata como "desconhecido" e mantém o comportamento atual.
+export type DataPersistence = "pg" | "json";
+export type DataStatus = { persistence: DataPersistence; counts?: Record<string, number> };
+export const getDataStatus = () => apiGet<DataStatus>("/api/data/status");
+
 // Papel do usuário (RBAC Setup × Live — Onda C item 12): superadmin | engenheiro | usuario.
 // Reexporta o tipo canônico de auth.tsx para manter front e API alinhados.
 export type { Papel } from "./auth";

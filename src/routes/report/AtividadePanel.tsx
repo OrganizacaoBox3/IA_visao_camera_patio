@@ -22,6 +22,7 @@ export function AtividadePanel({
   lens,
   k,
   kPrev,
+  peoplePeak,
   tips,
   hm,
   rank,
@@ -37,6 +38,7 @@ export function AtividadePanel({
   lens: string;
   k: Kpis;
   kPrev: Kpis;
+  peoplePeak: number; // pico de pessoas no recorte (plano 2.6) — 0 = sem detecção no período
   tips: string[];
   hm: ReturnType<typeof heatmap>;
   rank: ReturnType<typeof ranking>;
@@ -72,6 +74,8 @@ export function AtividadePanel({
         <Kpi value={k.topArea} label="área mais parada" valueStyle={{ fontSize: 17 }} />
         <Kpi value={`${String(k.peakHour).padStart(2, "0")}h`} label="horário crítico" />
         <Kpi value={`${k.activePct}%`} label="tempo ativo" valueStyle={{ color: "var(--ok)" }} />
+        {/* going-gray: contagem é informação neutra — sem cor saturada */}
+        <Kpi value={peoplePeak} label="pico de pessoas" />
       </KpiRow>
       <Insight label="💡 Oportunidades" tips={tips} />
       <Tabs

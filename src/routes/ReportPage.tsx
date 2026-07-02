@@ -62,7 +62,9 @@ import {
   loadFadigaDataset,
   loadFadigaEvents,
   loadAlarms,
+  peoplePeakOf,
 } from "../report/store";
+import { getDataStatus, type DataPersistence } from "../api";
 import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
 import {
   Button,
@@ -128,6 +130,9 @@ export function ReportPage() {
   const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Fonte da persistência do histórico (contrato aditivo GET /api/data/status).
+  // null = desconhecido (hub antigo sem a rota / falha do status) → mantém o texto atual.
+  const [dataSource, setDataSource] = useState<DataPersistence | null>(null);
   const [busy, setBusy] = useState(false);
   const { toast } = useToast();
   const [period, setPeriod] = useState<Period>("7d");
@@ -151,6 +156,11 @@ export function ReportPage() {
   async function refresh() {
     setLoading(true);
     setError(null);
+    // Status da persistência em paralelo, com falha ISOLADA: erro aqui (404 no hub antigo)
+    // nunca derruba o carregamento do relatório — só deixa a fonte como "desconhecida".
+    getDataStatus()
+      .then((s) => setDataSource(s.persistence === "pg" || s.persistence === "json" ? s.persistence : null))
+      .catch(() => setDataSource(null));
     try {
       const [d, e, rd, re, od, oe, fd, fe, al] = await Promise.all([
         loadDataset(),
@@ -202,6 +212,8 @@ export function ReportPage() {
   const { current: aCur, previous: aPrev } = useMemo(() => windows(dataset, fA), [dataset, fA]);
   const k = useMemo(() => kpis(aCur), [aCur]);
   const kPrev = useMemo(() => kpis(aPrev), [aPrev]);
+  // Pico de pessoas no recorte (plano 2.6): people_peak já persistia e era ignorado no relatório.
+  const kPeople = useMemo(() => peoplePeakOf(aCur), [aCur]);
   const areasForHeat = area === "Todas" ? dataset.areas : [area];
   const hm = useMemo(() => heatmap(aCur, areasForHeat), [aCur, area]); // eslint-disable-line react-hooks/exhaustive-deps
   const rank = useMemo(() => ranking(aCur, dataset.areas), [aCur, dataset.areas]);
@@ -472,6 +484,7 @@ export function ReportPage() {
           ["Tempo parado", fmtMin(k.idleMin)],
           ["Alertas", k.alerts],
           ["Tempo ativo (%)", k.activePct],
+          ["Pico de pessoas", kPeople],
           ["Área mais parada", k.topArea],
           ["Horário crítico", `${String(k.peakHour).padStart(2, "0")}h`],
         ],
@@ -742,6 +755,11 @@ export function ReportPage() {
           />
         )}
         <div className="spacer" />
+        {dataSource && (
+          <span className="muted text-[11px]" title="Onde o hub grava os indicadores">
+            histórico: {dataSource === "pg" ? "banco" : "arquivo local"}
+          </span>
+        )}
         <IconButton label="Recarregar do histórico" onClick={refresh}>
           ↻
         </IconButton>
@@ -825,7 +843,15 @@ export function ReportPage() {
                 </>
               )}
             </p>
-            <p className="muted">Os dados aparecem automaticamente conforme as câmeras operam.</p>
+            {/* Vazio HONESTO (plano 1.2): com a persistência confirmada pelo hub, afirmamos que é
+                falta de dados no período (não banco ausente). Sem o status (hub antigo), texto atual. */}
+            <p className="muted">
+              {dataSource
+                ? `Sem dados no período — deixe a Central aberta com câmeras ativas. Histórico gravado em ${
+                    dataSource === "pg" ? "banco" : "arquivo local no servidor"
+                  }.`
+                : "Os dados aparecem automaticamente conforme as câmeras operam."}
+            </p>
           </div>
         )}
 
@@ -963,6 +989,7 @@ export function ReportPage() {
             lens={lens}
             k={k}
             kPrev={kPrev}
+            peoplePeak={kPeople}
             tips={tips}
             hm={hm}
             rank={rank}

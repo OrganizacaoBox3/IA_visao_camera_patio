@@ -23,11 +23,43 @@ import type { AlarmEvent, AlarmPriority, AlarmState } from "../types/alarm";
 const DAY = 86_400_000;
 const shiftFor = (ts: number) => shiftOf(new Date(ts).getHours());
 
+// Telemetria de falha do ingest (plano 1.2): antes o erro era 100% engolido e "gravando" era
+// indistinguível de "perdendo dados". Contador módulo-nível de falhas CONSECUTIVAS + warn 1×
+// por sequência de falhas (sem toast global: o ingest roda no dashboard, não no relatório).
+export type IngestHealth = {
+  failing: boolean;
+  consecutiveFailures: number;
+  lastError: string | null;
+  lastFailureTs: number | null;
+};
+let ingestFailures = 0;
+let ingestLastError: string | null = null;
+let ingestLastFailureTs: number | null = null;
+
+export function getIngestHealth(): IngestHealth {
+  return {
+    failing: ingestFailures > 0,
+    consecutiveFailures: ingestFailures,
+    lastError: ingestLastError,
+    lastFailureTs: ingestLastFailureTs,
+  };
+}
+
 // envio resiliente: gravação nunca pode lançar dentro do loop de vídeo
 function ingest(kind: string, op: string, payload: unknown): Promise<void> {
   return apiSend("POST", "/api/ingest", { kind, op, payload })
-    .then(() => {})
-    .catch(() => {});
+    .then(() => {
+      ingestFailures = 0; // sucesso fecha a sequência; nova falha volta a avisar 1×
+    })
+    .catch((e) => {
+      ingestFailures += 1;
+      ingestLastError = e instanceof Error ? e.message : String(e);
+      ingestLastFailureTs = Date.now();
+      if (ingestFailures === 1)
+        console.warn(
+          `[ingest] histórico NÃO está sendo gravado (${kind}/${op}): ${ingestLastError}`,
+        );
+    });
 }
 // Leitura do histórico: o erro é PROPAGADO (antes era engolido com `.catch(() => [])`, o que
 // fazia "API fora do ar" parecer "sem dados"). Quem chama (ReportPage) distingue erro de vazio.
@@ -78,6 +110,21 @@ export function recordAlert(a: AlertPayload): Promise<void> {
   return ingest("ativ", "alert", { ...a, shift: shiftFor(a.ts) });
 }
 
+// Extensão ADITIVA de Cell (plano 2.6): o tipo canônico vive em report/calc/atividade.ts (fora
+// desta frente) e segue intocado — pessoas entram como campo opcional só p/ quem quiser ler.
+export interface AtivCell extends Cell {
+  peoplePeak?: number;
+}
+// Pico de pessoas num recorte de células (usado pelo KPI do painel Atividade).
+export function peoplePeakOf(cells: Cell[]): number {
+  let max = 0;
+  for (const c of cells) {
+    const p = (c as AtivCell).peoplePeak;
+    if (typeof p === "number" && p > max) max = p;
+  }
+  return max;
+}
+
 export async function loadDataset(): Promise<Dataset> {
   const buckets = await fetchBuckets<Bucket>("ativ");
   if (!buckets.length) return { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() };
@@ -85,7 +132,7 @@ export async function loadDataset(): Promise<Dataset> {
   const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
   const days = Math.max(1, Math.ceil((now - startMs) / DAY));
   const areas = new Set<string>();
-  const cells: Cell[] = buckets.map((b) => {
+  const cells: AtivCell[] = buckets.map((b) => {
     areas.add(b.area);
     return {
       area: b.area,
@@ -95,6 +142,8 @@ export async function loadDataset(): Promise<Dataset> {
       alerts: b.alerts,
       activePct: b.samples ? Math.round((b.activeSamples / b.samples) * 100) : 0,
       atividade: b.atividade,
+      // people_peak JÁ era persistido e vinha ignorado; o SELECT do hub o expõe como "peoplePeak"
+      peoplePeak: typeof b.peoplePeak === "number" ? b.peoplePeak : 0,
     };
   });
   return { days, areas: [...areas].sort(), cameraOf: {}, cells, startMs };
