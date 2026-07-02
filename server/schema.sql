@@ -39,6 +39,19 @@ create table if not exists obj_events (
   type text, setor text, classe text, shift text
 );
 
+-- ── HISTÓRICO: FLUXO DE PESSOAS (cruzamentos de tripwire — in/out) ───────────
+-- Evento por CRUZAMENTO — só metadados (câmera/linha/direção/ts), nunca imagem (LGPD).
+-- Colunas in_count/out_count ("in"/"out" são reservadas); a API expõe como "in"/"out".
+create table if not exists flow_buckets (
+  id text primary key,            -- `${cameraId}|${tripwireId}|${hourStart}`
+  camera_id text, camera_label text, tripwire_id text, hour_start bigint not null,
+  in_count int default 0, out_count int default 0
+);
+create table if not exists flow_events (
+  id bigserial primary key, ts bigint not null,
+  camera_id text, camera_label text, tripwire_id text, dir text, shift text
+);
+
 -- ── HISTÓRICO: FADIGA (operador — tempo em cada estado de risco) ─────────────
 create table if not exists fad_buckets (
   id text primary key,            -- `${posto}|${hourStart}`
@@ -125,8 +138,10 @@ create index if not exists idx_ativ_events_ts on ativ_events (ts desc);
 create index if not exists idx_read_events_ts on read_events (ts desc);
 create index if not exists idx_obj_events_ts  on obj_events  (ts desc);
 create index if not exists idx_fad_events_ts  on fad_events  (ts desc);
+create index if not exists idx_flow_events_ts on flow_events (ts desc);
 create index if not exists idx_ativ_buckets_hour on ativ_buckets (hour_start);
 create index if not exists idx_read_buckets_hour on read_buckets (hour_start);
 create index if not exists idx_obj_buckets_hour  on obj_buckets  (hour_start);
 create index if not exists idx_fad_buckets_hour  on fad_buckets  (hour_start);
+create index if not exists idx_flow_buckets_hour on flow_buckets (hour_start);
 create index if not exists idx_alarm_events_ts on alarm_events (ts desc);

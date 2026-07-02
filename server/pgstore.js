@@ -17,14 +17,14 @@ const hourOf = (ts) => Math.floor(ts / HOUR) * HOUR;
 
 // ── FALLBACK JSON: estado + persistência ─────────────────────────────────────
 const FILE = path.join(__dirname, "data-hist.json");
-const KINDS = ["ativ", "read", "obj", "fad"];
+const KINDS = ["ativ", "read", "obj", "fad", "flow"];
 const RETENTION_DAYS = Math.max(1, Number(process.env.DATA_HIST_RETENTION_DAYS ?? 30));
 const DAY_MS = 86_400_000;
 const FLUSH_MS = 2_000;
 
 const emptyStore = () => ({
-  buckets: { ativ: {}, read: {}, obj: {}, fad: {} }, // id → bucket (upsert em memória)
-  events: { ativ: [], read: [], obj: [], fad: [] }, // linhas cruas (ts desc na leitura)
+  buckets: { ativ: {}, read: {}, obj: {}, fad: {}, flow: {} }, // id → bucket (upsert em memória)
+  events: { ativ: [], read: [], obj: [], fad: [], flow: [] }, // linhas cruas (ts desc na leitura)
 });
 let mem = emptyStore();
 let flushTimer = null;
@@ -254,6 +254,34 @@ const J_INGEST = {
       shift: e.shift ?? null,
     });
   },
+  // Fluxo de pessoas (tripwire): evento por cruzamento — só metadados (LGPD).
+  // Bucket já gravado com as chaves finais do contrato ("in"/"out").
+  "flow:cross"(c) {
+    const hs = hourOf(c.ts);
+    const id = `${c.cameraId}|${c.tripwireId}|${hs}`;
+    let b = mem.buckets.flow[id];
+    if (!b)
+      b = mem.buckets.flow[id] = {
+        id,
+        cameraId: c.cameraId ?? null,
+        cameraLabel: c.cameraLabel ?? null,
+        tripwireId: c.tripwireId ?? null,
+        hourStart: hs,
+        in: 0,
+        out: 0,
+      };
+    if (c.dir === "in") b.in += 1;
+    else if (c.dir === "out") b.out += 1;
+    b.cameraLabel = c.cameraLabel ?? null; // como o UPSERT: label = excluded
+    mem.events.flow.push({
+      ts: c.ts,
+      cameraId: c.cameraId ?? null,
+      cameraLabel: c.cameraLabel ?? null,
+      tripwireId: c.tripwireId ?? null,
+      dir: c.dir ?? null,
+      shift: c.shift ?? null,
+    });
+  },
 };
 
 function jsonIngest(key, p) {
@@ -414,6 +442,30 @@ const INGEST = {
       e.shift,
     ]);
   },
+  "flow:cross": async (c) => {
+    const hs = hourOf(c.ts);
+    await db.query(
+      `insert into flow_buckets (id,camera_id,camera_label,tripwire_id,hour_start,in_count,out_count)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (id) do update set
+         in_count=flow_buckets.in_count+excluded.in_count,
+         out_count=flow_buckets.out_count+excluded.out_count,
+         camera_label=excluded.camera_label`,
+      [
+        `${c.cameraId}|${c.tripwireId}|${hs}`,
+        c.cameraId,
+        c.cameraLabel,
+        c.tripwireId,
+        hs,
+        c.dir === "in" ? 1 : 0,
+        c.dir === "out" ? 1 : 0,
+      ],
+    );
+    await db.query(
+      `insert into flow_events (ts,camera_id,camera_label,tripwire_id,dir,shift) values ($1,$2,$3,$4,$5,$6)`,
+      [c.ts, c.cameraId, c.cameraLabel, c.tripwireId, c.dir, c.shift],
+    );
+  },
 };
 
 // ── LEITURA (buckets/eventos crus, camelCase) ─────────────────────────────────
@@ -422,12 +474,14 @@ const BUCKET_SQL = {
   read: `select id, ponto, hour_start as "hourStart", boxes, reads, multi_reads as "multiReads", passages, per_camera as "perCamera" from read_buckets`,
   obj: `select id, setor, classe, hour_start as "hourStart", samples, count_sum as "countSum", peak, present from obj_buckets`,
   fad: `select id, posto, hour_start as "hourStart", samples, ok, fadiga, celular, duplo, ear_sum as "earSum", ear_samples as "earSamples" from fad_buckets`,
+  flow: `select id, camera_id as "cameraId", camera_label as "cameraLabel", tripwire_id as "tripwireId", hour_start as "hourStart", in_count as "in", out_count as "out" from flow_buckets`,
 };
 const EVENT_SQL = {
   ativ: `select ts, camera, camera_id as "cameraId", area, atividade, duration_min as "durationMin", shift from ativ_events order by ts desc`,
   read: `select ts, ponto, code, cameras, shift from read_events order by ts desc`,
   obj: `select ts, type, setor, classe, shift from obj_events order by ts desc`,
   fad: `select ts, posto, type, shift from fad_events order by ts desc`,
+  flow: `select ts, camera_id as "cameraId", camera_label as "cameraLabel", tripwire_id as "tripwireId", dir, shift from flow_events order by ts desc`,
 };
 async function buckets(kind) {
   if (!KINDS.includes(kind)) return [];
@@ -461,7 +515,8 @@ async function status() {
         `select (select count(*)::int from ativ_buckets) as "ativ",
                 (select count(*)::int from read_buckets) as "read",
                 (select count(*)::int from obj_buckets) as "obj",
-                (select count(*)::int from fad_buckets) as "fad"`,
+                (select count(*)::int from fad_buckets) as "fad",
+                (select count(*)::int from flow_buckets) as "flow"`,
       );
       return { persistence: "pg", counts: r.rows[0] };
     } catch (e) {
@@ -479,7 +534,7 @@ async function clear() {
   flushNow();
   if (!db.configured()) return;
   await db.query(
-    `truncate ativ_buckets, ativ_events, read_buckets, read_events, obj_buckets, obj_events, fad_buckets, fad_events`,
+    `truncate ativ_buckets, ativ_events, read_buckets, read_events, obj_buckets, obj_events, fad_buckets, fad_events, flow_buckets, flow_events`,
   );
 }
 

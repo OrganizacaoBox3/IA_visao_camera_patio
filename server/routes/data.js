@@ -21,7 +21,7 @@ async function handle(req, res, ctx) {
     return true;
   }
 
-  const mb = req.url && req.url.match(/^\/api\/data\/(ativ|read|obj|fad)\/(buckets|events)$/);
+  const mb = req.url && req.url.match(/^\/api\/data\/(ativ|read|obj|fad|flow)\/(buckets|events)$/);
   if (mb && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
     json(
