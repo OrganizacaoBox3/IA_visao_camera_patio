@@ -56,6 +56,23 @@ function resolveFfmpegBin() {
 }
 const FFMPEG_BIN = resolveFfmpegBin();
 
+// Versão do ffmpeg (major.minor). Algumas flags são de versões novas (ex.: -extension_picky
+// só existe no ffmpeg 7.1+; no 4.x quebra com "Option not found"). Detecta 1× no boot; se não
+// der p/ ler a versão, assume [0,0] → conservador (não usa flags novas). Ubuntu 22.04 = 4.4.
+function ffmpegVersion(bin) {
+  try {
+    const out = execFileSync(bin, ["-version"], { encoding: "utf8" });
+    const m = out.match(/ffmpeg version n?(\d+)\.(\d+)/i);
+    if (m) return [Number(m[1]), Number(m[2])];
+  } catch {
+    /* ffmpeg ausente ou parse falhou */
+  }
+  return [0, 0];
+}
+const FFMPEG_VER = ffmpegVersion(FFMPEG_BIN);
+const ffmpegAtLeast = (maj, min) =>
+  FFMPEG_VER[0] > maj || (FFMPEG_VER[0] === maj && FFMPEG_VER[1] >= min);
+
 const SOI = Buffer.from([0xff, 0xd8]); // início de JPEG
 const EOI = Buffer.from([0xff, 0xd9]); // fim de JPEG
 
@@ -150,9 +167,11 @@ function inputArgs(st) {
     args.push("-i", url);
   } else {
     // HLS (.m3u8), MJPEG ou HTTP(S) genérico / arquivo: ffmpeg autodetecta o formato de entrada.
-    if (/\.m3u8(\?|$)/i.test(String(url))) {
+    if (/\.m3u8(\?|$)/i.test(String(url)) && ffmpegAtLeast(7, 1)) {
       // HLS pode referenciar faixas de legenda (webvtt em .mp4) que o demuxer do ffmpeg 7.1+
       // rejeita pela checagem estrita de extensão. extension_picky=0 desliga essa checagem.
+      // A flag SÓ existe no 7.1+; em versões antigas (ex.: 4.4 do Ubuntu 22.04) ela nem é
+      // necessária (não há a checagem estrita) e quebraria o ffmpeg — por isso o guard de versão.
       args.push("-extension_picky", "0");
     }
     args.push("-i", url);
