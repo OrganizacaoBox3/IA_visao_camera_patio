@@ -266,9 +266,10 @@ type Props = {
   // "hoje" das linhas passa a ser refresh periódico do servidor. OPCIONAL/retrocompatível:
   // ausente (hub antigo sem o evento) → "local" = comportamento idêntico ao atual.
   analysisEngine?: "hub" | "local";
-  // F2 (ADR-009): getter ESTÁVEL (padrão gettersRef da central) do último `analysis-tracks` da
-  // câmera — tracks/zonas do MOTOR DO HUB. Consumido SÓ na GRADE (mode≠full) com engine==="hub":
-  // a grade vira espelho (desenha o que o servidor mandou) e deixa de agendar o coco local.
+  // F2/F3 (ADR-009): getter ESTÁVEL (padrão gettersRef da central) do último `analysis-tracks` da
+  // câmera — tracks/zonas do MOTOR DO HUB. Consumido com engine==="hub" em AMBOS os modos (grade
+  // desde a F2; câmera aberta desde a F3): a instância vira espelho (desenha o que o servidor
+  // mandou) e deixa de agendar o coco local.
   // OPCIONAL/retrocompatível: ausente/null → comportamento atual (pipeline local).
   getHubAnalysis?: () => HubAnalysis | null;
 };
@@ -584,9 +585,11 @@ export function CameraWorkspace({
       cancelled = true;
     };
   }, [cfgZoneId]);
-  useEffect(() => {
-    ensureDetectClient();
-  }, []);
+  // F3 (ADR-009): o ensureDetectClient() que vivia aqui (mount, incondicional) foi movido p/ o
+  // rAF, no gate `needPersons` — spawnar o worker no mount baixava tfjs+coco p/ TODA câmera,
+  // inclusive as analisadas pelo hub (que não inferem mais localmente). Agora o worker só nasce
+  // quando o caminho LOCAL é de fato agendado (engine local + zona de atividade/linha na aberta);
+  // fadiga (celular) chama ensureDetectClient no construtor do FadigaProcessor, como sempre.
   useEffect(() => {
     const m = holdersRef.current;
     return () => {
@@ -840,15 +843,20 @@ export function CameraWorkspace({
       // detecção NÃO é agendada só por causa das linhas. Na câmera ABERTA (350ms) conta normal.
       const hasWires = tripwiresRef.current.length > 0;
       const countingActive = hasWires && mode === "full";
-      // ── F2 (ADR-009): GRADE com engine==="hub" → espelho do MOTOR DO HUB ──
-      // O hub roda D-FINE+ByteTrack 24/7 e emite `analysis-tracks` @1fps; o tile deixa de agendar
-      // o coco local (needPersons ganha `&& !hubTile` — a economia de CPU da F2: fim de 1 worker
-      // tfjs de detecção POR TILE hub) e desenha os tracks/zonas servidos (bloco abaixo).
-      // DECISÃO F2 — câmera ABERTA (full) MANTÉM o pipeline local: overlay de baixa latência
-      // (~66ms local vs ~1s do hub) p/ inspeção; os ingests já são suprimidos pela F1-C, então
-      // não há duplicação de indicador. F3 reavalia (aposentar o coco também no full).
-      const hubTile = mode !== "full" && analysisEngineRef.current === "hub";
-      const needPersons = (ativ.length > 0 || countingActive) && !hubTile;
+      // ── F2/F3 (ADR-009): engine==="hub" → espelho do MOTOR DO HUB (grade E câmera aberta) ──
+      // O hub roda D-FINE+ByteTrack 24/7 e emite `analysis-tracks` @1fps; com o motor ligado
+      // NENHUMA instância agenda o coco local (needPersons ganha `&& !hubActive` — fim do worker
+      // tfjs de detecção p/ câmeras hub) e ambas desenham os tracks/zonas servidos (bloco abaixo).
+      // F3 — TRADE-OFF DECLARADO (câmera ABERTA): o overlay de pessoas passa a atualizar na
+      // cadência do motor (~1fps) em vez de ~350ms local — aceito em troca de aposentar o
+      // tfjs/coco do cliente; interpolação entre payloads fica p/ depois, se incomodar.
+      // Consequência nas LINHAS (full+hub): o counter LOCAL fica parado (freshDets nunca dispara
+      // sem detecção local) — sem timeline de cruzamento local; o HUD/painel já mostram o "hoje"
+      // do SERVIDOR (F1-C), que é a autoridade. Cine-loop, motion/estado/alarme de atividade,
+      // fadiga (MediaPipe+celular via FadigaProcessor) e leitura seguem 100% LOCAIS.
+      // Engine "local" (motor desligado) → fallback INTEGRAL: pipeline local idêntico ao de sempre.
+      const hubActive = analysisEngineRef.current === "hub";
+      const needPersons = (ativ.length > 0 || countingActive) && !hubActive;
 
       // ── nível de frame: motion luma + coco-ssd (só se houver zona de atividade) ──
       // (2.5) LONGO ALCANCE: a luma de movimento é produzida AQUI, 1× por câmera, já na resolução
@@ -897,6 +905,10 @@ export function CameraWorkspace({
       // BUGFIX tripwires: este bloco vivia DENTRO de `if (ativ.length && analyzeActivity)` —
       // agora agenda por `needPersons` (zona de atividade OU tripwire com câmera aberta).
       if (needPersons) {
+        // F3: worker de detecção nasce AQUI, on-demand (idempotente — early-return após o 1º
+        // spawn). Engine hub→local em runtime reentra por este gate e o worker sobe na hora;
+        // enquanto o worker carrega, detectFrame devolve [] (mesma semântica do boot atual).
+        ensureDetectClient();
         const objInterval = mode === "full" ? C.objectIntervalMs : TILE_OBJECT_INTERVAL_MS;
         const objBusy = objInFlightRef.current;
         if (now - lastObjAtRef.current > objInterval && !objBusy) {
@@ -928,7 +940,7 @@ export function CameraWorkspace({
             });
         }
       }
-      // ── F2 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (grade, engine hub) ──
+      // ── F2/F3 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (engine hub, grade e full) ──
       // Converte HubTrack → Track (shape do drawTracks/presença/heatmap): score=1 (o motor já
       // filtrou por limiar — nunca atenuado pelo slider local), foot derivado do bbox
       // (bottom-center) e firstSeen mantido POR ID entre payloads (rótulo de permanência).
@@ -937,7 +949,7 @@ export function CameraWorkspace({
       // a última detecção local congelaria o estado. Motion/estado/alarme seguem 100% locais.
       // Conversão SÓ quando o payload muda (~1fps) — nada aloca por frame; payload mais velho
       // que HUB_TRACKS_STALE_MS é descartado (limpa as caixas em vez de desenhar dado morto).
-      if (hubTile) {
+      if (hubActive) {
         const hd = getHubAnalysisRef.current?.() ?? null;
         const fresh = !!hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS;
         if (!fresh) {
@@ -984,7 +996,7 @@ export function CameraWorkspace({
           hubZonesRef.current = hd.zones;
         }
       } else if (hubZonesRef.current) {
-        // saiu do modo espelho (abriu a câmera/engine voltou a local) → limpa o resíduo do hub;
+        // saiu do modo espelho (engine voltou a local) → limpa o resíduo do hub;
         // o pipeline local reassume na próxima rodada de detecção (fallback = comportamento atual).
         hubZonesRef.current = null;
         hubTracksTsRef.current = 0;
@@ -1044,8 +1056,9 @@ export function CameraWorkspace({
           // Fire-and-forget: o store é resiliente (nunca lança dentro do loop de vídeo).
           // F1-C (ADR-009): SUPRIMIDO quando o MOTOR DO HUB analisa esta câmera — o hub grava
           // os mesmos cruzamentos direto no pgstore; gravar aqui também duplicaria o indicador.
-          // A contagem LOCAL segue rodando (timeline acima + counter) como feedback visual
-          // imediato — só o ingest é suprimido.
+          // (F3: no modo hub este bloco nem chega a rodar — sem detecção local não há freshDets,
+          // o counter fica parado e o "hoje" exibido é o do servidor. O guard fica como defesa
+          // em profundidade p/ qualquer caminho futuro que reanime o counter no modo hub.)
           if (analysisEngineRef.current !== "hub")
             void recordFlow({
               cameraId,
@@ -1116,10 +1129,10 @@ export function CameraWorkspace({
             contains: containsFn(z),
           };
           const r = (h.proc as AtividadeProcessor).process(az, ctx);
-          // F2 (ADR-009): pessoas por zona EXIBIDAS (rótulo no canvas + pill do painel) vêm do
+          // F2/F3 (ADR-009): pessoas por zona EXIBIDAS (rótulo no canvas + pill do painel) vêm do
           // zones[] do hub quando disponível — a atribuição de zona do MOTOR é a autoridade
           // (mesma que grava o indicador). Estado/motion/alarme locais seguem intactos.
-          const hz = hubTile
+          const hz = hubActive
             ? hubZonesRef.current?.find((zz) => zz.id === z.id || zz.label === z.label)
             : undefined;
           resultsRef.current.set(z.id, {
@@ -2475,9 +2488,9 @@ export function CameraWorkspace({
         </span>
         <span className="kb muted">FPS {perf.fps}</span>
         {/* F1-C (ADR-009) — fonte da análise: NEUTRO (going-gray, informativo, não é anormalidade)
-            e SÓ no modo hub; local = nada (comportamento atual). O badge de detecção abaixo
-            continua valendo: refere-se ao OVERLAY local (tfjs no worker), que segue rodando
-            para o visual mesmo quando os indicadores são gravados pelo servidor. */}
+            e SÓ no modo hub; local = nada (comportamento atual). F3: no modo hub o worker tfjs
+            local nem sobe p/ pessoas (tracks vêm do servidor) — o badge de detecção abaixo só
+            aparece se algum consumidor local (fadiga/celular, engine local) iniciou o worker. */}
         {analysisEngine === "hub" && (
           <span className="kb muted" title="indicadores gravados pelo servidor — D-FINE">
             análise: hub

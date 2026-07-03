@@ -6,7 +6,9 @@
 //     (canvas 2D + getImageData, pixels RGBA transferíveis) — feature-detect 1×, não por chamada;
 //   - remapeia as caixas do bloco → frame inteiro e funde duplicatas das bordas com NMS;
 //   - FALLBACK: se o worker não inicia (sem OffscreenCanvas/WebGL no worker), detecta na main thread
-//     (sem tiling, p/ não travar) via o detector compartilhado do vision/model.
+//     (sem tiling, p/ não travar) via o detector compartilhado do vision/model — que desde a F3
+//     (ADR-009) carrega tfjs/coco-ssd por import() DINÂMICO: o custo só é pago se este fallback
+//     (ou o andaime coco do objects/detector) rodar de fato; o bundle principal fica sem tfjs.
 import { APP_CONFIG } from "../config";
 import { loadDetector, type Detection } from "./model";
 import { requestInference, type InferencePriority } from "./scheduler";
@@ -33,6 +35,7 @@ export function getDetectBackend(): string | null {
 
 // Aquece o detector de main thread SOMENTE quando o worker falha (P5: evita carregar
 // dois modelos coco — worker mobilenet_v2 + main lite_mobilenet_v2 — no caminho feliz).
+// F3: é aqui que o chunk async tfjs+coco-ssd é baixado (loadDetector lazy) — nunca antes.
 function warmFallback(): void {
   void loadDetector().catch(() => {});
 }
