@@ -54,3 +54,4 @@ server/models/
 # (eval/fixture/ ~5MB — sensor de regressão npm run eval).
 eval/data/
 eval/last-results.json
+eval/model-comparison.json
