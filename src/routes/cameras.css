@@ -2,7 +2,9 @@
    O form de câmera IP (.cam-ip-*) veio do antigo Dialog da home (dashboard/IpCameraDialog),
    agora dentro do Dialog aberto pela própria tela. */
 
-/* Corpo da página: seções empilhadas (mesmo ritmo de .users-body/.ah-body). */
+/* Corpo da página: seções empilhadas (mesmo ritmo de .users-body/.ah-body).
+   SEM max-width: app de operação usa a tela inteira (padrão das demais telas);
+   legibilidade de formulário é problema do FORM (Dialog), não da página. */
 .cam-mgr-body {
   padding: var(--sp-4);
   overflow: auto;
@@ -10,7 +12,6 @@
   flex-direction: column;
   gap: var(--sp-4);
   width: 100%;
-  max-width: 920px;
 }
 
 .cam-sec-hint {
@@ -22,16 +23,18 @@
 .cam-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
+/* Linha = superfície neutra (--panel-2/--border, going-gray) — tokens de ESTADO
+   ficam reservados p/ estado; radius na escala da casa (--radius-sm). */
 .cam-row {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 8px 10px;
-  border: 1px solid var(--state-neutral-border, #1f2937);
-  border-radius: 8px;
-  background: var(--state-neutral-bg, #161c24);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
 }
 .cam-row__name {
   display: flex;
@@ -93,7 +96,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  font-size: 0.9rem;
+  font-size: 13px; /* corpo padrão (0.9rem era o único rem do app) */
   cursor: pointer;
 }
 
@@ -108,8 +111,8 @@
 .cam-ip-foot {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 6px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 @media (max-width: 560px) {
