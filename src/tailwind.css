@@ -19,6 +19,29 @@
   --color-text-muted: var(--text-muted);
   --color-accent: var(--accent);
 
+  /* tints de interação (fonte única em index.css :root; padronização A1) —
+     viram bg-accent-bg / hover:bg-accent-bg-hover / border-accent-border /
+     text-accent-contrast / bg-ctrl-bg / bg-danger-bg etc. */
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-bg-hover: var(--accent-bg-hover);
+  --color-accent-border: var(--accent-border);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-ctrl-bg: var(--ctrl-bg);
+  --color-ctrl-bg-hover: var(--ctrl-bg-hover);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-bg-hover: var(--danger-bg-hover);
+
+  /* tipografia — 7 papéis (fonte única em index.css :root; padronização A1) —
+     viram text-micro/text-label/text-sec/text-body/text-title/text-hero/text-kpi.
+     text-[Npx] é proibido em código de página. */
+  --text-micro: var(--fs-micro);
+  --text-label: var(--fs-label);
+  --text-sec: var(--fs-sec);
+  --text-body: var(--fs-body);
+  --text-title: var(--fs-title);
+  --text-hero: var(--fs-hero);
+  --text-kpi: var(--fs-kpi);
+
   /* estados (going-gray) */
   --color-ok: var(--state-ok);
   --color-warn: var(--state-warn);

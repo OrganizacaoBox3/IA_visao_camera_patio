@@ -130,7 +130,9 @@
 }
 
 /* h1 cru de DashboardPage/ReportPage (fora do PageHeader migrado).
-   index.css define fonte (14px/600, vence a cascata); aqui: margin + cor. */
+   index.css define fonte (14px/600, vence a cascata); aqui: margin + cor.
+   LEGADO A REMOVER: quando a frente A2 migrar Dashboard/Report p/ PageHeader,
+   esta classe (e a de index.css) morre — remoção na validação final da onda A. */
 .page-title {
   margin: 0;
   font-size: 16px;
@@ -145,7 +147,7 @@
   top: 0;
   z-index: 300;
   background: var(--accent);
-  color: #04121a;
+  color: var(--accent-contrast);
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   font-size: 13px;

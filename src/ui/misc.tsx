@@ -41,7 +41,7 @@ export function Spinner() {
 // h padrão 14px (via style: h ?? 14); radius padrão 6px (override por style quando radius definido).
 const SKELETON_BASE = cx(
   "inline-block h-[14px] rounded-[6px]",
-  "bg-[linear-gradient(90deg,var(--panel-2)_25%,#1a2430_50%,var(--panel-2)_75%)] bg-[length:200%_100%]",
+  "bg-[linear-gradient(90deg,var(--panel-2)_25%,var(--ctrl-bg)_50%,var(--panel-2)_75%)] bg-[length:200%_100%]",
   "animate-[ui-shimmer_1.3s_infinite]",
 );
 
@@ -119,6 +119,7 @@ export function EmptyState({ children }: { children: ReactNode }) {
 }
 
 // ── KpiCard ────────────────────────────────────────────────
+// Valor no papel kpi (24px, ÚNICO tamanho de número de KPI — padrão da casa).
 export function KpiCard({
   value,
   label,
@@ -131,13 +132,34 @@ export function KpiCard({
   const style: CSSProperties | undefined = color ? { color } : undefined;
   return (
     <div className="flex flex-col gap-0.5 rounded-[var(--radius)] border border-border bg-panel p-3">
-      <div
-        className="[font-family:var(--mono)] text-[20px] font-semibold text-text"
-        style={style}
-      >
+      <div className="[font-family:var(--mono)] text-kpi font-semibold text-text" style={style}>
         {value}
       </div>
-      <div className="text-[11px] uppercase tracking-[0.3px] text-text-muted">{label}</div>
+      <div className="text-label uppercase tracking-[0.3px] text-text-muted">{label}</div>
     </div>
+  );
+}
+
+// ── SectionTitle ───────────────────────────────────────────
+// Título de seção padrão da casa: h2 SEMÂNTICO com o visual do antigo h3 de
+// painel (.panel h3/.side h3): label 11px uppercase, tracking 0.12em,
+// text-muted, margem inferior 12px (funde as margens divergentes 8/12→12).
+// As frentes A2–A5 substituem os h3 crus por este átomo.
+export function SectionTitle({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <h2
+      className={cx(
+        "m-0 mb-3 text-label font-bold uppercase tracking-[0.12em] text-text-muted",
+        className,
+      )}
+    >
+      {children}
+    </h2>
   );
 }

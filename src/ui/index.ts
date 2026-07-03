@@ -18,6 +18,7 @@ export {
   Alert,
   EmptyState,
   KpiCard,
+  SectionTitle,
   type Tone,
 } from "./misc";
 export { PageHeader } from "./PageHeader";

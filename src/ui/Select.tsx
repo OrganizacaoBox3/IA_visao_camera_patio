@@ -26,7 +26,7 @@ export const Select = forwardRef<
         ref={ref}
         className={cx(
           "inline-flex h-[var(--ui-ctrl-h)] min-w-[120px] cursor-pointer items-center justify-between gap-2",
-          "rounded-sm border border-border bg-panel-2 pl-3 pr-2 text-[13px] text-text [font-family:var(--sans)]",
+          "rounded-sm border border-border bg-panel-2 pl-3 pr-2 text-body text-text [font-family:var(--sans)]",
           "data-[placeholder]:text-text-muted",
           "focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--bg),0_0_0_4px_var(--accent)]",
           className,
@@ -54,8 +54,9 @@ export const Select = forwardRef<
                 value={o.value}
                 className={cx(
                   "flex cursor-pointer select-none items-center gap-2 rounded-[4px] px-2 py-1",
-                  "text-[13px] text-text outline-none",
-                  "data-[highlighted]:bg-[#0b3a4a] data-[highlighted]:text-[var(--state-info-fg)]",
+                  "text-body text-text outline-none",
+                  // tint accent via token (--accent-bg = mesmo hex de antes)
+                  "data-[highlighted]:bg-accent-bg data-[highlighted]:text-[var(--state-info-fg)]",
                   "data-[state=checked]:font-semibold",
                 )}
               >

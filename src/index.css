@@ -8,6 +8,30 @@
   --text-dim: #9aa7b4;
   --text-muted: #5b6b7a;
   --accent: #38bdf8;
+  /* ── Tints de INTERAÇÃO (fonte única; antes hex hardcoded nos átomos
+     Button/SegmentedControl/Select e em .rail-item.on). Valores = exatamente
+     os hexes anteriores — a cor renderizada NÃO mudou, só a fonte dela.
+     Espelhados no @theme do tailwind.css (bg-accent-bg, bg-ctrl-bg, …). */
+  --accent-bg: #0b3a4a; /* fundo de seleção/ação primária (tint accent)       */
+  --accent-bg-hover: #0e4a5e; /* hover do anterior                                  */
+  --accent-border: #155e75; /* borda de ação primária (= --state-info-border)     */
+  --accent-contrast: #04121a; /* texto sobre superfície accent SÓLIDA (CTA, skip-link) */
+  --ctrl-bg: #1a2430; /* fundo de controle neutro (botão default)           */
+  --ctrl-bg-hover: #22303f; /* hover do anterior                                  */
+  --danger-bg: #3a1518; /* fundo do botão danger — tint interativo, mais claro
+                             que --state-critical-bg (#2a1113); manteve o hex
+                             original p/ não mudar a cor renderizada           */
+  --danger-bg-hover: #4a1a1e; /* hover do anterior                                  */
+  /* ── Tipografia — 7 papéis (padrão da casa, analises/plano-padronizacao-visual.md).
+     Espelho no @theme do tailwind.css → utilities text-micro … text-kpi.
+     text-[Npx] é proibido em código de página. */
+  --fs-micro: 10px; /* legenda técnica (eixos/unidades; mono se numérico) */
+  --fs-label: 11px; /* título de seção uppercase, metadado                */
+  --fs-sec: 12px; /* secundário/hint/célula densa                       */
+  --fs-body: 13px; /* corpo e controles (base)                           */
+  --fs-title: 14px; /* título de página/dialog                            */
+  --fs-hero: 18px; /* destaque de conteúdo                               */
+  --fs-kpi: 24px; /* número de KPI — ÚNICO tamanho                      */
   /* Tokens de estado LEGADOS → agora ALIASES dos --state-* (going-gray R3.1).
      A FONTE ÚNICA da verdade são os --state-* (definidos abaixo). Estes nomes
      antigos permanecem APENAS por compatibilidade: ReportPage/FadigaView/UsersPage
@@ -146,44 +170,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Controles de formulário — base no tema escuro (evita fundo branco do navegador).
-   Componentes podem sobrepor tamanho via classe (.rep-select, .zone-* select, etc.). */
-select,
-input[type="text"],
-input[type="number"],
-input[type="search"],
-textarea {
-  font-family: var(--sans);
-  font-size: 12px;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  height: 30px;
-  padding: 0 8px;
-}
-textarea {
-  height: auto;
-  padding: 6px 8px;
-}
-select {
-  cursor: pointer;
-}
-select:disabled,
-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-select option {
-  background: var(--panel);
-  color: var(--text);
-}
-select:focus,
-input:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+/* Controles de formulário: o CSS global de select/input/textarea foi REMOVIDO
+   (padronização A1). Não existe <select> nativo em nenhum .tsx (tudo é o átomo
+   Radix Select) e os inputs nativos restantes são os átomos Input/Textarea
+   (autossuficientes via utilities) e a busca do AppShell (estilizada por
+   appshell.css). O bloco antigo, por ser não-camadado, ainda SOBRESCREVIA os
+   átomos (altura 30px/12px/fundo --panel vs. o contrato 34px/13px/--panel-2). */
 
 .app {
   display: grid;
@@ -197,7 +189,7 @@ textarea:focus {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--sp-4);
   padding: 10px 16px;
   background: linear-gradient(180deg, #0e141b, #0b0f14);
   border-bottom: 1px solid var(--border);
@@ -208,7 +200,7 @@ textarea:focus {
   gap: 8px;
 }
 .brand b {
-  font-size: 15px;
+  font-size: var(--fs-title); /* 15px → papel title (14) */
   letter-spacing: 0.2px;
 }
 .brand span {
@@ -456,7 +448,7 @@ label.file input {
   height: 4px;
   background: #0a1219;
   border-radius: 3px;
-  margin-top: 7px;
+  margin-top: var(--sp-2);
   overflow: hidden;
 }
 .bar > i {
@@ -485,7 +477,7 @@ label.file input {
 .tl li {
   display: flex;
   gap: 8px;
-  padding: 5px 0;
+  padding: var(--sp-1) 0;
   border-bottom: 1px dashed var(--border-soft);
   font-size: 12px;
 }
@@ -626,7 +618,7 @@ label.file input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 10px;
+  padding: var(--sp-2) 10px;
   border-top: 1px solid var(--border-soft);
 }
 .tile-name {
@@ -686,7 +678,7 @@ label.file input {
   align-items: center;
   gap: 8px;
   background: rgba(5, 8, 12, 0.72);
-  padding: 7px 12px;
+  padding: var(--sp-2) var(--sp-3);
   border-radius: 999px;
   border: 1px solid var(--border);
 }
@@ -751,19 +743,31 @@ label.file input {
   z-index: 5;
 }
 /* .rep-select → átomo Select; .seg/.seg-btn → átomo SegmentedControl */
-/* Relatório em abas: topo fixo (KPIs/insight/filtros); só o painel da aba ativa rola. */
+/* ── Relatório em abas — CADEIA DE SCROLL (fix runtime 1366/1920) ──────────
+   .rep-body é a coluna que preenche a página (flex:1 via .report.page) e ROLA
+   quando o conteúdo excede (o antigo overflow:hidden CLIPAVA as abas em 1366,
+   sem scroll — bug). Quando o conteúdo CABE, a área de abas (.rep-tabs, átomo
+   Tabs) flexiona p/ ocupar o espaço livre e só o painel da aba ativa rola. */
 .rep-body {
   min-height: 0;
-  overflow: hidden;
-  padding: var(--sp-3);
+  overflow-y: auto; /* scroll REAL em vez de corte */
+  padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4); /* section-gap = --sp-4 (padrão da casa) */
 }
-/* .rep-tabs → átomo SegmentedControl */
+/* A área de abas cresce p/ preencher a viewport (mata o "squeeze" em 1920);
+   min-height:auto ANULA o min-h-0 do átomo Tabs: o bloco nunca colapsa abaixo
+   do próprio mínimo — é ele que empurra o .rep-body a rolar em viewport curta. */
+.rep-body > .rep-tabs {
+  flex: 1 1 auto;
+  min-height: auto;
+}
 .rep-tabpanel {
   flex: 1;
-  min-height: 0;
+  /* piso de usabilidade (não é altura fixa): abaixo disso o scroll passa a ser
+     do .rep-body inteiro, em vez de espremer o painel até sumir. */
+  min-height: 260px;
   overflow: auto;
 }
 .rep-2col {
@@ -796,11 +800,11 @@ label.file input {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: var(--sp-4);
 }
 .kpi.big .v {
   font-family: var(--mono);
-  font-size: 26px;
+  font-size: var(--fs-kpi); /* 26px → papel kpi (24, tamanho único) */
   font-weight: 700;
   line-height: 1.1;
 }
@@ -830,7 +834,7 @@ label.file input {
 .rep-cols {
   display: grid;
   grid-template-columns: 1.6fr 1fr;
-  gap: 14px;
+  gap: var(--sp-4);
 }
 @media (max-width: 1000px) {
   .kpi-row {
@@ -844,7 +848,7 @@ label.file input {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 14px;
+  padding: var(--sp-4); /* card-padding = --sp-4 (padrão da casa; era 14px) */
 }
 .panel h3 {
   margin: 0 0 12px;
@@ -869,7 +873,7 @@ label.file input {
 }
 .hm-h {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro); /* 9px → papel micro (10) */
   color: var(--text-muted);
   text-align: center;
 }
@@ -897,7 +901,12 @@ label.file input {
   flex: 1;
   height: 8px;
   border-radius: 4px;
-  background: linear-gradient(90deg, rgba(40, 55, 72, 0.3), #eab308, #ef4444);
+  background: linear-gradient(
+    90deg,
+    rgba(40, 55, 72, 0.3),
+    var(--state-warn),
+    var(--state-critical)
+  );
   max-width: 220px;
 }
 
@@ -924,7 +933,7 @@ label.file input {
 .rank-bar > i {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #eab308, #ef4444);
+  background: linear-gradient(90deg, var(--state-warn), var(--state-critical));
 }
 
 /* Evolução */
@@ -947,12 +956,13 @@ label.file input {
 .evo-bar {
   width: 60%;
   min-height: 2px;
-  background: linear-gradient(180deg, #38bdf8, #0e7490);
+  /* #0e7490 (cyan escuro do degradê) não tem token — decorativo, retido. */
+  background: linear-gradient(180deg, var(--accent), #0e7490);
   border-radius: 3px 3px 0 0;
 }
 .evo-lbl {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro); /* 9px → papel micro (10) */
   color: var(--text-muted);
 }
 
@@ -993,14 +1003,14 @@ label.file input {
   background: var(--state-ok-bg);
   border: 1px solid var(--state-ok-border);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: var(--sp-3) var(--sp-4);
 }
 .insight b {
   color: var(--state-ok);
 }
 .insight ul {
   margin: 8px 0 0;
-  padding-left: 18px;
+  padding-left: var(--sp-4);
   color: var(--text);
 }
 .insight li {
@@ -1112,41 +1122,34 @@ label.file input {
   }
 }
 
-/* Limite por área (zone card) */
+/* Limite por área (zone card) — regras de <select> nativo removidas (morto:
+   o controle é o átomo Radix Select). */
 .zone-limit {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 7px;
+  margin-top: var(--sp-2);
   font-size: 11px;
   color: var(--text-dim);
-}
-.zone-limit select {
-  font-size: 11px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 5px;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-.zone-limit select:disabled {
-  opacity: 0.5;
 }
 .zone-limit .muted {
   font-size: 10px;
 }
 
-/* Estado LENTA (baixa movimentação / gargalo) */
+/* Estado LENTA (baixa movimentação / gargalo).
+   DECISÃO (padronização A1): o laranja #fb923c estava FORA da paleta de estados;
+   LENTA mapeia p/ --state-warn — exatamente o contrato documentado no mapa
+   estado→token acima (LENTA → --state-warn, mesma família de OCIOSA/gargalo). */
 .zone.LENTA {
-  border-left-color: #fb923c;
+  border-left-color: var(--state-warn);
 }
 .badge.LENTA {
-  color: #fb923c;
-  background: #2a1808;
+  color: var(--state-warn);
+  background: var(--state-warn-bg);
 }
 
-/* Sensibilidade por área (slider) */
+/* Sensibilidade por área (slider) — regra de input[type=range] nativo removida
+   (morto: o controle é o átomo Radix Slider; ui.css cobre [data-orientation]). */
 .zone-sens {
   display: flex;
   align-items: center;
@@ -1154,12 +1157,6 @@ label.file input {
   margin-top: 6px;
   font-size: 11px;
   color: var(--text-dim);
-}
-.zone-sens input[type="range"] {
-  flex: 1;
-  height: 3px;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 .zone-sens .ss-end {
   font-family: var(--mono);
@@ -1215,8 +1212,8 @@ label.file input {
   color: var(--text);
 }
 .rail-item.on {
-  background: #0b3a4a;
-  color: #bae6fd;
+  background: var(--accent-bg);
+  color: var(--state-info-fg);
 }
 .rail-item .ri-ic {
   width: 18px;
@@ -1423,7 +1420,7 @@ button.rail-item {
 }
 .rc-k b {
   font-family: var(--mono);
-  font-size: 20px;
+  font-size: var(--fs-kpi); /* 20px → papel kpi (24, tamanho único) */
   font-weight: 600;
   color: var(--text);
 }
@@ -1528,7 +1525,21 @@ button.rail-item {
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
-/* inputs/botão do login agora usam os átomos (ui-input/ui-btn) */
+/* Inputs do login usam os átomos (Input/Field). O botão "Entrar" é o átomo
+   Button variant=primary — cujo tint escuro (--accent-bg) sobre o card rendia
+   contraste baixíssimo (achado da auditoria de runtime). Ação primária ÚNICA
+   da tela → accent SÓLIDO com texto escuro (going-gray permite accent em ação
+   primária). Regra não-camadada: vence as utilities do átomo por design. */
+.login-card button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.login-card button[type="submit"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+  border-color: color-mix(in srgb, var(--accent) 85%, white);
+}
 .login-err {
   color: var(--state-critical);
   font-size: 12px;
@@ -1609,7 +1620,7 @@ button.rail-item {
   transform: translateX(-50%);
   background: rgba(127, 29, 29, 0.92);
   color: #fff;
-  border: 1px solid #ef4444;
+  border: 1px solid var(--state-critical);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius);
   font-size: 13px;
@@ -1802,17 +1813,13 @@ button.rail-item {
     font-size: 12px;
   }
 
-  /* Alvos de toque ≥44px (WCAG 2.5.5) — icon-buttons e selects pequenos. */
+  /* Alvos de toque ≥44px (WCAG 2.5.5) — icon-buttons e inputs nativos.
+     (Regras de <select> nativo removidas — morto; tudo é o átomo Radix.) */
   .zone .del,
   .ws-zone-head .del {
     min-width: 44px;
     min-height: 44px;
   }
-  .zone-limit select,
-  .zone-act select {
-    height: 44px;
-  }
-  select,
   input[type="text"],
   input[type="number"],
   input[type="search"] {
@@ -1861,6 +1868,7 @@ button.rail-item {
   opacity: 0.65;
   border-radius: 1px;
 }
+/* (.zone-act select removido — morto: o controle é o átomo Radix Select.) */
 .zone-act {
   display: flex;
   align-items: center;
@@ -1868,15 +1876,6 @@ button.rail-item {
   margin-top: var(--sp-2);
   font-size: 11px;
   color: var(--text-dim);
-}
-.zone-act select {
-  font-size: 11px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
 }
 
 /* Câmera aberta como overlay (grade segue montada/gravando por baixo) */
@@ -2373,7 +2372,7 @@ button.rail-item {
   text-align: center;
 }
 .ws-kpis .kpi .v {
-  font-size: 16px;
+  font-size: var(--fs-hero); /* 16px → papel hero (18, = .kpi .v base) */
 }
 .ws-wait {
   font-size: 11px;
@@ -2542,7 +2541,7 @@ button.rail-item {
   color: var(--text-dim);
   cursor: pointer;
 }
-.calib-row input[type="range"],
+/* (seletor input[type=range] removido — morto: o controle é o átomo Radix Slider) */
 .calib-row [data-orientation] {
   grid-column: 1 / -1;
   width: 100%;

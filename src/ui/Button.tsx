@@ -25,19 +25,21 @@ const BTN_BASE = cx(
 );
 
 // bg/hover/borda/cor por variante (uma só declaração de cada por botão → sem colisão de utilities).
+// Tints via tokens do @theme (--ctrl-bg/--accent-bg/--danger-bg em index.css :root) —
+// mesmos valores dos hexes antigos; a fonte da cor mudou, a cor renderizada não.
 const BTN_VARIANT: Record<Variant, string> = {
-  default: "bg-[#1a2430] text-text border-border hover:bg-[#22303f]",
+  default: "bg-ctrl-bg text-text border-border hover:bg-ctrl-bg-hover",
   primary:
-    "bg-[#0b3a4a] text-[var(--state-info-fg)] border-[var(--state-info-border)] hover:bg-[#0e4a5e]",
+    "bg-accent-bg text-[var(--state-info-fg)] border-accent-border hover:bg-accent-bg-hover",
   danger:
-    "bg-[#3a1518] text-[var(--state-critical-fg)] border-[var(--state-critical-border)] hover:bg-[#4a1a1e]",
+    "bg-danger-bg text-[var(--state-critical-fg)] border-[var(--state-critical-border)] hover:bg-danger-bg-hover",
   ghost: "bg-transparent text-text border-transparent hover:bg-panel",
 };
 
 // altura/padding/fonte por tamanho (sm ganha alvo de toque ≥44px em <=640px, WCAG 2.5.5).
 const BTN_SIZE: Record<NonNullable<ButtonProps["size"]>, string> = {
-  md: "h-[34px] px-3 text-[13px]",
-  sm: "h-7 px-2 text-[12px] max-[640px]:min-h-[44px]",
+  md: "h-[34px] px-3 text-body",
+  sm: "h-7 px-2 text-sec max-[640px]:min-h-[44px]",
 };
 
 // active: contorno de foco/seleção (equivale a outline: 2px solid var(--accent); offset 1px).
@@ -69,9 +71,9 @@ export type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 // Botão quadrado (34px) só-ícone. Só a cor de fundo transiciona (como .ui-iconbtn).
 const ICONBTN_BASE = cx(
   "box-border inline-flex items-center justify-center size-[34px] cursor-pointer",
-  "rounded-[6px] border border-border bg-[#1a2430] text-text",
+  "rounded-[6px] border border-border bg-ctrl-bg text-text",
   "transition-[background-color] duration-[120ms]",
-  "hover:bg-[#22303f]",
+  "hover:bg-ctrl-bg-hover",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
   "disabled:opacity-45 disabled:cursor-not-allowed",
   "max-[640px]:min-w-[44px] max-[640px]:min-h-[44px]",
