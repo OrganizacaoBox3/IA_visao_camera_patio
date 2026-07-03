@@ -1,26 +1,27 @@
 {
   "_doc": "Limiares MÍNIMOS do sensor de regressão de acurácia (eval/gate.mjs, plano-acuracia-modelos §3.3). Calibrados a partir da medição ATUAL no fixture (eval/fixture) menos a margem de tolerância, para absorver ruído de execução sem deixar passar regressão real. Cada 'min'/'max' é o piso/teto aceitável; 'type: min' reprova abaixo, 'type: max' reprova acima.",
-  "_model": "dfine_n_coco.onnx",
+  "_model": "dfine_s_obj2coco.onnx",
+  "_baseline": "O DEFAULT DE PRODUÇÃO passou a ser o D-FINE-S obj2coco (recall de pessoa média/pequena ~dobra vs o N — eval/MODELS.md). Estes patamares SUBIRAM ao trocar N→S: F1@0.35 32%→77%, recall@0.25 48%→88%, precisão@0.35 48%→69%. O gate roda o mesmo default (ANALYSIS_MODEL=s); para medir outro modelo use ANALYSIS_MODEL=n|m ou ANALYSIS_MODEL_PATH. Nota honesta: no fixture pequeno (8 vazias) o S manteve fp_empties@0.50=0; a alucinação do S em cena vazia (7 em 150 no full-set — eval/MODELS.md) NÃO aparece nesta amostra e é tratada pela Medida A (zona de exclusão).",
   "_margin_pp": 5,
   "_recalibrate": "AO TROCAR de modelo/threshold/NMS: rode `node eval/gate.mjs --calibrate` para reescrever os limiares a partir do novo patamar (medido - margem) e revise o diff. NÃO recalibre para mascarar uma regressão não intencional.",
-  "_calibratedAt": "2026-07-03T16:51:51.187Z",
+  "_calibratedAt": "2026-07-03T17:31:48.611Z",
   "checks": {
     "f1_all@0.35": {
       "type": "min",
-      "min": 0.3199,
-      "_measured": "37%",
+      "min": 0.7708,
+      "_measured": "82.1%",
       "_desc": "F1 (person, todos os tamanhos) no threshold de operação 0.35 — equilíbrio precisão×recall do motor."
     },
     "recall_all@0.25": {
       "type": "min",
-      "min": 0.4763,
-      "_measured": "52.6%",
+      "min": 0.8763,
+      "_measured": "92.6%",
       "_desc": "Recall (person) no threshold mais permissivo 0.25 — teto de 'enxerga pessoas?'; queda aqui = modelo ficou cego."
     },
     "precision_all@0.35": {
       "type": "min",
-      "min": 0.4794,
-      "_measured": "52.9%",
+      "min": 0.6936,
+      "_measured": "74.4%",
       "_desc": "Precisão (person) a 0.35 — queda = motor passou a inventar mais pessoas onde há gente e onde não há."
     },
     "fp_empties@0.50": {

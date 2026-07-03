@@ -1,5 +1,10 @@
 # eval/MODELS.md — Comparativo de capacidade do detector (N vs S vs M)
 
+> **DECISÃO (jul/2026):** o **default de produção do motor é o D-FINE-S obj2coco**
+> (`ANALYSIS_MODEL=s` no `engine.js`; ver `server/analysis/README.md §Modelo`). O gate de acurácia
+> (`eval/thresholds.json`) foi **recalibrado sobre o S** — os patamares subiram (F1@0.35 32%→77%,
+> recall@0.25 48%→88%). `ANALYSIS_MODEL=n` volta ao nano onde o CPU for o limite duro.
+
 > **Pergunta:** mais capacidade conserta o recall de pessoa média/pequena (o nosso
 > gargalo) — e a que custo de CPU? Medido no **harness real de produção** (`fork` de
 > `server/analysis/worker.js`, modo **squash 640**, CPU EP, `intraOpNumThreads=2`),

@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const {
   attributeZone,
+  inExclusionZone,
   createMask,
   anySet,
   containsNorm,
@@ -137,5 +138,46 @@ describe("helpers de máscara — paridade com src/zoneMask.ts", () => {
     expect(anySet(m)).toBe(true);
     expect(containsNorm(m, 0.1, 0.1)).toBe(true);
     expect(containsNorm(m, 0.9, 0.9)).toBe(false);
+  });
+});
+
+// Zona de exclusão: critério = o PÉ (bottom-center do bbox), não o centro (Medida A).
+describe("inExclusionZone — âncora no pé (bottom-center), mask-aware", () => {
+  const zEx = { x: 0.4, y: 0.6, w: 0.2, h: 0.3 }; // retângulo no canto inferior-central
+
+  it("lista vazia / ausente → false", () => {
+    expect(inExclusionZone([0.45, 0.7, 0.1, 0.15], [])).toBe(false);
+    expect(inExclusionZone([0.45, 0.7, 0.1, 0.15], null)).toBe(false);
+  });
+
+  it("PÉ dentro do retângulo → true; PÉ fora → false", () => {
+    // bbox cujo pé (x+w/2=0.5, y+h=0.75) cai dentro da zona
+    expect(inExclusionZone([0.45, 0.6, 0.1, 0.15], [zEx])).toBe(true);
+    // mesmo bbox deslocado p/ a direita: pé em x=0.9 → fora
+    expect(inExclusionZone([0.85, 0.6, 0.1, 0.15], [zEx])).toBe(false);
+  });
+
+  it("ancora no PÉ, não no centro: centro fora mas pé dentro → true", () => {
+    // bbox alto: centro em y=0.5 (acima da zona, y≥0.6) mas o pé em y=0.7 entra
+    const bbox = [0.45, 0.3, 0.1, 0.4]; // pé = (0.5, 0.7)
+    const cy = bbox[1] + bbox[3] / 2; // 0.5 — fora da zona
+    expect(cy < zEx.y).toBe(true); // o centro NÃO entraria
+    expect(inExclusionZone(bbox, [zEx])).toBe(true); // mas o pé sim
+  });
+
+  it("aceita ponto {x,y} já no pé", () => {
+    expect(inExclusionZone({ x: 0.5, y: 0.7 }, [zEx])).toBe(true);
+    expect(inExclusionZone({ x: 0.1, y: 0.1 }, [zEx])).toBe(false);
+  });
+
+  it("mask-aware: pé no retângulo mas fora da máscara pintada → false", () => {
+    // máscara cobrindo só a metade ESQUERDA da zona (célula da esquerda)
+    const m = createMask(2, 1);
+    fillRectNorm(m, 0, 0, 0.5, 1, true); // só col 0 (x<0.5) pintada
+    const z = { ...zEx, mask: encodeMask(m) };
+    // pé em x=0.45 → col 0 (pintada) → exclui
+    expect(inExclusionZone([0.4, 0.6, 0.1, 0.2], [z])).toBe(true);
+    // pé em x=0.55 → dentro do retângulo mas col 1 (não pintada) → não exclui
+    expect(inExclusionZone([0.5, 0.6, 0.1, 0.2], [z])).toBe(false);
   });
 });

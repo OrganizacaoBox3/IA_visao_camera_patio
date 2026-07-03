@@ -14,6 +14,7 @@ relé de frames (index.js webcam · rtsp.js ffmpeg)
 engine.js (in-process no hub)
   · amostra @ANALYSIS_FPS (default 1) e envia ao worker (1 pedido em voo/câmera)
   · câmera com CameraCfg.longRange (camcfg) → pedido leva tiles 2×2 (F3, ver §Longo alcance)
+  · dets "person" cujo PÉ cai em zona modo "exclusao" → DESCARTADAS aqui (§Zona de exclusão)
   · dets "person" → bytetrack.js (por câmera) → counting.js (tripwires do camcfg)
   · zonas modo "atividade" (camcfg) → people/occupied por zona (janela ~3s)
   · pgstore.ingest DIRETO ("flow"/"cross" e "ativ"/"samples" — formatos do front)
@@ -33,14 +34,30 @@ worker.js (child_process — processo SEPARADO: ORT serializa inferência por pr
 `bytetrack.js`, `counting.js` e `zones.js` são ports 1:1 dos módulos TS do front
 (frente F1-B) — mesmas APIs, mesmos testes de paridade.
 
-## Modelo
+## Modelo — N / S / M (env `ANALYSIS_MODEL`, default **S**)
 
-- Arquivo: `server/models/dfine_n_coco.onnx` (**gitignored**), fp32, 15.258.358 bytes,
-  sha256 `0f684f409618ee8a822410e754a29caa817d1aa16283ce89cad936d0a48e2f35`.
-- Fonte (a mesma do spike): `https://huggingface.co/onnx-community/dfine_n_coco-ONNX`
-  (`onnx/model.onnx`, base `ustc-community/dfine-nano-coco`, **Apache-2.0**).
-- Baixado no boot com verificação de tamanho + sha256 (escrita atômica). Sem rede no deploy?
-  Copie o arquivo manualmente para `server/models/` — o boot valida o sha e segue.
+O **default de produção é o D-FINE-S obj2coco** (`ANALYSIS_MODEL=s`): no harness de acurácia
+(`eval/MODELS.md`) o recall de pessoa **média/pequena ~dobra** vs o N — exatamente o gargalo que
+travava a contagem de linha (`analises/acuracia-modelos.md §3`) — a **~2.4× o CPU**. Os três são a
+**mesma arquitetura D-FINE** (input `pixel_values` 640, saídas `logits[1,300,80]`+`pred_boxes[1,300,4]`,
+COCO 80) → **drop-in absoluto**: só troca o `.onnx`. Todos `onnx-community/*-ONNX`, **Apache-2.0**, fp32,
+`onnx/model.onnx`, baixados no boot com verificação de tamanho + sha256 (escrita atômica).
+
+| `ANALYSIS_MODEL` | arquivo (`server/models/`, **gitignored**) | bytes | cam/core @1fps¹ | quando usar |
+|---|---|---|---|---|
+| `n` | `dfine_n_coco.onnx` | 15.258.358 | ~2.2 (≈17/8C) | **CPU-bound** — muitas câmeras num hub fraco; aceita recall menor |
+| `s` **(default)** | `dfine_s_obj2coco.onnx` | 41.535.197 | ~0.93 (≈7/8C) | **produção** — o gargalo (média/pequena) consertado |
+| `m` | `dfine_m_obj2coco.onnx` | 78.624.257 | ~0.53 (≈4/8C) | teto de robustez, hub sobrando CPU (+3–7pp sobre S por ~2× o custo) |
+
+¹ medido no full-set squash 640, CPU EP 2 threads (`eval/MODELS.md`) — **piso** (medido sob carga).
+**CPU-bound?** `ANALYSIS_MODEL=n` volta ao nano (mais câmeras/core, menos recall).
+
+- **Fallback:** se o download do S/M falhar no boot (e `ANALYSIS_MODEL_PATH` não estiver fixado), o
+  motor **cai para o N** com aviso e o hub segue analisando; se o N também falhar, o motor desliga
+  (hub segue normal). Fixe `ANALYSIS_MODEL=n` para evitar o caminho de fallback.
+- **Sem rede no deploy?** Copie o `.onnx` do modelo escolhido para `server/models/` — o boot valida o
+  sha e segue. `ANALYSIS_MODEL_PATH=<.onnx>` fixa um arquivo explícito (sem catálogo/fallback; sha do
+  catálogo não é forçado) — é o que o `eval/` usa para comparar modelos.
 
 ## Liga/desliga (contrato)
 
@@ -54,10 +71,30 @@ Ou seja: rode o 1º boot com `ANALYSIS_ENABLED=1` (baixa o modelo); dali em dian
 
 ## Env (defaults entre parênteses)
 
-`ANALYSIS_FPS` (1) · `ANALYSIS_HIGH_SCORE` (0.35 — nascimento/1ª passada do ByteTrack; o worker
-devolve ≥`ANALYSIS_SCORE_MIN`=0.25, que sustenta tracks na 2ª passada) · `ANALYSIS_AGG_MS`
-(3000 — janela do ingest "ativ") · `ANALYSIS_INTRA_THREADS` (2) · `ANALYSIS_NMS_IOU` (0.6) ·
-`ANALYSIS_MODEL_PATH` (server/models/dfine_n_coco.onnx).
+`ANALYSIS_MODEL` (**s** — `n|s|m`; ver §Modelo) · `ANALYSIS_FPS` (1) · `ANALYSIS_HIGH_SCORE`
+(0.35 — nascimento/1ª passada do ByteTrack; o worker devolve ≥`ANALYSIS_SCORE_MIN`=0.25, que
+sustenta tracks na 2ª passada) · `ANALYSIS_AGG_MS` (3000 — janela do ingest "ativ") ·
+`ANALYSIS_INTRA_THREADS` (2) · `ANALYSIS_NMS_IOU` (0.6) · `ANALYSIS_MODEL_PATH` (fixa um `.onnx`
+explícito; ignora `ANALYSIS_MODEL` e o fallback).
+
+## Zona de exclusão (supressão de FP estático — Medida A)
+
+Zona com **`modo: "exclusao"`** no camcfg: a detecção de pessoa cujo **PÉ (bottom-center do bbox:
+`x+w/2`, `y+h`)** cai dentro dela (**mask-aware** se a zona tem máscara pintada) é **DESCARTADA no
+engine ANTES de ByteTrack/counter/zonas/ingest/emit** — não conta, não rastreia, não vira overlay.
+
+**Por quê:** o soak (`analises/acuracia-modelos.md §2`) mediu que **47–86% dos FP** vêm de poucos
+**objetos fixos** (grade/placa, janela escura de van, estruturas à beira-lago) lidos como torso/cabeça
+no piso de confiança. Como o FP é **espacialmente preso** e a pessoa real **se move**, mascarar o
+hotspot mata o FP **sem custar recall**. Ancorar no **pé** (não no centro) casa a supressão com o chão
+do objeto. Helper: `zones.js inExclusionZone(bbox|ponto, zonasExcl)`; o engine mantém `st.zonesExcl`
+(recarregado no `camcfg-updated` kind `"zones"`, como as de atividade). `GET /api/analysis/status`
+expõe `excluded1m` por câmera (aditivo) = dets suprimidas em 60s.
+
+> Dependência de contrato (frente do front): `server/camcfg.js` precisa aceitar `"exclusao"` no
+> conjunto de modos de zona (`ZONE_MODES`) e a UI precisa desenhar a zona nesse modo — senão o
+> `cleanZone` rebaixa `modo` para `"atividade"` na persistência e o engine nunca vê a zona de
+> exclusão. (Mesmo padrão da nota de `longRange` abaixo.)
 
 ## Longo alcance / Panorâmica (tiling 2×2 — F3)
 
@@ -110,7 +147,8 @@ fora do alcance do nano (limite do modelo, não do tiling).
     (`io.sockets.adapter.rooms.get("dashboards")?.size`).
 - **HTTP** `GET /api/analysis/status` (autenticado) → `{ enabled, model, targetFps,
   worker:{ready,pid,respawns,cpuPct}, perCamera:{ [id]: {fps, queue, lastMs, dets1m,
-  longRange} } }` (`longRange` aditivo — F3: true = rodada com tiling 2×2).
+  excluded1m, longRange} } }` (`excluded1m` aditivo — dets suprimidas por zona de exclusão em 60s;
+  `longRange` aditivo — F3: true = rodada com tiling 2×2).
 - **Shed**: câmera analisada conta como espectador — `rtsp.setAnalysisViewer()` impede o
   `idleSource` de pausar o ffmpeg. Webcam ainda pode ser rebaixada a `SHED_WEBCAM_FPS` (2fps ≥
   cadência de análise; o nó economiza CPU e o motor não perde nada).
@@ -125,6 +163,8 @@ Persistem-se apenas indicadores agregados/metadados — exatamente os mesmos de 
 
 ## Dimensionamento (spike §7)
 
-~0,2 core/câmera @1fps (worker 1-2 threads) + ~190-240 MB RSS do worker (modelo carregado).
-Ultrabook 4C/8T ≈ 8-10 câmeras @1fps; desktop 8C/16T ≈ 16-24. CPU EP **only** (DML retorna
-saída errada; WebGPU crasha — spike §5). Pessoa <~25px segue fora do alcance do nano.
+Custo por câmera @1fps depende do modelo (`eval/MODELS.md`, CPU EP 2 threads): **S** (default)
+~1,07 core·s/frame → **~0,9 câmera/core** (8C/16T ≈ **~7 câmeras** @1fps); **N** ~0,45 → ~2,2
+câmera/core (≈17); **M** ~1,88 → ~0,53 (≈4). RSS do worker ~190–260 MB (modelo carregado; S/M um
+pouco acima do N). CPU EP **only** (DML retorna saída errada; WebGPU crasha — spike §5). Pessoa
+<~25px segue fora do alcance do modelo a 640 (limite de amostragem, não do modelo).

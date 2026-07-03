@@ -150,8 +150,42 @@ function attributeZone(target, zones) {
   return best ? (best.label ?? null) : null;
 }
 
+// ── zona de exclusão (calibração — analises/acuracia-modelos.md Medida A) ────
+/**
+ * A pessoa está numa zona de EXCLUSÃO? Critério = o PÉ (bottom-center do bbox: cx,
+ * y+h) dentro do retângulo de ALGUMA zona, respeitando a MÁSCARA quando pintada.
+ * Diferente do attributeZone (que usa o CENTRO): FP de objeto fixo — grade, placa,
+ * janela de van — é lido no CHÃO da caixa, então ancorar no pé casa a supressão
+ * exatamente onde o objeto está. Serve p/ o engine DESCARTAR a detecção ANTES de
+ * tracking/contagem/ingest. `zones` já deve vir filtrado por modo ("exclusao").
+ * @param {[number,number,number,number] | {x?:number,y?:number,cx?:number,cy?:number}} target
+ *   bbox normalizado [x,y,w,h] (deriva o pé) OU um ponto {x,y}/{cx,cy} já no pé.
+ * @param {Array<{x:number,y:number,w:number,h:number,mask?:string}>} zones
+ * @returns {boolean}
+ */
+function inExclusionZone(target, zones) {
+  if (!zones || zones.length === 0) return false;
+  let fx, fy;
+  if (Array.isArray(target)) {
+    fx = target[0] + target[2] / 2; // pé: centro horizontal
+    fy = target[1] + target[3]; //     base vertical do bbox
+  } else {
+    fx = target.x ?? target.cx;
+    fy = target.y ?? target.cy;
+  }
+  if (typeof fx !== "number" || typeof fy !== "number") return false;
+  for (const z of zones) {
+    if (fx < z.x || fx > z.x + z.w || fy < z.y || fy > z.y + z.h) continue;
+    const mc = maskFor(z.mask);
+    if (mc && mc.any && !containsNorm(mc.mask, fx, fy)) continue; // fora da máscara → não exclui
+    return true;
+  }
+  return false;
+}
+
 module.exports = {
   attributeZone,
+  inExclusionZone,
   // helpers de máscara (mesma semântica do zoneMask.ts; exportados p/ testes/engine)
   createMask,
   anySet,

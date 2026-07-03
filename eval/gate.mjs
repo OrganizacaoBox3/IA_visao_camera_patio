@@ -27,8 +27,17 @@ import { fork } from "node:child_process";
 const EVAL_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(EVAL_DIR);
 const WORKER = path.join(ROOT, "server", "analysis", "worker.js");
+// Modelo do gate = o DEFAULT de produção (D-FINE-S obj2coco). Resolvido igual ao engine:
+// ANALYSIS_MODEL = n|s|m (default s); ANALYSIS_MODEL_PATH fixa um .onnx explícito.
+const MODEL_FILES = {
+  n: "dfine_n_coco.onnx",
+  s: "dfine_s_obj2coco.onnx",
+  m: "dfine_m_obj2coco.onnx",
+};
+const MODEL_KEY = (process.env.ANALYSIS_MODEL || "s").toLowerCase();
 const MODEL =
-  process.env.ANALYSIS_MODEL_PATH || path.join(ROOT, "server", "models", "dfine_n_coco.onnx");
+  process.env.ANALYSIS_MODEL_PATH ||
+  path.join(ROOT, "server", "models", MODEL_FILES[MODEL_KEY] || MODEL_FILES.s);
 const FIXTURE_DIR = path.join(EVAL_DIR, "fixture");
 const FIXTURE_IMG = path.join(FIXTURE_DIR, "img");
 const FIXTURE_MANIFEST = path.join(FIXTURE_DIR, "manifest-fixture.json");

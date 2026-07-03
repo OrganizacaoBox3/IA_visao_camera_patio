@@ -59,15 +59,43 @@ const camcfg = require("../camcfg");
 const pgstore = require("../pgstore");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
-const { attributeZone } = require("./zones");
+const { attributeZone, inExclusionZone } = require("./zones");
 
-// ── Modelo (mesma fonte do spike: onnx-community/dfine_n_coco-ONNX, Apache-2.0) ──
-const MODEL_PATH =
-  process.env.ANALYSIS_MODEL_PATH || path.join(__dirname, "..", "models", "dfine_n_coco.onnx");
-const MODEL_URL =
-  "https://huggingface.co/onnx-community/dfine_n_coco-ONNX/resolve/main/onnx/model.onnx";
-const MODEL_SHA256 = "0f684f409618ee8a822410e754a29caa817d1aa16283ce89cad936d0a48e2f35";
-const MODEL_BYTES = 15_258_358; // fp32, 14,55 MB (int8 descartada por medição — spike §2)
+// ── Modelo: catálogo N/S/M (D-FINE, MESMA arquitetura → drop-in — eval/MODELS.md) ──
+// Resolução por env ANALYSIS_MODEL = n|s|m (default "s"). O default de PRODUÇÃO é o
+// D-FINE-S obj2coco: no fixture/full-set (eval/MODELS.md) o recall de pessoa média/pequena
+// ~DOBRA vs o N — exatamente o gargalo que travava a contagem de linha
+// (analises/acuracia-modelos.md §3) — a ~2.4× o CPU (~0.9 câmera/core @1fps no S vs ~2.2 no
+// N; ~7 vs ~17 câmeras/core). CPU-bound? ANALYSIS_MODEL=n volta ao nano (recall menor, mais
+// câmeras/core). Todos onnx-community/*-ONNX, Apache-2.0, fp32; baixados no boot com sha256.
+const MODELS = {
+  n: {
+    file: "dfine_n_coco.onnx",
+    url: "https://huggingface.co/onnx-community/dfine_n_coco-ONNX/resolve/main/onnx/model.onnx",
+    sha256: "0f684f409618ee8a822410e754a29caa817d1aa16283ce89cad936d0a48e2f35",
+    bytes: 15_258_358, // 14,55 MB
+    label: "D-FINE-N coco",
+  },
+  s: {
+    file: "dfine_s_obj2coco.onnx",
+    url: "https://huggingface.co/onnx-community/dfine_s_obj2coco-ONNX/resolve/main/onnx/model.onnx",
+    sha256: "b9e2e76610053aeeac3b2f1f685d8f9a1182a93a338f624b6c8cb7fb390cb532",
+    bytes: 41_535_197, // 39,6 MB
+    label: "D-FINE-S obj2coco",
+  },
+  m: {
+    file: "dfine_m_obj2coco.onnx",
+    url: "https://huggingface.co/onnx-community/dfine_m_obj2coco-ONNX/resolve/main/onnx/model.onnx",
+    sha256: "347f2faba93248c2e7500c9e604317fb391706c58a04802dd908573376dc1323",
+    bytes: 78_624_257, // 75,0 MB
+    label: "D-FINE-M obj2coco",
+  },
+};
+// ANALYSIS_MODEL_PATH fixa o arquivo explicitamente (usado pelo eval/): sem catálogo/fallback.
+const MODEL_OVERRIDE = process.env.ANALYSIS_MODEL_PATH || "";
+const MODEL_KEY = (process.env.ANALYSIS_MODEL || "s").toLowerCase();
+let modelSpec = MODELS[MODEL_KEY] || MODELS.s; // default de produção: S
+let MODEL_PATH = MODEL_OVERRIDE || path.join(__dirname, "..", "models", modelSpec.file);
 
 // ── Parâmetros de operação (defaults espelham APP_CONFIG.people.track do front) ──
 const FPS = Math.min(4, Math.max(0.2, Number(process.env.ANALYSIS_FPS) || 1));
@@ -115,22 +143,23 @@ function sha256File(file) {
 function modelOk() {
   try {
     const st = fs.statSync(MODEL_PATH);
-    if (st.size !== MODEL_BYTES) return false;
-    return sha256File(MODEL_PATH) === MODEL_SHA256;
+    if (MODEL_OVERRIDE) return st.size > 0; // path fixado pelo operador → confia (não força sha do catálogo)
+    if (st.size !== modelSpec.bytes) return false;
+    return sha256File(MODEL_PATH) === modelSpec.sha256;
   } catch {
     return false;
   }
 }
 
 async function downloadModel() {
-  console.log(`[analysis] baixando modelo D-FINE-N (${(MODEL_BYTES / 1e6).toFixed(1)} MB) de ${MODEL_URL} …`);
-  const res = await fetch(MODEL_URL);
+  console.log(`[analysis] baixando modelo ${modelSpec.label} (${(modelSpec.bytes / 1e6).toFixed(1)} MB) de ${modelSpec.url} …`);
+  const res = await fetch(modelSpec.url);
   if (!res.ok) throw new Error(`HTTP ${res.status} ao baixar o modelo`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length !== MODEL_BYTES)
-    throw new Error(`tamanho inesperado: ${buf.length} bytes (esperado ${MODEL_BYTES})`);
+  if (buf.length !== modelSpec.bytes)
+    throw new Error(`tamanho inesperado: ${buf.length} bytes (esperado ${modelSpec.bytes})`);
   const sha = crypto.createHash("sha256").update(buf).digest("hex");
-  if (sha !== MODEL_SHA256) throw new Error(`sha256 divergente: ${sha} (esperado ${MODEL_SHA256})`);
+  if (sha !== modelSpec.sha256) throw new Error(`sha256 divergente: ${sha} (esperado ${modelSpec.sha256})`);
   fs.mkdirSync(path.dirname(MODEL_PATH), { recursive: true });
   fs.writeFileSync(MODEL_PATH + ".tmp", buf); // escrita atômica: nunca deixa modelo truncado
   fs.renameSync(MODEL_PATH + ".tmp", MODEL_PATH);
@@ -146,7 +175,23 @@ async function ensureModel(allowDownload) {
     await downloadModel();
     return true;
   } catch (e) {
-    console.error(`[analysis] download do modelo FALHOU: ${e.message} — motor de análise DESLIGADO (hub segue normal)`);
+    console.error(`[analysis] download de ${modelSpec.label} FALHOU: ${e.message}`);
+    // Fallback: modelo grande (S/M) indisponível e SEM path fixado → cai p/ o N (recall
+    // menor, mas o hub SEGUE analisando). Ajuste ANALYSIS_MODEL=n p/ evitar este caminho.
+    if (!MODEL_OVERRIDE && modelSpec !== MODELS.n) {
+      modelSpec = MODELS.n;
+      MODEL_PATH = path.join(__dirname, "..", "models", modelSpec.file);
+      console.warn(`[analysis] fallback → ${modelSpec.label} (recall menor que o default S)`);
+      if (modelOk()) return true;
+      try {
+        await downloadModel();
+        return true;
+      } catch (e2) {
+        console.error(`[analysis] fallback ${modelSpec.label} também FALHOU: ${e2.message} — motor DESLIGADO (hub segue normal)`);
+        return false;
+      }
+    }
+    console.error("[analysis] motor de análise DESLIGADO (hub segue normal)");
     return false;
   }
 }
@@ -227,6 +272,13 @@ function ativZonesOf(cameraId) {
   return camcfg.getZones(cameraId).filter((z) => z.modo === "atividade");
 }
 
+// Zonas de EXCLUSÃO (calibração — analises/acuracia-modelos.md Medida A): a pessoa cujo
+// PÉ cai aqui é descartada antes de tracking/contagem/ingest (mata FP de objeto fixo).
+// Contrato compartilhado com o front: modo "exclusao" no camcfg.
+function exclZonesOf(cameraId) {
+  return camcfg.getZones(cameraId).filter((z) => z.modo === "exclusao");
+}
+
 // Perfil "Longo alcance/Panorâmica" da câmera (CameraCfg.longRange — src/cameraConfig.ts).
 // Leitura DEFENSIVA (=== true): config ausente/legada sem o campo → false (squash atual).
 function longRangeOf(cameraId) {
@@ -252,6 +304,7 @@ function createState(id) {
       minCrossingFrames: 2, // histerese: lado novo sustentado 2 rodadas
     }),
     zonesAtiv: ativZonesOf(id),
+    zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
     longRange: longRangeOf(id), // F3: true → pedido ao worker leva tiles 2×2 (LR_TILES)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
@@ -269,12 +322,23 @@ function emitAnalysisStatus(cameraId, engine) {
 
 // ── Pipeline por rodada: dets → tracker → counter/zonas → ingest ─────────────
 function processDets(st, dets, now) {
+  // Zona de EXCLUSÃO (calibração — analises/acuracia-modelos.md Medida A): a detecção de
+  // pessoa cujo PÉ (bottom-center do bbox) cai numa zona modo "exclusao" (mask-aware) é
+  // DESCARTADA AQUI — antes de ByteTrack/counter/zonas/ingest/emit. Não conta, não rastreia,
+  // não vira overlay. Os FP de objeto fixo (grade/placa/janela) são espacialmente presos;
+  // a pessoa real se move, então mascarar o hotspot mata o FP sem custar recall.
   const persons = [];
+  let excluded = 0;
   for (const d of dets) {
-    if (d && d.class === "person" && Array.isArray(d.bbox)) persons.push({ score: d.score, bbox: d.bbox });
+    if (!d || d.class !== "person" || !Array.isArray(d.bbox)) continue;
+    if (st.zonesExcl.length && inExclusionZone(d.bbox, st.zonesExcl)) {
+      excluded += 1;
+      continue;
+    }
+    persons.push({ score: d.score, bbox: d.bbox });
   }
   st.rounds.push(now);
-  st.detsLog.push({ t: now, n: persons.length });
+  st.detsLog.push({ t: now, n: persons.length, x: excluded });
   const cutoff = now - 60_000;
   while (st.rounds.length && st.rounds[0] < cutoff) st.rounds.shift();
   while (st.detsLog.length && st.detsLog[0].t < cutoff) st.detsLog.shift();
@@ -452,6 +516,7 @@ function onCamcfgUpdated(p) {
     st.counter.setTripwires(camcfg.getTripwires(st.id)); // preserva contadores por id
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
+    st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // F3: liga/desliga o tiling na PRÓXIMA rodada
@@ -474,12 +539,17 @@ function status() {
   const perCamera = {};
   for (const [id, st] of states) {
     let dets1m = 0;
-    for (const d of st.detsLog) dets1m += d.n;
+    let excluded1m = 0;
+    for (const d of st.detsLog) {
+      dets1m += d.n;
+      excluded1m += d.x || 0;
+    }
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
       queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
       lastMs: st.lastMs,
       dets1m,
+      excluded1m, // aditivo: dets de pessoa suprimidas por zona de exclusão em 60s
       longRange: st.longRange, // F3 (aditivo): true = rodada com tiling 2×2 no worker
     };
   }
@@ -518,7 +588,7 @@ async function init({ io, cameras }) {
   timers.push(setInterval(prune, 60_000));
   timers.push(setInterval(logMinute, 60_000));
   for (const t of timers) if (t.unref) t.unref();
-  console.log(`[analysis] motor ATIVO — D-FINE-N no hub @${FPS}fps/câmera (worker process, CPU EP)`);
+  console.log(`[analysis] motor ATIVO — ${modelSpec.label} no hub @${FPS}fps/câmera (worker process, CPU EP)`);
 }
 
 /** Desliga o motor (usado em testes/encerramento). */
