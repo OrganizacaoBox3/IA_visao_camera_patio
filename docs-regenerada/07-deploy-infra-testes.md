@@ -12,14 +12,20 @@
 
 ## 1. Visão geral da arquitetura
 
-O projeto tem **dois processos**:
+O projeto tem **dois processos** (mais um **worker process** de análise dentro do hub):
 
-1. **Frontend SPA (React + Vite)** — todo o processamento de visão computacional roda **no
-   navegador** do operador (TensorFlow.js / MediaPipe / coco-ssd). Em produção é servido como
-   estático (`dist/`) pelo nginx.
-2. **Hub Node (`server/index.js`)** — servidor socket.io que **apenas relaia frames** câmera →
-   dashboard e expõe uma pequena API HTTP (`/api/`) de login/gestão. Não processa nem armazena
-   vídeo. Persiste histórico/usuários/config em PostgreSQL (quando configurado).
+1. **Frontend SPA (React + Vite)** — é **espelho** da análise do hub (exibe vídeo + overlays
+   servidos via `analysis-tracks`) e roda no navegador apenas os **modos especializados**
+   (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). Em produção é servido como estático
+   (`dist/`) pelo nginx. **Mudança da ADR-009:** a análise de indicadores (pessoas/atividade/
+   fluxo) **saiu do navegador** e passou para o hub.
+2. **Hub Node (`server/index.js`)** — servidor socket.io que relaia frames câmera → dashboard,
+   expõe a API HTTP (`/api/`) de login/gestão/status e **agora roda o motor de análise
+   D-FINE-S** num worker process dedicado (`server/analysis/`, ADR-009), 24/7 e independente de
+   espectador. Consome os frames que já transitam pelo relé; não persiste vídeo. Persiste
+   histórico/usuários/config em PostgreSQL quando configurado, com **fallback JSON**
+   (`server/data-hist.json`). **Implicação de deploy:** o hub passa a ter **custo de CPU
+   proporcional às câmeras** (~7 câmeras/core no modelo S; ~17 no N — `ANALYSIS_MODEL`).
 
 Fluxo em produção (resumo de `docs/deploy-digitalocean.md`):
 
@@ -41,7 +47,9 @@ Decisões-chave (de `docs/deploy-digitalocean.md:28`):
 - **wss na mesma origem** — página `https://` não abre `ws://` (mixed-content). O front usa
   `location.origin` em produção (`src/config.ts:143`) e o nginx faz o proxy de `/socket.io`.
 - **A porta do hub nunca é exposta** à internet — fica só no loopback; o nginx é o único que a alcança.
-- **O processamento roda no navegador**, não no servidor — o hub é leve (só relaia banda).
+- **A análise de indicadores roda no HUB** (motor D-FINE-S em worker process, ADR-009), não mais
+  no navegador. O hub continua no loopback pela rede, mas **não é mais "leve"**: além da banda do
+  relé, consome CPU proporcional às câmeras — dimensione o servidor pela contagem de câmeras.
 
 ---
 
@@ -59,6 +67,8 @@ Pré-requisito: **Node >= 20** (`package.json:14-16`).
 | `npm run hub` | `node server/index.js` | Sobe o **hub** de câmeras (socket.io + API). |
 | `npm run start` | `node server/index.js` | Idêntico a `hub` (alias de produção). |
 | `npm run e2e` | `playwright test` | Roda a suíte de testes E2E (ver seção 6). |
+| `npm run verify` | `lint && typecheck && build && test` | Gate local (ESLint + `tsc --noEmit` + Vite build + Vitest). Vermelho não entra. |
+| `npm run eval` | `node eval/gate.mjs` | **Sensor de regressão de acurácia** do motor de análise (roda o worker de produção sobre o fixture COCO commitado e compara com `eval/thresholds.json`). **NÃO** entra no `verify` — é gate manual/CI opcional, rode antes de trocar modelo/threshold. |
 
 ### 2.2 Sessão de desenvolvimento típica
 
@@ -127,6 +137,10 @@ Levantadas via `process.env.*` em `server/`:
 | `RTSP_FPS` | `server/rtsp.js:98` | `8` | FPS de ingestão RTSP. |
 | `RTSP_WIDTH` | `server/rtsp.js:99` | `480` (a confirmar) | Largura do frame RTSP. |
 | `RTSP_QUALITY` | `server/rtsp.js:100` | `7` | Qualidade JPEG (menor = melhor). |
+| `ANALYSIS_ENABLED` | `server/analysis/` | *(liga se o modelo já existe)* | Motor D-FINE no hub. `1` liga e **baixa o modelo no boot** se ausente; `0` desliga. Rode o 1º boot com `1`. |
+| `ANALYSIS_MODEL` | `server/analysis/` | `s` (`n\|s\|m`) | Modelo/custo: **N** ~17 cam/core (menos recall), **S** ~7 cam/core (produção), **M** ~4 cam/core. Drop-in — só troca o `.onnx`. |
+| `ANALYSIS_FPS` | `server/analysis/` | `1` | Taxa de análise por câmera (1–2 fps), 24/7. |
+| `ANALYSIS_MODEL_PATH` | `server/analysis/` | — | Fixa um `.onnx` explícito (ignora `ANALYSIS_MODEL` e o fallback) — usado sem internet e pelo `eval/`. |
 | `WHATSAPP_ENABLED` | `server/whatsapp.js:12` | — | `1` liga o WhatsApp (Baileys, não-oficial). Pareie por QR no painel. |
 | `ALERT_WEBHOOK_URL` | `server/alerts.js:7` | — | Andon: repassa alertas críticos a Slack/Teams/Discord/Zapier/n8n. Sem ela, o andon fica off. |
 | `ALERT_DEDUP_MS` | `server/alerts.js:8`, `server/dispatch.js:10` | — | Janela anti-repetição de alertas (ms). |
@@ -135,6 +149,25 @@ Levantadas via `process.env.*` em `server/`:
 > como variável de senha do painel. Essa variável **não** aparece no código atual do `server/`
 > — a autenticação evoluiu para `AUTH_SECRET` + usuários (`server/users.js`) + `SUPERADMIN_*`.
 > O texto do manual de deploy parece desatualizado nesse ponto.
+
+> **Envs adicionais do motor** (defaults e detalhe em `server/analysis/README.md`):
+> `ANALYSIS_HIGH_SCORE` (0.35), `ANALYSIS_SCORE_MIN` (0.25), `ANALYSIS_AGG_MS` (3000),
+> `ANALYSIS_INTRA_THREADS` (2), `ANALYSIS_NMS_IOU` (0.6). E `DATA_HIST_RETENTION_DAYS` (30 —
+> poda do fallback JSON, `server/pgstore.js:21`). Status ao vivo: `GET /api/analysis/status`
+> (autenticado) expõe `worker.ready/pid`, modelo, e `fps/queue` por câmera.
+
+**Deps de RUNTIME do hub (novas — ADR-009).** O hub deixou de rodar só com `socket.io`. Em
+`package.json > dependencies` agora entram, para runtime do servidor: **`onnxruntime-node`** e
+**`sharp`** (motor D-FINE — **binários NATIVOS**, instalar no SO do servidor Linux; **nunca**
+subir o `node_modules/` do Windows), **`pg`** (Postgres) e **`pino`** (logs). O
+`npm install --omit=dev` cobre todas (estão em `dependencies`, não em `devDependencies`).
+
+**Modelo ONNX (não versionado — `server/models/`, `.gitignore:49-51`).** Não vem no upload:
+com `ANALYSIS_ENABLED=1` o hub **baixa o `.onnx` no 1º boot** (onnx-community, Apache-2.0),
+verificando tamanho + **sha256** (escrita atômica). Default `s` = `dfine_s_obj2coco.onnx`
+(~40 MB). Sem internet de saída no servidor: copie o `.onnx` para `server/models/` antes do boot
+ou aponte `ANALYSIS_MODEL_PATH`. Falha de download do S/M cai para o **N** com aviso; sem modelo
+algum, o motor desliga e o hub segue relaiando normal.
 
 ### 3.3 Onde definir em produção
 
@@ -199,15 +232,19 @@ escolhida por estar livre. Etapas resumidas:
 2. **Preparar pasta/usuário** — instalar Node 20 (NodeSource), `adduser --system visao`,
    `mkdir /var/www/visao-patio`. (ffmpeg só se for ingerir RTSP.)
 3. **Build local + upload** — `npm install && npm run build` na máquina dev; `scp` de
-   `dist server deploy package.json package-lock.json`; no servidor `npm install --omit=dev`
-   (o hub só precisa de `socket.io` em runtime) e `chown -R visao:visao`.
+   `dist server deploy package.json package-lock.json` (**nunca** o `node_modules/` do Windows);
+   no servidor `npm install --omit=dev` (deps de runtime do hub — inclui os binários nativos
+   `onnxruntime-node`/`sharp`, além de `pg`/`pino`) e `chown -R visao:visao`.
 4. **Subir o hub** — copiar o `.service`, `daemon-reload`, `enable --now visao-hub`.
 5. **Configurar nginx** — copiar o `.conf`, ajustar `server_name`, emitir TLS com certbot,
    `nginx -t && systemctl reload nginx`.
 6. **Validação** — checklist (TLS, "conectado" no rodapé, `/camera` no celular, zonas, 8091
    inacessível de fora, sem erros de CSP/mixed-content).
-7. **Segurança/operação** — login no hub, histórico por navegador (IndexedDB), andon via webhook,
-   modelos vêm de CDNs (precisa internet na 1ª carga), banda escala com câmeras × espectadores.
+7. **Segurança/operação** — login no hub; **histórico persistido no hub** (Postgres com fallback
+   JSON `server/data-hist.json`, centralizado — não mais IndexedDB por navegador); andon via
+   webhook; modelos do navegador vêm de CDNs (internet na 1ª carga) **e o hub baixa o ONNX do
+   D-FINE no 1º boot** (internet de saída OU upload manual + `ANALYSIS_MODEL_PATH`); banda escala
+   com câmeras × espectadores e **CPU do hub escala com câmeras** (motor de análise).
 8. **(Opcional) RTSP** — ffmpeg + `server/rtsp.sources.json` ou `RTSP_SOURCES`.
 
 ---
@@ -219,9 +256,17 @@ escolhida por estar livre. Etapas resumidas:
 - **Editor** (`.vscode/*` exceto `extensions.json`, `.idea`, `.DS_Store`).
 - **Mídia de demo pesada** (`public/demo/*.mp4`, `*.webm`).
 - **`server/rtsp.sources.json`** — fontes RTSP reais, **podem conter credenciais** (`:20`).
+- **Estado de runtime do hub** — `server/cameras.json`, `server/alarms.json`, `server/camcfg.json`,
+  `server/alarm-shelves.json`, `server/users.json`, `server/wa-auth/`, `deploy/visao-hub.service`.
+- **Histórico em fallback JSON** — `server/data-hist.json` (+ `.tmp`) — só indicadores agregados (`:46-47`).
+- **Modelo ONNX do motor de análise** — `server/models/` (baixado no boot com verificação de sha,
+  ~15–79 MB conforme N/S/M — ver `server/analysis/README.md`) (`:49-51`).
+- **Bancada de acurácia** — `eval/data/`, `eval/last-results.json`, `eval/model-comparison.json`
+  (dados pesados COCO + resultados de execução; o `eval/fixture/` commitável ~5 MB fica versionado).
 
 Implicação prática: credenciais de câmeras RTSP ficam fora do repositório (configuradas no
-servidor). O build (`dist/`) também não é versionado — é gerado no deploy.
+servidor). O build (`dist/`) e o **modelo ONNX** também não são versionados — gerados/baixados no
+deploy. O histórico agora vive no servidor (Postgres ou `data-hist.json`), não mais no navegador.
 
 ---
 
