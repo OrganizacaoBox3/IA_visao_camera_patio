@@ -13,6 +13,11 @@ const TIPOS = [
 ];
 const DEFAULT_PREFS: NotifPrefs = { ativo: true, somenteCriticos: true, tipos: [] };
 
+// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
+// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
+const H2_SEC =
+  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
+
 export function ProfilePage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -55,21 +60,32 @@ export function ProfilePage() {
     setBusy(false);
   }
 
-  const willReceive = optIn && prefs.ativo && whatsapp.replace(/\D/g, "").length >= 10;
+  const numeroOk = whatsapp.replace(/\D/g, "").length >= 10;
+  const willReceive = optIn && prefs.ativo && numeroOk;
+  // Microcopy honesta: em vez do críptico "(opt-in/número/ativo)", diz O QUE falta.
+  const faltando = [
+    !numeroOk && "número válido",
+    !optIn && "consentimento",
+    !prefs.ativo && "recebimento ativo",
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <div className="page">
       <PageHeader title="Meu perfil" />
       <div className="users-body">
-        <section className="panel">
-          <h3>Conta</h3>
-          <p>
+        {/* Medida única de conteúdo: os DOIS painéis usam a mesma largura do form
+            (.profile-form tem max-width 520px no index.css) — página segue full-width. */}
+        <section className="panel w-full max-w-[520px]">
+          <h2 className={H2_SEC}>Conta</h2>
+          <p className="m-0">
             Usuário <b>{user.usuario}</b> · papel <b>{user.papel}</b>
           </p>
         </section>
 
         <form className="panel profile-form" onSubmit={save}>
-          <h3>Notificações por WhatsApp</h3>
+          <h2 className={H2_SEC}>Notificações por WhatsApp</h2>
 
           <Field label="Número (com DDD)" htmlFor="prof-wpp">
             <Input
@@ -115,7 +131,9 @@ export function ProfilePage() {
               {busy ? "Salvando…" : "Salvar"}
             </Button>
             <span className={`prof-state ${willReceive ? "on" : ""}`}>
-              {willReceive ? "● receberá alertas" : "○ não receberá (opt-in/número/ativo)"}
+              {willReceive
+                ? "● Este número receberá os alertas."
+                : `○ Ainda não receberá alertas — falta: ${faltando}.`}
             </span>
           </div>
           {status && <Alert tone="ok">{status}</Alert>}

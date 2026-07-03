@@ -12,6 +12,11 @@ const PAPEL_OPTS = [
   { value: "superadmin", label: "Superadmin" },
 ];
 
+// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
+// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
+const H2_SEC =
+  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
+
 // Senha só por hash no servidor — ao criar/resetar, a senha aparece UMA vez para o superadmin
 // repassar (modelo de reset seguro).
 function genSenha(): string {
@@ -112,8 +117,8 @@ export function UsersTab({
 
   return (
     <>
-      <section className="panel">
-        <h3>Novo usuário</h3>
+      <section className="panel shrink-0">
+        <h2 className={H2_SEC}>Novo usuário</h2>
         <form className="users-new" onSubmit={onCreate}>
           <Input
             placeholder="Usuário"
@@ -147,16 +152,19 @@ export function UsersTab({
         </form>
       </section>
 
-      <section className="panel panel-events">
-        <h3>{loading ? "Carregando…" : `${rows.length} usuário(s)`}</h3>
-        <ScrollArea orientation="both" className="max-h-[460px]">
+      {/* Lista cresce com a viewport (flex-1 + min-h-0 na cadeia; scroll interno na ScrollArea)
+          — nada de max-h fixo em conteúdo (plano de padronização visual). */}
+      <section className="panel panel-events flex flex-1 flex-col">
+        <h2 className={H2_SEC}>{loading ? "Carregando…" : `${rows.length} usuário(s)`}</h2>
+        <ScrollArea orientation="both" className="min-h-[200px] flex-1">
           <table className="rtable">
             <thead>
               <tr>
-                <th>Usuário</th>
-                <th>Papel</th>
-                <th>Status</th>
-                <th>Ações</th>
+                {/* Usuário absorve a largura livre (some a faixa morta); demais colunas compactas. */}
+                <th className="w-full">Usuário</th>
+                <th className="whitespace-nowrap">Papel</th>
+                <th className="whitespace-nowrap">Status</th>
+                <th className="whitespace-nowrap text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -184,7 +192,7 @@ export function UsersTab({
                       <span>{u.ativo ? "Ativo" : "Inativo"}</span>
                     </div>
                   </td>
-                  <td className="users-actions">
+                  <td className="users-actions justify-end whitespace-nowrap">
                     <Button size="sm" onClick={() => onReset(u)}>
                       Resetar senha
                     </Button>

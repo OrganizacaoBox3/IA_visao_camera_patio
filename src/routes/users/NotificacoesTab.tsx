@@ -31,6 +31,11 @@ const TIPO_LABEL: Record<string, string> = {
 
 type NovoDest = { nome: string; numero: string; somenteCriticos: boolean };
 
+// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
+// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
+const H2_SEC =
+  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
+
 type Props = {
   wa: WaStatus | null;
   waNum: string;
@@ -165,13 +170,13 @@ export function NotificacoesTab({
 
   return (
     <>
-      <section className="panel">
-        <h3>
+      <section className="panel shrink-0">
+        <h2 className={H2_SEC}>
           WhatsApp (andon){" "}
           {wa && (
             <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />
           )}
-        </h3>
+        </h2>
         {!wa || !wa.enabled ? (
           <p className="muted">
             Desligado. Defina <code>WHATSAPP_ENABLED=1</code> no hub (systemd) e pareie aqui. Use um
@@ -210,8 +215,8 @@ export function NotificacoesTab({
       </section>
 
       {notif && (
-        <section className="panel">
-          <h3>Mensagens & alertas</h3>
+        <section className="panel shrink-0">
+          <h2 className={H2_SEC}>Mensagens & alertas</h2>
           <p className="muted">
             Defina o que cada notificação envia. Vale para todos os destinatários.
           </p>
@@ -246,9 +251,10 @@ export function NotificacoesTab({
             </CheckboxRow>
           </div>
 
-          <div className="notif-types">
+          {/* items-stretch + h-full: os 4 cards de mensagem alinham a altura na mesma linha. */}
+          <div className="notif-types items-stretch">
             {Object.keys(notif.tipos).map((k) => (
-              <div className="notif-type" key={k}>
+              <div className="notif-type h-full" key={k}>
                 <div className="nt-head">
                   <Switch
                     checked={notif.tipos[k].ativo}
@@ -293,8 +299,9 @@ export function NotificacoesTab({
         </section>
       )}
 
-      <section className="panel">
-        <h3>Destinatários do WhatsApp ({dests.length})</h3>
+      {/* Lista de destinatários cresce com a viewport (flex-fill; sem max-h fixo). */}
+      <section className="panel flex flex-1 flex-col">
+        <h2 className={H2_SEC}>Destinatários do WhatsApp ({dests.length})</h2>
         <p className="meta-text muted">
           Números avulsos que recebem os alertas (além dos usuários que cadastram o próprio número
           em "Meu perfil"). Você é responsável pelo consentimento (LGPD).
@@ -327,15 +334,16 @@ export function NotificacoesTab({
             Adicionar
           </Button>
         </form>
-        <ScrollArea orientation="both" className="mt-2 max-h-[320px]">
+        <ScrollArea orientation="both" className="mt-2 min-h-[160px] flex-1">
           <table className="rtable">
             <thead>
               <tr>
-                <th>Nome</th>
-                <th>Número</th>
-                <th>Filtro</th>
-                <th>Status</th>
-                <th>Ações</th>
+                {/* Nome absorve a largura livre; demais colunas compactas (sem faixa morta). */}
+                <th className="w-full">Nome</th>
+                <th className="whitespace-nowrap">Número</th>
+                <th className="whitespace-nowrap">Filtro</th>
+                <th className="whitespace-nowrap">Status</th>
+                <th className="whitespace-nowrap text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -363,7 +371,7 @@ export function NotificacoesTab({
                       <span>{d.ativo ? "Ativo" : "Inativo"}</span>
                     </div>
                   </td>
-                  <td>
+                  <td className="whitespace-nowrap text-right">
                     <Button variant="danger" size="sm" onClick={() => requestDeleteDest(d)}>
                       Remover
                     </Button>

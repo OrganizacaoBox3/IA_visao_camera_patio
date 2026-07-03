@@ -101,7 +101,9 @@ export function UsersPage() {
         </IconButton>
       </PageHeader>
 
-      <div className="users-body">
+      {/* Cadeia flex (page → body → tabs → painel): a lista cresce com a viewport
+          (plano de padronização visual — layout SaaS, sem max-h em conteúdo). */}
+      <div className="users-body min-h-0 flex-1">
         {reveal && (
           <div className="users-reveal">
             Senha de <b>{reveal.usuario}</b>: <code>{reveal.senha}</code> — copie agora, não será
@@ -114,6 +116,7 @@ export function UsersPage() {
         {err && <Alert tone="alert">{err}</Alert>}
 
         <Tabs
+          className="min-h-0 flex-1"
           items={[
             { value: "usuarios", label: "Usuários" },
             { value: "notificacoes", label: "Notificações" },
@@ -123,11 +126,14 @@ export function UsersPage() {
           onValueChange={(v) => setSecao(v as typeof secao)}
           ariaLabel="Seção de administração"
         >
-          <TabsContent value="cameras">
+          <TabsContent value="cameras" className="pt-[var(--sp-4)]">
             <CamerasTab camToken={camToken} />
           </TabsContent>
 
-          <TabsContent value="notificacoes">
+          <TabsContent
+            value="notificacoes"
+            className="flex min-h-0 flex-1 flex-col gap-[var(--sp-4)] pt-[var(--sp-4)]"
+          >
             <NotificacoesTab
               wa={wa}
               waNum={waNum}
@@ -149,7 +155,10 @@ export function UsersPage() {
             />
           </TabsContent>
 
-          <TabsContent value="usuarios">
+          <TabsContent
+            value="usuarios"
+            className="flex min-h-0 flex-1 flex-col gap-[var(--sp-4)] pt-[var(--sp-4)]"
+          >
             <UsersTab
               rows={rows}
               loading={loading}

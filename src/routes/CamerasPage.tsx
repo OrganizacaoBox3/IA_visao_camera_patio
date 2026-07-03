@@ -15,6 +15,11 @@ import "./cameras.css";
 //
 // DÍVIDA (anotada de propósito): a UI do link de inscrição duplica src/routes/users/CamerasTab.tsx
 // (aba Câmeras de Usuários, mantida pela spec). Ao mexer de novo, extrair um componente comum.
+// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
+// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
+const H2_SEC =
+  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
+
 export function CamerasPage() {
   const { isSuper } = useAuth();
   const { toast } = useToast();
@@ -56,7 +61,7 @@ export function CamerasPage() {
           <IpCamerasSection />
         ) : (
           <section className="panel" aria-label="Câmeras IP / RTSP">
-            <h3>Câmeras IP / RTSP</h3>
+            <h2 className={H2_SEC}>Câmeras IP / RTSP</h2>
             <EmptyState>
               O cadastro de câmeras IP/RTSP é restrito ao administrador (superadmin).
             </EmptyState>
@@ -64,7 +69,7 @@ export function CamerasPage() {
         )}
 
         <section className="panel" aria-label="Câmera local (webcam / nó)">
-          <h3>Câmera local (webcam / nó)</h3>
+          <h2 className={H2_SEC}>Câmera local (webcam / nó)</h2>
           <p className="muted cam-sec-hint">
             Qualquer dispositivo com navegador e webcam (PC, celular) vira uma câmera: abra a
             página do nó e ele entra na central automaticamente. A IA roda no próprio navegador —

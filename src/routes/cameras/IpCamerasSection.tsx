@@ -33,6 +33,11 @@ import {
 // vem do GET /api/cameras; a url nunca é logada e é mascarada na exibição (LGPD/segurança).
 // Renderizado só para superadmin (o pai monta esta seção sob a guarda `isSuper`).
 
+// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
+// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
+const H2_SEC =
+  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
+
 // Tipo do stream deduzido da URL — só informativo, para a lista (o hub decide pelo esquema).
 function cameraKind(url: string): string {
   const u = (url ?? "").trim().toLowerCase();
@@ -196,7 +201,7 @@ export function IpCamerasSection() {
 
   return (
     <section className="panel" aria-label="Câmeras IP / RTSP">
-      <h3>Câmeras IP / RTSP</h3>
+      <h2 className={H2_SEC}>Câmeras IP / RTSP</h2>
       <p className="muted cam-sec-hint">
         Câmeras de rede (RTSP/HLS/MJPEG). Ao salvar, o hub conecta e a câmera aparece na Central
         automaticamente. A URL pode conter credenciais — é tratada como sensível (exibida com o

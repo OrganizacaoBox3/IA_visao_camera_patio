@@ -14,6 +14,12 @@
   width: 100%;
 }
 
+/* Medida de LINHA (plano de padronização visual): a página segue em largura total;
+   o texto corrido (hints/parágrafos) limita a linha a ~70ch para legibilidade em 1920. */
+.cam-mgr-body p {
+  max-width: 70ch;
+}
+
 .cam-sec-hint {
   margin: 0 0 var(--sp-3);
   font-size: 12px;
