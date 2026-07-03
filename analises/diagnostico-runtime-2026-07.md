@@ -301,3 +301,71 @@ eventos/status de flow, série completa) + `relatorio-atividade.csv` em `...\scr
 (sessão): `01-linha-desenhada.png`, `02-linhas-hoje-apos-reabrir.png`,
 `03-linhas-hoje-apos-reload.png`, `04-relatorio-fluxo.png`, `05-obs-t{00,15,30,45,60,75,90}s.png`,
 `06-workspace-final.png`.
+
+## Verificação dos modos Leitura/Objetos/Fadiga (2026-07-03)
+
+> **Objetivo:** prova de EXECUÇÃO dos 3 pipelines sem prova recente — Leitura (ZXing/
+> BarcodeDetector), Objetos (OWL-ViT) e Operador/Fadiga (MediaPipe). MESMA infra dos diagnósticos
+> acima (hub isolado 4100 sem PG → persistência **json**, vite 5180, Chromium headless), mas desta
+> vez com **webcam fake alimentada por vídeo sintético** (`--use-file-for-fake-video-capture`,
+> `.y4m` gerados com ffmpeg): QRs nítidos p/ Leitura (QR-A 3s → branco 2s → QR-B 3s → branco 2s,
+> em loop, dentro da zona "Expedição"), foto com 2 pessoas + 1 caixa de papelão p/ Objetos, e
+> retrato frontal p/ Fadiga. Specs temporários `e2e/diag4-*.spec.ts` (já **deletados**, não
+> commitados). Leitura e Objetos rodaram nos runs desta frente; o spec de Fadiga foi executado
+> numa varredura completa do suite (antes da deleção dos temporários) — a evidência é do MESMO
+> spec/vídeo desta frente e está íntegra (screenshots + JSON + buckets na API).
+
+### Tabela-veredito
+
+| Pipeline | Modelo carrega | Detecta no vídeo sintético | Ingest grava | Relatório enche | Tempo até 1º resultado | Erros console | Veredito |
+| -------- | -------------- | -------------------------- | ------------ | --------------- | ---------------------- | ------------- | -------- |
+| **Leitura** | ✅ ZXing em worker (`kind:"zxing"`). BarcodeDetector nativo **não existe** no Chromium/Windows (`hasNativeBD:false`) — o fallback assumiu sozinho, como desenhado | ✅ QR-A e QR-B decodificados; painel com taxa/lidas·min/no-reads/último código; 9 passagens (motion) detectadas | ✅ `read/buckets`: `{reads:5, passages:9, perCamera}` · `read/events`: 5 eventos com código e turno | ✅ aba Leitura: 5 caixas lidas, taxa 56%, 4 no-reads, "Ponto 1", heatmap "Quando lê", lista Leituras (5) | **836 ms** (zona virou Leitura → 1ª leitura no painel) | nenhum novo (só os warns WebGL/tfjs já conhecidos) | **FUNCIONA** (ponta a ponta, provado) |
+| **Objetos (OWL-ViT)** | ✅ worker baixou o modelo (HF CDN) e detectou **em <~1 min** com rede boa | ✅ **prova dura persistida no hub**: classe `caixa` (SEM equivalente coco — só o OWL-ViT a produz) com `countSum:23, present:23/45`; `pessoa` com `peak:2` (as 2 pessoas da foto); zero falso-positivo (empilhadeira/palete/paleteira = 0) | ✅ buckets `obj` no `data-hist.json` do hub + evento `{type:"entrada", classe:"caixa", setor:"Expedição"}` + **alarme advisory "📦 Caixa entrou em Expedição"** | ⚠ não visitado (o spec morreu antes — ver nota ambiental) | evento `entrada` de caixa ≈60 s após ligar o modo | nenhum novo | **FUNCIONA no núcleo** (modelo→detecção→ingest→evento→alarme provados por dado persistido); painel/relatório **sem screenshot** por instabilidade AMBIENTAL do headless |
+| **Operador/Fadiga** | ✅ FaceLandmarker+HandLandmarker carregaram (CDN wasm+task); em headless caiu p/ **XNNPACK/CPU** ("Created TensorFlow Lite XNNPACK delegate for CPU") — o fallback GPU→CPU segurou, como desenhado | ✅ malha facial + olhos no retrato, **EAR 0.35**, **1 mão** detectada (braços cruzados), zona de busca de celular desenhada; o sorriso do retrato elevou o MAR → **bocejo→ALERTA_FADIGA** disparou (toast "⚠ DIAG-FADIGA: Fadiga") — motor de risco exercitado de ponta a ponta | ✅ `fad/buckets`: `{posto:"DIAG-FADIGA", samples:13, ok:7, fadiga:6, earSamples:6}` (EAR médio 0,36) · `fad/events`: bocejo + fadiga | ✅ aba Operador: 43% tempo em alerta, 1 ocorrência de fadiga, 1 bocejo, horário crítico 10h, heatmap "tempo de risco por hora", Ocorrências (2) | **14,2 s** (marcar "Operador (fadiga)" → 1º EAR no tile; inclui download wasm/modelos do CDN) | nenhum novo (warns informativos do MediaPipe/XNNPACK) | **FUNCIONA** (ponta a ponta, provado) |
+
+### Evidências (scratchpad da sessão, `...\scratchpad\diag-modos\`)
+
+- `leitura-01-primeira-leitura.png` — workspace com pill "Expedição · CX-0001-E2E" sobre o QR;
+  painel: taxa 100%, lidas/min 1, último código `CX-0001-E2E`.
+- `leitura-02-painel-25s.png` — +25 s: 9 passagens, taxa 56% (branco↔QR conta passagem sem
+  leitura — no-read por construção do vídeo; reconciliação passagens×leituras funcionando).
+- `leitura-03-relatorio.png` — aba Leitura CHEIA: KPIs 5 / 56% / 4 no-reads / Ponto 1 / pico 09h,
+  heatmap "Quando lê" e aba "Leituras (5)".
+- `leitura-evidencia.json` — série do painel, buckets/events da API, console completo,
+  `hasNativeBD:false`, `firstReadMs:836`.
+- `probe-evidencia.json` + `probe-01-camera-page.png` — o decodificador REAL do app importado na
+  página (`/src/reading/decoder.ts` servido pelo Vite): decodifica ambos os QRs a cada ~270 ms
+  (`decoderKind:"zxing"`); webcam fake entregando 1280×720.
+- `objetos-evidencia-hub.json` — extraído de `data-hist.json`/`alarms.json` do hub isolado do run:
+  os 5 buckets `Expedição|{pessoa,caixa,empilhadeira,palete,paleteira}`, o evento `entrada` de
+  caixa e o alarme advisory (id `amr4xevin5905ecc4`).
+- `fadiga-01-tile-ear.png` — FadigaView aberto: malha facial com olhos destacados, landmarks da
+  MÃO (braços cruzados), região de busca de celular, badge "● Fadiga" e toast
+  "⚠ DIAG-FADIGA: Fadiga"; rodapé "EAR 0.35 · 1 mão(s)".
+- `fadiga-02-vista-cheia.png` — console do operador (Risco/EAR/MAR/Sinais/Celular).
+- `fadiga-03-relatorio.png` — aba Operador CHEIA: 43% tempo em alerta, 1 fadiga, 1 bocejo,
+  heatmap "tempo de risco por hora" (pico 10h), Ocorrências (2).
+- `fadiga-evidencia.json` — `firstEarMs:14162`, texto do tile, buckets/events da API
+  (`samples:13, ok:7, fadiga:6`), console com os logs do delegate XNNPACK/CPU.
+
+### Nota ambiental (vale p/ os próximos e2e longos)
+
+O modo de falha dominante da rodada NÃO foi dos pipelines: **aba em background no Chromium
+headless sofre throttling agressivo → o socket.io perde ping → os sockets do dashboard e do nó de
+câmera caem a cada ~60–90 s → a casca fullscreen fecha sozinha** (`open = cameras.find(...)`
+vira null na janela de reconexão — DashboardPage). Nos runs 1–3 da Leitura isso derrubou o teste
+até aplicar `page.bringToFront()` no dashboard (run 4: verde, 32,6 s total). No run de Objetos, a
+carga de CPU (download+init do OWL-ViT + coco CPU nas 3 zonas de atividade + inferência WASM)
+reabriu a janela de starvation: o workspace fechou ~45–60 s após ligar o modo e o gate de UI do
+spec expirou — mas o pipeline continuou gravando (os buckets/evento/alarme acima são dessa
+janela). Práticas: (1) e2e que observa a UI por >60 s deve manter o dashboard em foreground e
+tolerar reconexão; (2) em produção (aba visível) o throttle não se aplica, mas o episódio reforça
+o F4/F5 — em CPU o sistema opera no limite.
+
+### Fixes aplicados
+
+Nenhum arquivo de produto alterado: não foi encontrada quebra nos pipelines verificados
+(`src/reading/*`, `src/objects/*`, `src/processors/*`). Os 2 achados são ambientais/confirmatórios:
+o throttling acima (infra de teste) e a confirmação de que, sem BarcodeDetector no
+Chromium/Windows, o fallback ZXing assume sem intervenção e decodifica (por design).
+`npm run verify` dispensado (diff da frente = só este documento).
