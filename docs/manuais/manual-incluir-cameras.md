@@ -81,6 +81,24 @@ As zonas/linhas ficam salvas por câmera. Perfis **operador** só visualizam; **
 
 ---
 
+## Reduzir falsos positivos — zona de Exclusão
+
+Vendo a câmera detectar "pessoa" onde não há ninguém? O acompanhamento em campo (soak) mostrou
+que **a maioria dos falsos positivos vem de poucos objetos fixos** — uma grade, uma placa, a
+janela escura de uma van, uma TV — que o motor lê como torso/cabeça no piso de confiança. Como
+esses pontos **não se movem** e as pessoas sim, dá para mascará-los **sem perder recall**:
+
+1. Abra a câmera em tela cheia e clique **✎ Zona**.
+2. Desenhe a zona **sobre o objeto fixo** que gera a detecção fantasma (a grade, a placa, a
+   janela, a TV) — cobrindo só ele.
+3. Clique **⚙ Configurar zona** e escolha **Modo: Exclusão**.
+
+O motor passa a ignorar detecções dentro dessa área. Aplique **por câmera**, um objeto de cada
+vez, conferindo em `/api/analysis/status` que as detecções fantasma caíram. É a medida mais
+barata de calibração (config por câmera, opt-in, sem tocar em threshold nem modelo).
+
+---
+
 ## Câmeras de rua/panorâmicas — receita para reconhecer pedestres
 
 Cena aberta (rua, pátio, doca vista de longe): o pedestre distante ocupa **20–40 px** no stream original.
@@ -104,9 +122,16 @@ do modelo, e a contagem fica em zero mesmo com gente visível. A receita:
    padrão global; se o hub pesar, reduza o fps dessa câmera (ex.: 6–8) — o motor amostra a ~1 fps.
 
 > **Operação do motor (hub):** `ANALYSIS_ENABLED=1` no primeiro boot **baixa o modelo** D-FINE
-> (~15 MB, sha conferido) para `server/models/`; dali em diante o default liga sozinho se o modelo
+> (sha conferido) para `server/models/`; dali em diante o default liga sozinho se o modelo
 > existe (`ANALYSIS_ENABLED=0` desliga). Saúde/telemetria: `GET /api/analysis/status` (fps, fila,
 > ms e detecções por câmera). Detalhes: `server/analysis/README.md`.
+>
+> **Qual modelo (`ANALYSIS_MODEL=n|s|m`):** o default é o **D-FINE-S**, que enxerga ~2× mais
+> pessoa média/pequena (o alvo de pé-direito alto/cena aberta) que o antigo nano, ao custo de
+> ~2,4× de CPU — na prática ~**7 câmeras por núcleo** @1 fps (contra ~17 no nano). Se o hub
+> tiver **muitas câmeras e CPU limitada**, volte ao mais leve com `ANALYSIS_MODEL=n`; `=m` só
+> em hub folgado com poucas câmeras (mais recall, ~2× o custo do S). Trocar de modelo pede
+> recalibrar o gate de regressão do `eval/` — ver `eval/MODELS.md`.
 
 **Exemplo (câmera pública de Pula, HR — rua com pedestres, 1080p):** cadastre
 `https://cdn-004.whatsupcams.com/hls/hr_pula01.m3u8` com **Largura 1920**, ligue **Longo alcance /

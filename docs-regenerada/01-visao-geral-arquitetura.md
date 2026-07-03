@@ -17,8 +17,10 @@ operadores — tudo isso com dois princípios de projeto explícitos no código:
 
 - **Análise de indicadores no hub; navegador = espelho (ADR-009, jul/2026):** a detecção
   de pessoas, tracking, contagem por linha e atividade/ocupação rodam **no servidor**, num
-  worker process dedicado (`server/analysis/` — motor D-FINE-N via onnxruntime-node, CPU EP,
-  1–2 fps/câmera, 24/7, independente de espectador). O navegador exibe vídeo + overlays
+  worker process dedicado (`server/analysis/` — motor **D-FINE-S por default** via
+  onnxruntime-node, CPU EP, 1–2 fps/câmera, 24/7, independente de espectador; configurável por
+  `ANALYSIS_MODEL=n|s|m` — o S enxerga ~2× mais pessoa média/pequena que o antigo nano a ~2,4×
+  de CPU, ver `eval/MODELS.md`). O navegador exibe vídeo + overlays
   servidos (`analysis-tracks`) e roda **no cliente apenas os modos especializados**
   (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT); a detecção coco-ssd local permanece
   só como fallback quando o motor está desligado. Detalhes: `server/analysis/README.md` e
@@ -53,8 +55,9 @@ Referência das rotas: `src/main.tsx:13-26`.
    (`server/index.js`). Faz quatro coisas:
    - **Relé de frames** câmera→dashboard (não persiste vídeo).
    - **Motor de análise** (`server/analysis/`, ADR-009): `engine.js` (in-process) amostra
-     os frames do relé @1–2 fps e envia ao `worker.js` (child process com D-FINE-N ONNX,
-     CPU EP); as detecções passam por ByteTrack → tripwires/zonas → `pgstore.ingest`
+     os frames do relé @1–2 fps e envia ao `worker.js` (child process com D-FINE-S ONNX
+     por default — `ANALYSIS_MODEL=n|s|m`, CPU EP); as detecções passam por ByteTrack →
+     tripwires/zonas → `pgstore.ingest`
      direto. Emite `analysis-status` e `analysis-tracks` (overlays) aos dashboards.
    - **API HTTP** (`/api/...`) para login, gestão de usuários, perfil, destinatários,
      configuração de notificações, WhatsApp, ingestão/consulta de histórico e
@@ -83,7 +86,7 @@ flowchart TB
         HTTP["API HTTP /api/*\n(login, users, ingest, wa, ...)"]
         FFMPEG["rtsp.js → ffmpeg\nRTSP → JPEG (MJPEG)"]
         ENGINE["analysis/engine.js\namostra frames @1-2fps · ByteTrack\ntripwires · zonas de atividade"]
-        WORKER["analysis/worker.js (child process)\nD-FINE-N ONNX · onnxruntime-node CPU EP"]
+        WORKER["analysis/worker.js (child process)\nD-FINE-S ONNX (default) · onnxruntime-node CPU EP"]
         WA["whatsapp.js (Baileys)"]
         AND["alerts.js (webhook Andon)"]
     end

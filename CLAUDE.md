@@ -7,7 +7,7 @@
 ## 1. O que é este projeto
 
 Inteligência operacional por câmeras para o CD da Grendene. A **análise de indicadores roda no HUB**
-(pessoas/atividade/fluxo — motor D-FINE em worker process, `server/analysis/`, 24/7 sem espectador; ADR-009);
+(pessoas/atividade/fluxo — motor **D-FINE-S** em worker process, `server/analysis/`, 24/7 sem espectador; configurável por `ANALYSIS_MODEL=n|s|m` — N mais leve, S/M mais recall; ADR-009);
 o **navegador é espelho** (vídeo + overlays servidos via `analysis-tracks`) e roda os **modos
 especializados** no cliente (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). O **hub Node** (`server/`)
 segue relé de frames via Socket.IO + persistência (Postgres com fallback JSON) + notificações
