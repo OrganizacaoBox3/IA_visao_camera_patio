@@ -20,8 +20,18 @@
 //     modelo (spike §5). intraOpNumThreads=2 (~2,7× mais eficiente por frame
 //     que o default; latência ~178ms serve folgado a 1-2fps — spike §3).
 //
+// LONGO ALCANCE (F3): pedido com `tiles {cols,rows,overlap}` → TILING estilo SAHI:
+//   decode 1× p/ raw → extract de cada região (sharp) → squash 640/tile → N
+//   inferências SEQUENCIAIS (a fila último-vence por câmera já protege o atraso)
+//   → reprojeção das bboxes p/ frações do FRAME (mesma conta do front,
+//   src/vision/detect.ts) → fusão: NMS por classe + dedupe por CONTENÇÃO ≥0.7
+//   (interseção/área da caixa MENOR, mantém o maior score — espelha
+//   src/vision/nms.ts: a caixa PARCIAL do tile vizinho tem IoU baixo com a caixa
+//   inteira e sobreviveria ao NMS clássico). Custo: N× inferência por rodada.
+//
 // PROTOCOLO IPC (advanced serialization — Buffer viaja como binário):
-//   engine → worker: { type:"detect", id, cameraId, jpeg:Buffer, w?, h? }
+//   engine → worker: { type:"detect", id, cameraId, jpeg:Buffer, w?, h?,
+//                      tiles?:{cols,rows,overlap} }   (tiles ausente → squash 640 único)
 //   worker → engine: { id, cameraId, dets:[{class, score, bbox:[x,y,w,h] 0..1}],
 //                      decodeMs, inferMs, cpu }        (sucesso)
 //                    { id, cameraId, dropped:true }     (substituído na fila antes de rodar)
@@ -68,13 +78,8 @@ function send(msg) {
   if (process.send) process.send(msg);
 }
 
-// JPEG buffer → tensor CHW fp32 [1,3,640,640] (squash resize, 1/255 — igual ao spike).
-async function preprocess(jpegBuf) {
-  const { data } = await sharp(jpegBuf)
-    .resize(SIZE, SIZE, { fit: "fill" })
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+// RGB raw 640×640 → tensor CHW fp32 [1,3,640,640] (rescale 1/255, sem mean/std).
+function rgbToTensor(data) {
   const n = SIZE * SIZE;
   const f = new Float32Array(3 * n);
   for (let i = 0; i < n; i++) {
@@ -83,6 +88,16 @@ async function preprocess(jpegBuf) {
     f[2 * n + i] = data[i * 3 + 2] / 255;
   }
   return new ort.Tensor("float32", f, [1, 3, SIZE, SIZE]);
+}
+
+// JPEG buffer → tensor CHW fp32 [1,3,640,640] (squash resize, 1/255 — igual ao spike).
+async function preprocess(jpegBuf) {
+  const { data } = await sharp(jpegBuf)
+    .resize(SIZE, SIZE, { fit: "fill" })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return rgbToTensor(data);
 }
 
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
@@ -147,6 +162,112 @@ function postprocess(outputs) {
   return nmsPerClass(dets);
 }
 
+// ── Longo alcance (F3): tiling 2×2 + reprojeção + fusão (espelha src/vision/) ─
+
+/** CONTENÇÃO: interseção / área da caixa MENOR (0..1) — port de src/vision/nms.ts. */
+function containment(a, b) {
+  const ix = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
+  const iy = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
+  if (ix <= 0 || iy <= 0) return 0;
+  const inter = ix * iy;
+  const minArea = Math.min(a[2] * a[3], b[2] * b[3]);
+  return minArea > 0 ? inter / minArea : 0;
+}
+
+// Dedupe do tiling com overlap: caixa PARCIAL do tile vizinho (meia pessoa) tem
+// IoU BAIXO com a caixa inteira (união grande) e passa no NMS clássico — a
+// contenção ≥0.7 mata essa dupla. 0.7 é conservador de propósito (nms.ts): duas
+// pessoas realmente lado a lado não atingem 70% de contenção mútua.
+const CONTAINMENT_THR = 0.7;
+
+/** Fusão pós-reprojeção: POR CLASSE, guloso do maior score — descarta a caixa com
+ *  IoU ≥ NMS_IOU OU contenção ≥ 0.7 contra alguma já mantida (fica a de maior score). */
+function fuseTiles(dets) {
+  const byClass = new Map();
+  for (const d of dets) {
+    let arr = byClass.get(d.class);
+    if (!arr) byClass.set(d.class, (arr = []));
+    arr.push(d);
+  }
+  const keep = [];
+  for (const arr of byClass.values()) {
+    arr.sort((a, b) => b.score - a.score);
+    const kept = [];
+    for (const d of arr) {
+      if (kept.every((k) => iouXYWH(k.bbox, d.bbox) <= NMS_IOU && containment(k.bbox, d.bbox) < CONTAINMENT_THR))
+        kept.push(d);
+    }
+    keep.push(...kept);
+  }
+  return keep;
+}
+
+/** Grid em FRAÇÕES do frame (mesma conta do front — src/vision/detect.ts tileGrid). */
+function tileGrid(cols, rows, overlap) {
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  const tw = 1 / cols;
+  const th = 1 / rows;
+  const out = [];
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++)
+      out.push({
+        x0: clamp(i * tw - overlap * tw),
+        y0: clamp(j * th - overlap * th),
+        x1: clamp((i + 1) * tw + overlap * tw),
+        y1: clamp((j + 1) * th + overlap * th),
+      });
+  return out;
+}
+
+/**
+ * Detecção com TILING (perfil longo alcance): decode 1× → extract por tile →
+ * squash 640/tile → inferências SEQUENCIAIS → reprojeção tile→frame → fusão.
+ * Devolve { dets, decodeMs, inferMs } com dets em frações 0..1 do FRAME.
+ */
+async function detectTiled(jpegBuf, spec) {
+  const cols = Math.max(1, Math.min(4, Math.round(spec.cols) || 1));
+  const rows = Math.max(1, Math.min(4, Math.round(spec.rows) || 1));
+  const overlap = Math.max(0, Math.min(0.5, Number(spec.overlap) || 0));
+
+  // decode do JPEG UMA vez p/ raw; cada tile é extract do raw (sem re-decodificar N×)
+  let t0 = performance.now();
+  const { data, info } = await sharp(jpegBuf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const W = info.width;
+  const H = info.height;
+  let decodeMs = performance.now() - t0;
+  let inferMs = 0;
+
+  const all = [];
+  for (const t of tileGrid(cols, rows, overlap)) {
+    t0 = performance.now();
+    const left = Math.max(0, Math.round(t.x0 * W));
+    const top = Math.max(0, Math.round(t.y0 * H));
+    const width = Math.max(1, Math.min(W - left, Math.round((t.x1 - t.x0) * W)));
+    const height = Math.max(1, Math.min(H - top, Math.round((t.y1 - t.y0) * H)));
+    const { data: tileRgb } = await sharp(data, { raw: { width: W, height: H, channels: info.channels } })
+      .extract({ left, top, width, height })
+      .resize(SIZE, SIZE, { fit: "fill" })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const tensor = rgbToTensor(tileRgb);
+    const t1 = performance.now();
+    const outputs = await session.run({ pixel_values: tensor });
+    inferMs += performance.now() - t1;
+    decodeMs += t1 - t0;
+    // reprojeção: frações do TILE → frações do FRAME (mesma conta do detect.ts)
+    const tw = t.x1 - t.x0;
+    const th = t.y1 - t.y0;
+    for (const d of postprocess(outputs)) {
+      all.push({
+        class: d.class,
+        score: d.score,
+        bbox: [t.x0 + d.bbox[0] * tw, t.y0 + d.bbox[1] * th, d.bbox[2] * tw, d.bbox[3] * th],
+      });
+    }
+  }
+  return { dets: fuseTiles(all), decodeMs: Math.round(decodeMs), inferMs: Math.round(inferMs) };
+}
+
 // ── Fila último-vence por câmera ─────────────────────────────────────────────
 const order = []; // cameraIds na ordem de chegada (FIFO entre câmeras)
 const jobs = new Map(); // cameraId → pedido pendente (profundidade 1)
@@ -174,19 +295,25 @@ async function drain() {
     jobs.delete(cameraId);
     if (!job) continue;
     try {
-      const t0 = performance.now();
-      const tensor = await preprocess(job.jpeg);
-      const t1 = performance.now();
-      const outputs = await session.run({ pixel_values: tensor });
-      const t2 = performance.now();
-      send({
-        id: job.id,
-        cameraId,
-        dets: postprocess(outputs),
-        decodeMs: Math.round(t1 - t0),
-        inferMs: Math.round(t2 - t1),
-        cpu: process.cpuUsage(),
-      });
+      // F3: pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
+      if (job.tiles && (job.tiles.cols > 1 || job.tiles.rows > 1)) {
+        const r = await detectTiled(job.jpeg, job.tiles);
+        send({ id: job.id, cameraId, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
+      } else {
+        const t0 = performance.now();
+        const tensor = await preprocess(job.jpeg);
+        const t1 = performance.now();
+        const outputs = await session.run({ pixel_values: tensor });
+        const t2 = performance.now();
+        send({
+          id: job.id,
+          cameraId,
+          dets: postprocess(outputs),
+          decodeMs: Math.round(t1 - t0),
+          inferMs: Math.round(t2 - t1),
+          cpu: process.cpuUsage(),
+        });
+      }
     } catch (e) {
       send({ id: job.id, cameraId, error: e && e.message ? e.message : String(e) });
     }

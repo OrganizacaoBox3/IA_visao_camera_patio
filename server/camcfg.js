@@ -115,6 +115,10 @@ function cleanCamConfig(c) {
     pontoLeitura: str(c.pontoLeitura),
     capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "alta",
     selectedClasses: strList(c.selectedClasses),
+    // Perfil "Longo alcance/Panorâmica" (CameraCfg.longRange): o front persiste e o
+    // MOTOR de análise lê p/ ligar o tiling 2×2 (F3/ADR-009). Sem esta linha o flag
+    // era descartado no save e o longo alcance server-side ficava inerte.
+    longRange: c.longRange === true,
   };
 }
 

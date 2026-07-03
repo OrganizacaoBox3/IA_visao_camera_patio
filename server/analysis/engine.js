@@ -33,6 +33,13 @@
 // connect, via snapshotTo(); e a cada mudança). Câmera que sai da análise →
 // { cameraId, engine: null }. O front usa isso p/ desligar o ingest local.
 //
+// LONGO ALCANCE (F3 — perfil por câmera): câmera com CameraCfg.longRange=true no
+// camcfg é analisada com TILING 2×2 (overlap 0.1, estilo SAHI) a 640/tile em vez
+// do squash 640 único — recall de pedestre distante em panorâmicas. O engine só
+// DECIDE (lê o camcfg no createState e no `camcfg-updated` kind:"camconfig") e
+// passa `tiles` no pedido; recorte/reprojeção/fusão vivem no worker. CUSTO: 4×
+// inferência por rodada, SÓ nas câmeras marcadas (ver README §Longo alcance).
+//
 // SHED: câmera analisada conta como espectador — index.js injeta
 // rtsp.setAnalysisViewer(isAnalyzing), então o shed NÃO pausa o ffmpeg de
 // câmera RTSP analisada. Webcam segue podendo ser rebaixada p/ SHED_WEBCAM_FPS
@@ -73,6 +80,10 @@ const AGG_MS = Math.max(1000, Number(process.env.ANALYSIS_AGG_MS ?? 3000));
 const TTL_MS = Math.max(1500, Math.round(ROUND_MS * 3.5));
 const PRUNE_MS = 5 * 60_000; // câmera sem frame há tanto tempo sai do estado/status
 const TICK_MS = Math.min(250, Math.max(50, Math.round(ROUND_MS / 4)));
+// Grid do perfil "Longo alcance/Panorâmica" (F3): 2×2 com overlap 0.1 — espelha o
+// tiling do front (src/vision/detect.ts tileGrid). Fixo de propósito (YAGNI): um
+// grid maior quadruplicaria de novo o custo sem caso de uso medido.
+const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
 
 let ctx = null; // { io, cameras } injetado pelo index.js
 let enabled = false;
@@ -216,6 +227,13 @@ function ativZonesOf(cameraId) {
   return camcfg.getZones(cameraId).filter((z) => z.modo === "atividade");
 }
 
+// Perfil "Longo alcance/Panorâmica" da câmera (CameraCfg.longRange — src/cameraConfig.ts).
+// Leitura DEFENSIVA (=== true): config ausente/legada sem o campo → false (squash atual).
+function longRangeOf(cameraId) {
+  const cfg = camcfg.getCamConfig(cameraId);
+  return !!(cfg && cfg.longRange === true);
+}
+
 function createState(id) {
   const st = {
     id,
@@ -234,6 +252,7 @@ function createState(id) {
       minCrossingFrames: 2, // histerese: lado novo sustentado 2 rodadas
     }),
     zonesAtiv: ativZonesOf(id),
+    longRange: longRangeOf(id), // F3: true → pedido ao worker leva tiles 2×2 (LR_TILES)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
     detsLog: [], // { t, n } pessoas por rodada (p/ dets1m)
@@ -376,7 +395,14 @@ function tick() {
     try {
       // cópia no envio: o buf do relé pode ser view de um buffer maior (RTSP) — a cópia
       // acontece só 1×/rodada (não por frame do relé) e serializa enxuto no IPC.
-      worker.send({ type: "detect", id: st.inflight, cameraId: st.id, jpeg: Buffer.from(frame.buf) });
+      // F3: câmera longRange leva `tiles` — o worker recorta/reprojeta/funde (4× inferência).
+      worker.send({
+        type: "detect",
+        id: st.inflight,
+        cameraId: st.id,
+        jpeg: Buffer.from(frame.buf),
+        ...(st.longRange ? { tiles: LR_TILES } : {}),
+      });
     } catch {
       st.busy = false;
       st.inflight = 0;
@@ -399,7 +425,7 @@ function logMinute() {
   const parts = [];
   for (const [id, st] of states) {
     const fps = Math.round((st.rounds.length / 60) * 100) / 100;
-    parts.push(`${id}: ${fps}fps ${st.lastMs}ms`);
+    parts.push(`${id}${st.longRange ? "[LR]" : ""}: ${fps}fps ${st.lastMs}ms`);
   }
   console.log(
     `[analysis] worker ${workerReady ? "ok" : "fora"} pid=${workerPid} cpu~${cpuPct}% · ${parts.join(" · ")}`,
@@ -427,6 +453,8 @@ function onCamcfgUpdated(p) {
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
+  } else if (p.kind === "camconfig") {
+    st.longRange = longRangeOf(st.id); // F3: liga/desliga o tiling na PRÓXIMA rodada
   }
 }
 
@@ -452,6 +480,7 @@ function status() {
       queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
       lastMs: st.lastMs,
       dets1m,
+      longRange: st.longRange, // F3 (aditivo): true = rodada com tiling 2×2 no worker
     };
   }
   return {
