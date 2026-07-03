@@ -61,12 +61,14 @@
     "@xenova/transformers": "^2.17.2",
     "@zxing/library": "^0.21.3",
     "lucide-react": "^1.23.0",
+    "onnxruntime-node": "^1.27.0",
     "pg": "^8.21.0",
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.17.0",
+    "sharp": "^0.35.3",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   }

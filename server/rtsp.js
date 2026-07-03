@@ -71,6 +71,15 @@ let ctx = null; // { io, cameras, broadcast }
 /** id -> stream handle */
 const streams = new Map();
 
+// ── Análise no hub (F1/ADR-009): câmera analisada conta como ESPECTADOR ─────────────────────
+// Predicado injetado pelo index.js (analysis.isAnalyzing). Enquanto o motor de análise estiver
+// ativo para uma câmera, o shed NÃO pausa o ffmpeg dela (idleSource vira no-op): o motor
+// precisa do stream vivo mesmo sem nenhum dashboard aberto — é o requisito central da ADR-009.
+let analysisViewer = null;
+function setAnalysisViewer(fn) {
+  analysisViewer = typeof fn === "function" ? fn : null;
+}
+
 /**
  * Defaults globais de captura (env), sobrescritos POR CÂMERA quando informado (campos fps/width/quality
  * no cadastro). P1 (plano-performance-imagem.md): revertida a super-compressão — o gargalo é
@@ -384,6 +393,8 @@ function restartSource(src) {
 function idleSource(id) {
   const st = streams.get(String(id));
   if (!st || st.stopped || st.idle) return false;
+  // Análise conta como espectador (F1/ADR-009): motor ativo → stream fica vivo p/ ele.
+  if (analysisViewer && analysisViewer(String(id))) return false;
   st.idle = true;
   if (st.reconnectTimer) {
     clearTimeout(st.reconnectTimer);
@@ -467,6 +478,7 @@ module.exports = {
   restartSource,
   idleSource,
   wakeSource,
+  setAnalysisViewer,
   statuses,
   loadSources,
   FFMPEG_BIN,

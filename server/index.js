@@ -14,6 +14,7 @@ const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
+const analysis = require("./analysis/engine");
 
 // Grupos de rotas HTTP (corpos dos handlers). Cada módulo expõe handle(req,res,ctx) e
 // devolve true quando tratou a requisição (resposta enviada), senão false → o dispatch segue.
@@ -24,6 +25,7 @@ const routeNotif = require("./routes/notif");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
+const routeAnalysis = require("./routes/analysis");
 
 const PORT = Number(process.env.PORT ?? 4000);
 // HOST: em dev fica 0.0.0.0 (celular aponta p/ o IP do laptop). Em produção, atrás do
@@ -91,7 +93,9 @@ const httpServer = createServer(async (req, res) => {
   }
 
   // Contexto passado aos grupos de rotas: helpers de resposta/auth + io (p/ emitir aos painéis).
-  const ctx = { json, readBody, requireAuth, requireSuper, requireConfigurer, io };
+  // io = ioAnalysis (tee): mesmo io de sempre, mas o motor de análise observa os emits que
+  // consome (ex.: "camcfg-updated" recarrega zonas/tripwires no engine) — contrato intacto.
+  const ctx = { json, readBody, requireAuth, requireSuper, requireConfigurer, io: ioAnalysis };
   try {
     // Dispatch por grupo (ordem preservada do arquivo original; padrões de URL não colidem
     // entre grupos, então o agrupamento não altera qual handler casa).
@@ -102,6 +106,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeUsers.handle(req, res, ctx)) return;
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
+    if (await routeAnalysis.handle(req, res, ctx)) return;
   } catch {
     return json(res, 400, { error: "requisição inválida" });
   }
@@ -110,6 +115,26 @@ const httpServer = createServer(async (req, res) => {
   res.end();
 });
 const io = new Server(httpServer, { cors: { origin: "*" }, maxHttpBufferSize: 8e6 });
+
+// ── Motor de análise no hub (F1/ADR-009) — tee de observação sobre o io ─────────────────────
+// O engine consome coisas que já trafegam pelo io SEM mudar nenhum contrato: frames do relé
+// RTSP (emitidos dentro de rtsp.js via ctx.io) e "camcfg-updated" (emitido pelas rotas de
+// config). Este wrapper repassa TODO emit ao io real e apenas OBSERVA esses dois eventos.
+// Frames de webcam não passam por aqui — o handler de "frame" abaixo chama onFrame direto.
+function analysisTee(target) {
+  return {
+    to: (room) => analysisTee(target.to(room)),
+    get volatile() {
+      return analysisTee(target.volatile);
+    },
+    emit(ev, payload) {
+      if (ev === "frame" && payload) analysis.onFrame(payload.id, payload.buf, payload.ts);
+      else if (ev === "camcfg-updated") analysis.onCamcfgUpdated(payload);
+      return target.emit(ev, payload);
+    },
+  };
+}
+const ioAnalysis = analysisTee(io);
 
 // Acesso restrito (multi-usuário): todo socket precisa de token de sessão válido.
 // Câmeras (dispositivos) também aceitam CAMERA_TOKEN quando definido (F4 — token de dispositivo).
@@ -224,6 +249,9 @@ io.on("connection", (socket) => {
     // Rooms (2.1): dashboards novos assistem por câmera (`cam:<id>`, via `watch`); antigos recebem
     // tudo pela `dash-legacy`. União de rooms — socket.io deduplica destinos.
     socket.on("frame", (payload) => {
+      // Motor de análise (F1): o hub JÁ possui o frame — amostragem @1fps acontece no engine
+      // (último-vence); aqui é só entregar a referência (custo ~zero por frame).
+      if (payload && payload.buf) analysis.onFrame(id, payload.buf, payload.ts);
       io.to(`cam:${id}`).to("dash-legacy").volatile.emit("frame", { id, ...payload });
     });
 
@@ -252,6 +280,9 @@ io.on("connection", (socket) => {
           label: c.label,
           kind: "browser",
         });
+    // Anti-duplicação (F1/ADR-009): snapshot do "analysis-status" por câmera analisada
+    // ({ cameraId, engine: "hub" }) — o dashboard novo desliga o ingest local dessas câmeras.
+    analysis.snapshotTo(socket);
     console.log(`[dashboard+] ${socket.id}`);
 
     // 2.1 — assinatura por câmera (contrato ADITIVO): o dashboard anuncia o conjunto COMPLETO de
@@ -323,6 +354,11 @@ io.on("connection", (socket) => {
     camcfg.init(),
   ]);
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
+  // Motor de análise no hub (F1/ADR-009): D-FINE-N em worker process, ingest direto no pgstore.
+  // Liga/desliga por ANALYSIS_ENABLED (ver server/analysis/engine.js). Câmera analisada conta
+  // como ESPECTADOR p/ o shed: o ffmpeg de RTSP não é pausado enquanto o motor estiver ativo.
+  await analysis.init({ io, cameras });
+  rtsp.setAnalysisViewer(analysis.isAnalyzing);
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);
     console.log(
@@ -338,6 +374,13 @@ io.on("connection", (socket) => {
     whatsapp.init();
     // Câmeras IP/RTSP (via ffmpeg → frames JPEG), tratadas como câmeras comuns.
     // Legadas: rtsp.sources.json/env (retrocompat). Dinâmicas: cameras.json (CRUD em runtime).
-    rtsp.startRtspIngestion({ io, cameras, broadcast, dynamicSources: cameraStore.all() });
+    // io = ioAnalysis (tee): o motor de análise observa os frames JPEG que o rtsp.js emite
+    // (mesmo caminho dos dashboards, custo ~zero) — nenhum contrato de evento muda.
+    rtsp.startRtspIngestion({
+      io: ioAnalysis,
+      cameras,
+      broadcast,
+      dynamicSources: cameraStore.all(),
+    });
   });
 })();
