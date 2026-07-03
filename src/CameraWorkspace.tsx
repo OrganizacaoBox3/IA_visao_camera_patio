@@ -137,6 +137,22 @@ const HUB_FLOW_REFRESH_MS = 30_000;
 // Contadores de sessão "vazios" p/ o HUD no modo hub (constante única — sem alocar por frame).
 const EMPTY_TW_COUNTS: Record<string, TripwireCounts> = {};
 
+// ── F2 (ADR-009): overlays SERVIDOS — contrato do evento `analysis-tracks` (aditivo, volatile
+// @1fps): tracks/zonas calculados pelo MOTOR DO HUB (D-FINE + ByteTrack server-side). Tipos
+// exportados p/ a central (DashboardPage guarda o payload em ref e passa um getter estável).
+export type HubTrack = {
+  id: number;
+  /** bbox normalizado [x,y,w,h] 0..1 (mesma convenção de Track.bbox). */
+  bbox: [number, number, number, number];
+  cx: number;
+  cy: number;
+  zone: string | null;
+};
+export type HubZone = { id: string; label: string; people: number; occupied: boolean };
+export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
+// Payload do hub mais velho que isto é STALE (motor reiniciando/rede) → não desenhar caixa velha.
+const HUB_TRACKS_STALE_MS = 5000;
+
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
 // CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
@@ -250,6 +266,11 @@ type Props = {
   // "hoje" das linhas passa a ser refresh periódico do servidor. OPCIONAL/retrocompatível:
   // ausente (hub antigo sem o evento) → "local" = comportamento idêntico ao atual.
   analysisEngine?: "hub" | "local";
+  // F2 (ADR-009): getter ESTÁVEL (padrão gettersRef da central) do último `analysis-tracks` da
+  // câmera — tracks/zonas do MOTOR DO HUB. Consumido SÓ na GRADE (mode≠full) com engine==="hub":
+  // a grade vira espelho (desenha o que o servidor mandou) e deixa de agendar o coco local.
+  // OPCIONAL/retrocompatível: ausente/null → comportamento atual (pipeline local).
+  getHubAnalysis?: () => HubAnalysis | null;
 };
 
 const C = APP_CONFIG.detection;
@@ -265,6 +286,7 @@ export function CameraWorkspace({
   onAlert,
   tripwiresRev,
   analysisEngine = "local",
+  getHubAnalysis,
 }: Props) {
   // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
   // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
@@ -428,6 +450,17 @@ export function CameraWorkspace({
   useEffect(() => {
     analysisEngineRef.current = analysisEngine;
   }, [analysisEngine]);
+
+  // ── F2 (ADR-009): espelho dos overlays SERVIDOS (grade com engine==="hub") ──
+  // O getter vem estável da central (cache por câmera), mas espelhamos em ref pelo mesmo motivo
+  // do analysisEngineRef: o rAF é criado 1× por câmera e a prop pode trocar em runtime.
+  const getHubAnalysisRef = useRef(getHubAnalysis);
+  useEffect(() => {
+    getHubAnalysisRef.current = getHubAnalysis;
+  }, [getHubAnalysis]);
+  const hubZonesRef = useRef<HubZone[] | null>(null); // zones[] do último payload FRESCO do hub
+  const hubTracksTsRef = useRef(0); // ts do último payload consumido (gate "payload novo")
+  const hubFirstSeenRef = useRef<Map<number, number>>(new Map()); // id do hub → 1ª vez visto aqui
 
   // F1-C: "hoje" das linhas no MODO HUB — refresh periódico do SERVIDOR, SEM somar a sessão.
   // Com o motor do hub ligado, o servidor grava os MESMOS cruzamentos que o counter local vê;
@@ -807,7 +840,15 @@ export function CameraWorkspace({
       // detecção NÃO é agendada só por causa das linhas. Na câmera ABERTA (350ms) conta normal.
       const hasWires = tripwiresRef.current.length > 0;
       const countingActive = hasWires && mode === "full";
-      const needPersons = ativ.length > 0 || countingActive;
+      // ── F2 (ADR-009): GRADE com engine==="hub" → espelho do MOTOR DO HUB ──
+      // O hub roda D-FINE+ByteTrack 24/7 e emite `analysis-tracks` @1fps; o tile deixa de agendar
+      // o coco local (needPersons ganha `&& !hubTile` — a economia de CPU da F2: fim de 1 worker
+      // tfjs de detecção POR TILE hub) e desenha os tracks/zonas servidos (bloco abaixo).
+      // DECISÃO F2 — câmera ABERTA (full) MANTÉM o pipeline local: overlay de baixa latência
+      // (~66ms local vs ~1s do hub) p/ inspeção; os ingests já são suprimidos pela F1-C, então
+      // não há duplicação de indicador. F3 reavalia (aposentar o coco também no full).
+      const hubTile = mode !== "full" && analysisEngineRef.current === "hub";
+      const needPersons = (ativ.length > 0 || countingActive) && !hubTile;
 
       // ── nível de frame: motion luma + coco-ssd (só se houver zona de atividade) ──
       // (2.5) LONGO ALCANCE: a luma de movimento é produzida AQUI, 1× por câmera, já na resolução
@@ -886,6 +927,68 @@ export function CameraWorkspace({
               objInFlightRef.current = false;
             });
         }
+      }
+      // ── F2 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (grade, engine hub) ──
+      // Converte HubTrack → Track (shape do drawTracks/presença/heatmap): score=1 (o motor já
+      // filtrou por limiar — nunca atenuado pelo slider local), foot derivado do bbox
+      // (bottom-center) e firstSeen mantido POR ID entre payloads (rótulo de permanência).
+      // detsRef recebe pseudo-dets "person" (bbox em PIXELS, contrato Detection) — mantém vivo o
+      // `occupied` do AtividadeProcessor (OCIOSA×VAZIA), que antes vinha do coco local; sem isso
+      // a última detecção local congelaria o estado. Motion/estado/alarme seguem 100% locais.
+      // Conversão SÓ quando o payload muda (~1fps) — nada aloca por frame; payload mais velho
+      // que HUB_TRACKS_STALE_MS é descartado (limpa as caixas em vez de desenhar dado morto).
+      if (hubTile) {
+        const hd = getHubAnalysisRef.current?.() ?? null;
+        const fresh = !!hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS;
+        if (!fresh) {
+          if (tracksRef.current.length) tracksRef.current = [];
+          if (detsRef.current.length) detsRef.current = [];
+          hubZonesRef.current = null;
+          if (hubFirstSeenRef.current.size) hubFirstSeenRef.current.clear();
+        } else if (hd.ts !== hubTracksTsRef.current) {
+          hubTracksTsRef.current = hd.ts;
+          const seen = hubFirstSeenRef.current;
+          const alive = new Set<number>();
+          tracksRef.current = hd.tracks.map((t) => {
+            alive.add(t.id);
+            let fs = seen.get(t.id);
+            if (fs == null) {
+              fs = now;
+              seen.set(t.id, fs);
+            }
+            return {
+              id: t.id,
+              cx: t.cx,
+              cy: t.cy,
+              foot: { x: t.bbox[0] + t.bbox[2] / 2, y: t.bbox[1] + t.bbox[3] },
+              bbox: t.bbox,
+              firstSeen: fs,
+              lastSeen: now,
+              zone: t.zone,
+              score: 1,
+            };
+          });
+          seen.forEach((_, id) => {
+            if (!alive.has(id)) seen.delete(id); // poda ids mortos (mapa não cresce sem limite)
+          });
+          detsRef.current = hd.tracks.map((t) => ({
+            class: "person",
+            score: 1,
+            bbox: [t.bbox[0] * f.w, t.bbox[1] * f.h, t.bbox[2] * f.w, t.bbox[3] * f.h] as [
+              number,
+              number,
+              number,
+              number,
+            ],
+          }));
+          hubZonesRef.current = hd.zones;
+        }
+      } else if (hubZonesRef.current) {
+        // saiu do modo espelho (abriu a câmera/engine voltou a local) → limpa o resíduo do hub;
+        // o pipeline local reassume na próxima rodada de detecção (fallback = comportamento atual).
+        hubZonesRef.current = null;
+        hubTracksTsRef.current = 0;
+        hubFirstSeenRef.current.clear();
       }
       const dets = detsRef.current;
       // (Onda 2) O ByteTracker roda SÓ em rodada NOVA de detecção — não a cada frame de vídeo
@@ -1013,7 +1116,16 @@ export function CameraWorkspace({
             contains: containsFn(z),
           };
           const r = (h.proc as AtividadeProcessor).process(az, ctx);
-          resultsRef.current.set(z.id, { modo: "atividade", view: r.view });
+          // F2 (ADR-009): pessoas por zona EXIBIDAS (rótulo no canvas + pill do painel) vêm do
+          // zones[] do hub quando disponível — a atribuição de zona do MOTOR é a autoridade
+          // (mesma que grava o indicador). Estado/motion/alarme locais seguem intactos.
+          const hz = hubTile
+            ? hubZonesRef.current?.find((zz) => zz.id === z.id || zz.label === z.label)
+            : undefined;
+          resultsRef.current.set(z.id, {
+            modo: "atividade",
+            view: hz ? { ...r.view, people: hz.people } : r.view,
+          });
           if (r.sample) recSamples.push(r.sample);
           if (r.event) pushTimeline(r.event.text, r.event.sev);
           if (r.alert) {

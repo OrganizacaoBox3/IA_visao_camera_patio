@@ -5,7 +5,12 @@ import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { setInferencePriority } from "../vision/scheduler";
 import { type FrameSource } from "../frame";
-import { CameraWorkspace } from "../CameraWorkspace";
+import {
+  CameraWorkspace,
+  type HubAnalysis,
+  type HubTrack,
+  type HubZone,
+} from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
@@ -132,6 +137,12 @@ export function DashboardPage() {
   const socketRef = useRef<Socket | null>(null);
   const framesRef = useRef<Map<string, FrameEntry>>(new Map());
   const gettersRef = useRef<Map<string, () => FrameSource | null>>(new Map());
+  // ── F2 (ADR-009): overlays SERVIDOS — último `analysis-tracks` por câmera ──
+  // Evento volatile @1fps do MOTOR DO HUB (tracks + zonas). SEM setState por evento (padrão
+  // framesRef): o payload vai a este ref e o rAF do CameraWorkspace o lê via getter estável
+  // (padrão gettersRef, hubGetterFor abaixo) — zero re-render da grade por frame de análise.
+  const hubAnalysisRef = useRef<Map<string, HubAnalysis>>(new Map());
+  const hubGettersRef = useRef<Map<string, () => HubAnalysis | null>>(new Map());
   // Conjunto de feeds ATIVOS (página atual + câmera aberta). Só estes são decodificados/processados.
   const activeIdsRef = useRef<Set<string>>(new Set());
   // Câmera aberta espelhada em ref: drainDecode (estável, useCallback []) decide o resize sem
@@ -318,6 +329,21 @@ export function DashboardPage() {
         prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
       );
     });
+    // F2 (ADR-009) — overlays servidos: guarda o último payload por câmera no REF (sem setState —
+    // ver hubAnalysisRef acima). `ts` = RECEPÇÃO local (Date.now): o gate de stale (~5s) no
+    // CameraWorkspace compara com o relógio local e fica imune a skew hub×cliente. Payload
+    // defensivo: campos ausentes viram lista vazia (tile fica sem caixas, nunca quebra).
+    socket.on(
+      "analysis-tracks",
+      (p: { cameraId: string; ts?: number; tracks?: HubTrack[]; zones?: HubZone[] }) => {
+        if (!p || typeof p.cameraId !== "string") return;
+        hubAnalysisRef.current.set(p.cameraId, {
+          ts: Date.now(),
+          tracks: Array.isArray(p.tracks) ? p.tracks : [],
+          zones: Array.isArray(p.zones) ? p.zones : [],
+        });
+      },
+    );
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
@@ -387,6 +413,12 @@ export function DashboardPage() {
       f.bmp?.close();
       framesRef.current.delete(id);
       gettersRef.current.delete(id);
+    });
+    // F2: poda também o espelho de análise do hub (payload + getter) da câmera removida.
+    hubAnalysisRef.current.forEach((_, id) => {
+      if (ids.has(id)) return;
+      hubAnalysisRef.current.delete(id);
+      hubGettersRef.current.delete(id);
     });
   }, [cameras]);
 
@@ -661,6 +693,17 @@ export function DashboardPage() {
     return g;
   }
 
+  // F2 (ADR-009): getter estável por câmera do último `analysis-tracks` (padrão getterFor).
+  // Identidade fixa por id → não quebra o React.memo do CameraTile nem religa efeitos.
+  function hubGetterFor(id: string): () => HubAnalysis | null {
+    let g = hubGettersRef.current.get(id);
+    if (!g) {
+      g = () => hubAnalysisRef.current.get(id) ?? null;
+      hubGettersRef.current.set(id, g);
+    }
+    return g;
+  }
+
   function cfgOf(id: string): CameraCfg {
     return cfgs[id] ?? getCameraCfg(id);
   }
@@ -838,6 +881,7 @@ export function DashboardPage() {
                 tripwiresRev={revByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
                 analysisEngine={analysisEngines[c.id] ?? "local"}
+                getHubAnalysis={hubGetterFor(c.id)}
                 onOpen={handleOpen}
                 onAlert={handleAlert}
               />
@@ -870,6 +914,10 @@ export function DashboardPage() {
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
                 analysisEngine={analysisEngines[open.id] ?? "local"}
+                // F2: passado também no full por simetria/F3; a decisão da F2 (comentário no
+                // rAF do CameraWorkspace) mantém o pipeline local na câmera aberta — o getter
+                // só é consumido na grade (mode≠full).
+                getHubAnalysis={hubGetterFor(open.id)}
                 onClose={() => setOpenId(null)}
                 onAlert={handleAlert}
               />

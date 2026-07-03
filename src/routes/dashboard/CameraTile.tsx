@@ -1,6 +1,6 @@
 import { memo, useCallback } from "react";
 import { type FrameSource } from "../../frame";
-import { CameraWorkspace } from "../../CameraWorkspace";
+import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { Tooltip } from "../../ui";
@@ -57,6 +57,10 @@ type CameraTileProps = {
   // (o CameraWorkspace suprime os ingests locais). OPCIONAL/retrocompatível (default "local");
   // primitiva → amigável ao React.memo abaixo (só o tile da câmera afetada re-renderiza).
   analysisEngine?: "hub" | "local";
+  // F2 (ADR-009): getter estável (cache por id na central — memo-friendly) do último
+  // `analysis-tracks` do hub; o CameraWorkspace desenha esses tracks na grade em vez de
+  // rodar inferência local. OPCIONAL/retrocompatível (ausente → pipeline local).
+  getHubAnalysis?: () => HubAnalysis | null;
   // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
   // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
   // MESMA função e só re-renderizam quando os próprios dados mudam.
@@ -77,6 +81,7 @@ export const CameraTile = memo(function CameraTile({
   tripwiresRev,
   status,
   analysisEngine,
+  getHubAnalysis,
   onOpen,
   onAlert,
 }: CameraTileProps) {
@@ -108,6 +113,7 @@ export const CameraTile = memo(function CameraTile({
       demoMode={demoMode}
       tripwiresRev={tripwiresRev}
       analysisEngine={analysisEngine}
+      getHubAnalysis={getHubAnalysis}
       onOpen={openSelf}
       onAlert={onAlert}
     />
