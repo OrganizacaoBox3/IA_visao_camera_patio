@@ -1,11 +1,15 @@
 /* Saúde do sistema de alarmes (ISA-18.2 / EEMUA 191 — racionalização · Onda B).
    Importado SÓ por AlarmHealthPage.tsx. Reusa os tokens da fundação
    (var(--state-*)/var(--sp-*)/var(--mono)) — going-gray: base neutra, cor saturada
-   reservada à anormalidade (% crítico acima do alvo). NÃO edita index.css/ui.css. */
+   reservada à anormalidade (% crítico acima do alvo). NÃO edita index.css/ui.css.
+   Padronização visual (Onda A · A3): hex/px duplicados dos tokens removidos; a área de
+   shelves cresce com a viewport (flex-fill), sem teto fixo. */
 
 .ah-body {
+  flex: 1;
+  min-height: 0;
   padding: var(--sp-4);
-  overflow: auto;
+  overflow: auto; /* degradação em viewport curta: a página rola, nada é cortado */
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
@@ -19,52 +23,56 @@
 }
 
 .ah-kpi {
-  background: var(--panel, #0f141b);
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  background: var(--panel);
+  border: 1px solid var(--state-neutral-border);
   border-radius: 10px;
   padding: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 /* Realce reservado à anormalidade: % crítico acima do alvo EEMUA. */
 .ah-kpi[data-over="1"] {
-  border-color: var(--state-critical-border, #7f1d1d);
-  background: var(--state-critical-bg, #2a1113);
+  border-color: var(--state-critical-border);
+  background: var(--state-critical-bg);
 }
 
+/* Título de seção/cartão — também usado como <h2> (visual atual mantido: sem preflight,
+   o h2 precisa de margin/weight explícitos para renderizar igual ao span). */
 .ah-kpi__label {
+  margin: 0;
   font-size: 10px;
+  font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--text-muted, #7d8aa0);
+  color: var(--text-muted);
 }
 .ah-kpi__value {
   font-family: var(--mono);
-  font-size: 22px;
+  font-size: var(--fs-kpi, 24px);
   font-weight: 600;
-  color: var(--text, #e5e7eb);
+  color: var(--text);
   line-height: 1.1;
 }
 .ah-kpi__value[data-over="1"] {
-  color: var(--state-critical-fg, #fecaca);
+  color: var(--state-critical-fg);
 }
 .ah-kpi__sub {
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   font-family: var(--mono);
 }
 .ah-kpi__flag {
   font-size: 11px;
   font-weight: 600;
-  color: var(--state-critical-fg, #fecaca);
+  color: var(--state-critical-fg);
 }
 
 /* Barra de distribuição por prioridade (analógica — "nunca número cru"). */
 .ah-dist {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--sp-1);
 }
 .ah-dist__bar {
   display: flex;
@@ -72,8 +80,8 @@
   height: 12px;
   border-radius: 999px;
   overflow: hidden;
-  background: var(--state-neutral-bg, #161c24);
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  background: var(--state-neutral-bg);
+  border: 1px solid var(--state-neutral-border);
 }
 .ah-dist__seg {
   height: 100%;
@@ -81,13 +89,13 @@
   transition: width 0.4s ease;
 }
 .ah-dist__seg[data-prio="critical"] {
-  background: var(--state-critical, #ef4444);
+  background: var(--state-critical);
 }
 .ah-dist__seg[data-prio="high"] {
-  background: var(--state-warn, #eab308);
+  background: var(--state-warn);
 }
 .ah-dist__seg[data-prio="advisory"] {
-  background: var(--state-neutral-fg, #9aa7b4);
+  background: var(--state-neutral-fg);
 }
 
 .ah-dist__legend {
@@ -96,12 +104,12 @@
   gap: var(--sp-3);
   font-size: 11px;
   font-family: var(--mono);
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
 }
 .ah-dist__key {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-1);
 }
 .ah-dist__dot {
   width: 9px;
@@ -110,78 +118,87 @@
   flex: none;
 }
 .ah-dist__dot[data-prio="critical"] {
-  background: var(--state-critical, #ef4444);
+  background: var(--state-critical);
 }
 .ah-dist__dot[data-prio="high"] {
-  background: var(--state-warn, #eab308);
+  background: var(--state-warn);
 }
 .ah-dist__dot[data-prio="advisory"] {
-  background: var(--state-neutral-fg, #9aa7b4);
+  background: var(--state-neutral-fg);
 }
 .ah-dist__num {
-  color: var(--text, #e5e7eb);
+  color: var(--text);
   font-weight: 600;
 }
 
-/* Layout 2 colunas (shelves ativos | criar shelve). */
+/* Layout 2 colunas (shelves ativos | criar shelve) — flex-fill: absorve a altura restante
+   da página e as DUAS colunas se esticam por igual (grid-auto-rows: 1fr equilibra o painel
+   de shelves com o formulário; antes: align-items:start deixava ~100px vs ~350px). */
 .ah-cols {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1.2fr 1fr;
+  grid-auto-rows: minmax(min-content, 1fr);
   gap: var(--sp-3);
-  align-items: start;
 }
 @media (max-width: 860px) {
   .ah-cols {
     grid-template-columns: 1fr;
   }
 }
+/* A ScrollArea da lista ocupa o restante do cartão e rola por dentro (sem max-height fixo). */
+.ah-shelves-scroll {
+  flex: 1;
+  min-height: 0;
+}
 
 /* Lista de shelves ativos. */
 .ah-shelves {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .ah-shelve {
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  border: 1px solid var(--state-neutral-border);
   border-left-width: 4px;
-  border-left-color: var(--state-warn, #eab308);
+  border-left-color: var(--state-warn);
   border-radius: 8px;
-  padding: 9px 11px;
-  background: var(--state-neutral-bg, #161c24);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--state-neutral-bg);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .ah-shelve__top {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .ah-shelve__key {
   font-family: var(--mono);
   font-size: 13px;
-  color: var(--text, #e5e7eb);
+  color: var(--text);
   word-break: break-all;
 }
 .ah-shelve__remaining {
   margin-left: auto;
   font-family: var(--mono);
   font-size: 12px;
-  color: var(--state-warn-fg, #facc15);
+  color: var(--state-warn-fg);
   white-space: nowrap;
 }
 .ah-shelve__meta {
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .ah-shelve__actions {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 /* Formulário de criação. */
@@ -192,25 +209,25 @@
 }
 .ah-form__hint {
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   line-height: 1.45;
 }
 .ah-form__hint code {
   font-family: var(--mono);
-  background: var(--state-neutral-bg, #161c24);
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  background: var(--state-neutral-bg);
+  border: 1px solid var(--state-neutral-border);
   border-radius: 4px;
-  padding: 0 4px;
+  padding: 0 var(--sp-1);
 }
 
 .ah-foot {
   font-size: 11px;
-  color: var(--text-muted, #7d8aa0);
+  color: var(--text-muted);
   font-family: var(--mono);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .ah-foot__dot {
-  color: var(--state-ok, #22c55e);
+  color: var(--state-ok);
 }

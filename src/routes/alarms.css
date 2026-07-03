@@ -1,7 +1,8 @@
 /* Fila de alarmes acionável (Onda B · item 7) — estilos da central.
    Importado SÓ por DashboardPage.tsx. Usa tokens var(--state-*)/var(--sp-*) já existentes
    (going-gray): base neutra, cor saturada só para prioridade/anormalidade; reconhecidos
-   esmaecidos. NÃO duplica nem edita index.css/ui.css. */
+   esmaecidos. NÃO duplica nem edita index.css/ui.css.
+   Padronização visual (Onda A · A3): hex/px duplicados dos tokens removidos. */
 
 /* Drawer/sheet de alarmes via <Dialog> (Radix): o foco preso, ESC e portal vêm do wrapper.
    Aqui apenas REPOSICIONAMOS aquele .ui-dialog específico como sheet lateral, escopando por
@@ -18,7 +19,7 @@
   max-height: none;
   border-radius: 0;
   border: none;
-  border-left: 1px solid var(--state-neutral-border, #1f2937);
+  border-left: 1px solid var(--state-neutral-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
   animation: alarm-drawer-in 0.18s ease;
 }
@@ -57,7 +58,7 @@
     max-width: none;
     height: 62%;
     border-left: none;
-    border-top: 1px solid var(--state-neutral-border, #1f2937);
+    border-top: 1px solid var(--state-neutral-border);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
   }
   @keyframes alarm-drawer-in {
@@ -74,56 +75,56 @@
 
 /* Contador "N novo(s)" no título do diálogo. */
 .alarm-drawer__count {
-  margin-left: 8px;
+  margin-left: var(--sp-2);
   font-family: var(--mono);
   font-size: 12px;
   font-weight: 400;
-  color: var(--state-warn-fg, #facc15);
+  color: var(--state-warn-fg);
 }
 .alarm-drawer__count[data-zero="1"] {
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
 }
 
 .alarm-drawer__filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--state-neutral-border, #1f2937);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--state-neutral-border);
   font-size: 12px;
 }
 .alarm-drawer__filters label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  gap: var(--sp-2);
+  color: var(--state-neutral-fg);
 }
 
 /* Conteúdo da fila (dentro do viewport da ScrollArea — a rolagem é da ScrollArea). */
 .alarm-drawer__list {
-  padding: 10px 12px;
+  padding: var(--sp-2) var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .alarm-drawer__empty {
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   font-size: 13px;
   text-align: center;
-  padding: 24px 8px;
+  padding: var(--sp-5) var(--sp-2);
 }
 
 /* Card de alarme: borda esquerda = prioridade (glanceable). */
 .alarm-card {
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  border: 1px solid var(--state-neutral-border);
   border-left-width: 4px;
   border-radius: 8px;
-  padding: 9px 11px;
-  background: var(--state-neutral-bg, #161c24);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--state-neutral-bg);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: var(--sp-2);
 }
 /* Estado new = destacado; acknowledged/forwarded = esmaecido (going-gray). */
 .alarm-card[data-done="1"] {
@@ -134,7 +135,7 @@
 .alarm-card__top {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--sp-2);
 }
 .alarm-card__dot {
   width: 9px;
@@ -152,19 +153,19 @@
   margin-left: auto;
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
 }
 .alarm-card__text {
   font-size: 13px;
   line-height: 1.35;
-  color: var(--text, #e5e7eb);
+  color: var(--text);
 }
 .alarm-card__meta {
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .alarm-card__state {
   font-family: var(--mono);
@@ -174,8 +175,8 @@
 }
 .alarm-card__actions {
   display: flex;
-  gap: 6px;
-  margin-top: 1px;
+  gap: var(--sp-2);
+  margin-top: 1px; /* ajuste fino abaixo da escala --sp-* */
 }
 
 /* Badge "novos" no botão do cabeçalho. */
@@ -185,20 +186,20 @@
   justify-content: center;
   min-width: 18px;
   height: 18px;
-  padding: 0 5px;
-  margin-left: 6px;
+  padding: 0 var(--sp-1);
+  margin-left: var(--sp-2);
   border-radius: 999px;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
-  color: #fff;
-  background: var(--state-critical, #ef4444);
+  color: #fff; /* texto de contraste sobre cor saturada — sem token equivalente */
+  background: var(--state-critical);
 }
 .alarm-badge[data-prio="high"] {
-  background: var(--state-warn, #eab308);
-  color: #1a1500;
+  background: var(--state-warn);
+  color: #1a1500; /* texto de contraste sobre --state-warn — sem token equivalente */
 }
 .alarm-badge[data-prio="advisory"] {
-  background: var(--state-info, #38bdf8);
-  color: #041018;
+  background: var(--state-info);
+  color: #041018; /* texto de contraste sobre --state-info — sem token equivalente */
 }

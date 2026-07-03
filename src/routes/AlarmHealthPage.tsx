@@ -65,7 +65,7 @@ function fmtDuration(ms: number): string {
 }
 
 export function AlarmHealthPage() {
-  const { user, canConfigure } = useAuth();
+  const { canConfigure } = useAuth();
   const { toast } = useToast();
 
   const [metrics, setMetrics] = useState<AlarmMetrics | null>(null);
@@ -242,11 +242,11 @@ export function AlarmHealthPage() {
             {/* Distribuição por prioridade (analógica) — janela e última hora. */}
             <section className="ah-kpis" aria-label="Distribuição por prioridade">
               <div className="ah-kpi">
-                <span className="ah-kpi__label">Por prioridade — janela</span>
+                <h2 className="ah-kpi__label">Por prioridade — janela</h2>
                 <PriorityDist counts={metrics.byPriorityWindow} />
               </div>
               <div className="ah-kpi">
-                <span className="ah-kpi__label">Por prioridade — última hora</span>
+                <h2 className="ah-kpi__label">Por prioridade — última hora</h2>
                 <PriorityDist counts={metrics.byPriorityHour} />
               </div>
             </section>
@@ -254,7 +254,7 @@ export function AlarmHealthPage() {
             {/* Shelves: lista ativa + criação (criação/remoção só p/ canConfigure). */}
             <div className="ah-cols">
               <section className="ah-kpi">
-                <span className="ah-kpi__label">Shelves ativos</span>
+                <h2 className="ah-kpi__label">Shelves ativos</h2>
                 {shelves == null ? (
                   <div className="ah-foot">
                     <Spinner /> carregando…
@@ -264,7 +264,7 @@ export function AlarmHealthPage() {
                     Nenhum alarme silenciado. Os alertas seguem o fluxo normal.
                   </EmptyState>
                 ) : (
-                  <ScrollArea className="max-h-[360px]">
+                  <ScrollArea className="ah-shelves-scroll">
                     <div className="ah-shelves">
                       {shelves.map((s) => (
                         <div className="ah-shelve" key={s.key}>
@@ -300,7 +300,7 @@ export function AlarmHealthPage() {
 
               {canConfigure ? (
                 <form className="ah-kpi ah-form" onSubmit={onCreate}>
-                  <span className="ah-kpi__label">Silenciar temporariamente (shelve)</span>
+                  <h2 className="ah-kpi__label">Silenciar temporariamente (shelve)</h2>
                   <p className="ah-form__hint">
                     Chave no formato <code>cameraId|zona|tipo</code>, com <code>*</code> como
                     curinga. Ex.: <code>cam-1|doca-3|fadiga</code> (específico),{" "}
@@ -344,7 +344,7 @@ export function AlarmHealthPage() {
                 </form>
               ) : (
                 <section className="ah-kpi">
-                  <span className="ah-kpi__label">Gerenciar shelves</span>
+                  <h2 className="ah-kpi__label">Gerenciar shelves</h2>
                   <EmptyState>
                     Somente perfis de configuração (engenheiro/superadmin) podem criar ou remover
                     silenciamentos. Você está em modo somente-leitura.
@@ -353,10 +353,9 @@ export function AlarmHealthPage() {
               )}
             </div>
 
-            <div className="ah-foot">
-              Sessão: {user.usuario} · papel {user.papel}
-              {canConfigure ? "" : " (somente leitura)"}.
-            </div>
+            {/* A linha "Sessão: usuário · papel" foi REMOVIDA (padronização A3): o AppShell já
+                mostra usuário+papel no menu de conta, e o modo somente-leitura já é comunicado
+                pelo painel "Gerenciar shelves" — o rodapé era redundante e órfão. */}
 
             {/* Confirmação destrutiva da remoção de shelve (controlada via AlertDialog). */}
             <AlertDialog

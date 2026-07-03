@@ -1,11 +1,13 @@
 /* Estilos da aba ALARMES do Relatório (Onda B, item 8 — ligação RELATÓRIO↔EVENTOS).
    Importado SÓ por ReportPage.tsx. Reusa os tokens var(--state-*) e var(--sp-*) do tema;
-   sem imagens (LGPD) — os cards usam só badges de prioridade/estado + texto. */
+   sem imagens (LGPD) — os cards usam só badges de prioridade/estado + texto.
+   Padronização visual (Onda A · A3): hex/px duplicados dos tokens removidos — cor e
+   espaçamento vêm SÓ dos tokens do index.css; listas crescem com a viewport (flex-fill). */
 
 .alarm-list {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2, 8px);
+  gap: var(--sp-2);
 }
 
 /* ── Migração Radix (Fase 1) — Tabs/ScrollArea no ReportPage ── */
@@ -14,17 +16,48 @@
   flex: 1;
   min-height: 0;
 }
+
+/* ── Flex-fill (padrão SaaS do plano): a lista cresce com a viewport e rola POR DENTRO ──
+   Cadeia: .rep-tabpanel (flex:1 no index.css) vira coluna; o painel que contém a tabela
+   absorve a altura restante; a ScrollArea rola internamente. Escopo por :has(> .panel > …)
+   para NÃO afetar tabpanels de grade (.rep-2col), que continuam rolando no próprio tabpanel. */
+.rep-tabpanel:has(> .panel > .rep-tablescroll) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Guarda: display autoral NÃO pode reexibir um tabpanel oculto (atributo hidden do Radix). */
+.rep-tabpanel[hidden] {
+  display: none !important;
+}
+.rep-tabpanel > .panel:has(> .rep-tablescroll) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 /* Tabelas de eventos/leituras/ocorrências dentro de ScrollArea (rolagem vertical estilizada). */
 .rep-tablescroll {
-  max-height: 420px;
+  flex: 1;
+  min-height: 0;
 }
-/* Matriz Setor × Classe: rolagem vertical + horizontal (muitas colunas de classe). */
+/* Matriz Setor × Classe / heatmaps: SEM teto fixo — altura intrínseca; quando excede,
+   quem rola é o .rep-tabpanel (a ScrollArea aqui é horizontal: esticá-la deslocaria a
+   barra para longe do conteúdo, por isso não recebe flex:1). */
 .rep-matrixscroll {
-  max-height: 420px;
+  max-height: none;
+}
+/* Alarmes (sem abas): o painel de eventos absorve o restante do .rep-body. */
+.rep-body > .panel-events:has(.alarm-list-scroll) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 /* Lista longa de cards de alarme (até 500) rolável dentro do card. */
 .alarm-list-scroll {
-  max-height: 520px;
+  flex: 1;
+  min-height: 0;
 }
 /* O .rep-foot é irmão do Tabs no fluxo; ScrollArea não deve impedir a impressão. */
 @media print {
@@ -34,6 +67,13 @@
   .alarm-list-scroll {
     overflow: visible;
     max-height: none;
+  }
+  /* Desfaz o flex-fill na impressão: fluxo em bloco, sem clipping. */
+  .rep-tabpanel:has(> .panel > .rep-tablescroll),
+  .rep-tabpanel > .panel:has(> .rep-tablescroll),
+  .rep-body > .panel-events:has(.alarm-list-scroll) {
+    display: block;
+    overflow: visible;
   }
   .rep-tablescroll [data-radix-scroll-area-viewport],
   .rep-matrixscroll [data-radix-scroll-area-viewport],
@@ -45,13 +85,13 @@
 .alarm-card {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: var(--sp-2, 8px);
+  gap: var(--sp-2);
   align-items: start;
   text-align: left;
   width: 100%;
-  padding: var(--sp-2, 8px) var(--sp-3, 12px);
-  background: var(--state-neutral-bg, #161c24);
-  border: 1px solid var(--state-neutral-border, #1f2937);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--state-neutral-bg);
+  border: 1px solid var(--state-neutral-border);
   border-left-width: 3px;
   border-radius: 8px;
   color: inherit;
@@ -61,35 +101,35 @@
     border-color 0.12s ease;
 }
 .alarm-card:hover {
-  background: #1b2330;
+  background: #1b2330; /* sem token equivalente (hover 1 passo acima do neutral-bg) */
 }
 .alarm-card.sel {
-  border-color: var(--state-info, #38bdf8);
-  background: var(--state-info-bg, #0b2530);
+  border-color: var(--state-info);
+  background: var(--state-info-bg);
 }
 
 /* Faixa lateral por prioridade (advisory→info, high→warn, critical→critical). */
 .alarm-card.prio-critical {
-  border-left-color: var(--state-critical, #ef4444);
+  border-left-color: var(--state-critical);
 }
 .alarm-card.prio-high {
-  border-left-color: var(--state-warn, #eab308);
+  border-left-color: var(--state-warn);
 }
 .alarm-card.prio-advisory {
-  border-left-color: var(--state-info, #38bdf8);
+  border-left-color: var(--state-info);
 }
 
 .alarm-time {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
   white-space: nowrap;
 }
 .alarm-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-1);
 }
 .alarm-text {
   font-size: 13px;
@@ -97,17 +137,17 @@
 }
 .alarm-loc {
   font-size: 11px;
-  color: var(--state-neutral-fg, #9aa7b4);
+  color: var(--state-neutral-fg);
 }
 .alarm-loc .sep {
   opacity: 0.5;
-  margin: 0 4px;
+  margin: 0 var(--sp-1);
 }
 
 .alarm-badges {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
   align-items: flex-end;
 }
 .alarm-badge {
@@ -115,41 +155,41 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  padding: 2px 7px;
+  padding: 2px 7px; /* pílula: ajuste fino abaixo da escala --sp-* */
   border-radius: 999px;
   white-space: nowrap;
   border: 1px solid transparent;
 }
 .alarm-badge.b-critical {
-  color: var(--state-critical-fg, #fecaca);
-  background: var(--state-critical-bg, #2a1113);
-  border-color: var(--state-critical-border, #7f1d1d);
+  color: var(--state-critical-fg);
+  background: var(--state-critical-bg);
+  border-color: var(--state-critical-border);
 }
 .alarm-badge.b-high {
-  color: var(--state-warn-fg, #facc15);
-  background: var(--state-warn-bg, #211c08);
-  border-color: var(--state-warn-border, #4d3a09);
+  color: var(--state-warn-fg);
+  background: var(--state-warn-bg);
+  border-color: var(--state-warn-border);
 }
 .alarm-badge.b-advisory {
-  color: var(--state-info-fg, #bae6fd);
-  background: var(--state-info-bg, #0b2530);
-  border-color: var(--state-info-border, #155e75);
+  color: var(--state-info-fg);
+  background: var(--state-info-bg);
+  border-color: var(--state-info-border);
 }
 /* Estado: novo=neutro destacado, reconhecido=ok, encaminhado=info. */
 .alarm-badge.s-new {
-  color: var(--state-neutral-fg, #9aa7b4);
-  background: var(--state-neutral-bg, #161c24);
-  border-color: var(--state-neutral-border, #1f2937);
+  color: var(--state-neutral-fg);
+  background: var(--state-neutral-bg);
+  border-color: var(--state-neutral-border);
 }
 .alarm-badge.s-acknowledged {
-  color: var(--state-ok-fg, #4ade80);
-  background: var(--state-ok-bg, #0c1f15);
-  border-color: var(--state-ok-border, #14532d);
+  color: var(--state-ok-fg);
+  background: var(--state-ok-bg);
+  border-color: var(--state-ok-border);
 }
 .alarm-badge.s-forwarded {
-  color: var(--state-info-fg, #bae6fd);
-  background: var(--state-info-bg, #0b2530);
-  border-color: var(--state-info-border, #155e75);
+  color: var(--state-info-fg);
+  background: var(--state-info-bg);
+  border-color: var(--state-info-border);
 }
 
 /* Bidirecional: gráficos clicáveis + destaque do ponto correspondente ao evento selecionado.
@@ -164,36 +204,36 @@
   filter: brightness(1.25);
 }
 .evo-col.sel .evo-bar {
-  outline: 2px solid var(--state-info, #38bdf8);
+  outline: 2px solid var(--state-info);
   outline-offset: 1px;
 }
 .evo-bar.crit {
-  background: var(--state-critical, #ef4444);
+  background: var(--state-critical);
 }
 
 .hm-cell.clk {
   cursor: pointer;
 }
 .hm-cell.sel {
-  outline: 2px solid var(--state-info, #38bdf8);
+  outline: 2px solid var(--state-info);
   outline-offset: -2px;
 }
 
 .alarm-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-2, 8px);
+  gap: var(--sp-2);
   align-items: center;
-  margin-bottom: var(--sp-2, 8px);
+  margin-bottom: var(--sp-2);
 }
 .alarm-windownote {
   font-size: 11px;
-  color: var(--state-info-fg, #bae6fd);
-  background: var(--state-info-bg, #0b2530);
-  border: 1px solid var(--state-info-border, #155e75);
-  padding: 2px 8px;
+  color: var(--state-info-fg);
+  background: var(--state-info-bg);
+  border: 1px solid var(--state-info-border);
+  padding: 2px var(--sp-2);
   border-radius: 999px;
 }
 .alarm-windownote .linkbtn {
-  margin-left: 6px;
+  margin-left: var(--sp-2);
 }
