@@ -91,20 +91,29 @@ do modelo, e a contagem fica em zero mesmo com gente visível. A receita:
    `1280` a `1920` (em câmera já cadastrada: remova e recadastre com a largura nova, ou ajuste via
    `PATCH /api/cameras/:id`). O padrão 720 serve para doca/corredor de perto, **não** para cena de rua.
 2. **Ligue "Longo alcance / Panorâmica".** Abra a câmera em tela cheia → aba **Camadas** → ative
-   **Longo alcance / Panorâmica**. Isso liga o tiling (varredura por blocos) e baixa os limiares para
-   alvos pequenos — sem ele, a largura extra ajuda pouco.
-3. **Abra a câmera para analisar.** A detecção roda **no navegador**: com a câmera **aberta em tela
-   cheia** ela analisa em cadência completa; na grade a cadência é reduzida (rotação entre tiles) e
-   quem anda rápido pode escapar do rastreio. Para medir/validar, deixe a câmera aberta.
-4. **Trade-off honesto:** mais largura = mais CPU no servidor (ffmpeg) **e** no navegador (decode +
-   tiles maiores). Aplique **por câmera** (só nas panorâmicas), não como padrão global; se o hub
-   pesar, reduza o fps dessa câmera (ex.: 6–8).
+   **Longo alcance / Panorâmica**. Com o motor de análise ligado, é o **MOTOR no hub** que aplica o
+   tiling (varredura por blocos a 640 px) e os limiares para alvos pequenos — o toggle é salvo por
+   câmera (camcfg) e vale para o servidor. Com o motor desligado, o mesmo toggle segue valendo para
+   a detecção local do navegador (fallback).
+3. **Não precisa deixar a câmera aberta.** A análise de pessoas/atividade/fluxo roda **no hub, 24/7**
+   (ADR-009) — contagem e indicadores enchem mesmo sem nenhum dashboard aberto. O navegador só
+   espelha as caixas que o servidor manda. (Exceção: com o motor desligado, vale o comportamento
+   antigo — detecção no navegador, câmera aberta para cadência completa.)
+4. **Trade-off honesto:** mais largura = mais CPU no servidor (ffmpeg + decode do motor; tiling
+   multiplica as inferências dessa câmera). Aplique **por câmera** (só nas panorâmicas), não como
+   padrão global; se o hub pesar, reduza o fps dessa câmera (ex.: 6–8) — o motor amostra a ~1 fps.
+
+> **Operação do motor (hub):** `ANALYSIS_ENABLED=1` no primeiro boot **baixa o modelo** D-FINE
+> (~15 MB, sha conferido) para `server/models/`; dali em diante o default liga sozinho se o modelo
+> existe (`ANALYSIS_ENABLED=0` desliga). Saúde/telemetria: `GET /api/analysis/status` (fps, fila,
+> ms e detecções por câmera). Detalhes: `server/analysis/README.md`.
 
 **Exemplo (câmera pública de Pula, HR — rua com pedestres, 1080p):** cadastre
 `https://cdn-004.whatsupcams.com/hls/hr_pula01.m3u8` com **Largura 1920**, ligue **Longo alcance /
-Panorâmica** na aba Camadas, desenhe a zona sobre a calçada/rua e deixe a câmera aberta ~2 min.
-Com o padrão 720 e o perfil desligado, essa mesma cena conta **zero** pedestres — foi exatamente o
-caso do diagnóstico de jul/2026 (`analises/diagnostico-runtime-2026-07.md`).
+Panorâmica** na aba Camadas e desenhe a zona sobre a calçada/rua — com o motor ligado, os
+indicadores acumulam sozinhos (confira em Relatório ou `/api/analysis/status`), sem precisar
+manter a câmera aberta. Com o padrão 720 e o perfil desligado, essa mesma cena contava **zero**
+pedestres — foi exatamente o caso do diagnóstico de jul/2026 (`analises/diagnostico-runtime-2026-07.md`).
 
 ---
 

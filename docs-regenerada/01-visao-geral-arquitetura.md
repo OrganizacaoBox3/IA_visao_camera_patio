@@ -15,10 +15,14 @@ em sensores de operação, analisando o vídeo para extrair indicadores como mov
 ocupação, contagem de pessoas, permanência, leitura de códigos de barras e fadiga de
 operadores — tudo isso com dois princípios de projeto explícitos no código:
 
-- **Processamento 100% no navegador (edge no cliente):** a inferência de IA roda na
-  máquina que abre a *central/dashboard*, não no servidor. O servidor é apenas um **relé**
-  de frames e um repositório de indicadores. Confirmado em `server/index.js:1-2` ("Não
-  processa nem armazena vídeo") e no `README.md:42-45`.
+- **Análise de indicadores no hub; navegador = espelho (ADR-009, jul/2026):** a detecção
+  de pessoas, tracking, contagem por linha e atividade/ocupação rodam **no servidor**, num
+  worker process dedicado (`server/analysis/` — motor D-FINE-N via onnxruntime-node, CPU EP,
+  1–2 fps/câmera, 24/7, independente de espectador). O navegador exibe vídeo + overlays
+  servidos (`analysis-tracks`) e roda **no cliente apenas os modos especializados**
+  (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT); a detecção coco-ssd local permanece
+  só como fallback quando o motor está desligado. Detalhes: `server/analysis/README.md` e
+  `analises/decisoes/ADR-009-analise-server-side.md`.
 - **Privacidade by design (LGPD):** sem upload persistente de vídeo, sem reconhecimento
   facial e sem identificação individual. Pessoas recebem IDs efêmeros ("Pessoa N") que
   somem ao sair (`README.md:47-48`, `src/config.ts:32`).
@@ -46,10 +50,15 @@ Referência das rotas: `src/main.tsx:13-26`.
    - *Câmera*: captura a webcam, codifica frames em JPEG binário e os envia via socket
      (`src/routes/CameraPage.tsx:53-86`).
 2. **Hub (servidor Node)** — HTTP + Socket.IO no mesmo processo
-   (`server/index.js`). Faz três coisas:
-   - **Relé de frames** câmera→dashboard (sem processar vídeo).
+   (`server/index.js`). Faz quatro coisas:
+   - **Relé de frames** câmera→dashboard (não persiste vídeo).
+   - **Motor de análise** (`server/analysis/`, ADR-009): `engine.js` (in-process) amostra
+     os frames do relé @1–2 fps e envia ao `worker.js` (child process com D-FINE-N ONNX,
+     CPU EP); as detecções passam por ByteTrack → tripwires/zonas → `pgstore.ingest`
+     direto. Emite `analysis-status` e `analysis-tracks` (overlays) aos dashboards.
    - **API HTTP** (`/api/...`) para login, gestão de usuários, perfil, destinatários,
-     configuração de notificações, WhatsApp e ingestão/consulta de histórico.
+     configuração de notificações, WhatsApp, ingestão/consulta de histórico e
+     `/api/analysis/status`.
    - **Integrações**: Postgres (histórico/usuários), WhatsApp (Baileys), webhook Andon,
      e ingestão de câmeras IP via ffmpeg (RTSP→JPEG).
 3. **Postgres** — armazena **apenas indicadores agregados** (buckets por hora + eventos),
@@ -73,6 +82,8 @@ flowchart TB
         SIO["Socket.IO\n(relé de frames, sala 'dashboards')"]
         HTTP["API HTTP /api/*\n(login, users, ingest, wa, ...)"]
         FFMPEG["rtsp.js → ffmpeg\nRTSP → JPEG (MJPEG)"]
+        ENGINE["analysis/engine.js\namostra frames @1-2fps · ByteTrack\ntripwires · zonas de atividade"]
+        WORKER["analysis/worker.js (child process)\nD-FINE-N ONNX · onnxruntime-node CPU EP"]
         WA["whatsapp.js (Baileys)"]
         AND["alerts.js (webhook Andon)"]
     end
@@ -82,13 +93,18 @@ flowchart TB
     end
 
     subgraph Browser["Navegador da CENTRAL (dashboard)"]
-        DASH["DashboardPage.tsx\nrole=dashboard"]
-        AI["Pipelines de visão (IA no cliente)\ncoco-ssd · OWL-ViT · MediaPipe · ZXing\n(Web Workers)"]
+        DASH["DashboardPage.tsx\nrole=dashboard (ESPELHO:\nvídeo + overlays servidos)"]
+        AI["Modos especializados (IA no cliente)\nOWL-ViT · MediaPipe · ZXing\n(coco-ssd: só fallback c/ motor off)"]
         REPORT["ReportPage / report/store.ts"]
     end
 
     CAM -- "emit 'frame' (JPEG ArrayBuffer)" --> SIO
     IP --> FFMPEG -- "emit 'frame'" --> SIO
+    SIO -- "onFrame (último-vence)" --> ENGINE
+    ENGINE -- "IPC {cameraId, jpeg, ts}" --> WORKER
+    WORKER -- "dets normalizadas" --> ENGINE
+    ENGINE -- "pgstore.ingest (flow / ativ)" --> BUCKETS
+    ENGINE -- "volatile 'analysis-tracks' + 'analysis-status'" --> DASH
     SIO -- "volatile emit 'frame' + 'cameras'" --> DASH
     DASH -- "set-capture / alert" --> SIO
     SIO -- "capture (perfil)" --> CAM
@@ -120,6 +136,12 @@ flowchart TB
    POST /api/ingest  -> pgstore.ingest()  -> Postgres   (report/store.ts:17-18)
    socket.emit("alert") -> dispatch + WhatsApp + Andon   (index.js:206)
 ```
+
+> **ADR-009:** para os indicadores de pessoas/atividade/fluxo, esse último passo mudou de
+> lugar: o hub amostra o MESMO relé (`onFrame`, último-vence) para `analysis/engine.js` →
+> `worker.js` (D-FINE) → `pgstore.ingest` direto — sem navegador no caminho. Quando o motor
+> está ON para uma câmera (`analysis-status {engine:"hub"}`), o browser desliga o ingest dela
+> e apenas desenha os `analysis-tracks` recebidos. Fadiga/Leitura/Objetos seguem o fluxo acima.
 
 Pontos-chave de desempenho confirmados no código:
 - **Frame volátil**: `socket.on("frame", ...).volatile.emit(...)` descarta em vez de
@@ -391,6 +413,9 @@ sockets (`index.js:150-158`), define as salas/relé (sala `dashboards`, eventos 
 |---------|-------|-------------|----------|
 | Câmera → Hub | Socket.IO | `frame` | JPEG binário (`{buf,w,h,ts}`) |
 | Hub → Dashboard | Socket.IO (volatile) | `frame`, `cameras` | Frame repassado + lista de câmeras |
+| Hub → Dashboard | Socket.IO | `analysis-status` | Fonte da análise por câmera (`engine:"hub"` \| `null`) — anti-duplicação de ingest |
+| Hub → Dashboard | Socket.IO (volatile) | `analysis-tracks` | Overlays servidos: tracks (bbox normalizada) + estado das zonas, @1–2 fps |
+| Hub (engine) → PG | interno | `pgstore.ingest` | Indicadores `flow`/`ativ` nascem no hub para câmeras analisadas (ADR-009) |
 | Dashboard → Hub | Socket.IO | `set-capture`, `alert` | Perfil de captura por câmera; alertas |
 | Hub → Câmera | Socket.IO | `capture` | Perfil de captura (ex.: alta resolução p/ leitura) |
 | Dashboard ↔ Hub | HTTP REST | `/api/login`, `/api/me`, `/api/users`, `/api/recipients`, `/api/notif-*`, `/api/wa-*` | Auth e administração |

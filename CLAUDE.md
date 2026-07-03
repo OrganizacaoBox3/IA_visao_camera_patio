@@ -6,11 +6,14 @@
 
 ## 1. O que é este projeto
 
-Inteligência operacional por câmeras para o CD da Grendene. **IA roda 100% no navegador**
-(coco-ssd/TFJS, OWL-ViT, MediaPipe, ZXing); o **hub Node** (`server/`) é relé de frames via Socket.IO +
-persistência (Postgres com fallback JSON) + notificações (WhatsApp/Baileys, Andon). Nós de câmera
-(`/camera`, webcam) e RTSP (ffmpeg → JPEG) viram câmeras comuns na central. Arquitetura detalhada:
-`docs-regenerada/`. Decisões: `analises/decisoes/` (ADRs). Histórico de implementação: `analises/implementacao-changelog.md`.
+Inteligência operacional por câmeras para o CD da Grendene. A **análise de indicadores roda no HUB**
+(pessoas/atividade/fluxo — motor D-FINE em worker process, `server/analysis/`, 24/7 sem espectador; ADR-009);
+o **navegador é espelho** (vídeo + overlays servidos via `analysis-tracks`) e roda os **modos
+especializados** no cliente (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). O **hub Node** (`server/`)
+segue relé de frames via Socket.IO + persistência (Postgres com fallback JSON) + notificações
+(WhatsApp/Baileys, Andon). Nós de câmera (`/camera`, webcam) e RTSP (ffmpeg → JPEG) viram câmeras comuns
+na central. Arquitetura detalhada: `docs-regenerada/`. Decisões: `analises/decisoes/` (ADRs). Histórico
+de implementação: `analises/implementacao-changelog.md`.
 
 ## 2. Princípios inegociáveis (atemporais)
 
@@ -26,11 +29,13 @@ persistência (Postgres com fallback JSON) + notificações (WhatsApp/Baileys, A
 ## 3. Invariantes — NUNCA VIOLAR
 
 - **LGPD / local-first:** nenhuma imagem/frame é persistida no servidor. Só metadados/indicadores.
+  Frames são **efêmeros em memória** — no relé E no motor de análise (hub → worker via IPC; ADR-009).
   Cine-loop é **buffer em memória, efêmero**; "salvar" é download local manual. Eventos de alarme = só metadados. (ADR-002)
 - **Segredos:** nunca versionar `.env`/credenciais/`wa-auth/`/`*.json` de runtime; nunca enviar segredos/PII a uma IA.
   `cameras.json`, `alarms.json`, `camcfg.json`, `alarm-shelves.json`, `rtsp.sources.json`, `wa-auth/` ficam no `.gitignore`.
 - **Contratos socket aditivos:** `frame`, `cameras`, `set-capture`/`capture`, `alert`, `camera-status`,
-  `alarm-event`/`alarm-update`, `camcfg-updated` são contrato. Adicione eventos novos; não quebre os existentes.
+  `alarm-event`/`alarm-update`, `camcfg-updated`, `analysis-status`, `analysis-tracks` são contrato.
+  Adicione eventos novos; não quebre os existentes.
 - **Casca fullscreen da câmera NÃO vira Radix Dialog** (Portal/scroll-lock remontaria o `<canvas>` e quebraria o rAF/editor). Trap de foco manual permanece. (ADR-007)
 - **Radix é a camada de UI.** Todo controle interativo usa primitiva Radix via wrappers de `src/ui/`. (ADR-003, ADR-007)
 - **"Going gray":** cor é informação. Base neutra (tokens `--state-*`); saturada só para anormalidade.
