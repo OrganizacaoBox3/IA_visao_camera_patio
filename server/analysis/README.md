@@ -17,6 +17,7 @@ engine.js (in-process no hub)
   · zonas modo "atividade" (camcfg) → people/occupied por zona (janela ~3s)
   · pgstore.ingest DIRETO ("flow"/"cross" e "ativ"/"samples" — formatos do front)
   · emite `analysis-status {cameraId, engine:"hub"}` (anti-duplicação, F1-C)
+  · emite `analysis-tracks {cameraId, ts, tracks, zones}` volatile → dashboards (F2)
       │  IPC fork(serialization:"advanced") — {id, cameraId, jpeg:Buffer}
       ▼
 worker.js (child_process — processo SEPARADO: ORT serializa inferência por processo
@@ -65,6 +66,16 @@ devolve ≥`ANALYSIS_SCORE_MIN`=0.25, que sustenta tracks na 2ª passada) · `AN
     dela) continuam no front — fora da F1.
 - **Socket** `analysis-status { cameraId, engine: "hub" | null }` → room `dashboards`
   (snapshot no connect + a cada mudança). F1-C usa p/ desligar o ingest do browser.
+- **Socket** `analysis-tracks { cameraId, ts, tracks, zones }` (F2 — overlays servidos) →
+  room `dashboards`, **volatile** (último-vence, sem backlog — mesmo padrão dos frames),
+  emitido a CADA rodada de análise da câmera (@`ANALYSIS_FPS`; payload de KBs), inclusive
+  com 0 tracks (rodada vazia apaga as caixas) e mesmo sem zona/tripwire configurada:
+  - `tracks`: `[{ id, bbox:[x,y,w,h] normalizado 0..1, cx, cy, zone: label|null }]`
+    (só pessoas — o que o ByteTrack devolve; campos internos do tracker NÃO vazam).
+  - `zones`: `[{ id, label, people, occupied }]` — estado da rodada por zona de atividade
+    (o mesmo que alimenta a janela do ingest).
+  - Economia: sem socket na room `dashboards`, o payload nem é montado
+    (`io.sockets.adapter.rooms.get("dashboards")?.size`).
 - **HTTP** `GET /api/analysis/status` (autenticado) → `{ enabled, model, targetFps,
   worker:{ready,pid,respawns,cpuPct}, perCamera:{ [id]: {fps, queue, lastMs, dets1m} } }`.
 - **Shed**: câmera analisada conta como espectador — `rtsp.setAnalysisViewer()` impede o

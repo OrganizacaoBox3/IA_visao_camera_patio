@@ -22,6 +22,12 @@
 //     ausente+sem modelo → desligado (log explica como ligar). Ou seja: o 1º
 //     boot com ANALYSIS_ENABLED=1 baixa o modelo; dali em diante o default liga.
 //
+// OVERLAYS SERVIDOS (F2 — ADITIVO): a cada rodada de análise o hub emite
+// `analysis-tracks { cameraId, ts, tracks, zones }` (volatile, room "dashboards")
+// com os tracks de pessoa (bbox normalizado + zona atribuída) e o estado por zona
+// (people/occupied) — o dashboard desenha overlays sem inferir localmente.
+// Sem socket na room, a emissão nem monta o payload (ver emitTracks).
+//
 // ANTI-DUPLICAÇÃO (contrato com F1-C — ADITIVO): para cada câmera analisada o
 // hub emite `analysis-status { cameraId, engine: "hub" }` aos dashboards (no
 // connect, via snapshotTo(); e a cada mudança). Câmera que sai da análise →
@@ -279,11 +285,15 @@ function processDets(st, dets, now) {
     }
   }
 
-  // Zonas de atividade → people/occupied por zona (janela agregada em flushAtiv)
+  // Zonas de atividade → people/occupied por zona (janela agregada em flushAtiv).
+  // A atribuição por track roda UMA vez e alimenta os dois consumidores: a janela
+  // do ingest e o payload de overlay (analysis-tracks) — zero trabalho extra.
+  const zoneByTrack = new Map(); // track.id → label | null
+  const perLabel = new Map(); // label → pessoas nesta rodada
   if (st.zonesAtiv.length) {
-    const perLabel = new Map();
     for (const t of tracks) {
       const label = attributeZone(t.bbox, st.zonesAtiv);
+      zoneByTrack.set(t.id, label);
       if (label) perLabel.set(label, (perLabel.get(label) || 0) + 1);
     }
     st.window.frames += 1;
@@ -296,6 +306,37 @@ function processDets(st, dets, now) {
       if (n > acc.peak) acc.peak = n;
     }
   }
+
+  // Overlays servidos (F2): tracks/estados desta rodada p/ os dashboards desenharem
+  // sem inferir localmente. Roda TODA rodada (inclusive com 0 tracks — o dashboard
+  // precisa da rodada vazia p/ apagar caixas), mesmo sem zona/tripwire configurada.
+  emitTracks(st, tracks, zoneByTrack, perLabel, now);
+}
+
+// ── Overlays servidos (F2 do plano — evento `analysis-tracks`, ADITIVO) ──────
+// io.to("dashboards").volatile.emit: mesmo padrão último-vence dos frames do relé —
+// overlay atrasado não acumula backlog em socket lento. Payload EXPLÍCITO: só o que
+// o contrato pede (não vazam campos internos do tracker: vx/vy/score/firstSeen…).
+// ECONOMIA: sem socket na room "dashboards" não monta nem serializa nada
+// (io.sockets.adapter.rooms.get("dashboards")?.size — custo de um lookup por rodada).
+function emitTracks(st, tracks, zoneByTrack, perLabel, ts) {
+  if (!ctx) return;
+  if (!ctx.io.sockets.adapter.rooms.get("dashboards")?.size) return;
+  ctx.io.to("dashboards").volatile.emit("analysis-tracks", {
+    cameraId: st.id,
+    ts,
+    tracks: tracks.map((t) => ({
+      id: t.id,
+      bbox: [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], // normalizado 0..1
+      cx: t.cx,
+      cy: t.cy,
+      zone: zoneByTrack.get(t.id) ?? null,
+    })),
+    zones: st.zonesAtiv.map((z) => {
+      const people = perLabel.get(z.label) || 0;
+      return { id: z.id, label: z.label, people, occupied: people > 0 };
+    }),
+  });
 }
 
 // Flush do "ativ"/"samples" (~AGG_MS): MESMO shape do front (SamplePayload/ZoneSample).
