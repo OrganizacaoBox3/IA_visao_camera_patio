@@ -21,7 +21,9 @@ let usingPg = false;
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
 // Enums espelhados de src/zones.ts (ZoneMode) e src/cameraConfig.ts (CapturePreset).
-const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga"]);
+// "exclusao": zona que SUPRIME detecções de pessoa (máscara p/ FP de objeto fixo) — sem o
+// modo aqui, cleanZone rebaixaria a zona de exclusão p/ "atividade" ao persistir (calibração).
+const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao"]);
 const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
 const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
 const clamp01 = (v, d) => {

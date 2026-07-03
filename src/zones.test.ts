@@ -17,7 +17,7 @@ import {
   decodeMask,
   maskFromRect,
 } from "./zoneMask";
-import { newZoneId, loadZones, ZONE_MODE_COLOR, ZONE_MODE_LABEL } from "./zones";
+import { newZoneId, loadZones, pointInZone, ZONE_MODE_COLOR, ZONE_MODE_LABEL } from "./zones";
 
 describe("zoneMask — geometria de máscara", () => {
   it("get/set respeitam limites e ignoram fora da grade", () => {
@@ -164,11 +164,55 @@ describe("zones — utilitários puros", () => {
   });
 
   it("mapas de cor/rótulo cobrem todos os modos", () => {
-    const modos = ["atividade", "leitura", "objetos", "fadiga"] as const;
+    const modos = ["atividade", "leitura", "objetos", "fadiga", "exclusao"] as const;
     for (const modo of modos) {
       expect(ZONE_MODE_COLOR[modo]).toMatch(/^#[0-9a-f]{6}$/i);
       expect(typeof ZONE_MODE_LABEL[modo]).toBe("string");
       expect(ZONE_MODE_LABEL[modo].length).toBeGreaterThan(0);
     }
+  });
+
+  it("loadZones normaliza e PRESERVA o modo `exclusao` salvo (não vira atividade)", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      get length() {
+        return store.size;
+      },
+    } as Storage);
+    store.set(
+      "vp-zones-cam-ex",
+      JSON.stringify([
+        { id: "cam-ex-z1", label: "Grade", x: 0, y: 0, w: 0.4, h: 0.4, modo: "exclusao" },
+      ]),
+    );
+    const zs = loadZones("cam-ex", "Cam Ex");
+    expect(zs).toHaveLength(1);
+    expect(zs[0]).toMatchObject({ modo: "exclusao", label: "Grade" });
+    vi.unstubAllGlobals();
+  });
+});
+
+// Filtro geométrico do modo "Exclusão": o PÉ (bottom-center) da pessoa dentro da zona → descartar.
+describe("zones — pointInZone (filtro de exclusão)", () => {
+  const z = { x: 0.2, y: 0.2, w: 0.4, h: 0.4 }; // retângulo 0.2..0.6 em x e y
+
+  it("ponto dentro do retângulo (sem máscara) → true; fora → false", () => {
+    expect(pointInZone(z, 0.4, 0.4)).toBe(true); // centro
+    expect(pointInZone(z, 0.2, 0.2)).toBe(true); // borda inclusa
+    expect(pointInZone(z, 0.1, 0.4)).toBe(false); // à esquerda
+    expect(pointInZone(z, 0.4, 0.9)).toBe(false); // abaixo
+  });
+
+  it("com `contains` (máscara) o ponto no retângulo mas fora da máscara é rejeitado", () => {
+    // máscara que só aceita a metade superior (ny < 0.4)
+    const contains = (_nx: number, ny: number) => ny < 0.4;
+    expect(pointInZone(z, 0.4, 0.3, contains)).toBe(true); // no retângulo E na máscara
+    expect(pointInZone(z, 0.4, 0.5, contains)).toBe(false); // no retângulo, fora da máscara
+    expect(pointInZone(z, 0.05, 0.3, contains)).toBe(false); // fora do retângulo (nem chega à máscara)
   });
 });

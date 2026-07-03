@@ -75,6 +75,8 @@ test("regressão: Select abre e seleciona DENTRO do modal de config da zona", as
   await modo.click();
   const opt = page.getByRole("option", { name: "Leitura" });
   await expect(opt).toBeVisible(); // dropdown na frente do overlay
+  // A opção de CALIBRAÇÃO "Exclusão" existe no mesmo Select (não é o default — o padrão é Atividade).
+  await expect(page.getByRole("option", { name: "Exclusão" })).toBeVisible();
   await opt.click(); // clique funciona
   await expect(modo).toContainText("Leitura"); // valor mudou → confirmado
 });

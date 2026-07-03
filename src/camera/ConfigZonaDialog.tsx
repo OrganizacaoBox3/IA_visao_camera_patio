@@ -20,6 +20,7 @@ const MODO_OPTS = [
   { value: "leitura", label: "Leitura" },
   { value: "objetos", label: "Objetos" },
   { value: "fadiga", label: "Fadiga" },
+  { value: "exclusao", label: "Exclusão" },
 ];
 
 // 1 linha por modo, visível ao selecionar — o usuário não escolhe mais às cegas.
@@ -28,6 +29,8 @@ const MODO_DESC: Record<ZoneMode, string> = {
   leitura: "Lê código de barras/QR dentro da zona — desenhe-a sobre a esteira/etiqueta.",
   objetos: "Conta as classes escolhidas (caixa, palete…) — modelo pesado, o 1º uso demora.",
   fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use ⚙ Câmeras → Operador (fadiga).",
+  exclusao:
+    "Ignora detecções de pessoa nesta área — use sobre fontes fixas de falso positivo (grade, placa, janela de van, TV). Não gera indicador.",
 };
 
 type Props = {
@@ -208,6 +211,14 @@ export function ConfigZonaDialog({
                 <p className="empty-note">
                   Monitora 1 operador na ROI da zona (recorte). Som e calibração de limiares ficam na
                   câmera dedicada de fadiga.
+                </p>
+              )}
+
+              {z.modo === "exclusao" && (
+                <p className="empty-note">
+                  Área de máscara: toda pessoa cujo pé cair aqui é ignorada (não conta, não rastreia,
+                  não aparece). Sem parâmetros — pinte a área (🖌) sobre a fonte fixa de falso
+                  positivo.
                 </p>
               )}
             </div>

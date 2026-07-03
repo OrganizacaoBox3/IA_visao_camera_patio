@@ -49,6 +49,13 @@ export const APP_CONFIG = {
   // Presença: contagem de pessoas + permanência ANÔNIMA (IDs efêmeros, sem rosto/identidade)
   people: {
     scoreThreshold: 0.4, // confiança mínima p/ contar "person" (baixado: alvos distantes pontuam menos)
+    // THRESHOLD POR FINALIDADE (CALIBRAÇÃO) — decisão registrada, SEM novo número: PRESENÇA e
+    // CONTAGEM compartilham este `scoreThreshold`. Cogitou-se um limiar de PRESENÇA menor que o de
+    // CONTAGEM (contar exige mais certeza que só "notar alguém"), mas o detector novo (D-FINE-S) já
+    // dá recall alto ~0.35 → um segundo limiar não muda o recall observado e só adicionaria uma
+    // config para manter (overengineering). A fonte medida de falso positivo é objeto ESTÁTICO
+    // (grade/placa/TV), tratada pelo modo de zona "Exclusão" (máscara), não por baixar o limiar —
+    // baixar o corte AUMENTARIA os FPs estáticos. Reavaliar só se a medição mudar (acuracia-modelos.md).
     trackMaxDist: 0.12, // distância normalizada p/ casar detecção com track existente
     trackTimeoutMs: 1500, // remove o track se a pessoa some por mais que isso
     dwellMinMs: 800, // ignora aparições muito curtas (flicker)

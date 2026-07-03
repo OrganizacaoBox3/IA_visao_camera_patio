@@ -9,7 +9,12 @@ import { OBJECT_KEYS } from "./objects/catalog";
 import { getCameraCfg } from "./cameraConfig";
 import { getZones as apiGetZones, saveZones as apiSaveZones } from "./api";
 
-export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga";
+// "exclusao" é um modo de SUPRESSÃO: não produz indicador nenhum — só MASCARA a área para
+// descartar detecções de pessoa cujo pé (bottom-center do bbox) cai dentro dela (fontes fixas de
+// falso positivo: grade, placa, janela de van, TV/monitor). Quem itera zonas por indicador
+// (atividade/leitura/objetos/fadiga) simplesmente ignora as zonas "exclusao". Ver CameraWorkspace
+// (filtro local em updateTracks) e a frente do motor (mesma semântica no hub).
+export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga" | "exclusao";
 export const DEFAULT_GRID = { cols: 32, rows: 18 };
 // Zona com geometria normalizada (0..1) + modo + config (planos, por modo).
 // `x,y,w,h` = bounding box (recorte/ROI). `mask` (opcional) = células pintadas (área irregular);
@@ -50,7 +55,12 @@ function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
     h: z.h ?? 1,
     mask: typeof z.mask === "string" ? z.mask : undefined,
     modo:
-      z.modo === "leitura" || z.modo === "objetos" || z.modo === "fadiga" ? z.modo : "atividade",
+      z.modo === "leitura" ||
+      z.modo === "objetos" ||
+      z.modo === "fadiga" ||
+      z.modo === "exclusao"
+        ? z.modo
+        : "atividade",
     idleAlertMs: z.idleAlertMs ?? APP_CONFIG.zones.defaultIdleAlertMs,
     sensitivity: z.sensitivity ?? 5,
     atividade: z.atividade ?? activityForLabel(label),
@@ -197,10 +207,26 @@ export const ZONE_MODE_COLOR: Record<ZoneMode, string> = {
   leitura: "#38bdf8",
   objetos: "#f59e0b",
   fadiga: "#a78bfa",
+  exclusao: "#64748b", // going-gray: supressão é operação normal, não anormalidade (base neutra)
 };
 export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
   atividade: "Atividade",
   leitura: "Leitura",
   objetos: "Objetos",
   fadiga: "Fadiga",
+  exclusao: "Exclusão",
 };
+
+// Ponto normalizado (0..1) cai dentro da zona? Respeita a MÁSCARA via `contains` (quando a zona
+// foi pintada); sem máscara, é o retângulo cheio `x,y,w,h`. Função PURA (testável) reusada pelo
+// filtro de EXCLUSÃO (o "pé"/bottom-center da pessoa) no CameraWorkspace. Espelha o gate de
+// retângulo+máscara já usado em zoneAtAtiv/containsFn.
+export function pointInZone(
+  z: Pick<Zone, "x" | "y" | "w" | "h">,
+  px: number,
+  py: number,
+  contains?: (nx: number, ny: number) => boolean,
+): boolean {
+  if (px < z.x || px > z.x + z.w || py < z.y || py > z.y + z.h) return false;
+  return contains ? contains(px, py) : true;
+}

@@ -34,6 +34,7 @@ import {
   newZoneId,
   DEFAULT_GRID,
   ZONE_MODE_LABEL,
+  pointInZone,
   type Zone,
   type ZoneMode,
 } from "./zones";
@@ -213,6 +214,7 @@ const MODE_TONE: Record<ZoneMode, Tone> = {
   leitura: "info",
   objetos: "warn",
   fadiga: "info",
+  exclusao: "info", // supressão (going-gray); Tone não tem neutro, "info" é o mais discreto
 };
 
 // Telemetria "nunca número cru" (constantes/bandas/metric fns/useTelemetry) em ./camera/useTelemetry.
@@ -742,7 +744,14 @@ export function CameraWorkspace({
   // (minScore..limiar — as detecções 0.15-0.4 que antes eram jogadas fora) só SUSTENTA tracks
   // existentes. Predição linear no gate mantém o id vivo em rodadas lentas (LR full).
   // O contrato downstream é o MESMO: tracks alimentam presença/zona/counter/heatmap.
-  function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
+  function updateTracks(
+    dets: Detection[],
+    ativ: Zone[],
+    excl: Zone[],
+    vidW: number,
+    vidH: number,
+    now: number,
+  ) {
     const T = APP_CONFIG.people.track;
     const tracker =
       trackerRef.current ??
@@ -758,6 +767,19 @@ export function CameraWorkspace({
       : APP_CONFIG.people.scoreThreshold;
     const persons = dets
       .filter((d) => d.class === "person") // filtro de CLASSE apenas; o score é do tracker
+      // ── ZONA DE EXCLUSÃO (CALIBRAÇÃO) ──────────────────────────────────────────
+      // Pessoa cujo PÉ (bottom-center do bbox, normalizado) cai numa zona modo "exclusao" é
+      // DESCARTADA antes do tracker → não vira track, logo some de presença/counter/overlay
+      // (todos derivam dos tracks). Mask-aware via containsFn (retângulo OU máscara pintada).
+      // Máscara p/ fontes fixas de falso positivo (grade, placa, janela de van, TV). Mesma
+      // semântica que o motor do hub aplica (frente A); no modo hub os tracks já vêm filtrados,
+      // então este filtro só atua no pipeline LOCAL (updateTracks só roda com engine local).
+      .filter((d) => {
+        if (!excl.length) return true;
+        const fx = (d.bbox[0] + d.bbox[2] / 2) / vidW;
+        const fy = (d.bbox[1] + d.bbox[3]) / vidH;
+        return !excl.some((z) => pointInZone(z, fx, fy, containsFn(z)));
+      })
       .map((d) => ({
         score: d.score,
         bbox: [d.bbox[0] / vidW, d.bbox[1] / vidH, d.bbox[2] / vidW, d.bbox[3] / vidH] as [
@@ -833,6 +855,9 @@ export function CameraWorkspace({
       if (analyzeActivity) activityDtRef.current = 0;
       const zs = zonesRef.current;
       const ativ = zs.filter((z) => z.modo === "atividade");
+      // Zonas de EXCLUSÃO (CALIBRAÇÃO): máscaras que suprimem detecções de pessoa (pé dentro delas)
+      // no pipeline local — consumidas por updateTracks. Não produzem indicador nem processador.
+      const excl = zs.filter((z) => z.modo === "exclusao");
       // ── Tripwires precisam de DETECÇÃO DE PESSOAS mesmo SEM zona de atividade ──
       // BUGFIX: detectFrame/updateTracks eram gated por `ativ.length` — câmera só com linhas de
       // contagem (sem zona de atividade) nunca detectava/rastreava ninguém e as linhas NUNCA
@@ -1009,7 +1034,7 @@ export function CameraWorkspace({
       const freshDets = detsRevRef.current !== consumedDetsRevRef.current;
       if (needPersons && freshDets) {
         consumedDetsRevRef.current = detsRevRef.current;
-        updateTracks(dets, ativ, f.w, f.h, now);
+        updateTracks(dets, ativ, excl, f.w, f.h, now);
       }
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
@@ -1080,6 +1105,10 @@ export function CameraWorkspace({
 
       // ── por zona ──
       for (const z of zs) {
+        // Exclusão: modo de SUPRESSÃO, sem indicador nem processador — o filtro do pé já roda em
+        // updateTracks. Pula antes de holderFor p/ não instanciar processador (o `else` cairia em
+        // fadiga). A zona segue sendo DESENHADA (drawZoneOverlays itera todas) como máscara.
+        if (z.modo === "exclusao") continue;
         const h = holderFor(z);
         // P0/P2: leitura (ZXing), objetos (OWL-ViT) e fadiga (MediaPipe/coco) rodam o processador na
         // MAIN THREAD → são a maior fonte de jank na grade. Na GRADE (tile) rebaixamos essa inferência
@@ -1553,7 +1582,9 @@ export function CameraWorkspace({
   // Troca o modo de uma zona PRESERVANDO sua geometria/máscara/parâmetros e reaplica o preset.
   function changeZoneMode(z: Zone, next: ZoneMode) {
     patchZone(z.id, { modo: next });
-    applyPreset(next);
+    // "exclusao" não é um preset (não tem overlay/confiança/KPIs próprios — só suprime). O narrowing
+    // do `!==` reduz `next` a ModeKey (os 4 modos com preset), então applyPreset segue tipado.
+    if (next !== "exclusao") applyPreset(next);
   }
   function removeZone(id: string) {
     holdersRef.current.get(id)?.proc.dispose();
@@ -1627,6 +1658,8 @@ export function CameraWorkspace({
         { color: "var(--state-warn)", label: "Alerta" },
         { color: "var(--state-critical)", label: "Duplo" },
       );
+    if (modes.has("exclusao"))
+      out.push({ color: "var(--state-neutral)", label: "Exclusão (ignorada)" });
     return out;
   })();
   const cfgZone = cfgZoneId ? (zones.find((z) => z.id === cfgZoneId) ?? null) : null;
@@ -2151,6 +2184,13 @@ export function CameraWorkspace({
                             dedicada.
                           </p>
                         </>
+                      )}
+
+                      {z.modo === "exclusao" && (
+                        <p className="empty-note" style={{ margin: "4px 0 0" }}>
+                          Máscara de supressão: pessoas com o pé nesta área são ignoradas (não
+                          contam, não rastreiam). Sem indicador.
+                        </p>
                       )}
                     </div>
                   );
