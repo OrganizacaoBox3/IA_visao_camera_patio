@@ -38,6 +38,30 @@ node eval/run-eval.mjs [--mode squash|tiled|both] [--no-errors]
 - `eval/data/` inteiro é **gitignored** (anotações, imagens, erros) — só os scripts, este
   README e o `manifest.json` são versionados.
 
+## Sensor de regressão (`npm run eval`)
+
+A ONDA 3.3 do plano transforma esta bancada num **gate de acurácia** que roda em
+segundos e vira vermelho se uma troca futura de modelo/threshold/NMS degradar o motor.
+
+- **O que mede:** dá `fork` no mesmo `server/analysis/worker.js` (modo squash 640 —
+  default de produção) sobre um **fixture commitado pequeno** (`eval/fixture/`, 29
+  imagens COCO = 21 com pessoas S/M/L + 8 cenas vazias, ~5MB, GT em pixels em
+  `manifest-fixture.json`) e compara com os limiares mínimos de `eval/thresholds.json`:
+  `f1_all@0.35`, `recall_all@0.25`, `precision_all@0.35` (pisos) e `fp_empties@0.50`
+  (teto = 0: zero pessoa inventada em cena vazia). **Determinístico** — mesmo modelo +
+  mesmo fixture → mesmos números. Exit 0 passa; exit 1 + diff claro se regride.
+- **Como rodar:** `npm run eval` (ou `node eval/gate.mjs`). Precisa do modelo em
+  `server/models/dfine_n_coco.onnx` (o hub baixa no 1º boot com `ANALYSIS_ENABLED=1` —
+  ver `server/analysis/README.md`). **Não** está no `npm run verify` — é gate
+  manual/CI opcional; rode-o **ANTES de trocar modelo, threshold de score ou NMS**.
+- **Como recalibrar (ao TROCAR de modelo):** `node eval/gate.mjs --calibrate` remede o
+  fixture e reescreve os `min`/`max` de `thresholds.json` a partir do novo patamar
+  (medido − margem de tolerância `_margin_pp`, hoje 5pp). Revise o diff antes de
+  commitar — **não** recalibre para mascarar uma regressão não intencional.
+- **Regenerar o fixture:** `node eval/build-fixture.mjs` (após `fetch-dataset.mjs`) —
+  reamostra o subconjunto do `manifest.json` e recopia as imagens para `eval/fixture/img/`.
+  Se mudar o fixture, recalibre os limiares.
+
 ## Caveats declarados
 
 - Precisão por tamanho é aproximação (TP no bucket do GT casado, FP no bucket do det);

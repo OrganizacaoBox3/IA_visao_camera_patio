@@ -1,0 +1,33 @@
+{
+  "_doc": "Limiares MÍNIMOS do sensor de regressão de acurácia (eval/gate.mjs, plano-acuracia-modelos §3.3). Calibrados a partir da medição ATUAL no fixture (eval/fixture) menos a margem de tolerância, para absorver ruído de execução sem deixar passar regressão real. Cada 'min'/'max' é o piso/teto aceitável; 'type: min' reprova abaixo, 'type: max' reprova acima.",
+  "_model": "dfine_n_coco.onnx",
+  "_margin_pp": 5,
+  "_recalibrate": "AO TROCAR de modelo/threshold/NMS: rode `node eval/gate.mjs --calibrate` para reescrever os limiares a partir do novo patamar (medido - margem) e revise o diff. NÃO recalibre para mascarar uma regressão não intencional.",
+  "_calibratedAt": "2026-07-03T16:51:51.187Z",
+  "checks": {
+    "f1_all@0.35": {
+      "type": "min",
+      "min": 0.3199,
+      "_measured": "37%",
+      "_desc": "F1 (person, todos os tamanhos) no threshold de operação 0.35 — equilíbrio precisão×recall do motor."
+    },
+    "recall_all@0.25": {
+      "type": "min",
+      "min": 0.4763,
+      "_measured": "52.6%",
+      "_desc": "Recall (person) no threshold mais permissivo 0.25 — teto de 'enxerga pessoas?'; queda aqui = modelo ficou cego."
+    },
+    "precision_all@0.35": {
+      "type": "min",
+      "min": 0.4794,
+      "_measured": "52.9%",
+      "_desc": "Precisão (person) a 0.35 — queda = motor passou a inventar mais pessoas onde há gente e onde não há."
+    },
+    "fp_empties@0.50": {
+      "type": "max",
+      "max": 0,
+      "_measured": 0,
+      "_desc": "Falsos positivos (dets person) nas cenas VAZIAS a 0.50 — deve ser 0: acima disso o motor inventa gente do nada."
+    }
+  }
+}

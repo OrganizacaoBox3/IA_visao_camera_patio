@@ -15,7 +15,8 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm run test"
+    "verify": "npm run lint && npm run typecheck && npm run build && npm run test",
+    "eval": "node eval/gate.mjs"
   },
   "engines": {
     "node": ">=20"
