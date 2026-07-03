@@ -53,6 +53,10 @@ type CameraTileProps = {
   demoMode: boolean;
   tripwiresRev: number;
   status: CameraStatus | undefined;
+  // F1-C (ADR-009): fonte da análise da câmera. "hub" = motor server-side grava os indicadores
+  // (o CameraWorkspace suprime os ingests locais). OPCIONAL/retrocompatível (default "local");
+  // primitiva → amigável ao React.memo abaixo (só o tile da câmera afetada re-renderiza).
+  analysisEngine?: "hub" | "local";
   // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
   // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
   // MESMA função e só re-renderizam quando os próprios dados mudam.
@@ -72,6 +76,7 @@ export const CameraTile = memo(function CameraTile({
   demoMode,
   tripwiresRev,
   status,
+  analysisEngine,
   onOpen,
   onAlert,
 }: CameraTileProps) {
@@ -102,6 +107,7 @@ export const CameraTile = memo(function CameraTile({
       mode="tile"
       demoMode={demoMode}
       tripwiresRev={tripwiresRev}
+      analysisEngine={analysisEngine}
       onOpen={openSelf}
       onAlert={onAlert}
     />

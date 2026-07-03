@@ -145,6 +145,13 @@ export function DashboardPage() {
 
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CameraStatus>>({});
+  // ── F1-C (ADR-009): fonte da ANÁLISE por câmera (anti-duplicação de ingest) ──
+  // O hub anuncia via evento socket ADITIVO `analysis-status {cameraId, engine:"hub"|"local"}`
+  // (snapshot no connect + mudanças) quais câmeras o MOTOR server-side está analisando. O mapa
+  // desce como prop `analysisEngine` aos tiles/câmera aberta: com "hub", o CameraWorkspace
+  // SUPRIME os ingests locais (recordSamples/recordFlow) — o servidor é a fonte dos indicadores.
+  // Hub antigo sem o evento → mapa vazio → tudo "local" (comportamento idêntico ao atual).
+  const [analysisEngines, setAnalysisEngines] = useState<Record<string, "hub" | "local">>({});
   const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
@@ -274,6 +281,10 @@ export function DashboardPage() {
     const frames = framesRef.current;
     socket.on("connect", () => {
       setConnected(true);
+      // F1-C — a reconexão pode ter trocado o hub (com/sem motor): zera o mapa de engines; o
+      // snapshot `analysis-status` emitido no connect repovoa. Sem o evento (hub antigo/motor
+      // desligado), tudo volta a "local" — o default seguro (browser volta a gravar).
+      setAnalysisEngines({});
       // 2.1 — a reconexão perde as rooms no servidor: reanuncia o conjunto assistido para voltar
       // a receber frames (o efeito de feeds ativos cobre as MUDANÇAS; aqui cobre o re-connect).
       socket.emit("watch", { ids: [...activeIdsRef.current] });
@@ -297,6 +308,16 @@ export function DashboardPage() {
         return found ? next : [a, ...next];
       }),
     );
+    // F1-C (ADR-009) — fonte da análise por câmera (snapshot no connect + mudanças). Update
+    // funcional que PRESERVA a referência quando nada mudou (evita re-render da grade à toa).
+    // Payload defensivo: engine desconhecida degrada p/ "local" (browser grava — sem buraco).
+    socket.on("analysis-status", (p: { cameraId: string; engine: "hub" | "local" }) => {
+      if (!p || typeof p.cameraId !== "string") return;
+      const engine = p.engine === "hub" ? "hub" : "local";
+      setAnalysisEngines((prev) =>
+        prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
+      );
+    });
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
@@ -816,6 +837,7 @@ export function DashboardPage() {
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
+                analysisEngine={analysisEngines[c.id] ?? "local"}
                 onOpen={handleOpen}
                 onAlert={handleAlert}
               />
@@ -847,6 +869,7 @@ export function DashboardPage() {
                 mode="full"
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
+                analysisEngine={analysisEngines[open.id] ?? "local"}
                 onClose={() => setOpenId(null)}
                 onAlert={handleAlert}
               />
