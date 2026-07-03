@@ -68,6 +68,7 @@ export default tseslint.config(
     files: [
       "server/**/*.{js,cjs,mjs}",
       "scripts/**/*.{js,mjs,cjs}",
+      "eval/**/*.{js,mjs,cjs}",
       "e2e/**/*.ts",
       "*.{js,mjs,cjs,ts}",
     ],

@@ -48,3 +48,7 @@ server/data-hist.json.tmp
 
 # Modelo ONNX do motor de análise (baixado no boot com verificação de sha — ver server/analysis/README.md)
 server/models/
+
+# Bancada de acurácia (eval/): dados pesados COCO + resultados de execução — só o harness e o manifest são versionados
+eval/data/
+eval/last-results.json
