@@ -120,17 +120,27 @@ export function AppShell() {
   const [query, setQuery] = useState("");
   const [listOpen, setListOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
-  // Câmeras carregadas 1× no primeiro foco da busca (lazy). listCameras é superadmin;
-  // para os demais papéis o catch degrada silenciosamente p/ [] (busca só de menu).
+  // Câmeras na busca — LIMITAÇÃO documentada (A5): GET /api/cameras devolve as câmeras
+  // CADASTRADAS (IP/RTSP, cameraStore) e é restrito a superadmin. As câmeras CONECTADAS
+  // (nós de webcam) só existem no evento socket `cameras` do Dashboard — não há endpoint
+  // HTTP nem store compartilhado; expô-las aqui exigiria elevar o socket do DashboardPage
+  // a um contexto do shell (refactor fora desta frente — anotar no retrofit R2).
+  // Portanto: superadmin busca menu + câmeras cadastradas; demais papéis, só menu (o
+  // aria-label do campo não promete câmeras p/ eles). Carga lazy no primeiro foco;
+  // falha transitória libera nova tentativa no próximo foco.
+  const isSuper = user.papel === "superadmin";
   const [cams, setCams] = useState<Camera[]>([]);
   const camsRequested = useRef(false);
   const loadCams = useCallback(() => {
-    if (camsRequested.current) return;
+    if (!isSuper || camsRequested.current) return;
     camsRequested.current = true;
     listCameras()
       .then(setCams)
-      .catch(() => setCams([]));
-  }, []);
+      .catch(() => {
+        camsRequested.current = false; // permite retry num próximo foco
+        setCams([]);
+      });
+  }, [isSuper]);
 
   // Colapsada, o campo vira botão-ícone: clicar (ou Ctrl+K) EXPANDE a sidebar e foca a
   // busca (o mais simples dos dois padrões shadcn; sem estado "temporário" para desfazer).
@@ -203,7 +213,9 @@ export function AppShell() {
       title: "Administração",
       items: [
         ...(canConfigure ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes" }] : []),
-        ...(user.papel === "superadmin" ? [{ to: "/usuarios", icon: Users, label: "Usuários" }] : []),
+        ...(user.papel === "superadmin"
+          ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
+          : []),
       ],
     },
     {
@@ -221,7 +233,13 @@ export function AppShell() {
         ...groups
           .flatMap((g) => g.items)
           .filter((i) => norm(i.label).includes(q))
-          .map((i) => ({ id: `nav:${i.to}`, label: i.label, hint: "Menu", icon: i.icon, to: i.to })),
+          .map((i) => ({
+            id: `nav:${i.to}`,
+            label: i.label,
+            hint: "Menu",
+            icon: i.icon,
+            to: i.to,
+          })),
         ...cams
           .filter((c) => norm(c.label || c.id).includes(q))
           .slice(0, 6)
@@ -354,7 +372,7 @@ export function AppShell() {
                 className="rail-search-in"
                 type="text"
                 role="combobox"
-                aria-label="Buscar no menu e câmeras"
+                aria-label={isSuper ? "Buscar no menu e câmeras cadastradas" : "Buscar no menu"}
                 aria-expanded={searchOpen}
                 aria-controls={searchOpen ? "rail-search-list" : undefined}
                 aria-activedescendant={searchOpen && hits[sel] ? `rs-opt-${sel}` : undefined}

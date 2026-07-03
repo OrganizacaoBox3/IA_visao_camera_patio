@@ -291,6 +291,8 @@ export function FadigaView({
   // ── FULL (console do operador) ──
   return (
     <div className="cam fadiga-cam">
+      {/* a11y (A5): heading da casca fullscreen — só p/ leitores de tela. */}
+      <h1 className="sr-only">Operador {label} — monitor de fadiga</h1>
       <header className="cam-head">
         <div className="cam-title">
           <b>{label}</b>
@@ -303,8 +305,12 @@ export function FadigaView({
         </IconButton>
       </header>
 
-      <div className="cam-stage" ref={viewportRef}>
-        <canvas className="overlay" ref={canvasRef} />
+      {/* Palco + drawer lado a lado (.cam-body, cine.css): o palco encolhe e o draw
+          re-letterboxa (fit) — o vídeo não fica coberto pelo painel. */}
+      <div className="cam-body">
+        <div className="cam-stage" ref={viewportRef}>
+          <canvas className="overlay" ref={canvasRef} />
+        </div>
         <aside className="cam-drawer">
           <ScrollArea style={{ flex: 1, minHeight: 0 }}>
             <div className="read-now">

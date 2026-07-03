@@ -30,11 +30,12 @@
   background: var(--state-warn, #eab308);
 }
 
-/* Barra de cine (scrubber) ancorada na borda inferior do palco. */
+/* Barra de cine (scrubber) ancorada na borda inferior do palco. O palco já NÃO é
+   coberto pelo drawer (ver .cam-body abaixo), então a barra usa a largura toda. */
 .cine-bar {
   position: absolute;
   left: var(--sp-3);
-  right: 340px; /* deixa o painel lateral (320px) livre */
+  right: var(--sp-3);
   bottom: var(--sp-3);
   z-index: 6;
   display: flex;
@@ -77,9 +78,7 @@
 
 @media (max-width: 980px) {
   .cine-bar {
-    right: var(--sp-3);
-    bottom: calc(58% + var(--sp-3)); /* acima do drawer que vira faixa inferior */
-    flex-wrap: wrap;
+    flex-wrap: wrap; /* palco estreito: controles quebram linha dentro da barra */
   }
 }
 
@@ -93,13 +92,28 @@
    O .cam-drawer é flex column de altura definida; Tabs.Root e a ScrollArea
    precisam crescer (flex:1; min-height:0) para a viewport rolável ter altura.
    A rolagem/padding vivem na viewport do ScrollArea (não no Root), preservando
-   as scrollbars do Radix. As 5 abas podem quebrar linha em painel estreito. */
+   as scrollbars do Radix. */
 .cam-drawer .drawer-tabs {
   flex: 1;
   min-height: 0;
 }
+/* Abas SEMPRE em 1 linha (A5): triggers compactos + contagem em chip (.dt-n).
+   Se ainda faltar largura (drawer 280px no tablet), a tablist rola horizontal
+   discretamente — Radix mantém as setas/roving focus trazendo a aba à vista. */
 .cam-drawer .drawer-tabs .ui-tablist {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.cam-drawer .drawer-tabs .ui-tablist button {
+  padding-left: var(--sp-1);
+  padding-right: var(--sp-1);
+}
+.cam-drawer .drawer-tabs .dt-n {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
 }
 .cam-drawer .drawer-scroll {
   flex: 1;
@@ -111,4 +125,38 @@
 }
 .cam-drawer .drawer-tabs .ui-tabpanel {
   min-height: 0;
+}
+
+/* ── Palco + drawer LADO A LADO (A5): fit em vez de crop ──
+   index.css posiciona .cam-drawer como overlay absoluto DENTRO do palco — o vídeo
+   ficava coberto/cortado à direita. Aqui (seletores mais específicos vencem o
+   index.css) o par vira flex row: o palco ENCOLHE e o drawScene re-letterboxa o
+   frame no viewport menor (fit automático — getContentRect usa clientWidth). */
+.cam-body {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+.cam-body .cam-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cam-body .cam-drawer {
+  position: static;
+  flex: none;
+  height: auto;
+  min-height: 0;
+}
+/* sm (≤640px): empilha — vídeo em cima, drawer vira faixa inferior (58%, como o
+   bottom-sheet do index.css, agora sem sobrepor o palco). */
+@media (max-width: 640px) {
+  .cam-body {
+    flex-direction: column;
+  }
+  .cam-body .cam-stage {
+    min-height: 0;
+  }
+  .cam-body .cam-drawer {
+    height: 58%;
+  }
 }

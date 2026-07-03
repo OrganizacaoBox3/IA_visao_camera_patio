@@ -5,11 +5,7 @@ import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
-import {
-  AtividadeProcessor,
-  sensitivityFactor,
-  type AtividadeCtx,
-} from "./processors/atividade";
+import { AtividadeProcessor, sensitivityFactor, type AtividadeCtx } from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
 import { FadigaProcessor } from "./processors/fadiga";
@@ -1123,8 +1119,7 @@ export function CameraWorkspace({
 
     // Heatmap de ocupação (camada) — agora UNIFICADO na lib pura counting.ts (occ.grid() já normalizado 0..1).
     // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
-    if (layersRef.current.heatmap && occRef.current)
-      drawOccupancyHeatmap(ctx, cr, occRef.current);
+    if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)
@@ -1459,6 +1454,8 @@ export function CameraWorkspace({
       aria-modal="true"
       aria-label={`Câmera ${label} em tela cheia`}
     >
+      {/* a11y (A5): heading da casca fullscreen — só p/ leitores de tela. */}
+      <h1 className="sr-only">Câmera {label}</h1>
       <header className="cam-head">
         <div className="cam-title">
           <b>{label}</b>
@@ -1563,82 +1560,86 @@ export function CameraWorkspace({
         )}
       </header>
 
-      <div
-        className={`cam-stage ${drawMode || tripwireMode || paintZone ? "draw-cursor" : ""}`}
-        ref={viewportRef}
-        style={{ background: "var(--cam-surface-bg)" }}
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={onUp}
-        onMouseLeave={onUp}
-        onContextMenu={(e) => {
-          if (paintZone) e.preventDefault();
-        }}
-      >
-        <canvas className="overlay" ref={canvasRef} />
-        {review && (
-          <>
-            <div className="cine-flag">
-              <span className="dot" /> REVISÃO · cine-loop (buffer em memória)
-            </div>
-            <div className="cine-bar">
-              <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>
-                ‹
-              </IconButton>
-              <Tooltip content={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}>
-                <Toggle
-                  aria-label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}
-                  pressed={cinePlaying}
-                  onPressedChange={(v) => setCinePlaying(v)}
-                >
-                  {cinePlaying ? "⏸" : "▶"}
-                </Toggle>
-              </Tooltip>
-              <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>
-                ›
-              </IconButton>
-              <div className="cine-slider">
-                <Slider
-                  value={scrubIndex}
-                  min={0}
-                  max={Math.max(0, cineSize - 1)}
-                  step={1}
-                  onChange={(v) => {
-                    setCinePlaying(false);
-                    setScrubIndex(v);
-                  }}
-                  ariaLabel="Posição no cine-loop"
-                />
+      {/* Palco + drawer lado a lado (.cam-body, cine.css): o palco encolhe quando o
+          drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
+      <div className="cam-body">
+        <div
+          className={`cam-stage ${drawMode || tripwireMode || paintZone ? "draw-cursor" : ""}`}
+          ref={viewportRef}
+          style={{ background: "var(--cam-surface-bg)" }}
+          onMouseDown={onDown}
+          onMouseMove={onMove}
+          onMouseUp={onUp}
+          onMouseLeave={onUp}
+          onContextMenu={(e) => {
+            if (paintZone) e.preventDefault();
+          }}
+        >
+          <canvas className="overlay" ref={canvasRef} />
+          {review && (
+            <>
+              <div className="cine-flag">
+                <span className="dot" /> REVISÃO · cine-loop (buffer em memória)
               </div>
-              <span className="cine-time">
-                {cineRef.current
-                  ? `${cineRef.current.relativeSeconds(scrubIndex).toFixed(1)}s`
-                  : "0.0s"}
-              </span>
-              <span className="cine-count">
-                {cineSize ? scrubIndex + 1 : 0}/{cineSize}
-              </span>
-              <span className="cine-spacer" />
-              <Button
-                onClick={downloadSnapshot}
-                disabled={clipState === "working"}
-                title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)"
-              >
-                ⤓ Snapshot
-              </Button>
-              <Button
-                onClick={exportClip}
-                disabled={clipState === "working"}
-                title="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar."
-              >
-                {clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}
-              </Button>
-              <Button active onClick={exitReview}>
-                ▶ Ao vivo
-              </Button>
-            </div>
-          </>
-        )}
+              <div className="cine-bar">
+                <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>
+                  ‹
+                </IconButton>
+                <Tooltip content={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}>
+                  <Toggle
+                    aria-label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}
+                    pressed={cinePlaying}
+                    onPressedChange={(v) => setCinePlaying(v)}
+                  >
+                    {cinePlaying ? "⏸" : "▶"}
+                  </Toggle>
+                </Tooltip>
+                <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>
+                  ›
+                </IconButton>
+                <div className="cine-slider">
+                  <Slider
+                    value={scrubIndex}
+                    min={0}
+                    max={Math.max(0, cineSize - 1)}
+                    step={1}
+                    onChange={(v) => {
+                      setCinePlaying(false);
+                      setScrubIndex(v);
+                    }}
+                    ariaLabel="Posição no cine-loop"
+                  />
+                </div>
+                <span className="cine-time">
+                  {cineRef.current
+                    ? `${cineRef.current.relativeSeconds(scrubIndex).toFixed(1)}s`
+                    : "0.0s"}
+                </span>
+                <span className="cine-count">
+                  {cineSize ? scrubIndex + 1 : 0}/{cineSize}
+                </span>
+                <span className="cine-spacer" />
+                <Button
+                  onClick={downloadSnapshot}
+                  disabled={clipState === "working"}
+                  title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)"
+                >
+                  ⤓ Snapshot
+                </Button>
+                <Button
+                  onClick={exportClip}
+                  disabled={clipState === "working"}
+                  title="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar."
+                >
+                  {clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}
+                </Button>
+                <Button active onClick={exitReview}>
+                  ▶ Ao vivo
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
         <aside
           className="cam-drawer"
           style={{
@@ -1654,9 +1655,25 @@ export function CameraWorkspace({
               setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")
             }
             ariaLabel="Aba do painel"
+            // Contagens em chip compacto (.dt-n, cine.css) p/ as 5 abas caberem em 1 linha.
+            // Nome acessível continua "Zonas N" / "Linhas N" (o {" "} preserva o espaço).
             items={[
-              { value: "zonas", label: `Zonas (${zones.length})` },
-              { value: "linhas", label: `Linhas (${tripwires.length})` },
+              {
+                value: "zonas",
+                label: (
+                  <>
+                    Zonas <i className="dt-n">{zones.length}</i>
+                  </>
+                ),
+              },
+              {
+                value: "linhas",
+                label: (
+                  <>
+                    Linhas <i className="dt-n">{tripwires.length}</i>
+                  </>
+                ),
+              },
               { value: "camadas", label: "Camadas" },
               { value: "timeline", label: "Timeline" },
               { value: "presenca", label: "Presença" },
@@ -2022,16 +2039,23 @@ export function CameraWorkspace({
                     </div>
                   );
                 })}
-                <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-                  A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) — depende
-                  de ao menos uma zona de Atividade ativa p/ detectar pessoas. Contadores são por
-                  sessão.
-                </p>
+                {/* Nota mecânica só quando HÁ linhas (explica os contadores); vazia, a
+                    instrução de cima basta — estado vazio compacto, sem empurrar conteúdo. */}
+                {tripwires.length > 0 && (
+                  <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
+                    A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) —
+                    depende de ao menos uma zona de Atividade ativa p/ detectar pessoas. Contadores
+                    são por sessão.
+                  </p>
+                )}
               </TabsContent>
 
               <TabsContent value="timeline">
                 {timeline.length === 0 ? (
-                  <p className="empty-note">Sem eventos.</p>
+                  <p className="empty-note">
+                    Sem eventos nesta sessão. Alertas de zona e cruzamentos de linha aparecem aqui
+                    em tempo real.
+                  </p>
                 ) : (
                   <ul className="tl">
                     {timeline.map((e) => (
@@ -2060,7 +2084,7 @@ export function CameraWorkspace({
                     <div className="l">permanência</div>
                   </div>
                 </div>
-                <p className="empty-note" style={{ marginTop: 8 }}>
+                <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
                   Pessoas recebem ID efêmero (sem identidade); reseta por sessão.
                   {paused ? " ⏸ Pausado: rótulos com tempo em cena." : ""}
                 </p>
