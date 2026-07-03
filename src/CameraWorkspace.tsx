@@ -23,6 +23,7 @@ import {
   recordFadigaSamples,
   recordFadigaEvent,
   loadDataset,
+  loadFlowToday,
   type ZoneSample,
 } from "./report/store";
 import { type Dataset } from "./report/mock";
@@ -50,7 +51,12 @@ import {
   containsNorm,
   type Mask,
 } from "./zoneMask";
-import { createCounter, createOccupancy, type Occupancy } from "./vision/counting";
+import {
+  createCounter,
+  createOccupancy,
+  type Occupancy,
+  type TripwireCounts,
+} from "./vision/counting";
 import { createByteTracker, type ByteTracker } from "./vision/bytetrack";
 import {
   Button,
@@ -123,6 +129,13 @@ const HEAT_COLS = 32,
 // Constantes locais (NÃO editar config.ts — outra frente). Substituem o throttle de tile p/ o pesado.
 const TILE_OBJECT_INTERVAL_MS = 4000; // coco (detecção de pessoas/objetos) na grade — vs C.objectIntervalMs na aberta
 const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · MediaPipe/coco (fadiga) na grade
+
+// ── F1-C (ADR-009): análise no HUB — anti-duplicação de ingest + "hoje" servido ──
+// Cadência do refresh do acumulado "hoje" das linhas quando o MOTOR DO HUB analisa a câmera
+// (o hub grava os mesmos cruzamentos; o browser só EXIBE o valor do servidor — ver useEffect).
+const HUB_FLOW_REFRESH_MS = 30_000;
+// Contadores de sessão "vazios" p/ o HUD no modo hub (constante única — sem alocar por frame).
+const EMPTY_TW_COUNTS: Record<string, TripwireCounts> = {};
 
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
@@ -231,6 +244,12 @@ type Props = {
   // OPCIONAL/retrocompatível: se a central não passar, o CameraWorkspace mantém o
   // comportamento atual (carrega os tripwires só ao abrir/trocar a câmera).
   tripwiresRev?: number;
+  // F1-C (ADR-009): fonte da ANÁLISE desta câmera, anunciada pelo hub (`analysis-status`).
+  // "hub" = o motor server-side (D-FINE) grava os indicadores → este componente SUPRIME os
+  // ingests locais de atividade (recordSamples) e fluxo (recordFlow) p/ não duplicar, e o
+  // "hoje" das linhas passa a ser refresh periódico do servidor. OPCIONAL/retrocompatível:
+  // ausente (hub antigo sem o evento) → "local" = comportamento idêntico ao atual.
+  analysisEngine?: "hub" | "local";
 };
 
 const C = APP_CONFIG.detection;
@@ -245,6 +264,7 @@ export function CameraWorkspace({
   onClose,
   onAlert,
   tripwiresRev,
+  analysisEngine = "local",
 }: Props) {
   // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
   // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
@@ -400,6 +420,49 @@ export function CameraWorkspace({
       setPaintZoneId(null);
     },
   });
+
+  // ── F1-C (ADR-009): fonte da análise ("hub" × "local") ──
+  // Ref espelho p/ leitura DENTRO do rAF/drawScene (o loop é criado 1× por câmera e a prop pode
+  // mudar em runtime quando o motor do hub liga/desliga — mesmo padrão de onAlertRef/pausedRef).
+  const analysisEngineRef = useRef(analysisEngine);
+  useEffect(() => {
+    analysisEngineRef.current = analysisEngine;
+  }, [analysisEngine]);
+
+  // F1-C: "hoje" das linhas no MODO HUB — refresh periódico do SERVIDOR, SEM somar a sessão.
+  // Com o motor do hub ligado, o servidor grava os MESMOS cruzamentos que o counter local vê;
+  // exibir flowBase+sessão (modo local, item 1.2) contaria cada cruzamento 2× (uma vez na sessão
+  // local, outra quando o acumulado do servidor é recarregado). Aqui o "hoje" exibido (HUD do
+  // canvas via hubFlowRef + painel via hubFlowToday) é SÓ o valor do servidor, re-buscado a cada
+  // ~30s. A sessão local segue viva como feedback imediato (timeline + tooltip do painel), mas
+  // NÃO entra na soma exibida. Modo local: efeito inerte → comportamento atual intacto.
+  const hubFlowRef = useRef<Record<string, TripwireCounts>>({}); // lido no rAF (HUD, sem alocar)
+  const [hubFlowToday, setHubFlowToday] = useState<Record<string, TripwireCounts>>({});
+  useEffect(() => {
+    if (analysisEngine !== "hub") return; // local → nada muda (flowBase carrega 1×, como hoje)
+    let cancelled = false;
+    const refresh = () =>
+      loadFlowToday(cameraId)
+        .then((acc) => {
+          if (cancelled) return;
+          hubFlowRef.current = acc;
+          // Preserva a referência quando nada mudou — evita re-render a cada tick de 30s.
+          setHubFlowToday((prev) =>
+            JSON.stringify(prev) === JSON.stringify(acc) ? prev : acc,
+          );
+        })
+        .catch(() => {
+          /* mantém o último valor exibido; o próximo tick tenta de novo */
+        });
+    refresh();
+    const t = setInterval(refresh, HUB_FLOW_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      hubFlowRef.current = {};
+      setHubFlowToday({});
+    };
+  }, [analysisEngine, cameraId]);
 
   useEffect(() => {
     onAlertRef.current = onAlert;
@@ -876,13 +939,18 @@ export function CameraWorkspace({
           );
           // (1.1) Evento de cruzamento PERSISTIDO — só metadados (LGPD ok / ADR-002).
           // Fire-and-forget: o store é resiliente (nunca lança dentro do loop de vídeo).
-          void recordFlow({
-            cameraId,
-            cameraLabel: label,
-            tripwireId: ev.tripwireId,
-            dir: ev.dir,
-            ts: Date.now(),
-          });
+          // F1-C (ADR-009): SUPRIMIDO quando o MOTOR DO HUB analisa esta câmera — o hub grava
+          // os mesmos cruzamentos direto no pgstore; gravar aqui também duplicaria o indicador.
+          // A contagem LOCAL segue rodando (timeline acima + counter) como feedback visual
+          // imediato — só o ingest é suprimido.
+          if (analysisEngineRef.current !== "hub")
+            void recordFlow({
+              cameraId,
+              cameraLabel: label,
+              tripwireId: ev.tripwireId,
+              dir: ev.dir,
+              ts: Date.now(),
+            });
         }
         if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
       }
@@ -950,6 +1018,9 @@ export function CameraWorkspace({
           if (r.event) pushTimeline(r.event.text, r.event.sev);
           if (r.alert) {
             onAlertRef.current?.(`⚠ ${label}: ${r.alert.text}`);
+            // F1-C (ADR-009): recordAlert MANTIDO mesmo no modo hub — o alarme de ociosidade
+            // nasce do MOTION local (na F1 o motor do hub NÃO grava alarmes), então não há
+            // duplicação; suprimir aqui deixaria o indicador de alarmes cego.
             recordAlert({
               cameraId,
               cameraLabel: label,
@@ -965,6 +1036,8 @@ export function CameraWorkspace({
             { x: z.x, y: z.y, w: z.w, h: z.h, ponto: z.ponto },
             { frame: f, now, cameraId, cameraLabel: label },
           );
+          // F1-C (ADR-009): recordReads/recordPass MANTIDOS mesmo no modo hub — Leitura (ZXing)
+          // segue 100% no cliente (o motor F1 não cobre este modo) → sem risco de duplicação.
           r.reads.forEach((rd) => recordReads(pushRead(rd)));
           r.passes.forEach((ps) => {
             const pr = pushPass(ps);
@@ -990,6 +1063,8 @@ export function CameraWorkspace({
             z.selectedClasses,
             { frame: f, now },
           );
+          // F1-C (ADR-009): recordObjectEvent/recordObjectSamples MANTIDOS mesmo no modo hub —
+          // Objetos (OWL-ViT) segue no cliente (o motor F1 não cobre este modo; F4 condicional).
           r.events.forEach((e) => recordObjectEvent(e));
           r.alerts.forEach((a) => onAlertRef.current?.(a));
           if (r.samples) recordObjectSamples({ samples: r.samples });
@@ -998,6 +1073,8 @@ export function CameraWorkspace({
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
           const r = (h.proc as FadigaProcessor).process({ frame: cropFor(z, f), now, srcEl: f.el });
+          // F1-C (ADR-009): recordFadigaEvent/recordFadigaSamples MANTIDOS mesmo no modo hub —
+          // Fadiga (MediaPipe) fica no cliente por decisão da ADR-009 (exceção declarada).
           r.events.forEach((e) => {
             recordFadigaEvent({ posto: z.label, type: e.type, ts: e.ts });
             pushTimeline(`${z.label}: ${e.type}`, e.type === "bocejo" ? "info" : "high");
@@ -1025,7 +1102,11 @@ export function CameraWorkspace({
       if (sampleFlow) lastFlowAtRef.current = now;
       if (recEmit) {
         lastRecAtRef.current = now;
-        if (recSamples.length) recordSamples({ cameraId, samples: recSamples });
+        // F1-C (ADR-009): ingest de ATIVIDADE suprimido quando o MOTOR DO HUB analisa esta
+        // câmera — o hub grava ativ (people/occupied/flow por zona) direto no pgstore; gravar
+        // aqui também duplicaria. Overlays/máquina de estado/painel continuam locais (visual).
+        if (recSamples.length && analysisEngineRef.current !== "hub")
+          recordSamples({ cameraId, samples: recSamples });
       }
 
       // Em revisão o palco mostra um quadro do buffer (render dedicado) — NÃO sobrescreve com o ao vivo.
@@ -1127,6 +1208,9 @@ export function CameraWorkspace({
 
     // Laço por-zona (retângulo/máscara + rótulo + detecções + overlay de fadiga) → ./camera/draw.
     // Passa os valores já resolvidos (refs/estado) + getMask; os gates de camada seguem lá dentro.
+    // ÚLTIMO arg (bug "2 caixas p/ 1 pessoa"): bboxes dos tracks JÁ desenhados acima — a camada
+    // de dets do modo "objetos" omite a det de pessoa coberta por um track (1 pessoa = 1 caixa;
+    // a caixa "oficial" de pessoa é a do track). Só quando drawTracks de fato desenhou (camada on).
     drawZoneOverlays(
       ctx,
       cr,
@@ -1136,18 +1220,24 @@ export function CameraWorkspace({
       confRef.current,
       detailed,
       getMask,
+      layersRef.current.boxes ? tracksRef.current.map((t) => t.bbox) : [],
     );
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
     // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral)
     // + HUD in/out "hoje" (acumulado do servidor via flowBaseRef + sessão corrente — item 1.2).
+    // F1-C (ADR-009) — modo HUB: o "hoje" do HUD é SÓ o acumulado do servidor (hubFlowRef,
+    // refresh ~30s); somar a sessão local contaria cada cruzamento 2× (o hub grava os mesmos
+    // cruzamentos). counts=EMPTY zera a parcela da sessão; paused=false pois o motor conta
+    // 24/7 mesmo com o tile fechado (a mensagem "conta na câmera aberta" só vale no modo local).
+    const hubEngine = analysisEngineRef.current === "hub";
     drawTripwires(
       ctx,
       cr,
       tripwiresRef.current,
-      twCountsRef.current,
-      mode !== "full",
-      flowBaseRef.current,
+      hubEngine ? EMPTY_TW_COUNTS : twCountsRef.current,
+      !hubEngine && mode !== "full",
+      hubEngine ? hubFlowRef.current : flowBaseRef.current,
     );
 
     // grade de pintura (ao editar a máscara de uma zona)
@@ -1988,8 +2078,21 @@ export function CameraWorkspace({
                 {tripwires.map((w, i) => {
                   // (1.2) "hoje" = acumulado do DIA no servidor (flowBase, sobrevive a reload)
                   // + sessão corrente (twCounts). Load falhou/hub antigo → flowBase vazio (só sessão).
+                  // F1-C (ADR-009) — modo HUB: o servidor conta os MESMOS cruzamentos que a
+                  // sessão local → somar os dois exibiria 2×. "hoje" passa a ser SÓ o servidor
+                  // (hubFlowToday, refresh ~30s); a sessão local vira feedback imediato no
+                  // tooltip (não entra na soma exibida).
                   const c = twCounts[w.id] ?? { in: 0, out: 0 };
-                  const b = flowBase[w.id] ?? { in: 0, out: 0 };
+                  const hub = analysisEngine === "hub";
+                  const b = (hub ? hubFlowToday[w.id] : flowBase[w.id]) ?? { in: 0, out: 0 };
+                  const tIn = hub ? b.in : b.in + c.in;
+                  const tOut = hub ? b.out : b.out + c.out;
+                  const tipIn = hub
+                    ? `servidor (hoje) ${b.in} · sessão local ${c.in} (não somada — o hub grava os mesmos cruzamentos)`
+                    : `sessão ${c.in} · dia (servidor) ${b.in}`;
+                  const tipOut = hub
+                    ? `servidor (hoje) ${b.out} · sessão local ${c.out} (não somada — o hub grava os mesmos cruzamentos)`
+                    : `sessão ${c.out} · dia (servidor) ${b.out}`;
                   return (
                     <div key={w.id} className="zone">
                       <div className="row">
@@ -2031,15 +2134,15 @@ export function CameraWorkspace({
                         </span>
                       </div>
                       <div className="kpis ws-kpis">
-                        <div className="kpi" title={`sessão ${c.in} · dia (servidor) ${b.in}`}>
+                        <div className="kpi" title={tipIn}>
                           <div className="v" style={{ color: "var(--state-info)" }}>
-                            {b.in + c.in}
+                            {tIn}
                           </div>
                           <div className="l">entradas hoje</div>
                         </div>
-                        <div className="kpi" title={`sessão ${c.out} · dia (servidor) ${b.out}`}>
+                        <div className="kpi" title={tipOut}>
                           <div className="v" style={{ color: "var(--state-neutral)" }}>
-                            {b.out + c.out}
+                            {tOut}
                           </div>
                           <div className="l">saídas hoje</div>
                         </div>
@@ -2259,6 +2362,15 @@ export function CameraWorkspace({
           {summary || "sem zonas"}
         </span>
         <span className="kb muted">FPS {perf.fps}</span>
+        {/* F1-C (ADR-009) — fonte da análise: NEUTRO (going-gray, informativo, não é anormalidade)
+            e SÓ no modo hub; local = nada (comportamento atual). O badge de detecção abaixo
+            continua valendo: refere-se ao OVERLAY local (tfjs no worker), que segue rodando
+            para o visual mesmo quando os indicadores são gravados pelo servidor. */}
+        {analysisEngine === "hub" && (
+          <span className="kb muted" title="indicadores gravados pelo servidor — D-FINE">
+            análise: hub
+          </span>
+        )}
         {/* Backend de detecção (2.4) — going-gray: neutro em GPU; saturado (warn) SÓ em CPU,
             que é o modo degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
         {detBackend != null &&

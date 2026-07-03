@@ -10,6 +10,7 @@
 import { APP_CONFIG } from "../config";
 import { loadDetector, type Detection } from "./model";
 import { requestInference, type InferencePriority } from "./scheduler";
+import { suppressDuplicates, type NormDet } from "./nms";
 
 const C = APP_CONFIG.detection;
 
@@ -156,38 +157,16 @@ function tileGrid(tiled: boolean, optTiles?: TileSpec): Tile[] {
   return out;
 }
 
-// ── NMS por classe (entrada/saída normalizadas ao frame) ──────────────────────
-type NormDet = { cls: string; score: number; bbox: [number, number, number, number] };
-function iou(a: [number, number, number, number], b: [number, number, number, number]): number {
-  const ax2 = a[0] + a[2],
-    ay2 = a[1] + a[3],
-    bx2 = b[0] + b[2],
-    by2 = b[1] + b[3];
-  const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a[0], b[0]));
-  const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a[1], b[1]));
-  const inter = ix * iy;
-  if (inter <= 0) return 0;
-  const ua = a[2] * a[3] + b[2] * b[3] - inter;
-  return ua > 0 ? inter / ua : 0;
-}
-function nms(dets: NormDet[], thr: number): NormDet[] {
-  const byClass = new Map<string, NormDet[]>();
-  for (const d of dets) {
-    const arr = byClass.get(d.cls) ?? [];
-    arr.push(d);
-    byClass.set(d.cls, arr);
-  }
-  const kept: NormDet[] = [];
-  for (const arr of byClass.values()) {
-    arr.sort((a, b) => b.score - a.score);
-    const sel: NormDet[] = [];
-    for (const d of arr) {
-      if (sel.every((s) => iou(s.bbox, d.bbox) < thr)) sel.push(d);
-    }
-    kept.push(...sel);
-  }
-  return kept;
-}
+// ── Supressão de duplicatas por classe (NMS por IoU + dedupe por CONTENÇÃO) ──
+// Lógica pura em ./nms.ts (testável sem tfjs). Além do NMS clássico (IoU ≥ nmsIoU),
+// suprime a caixa majoritariamente CONTIDA em outra da mesma classe (interseção /
+// área_menor ≥ CONTAINMENT_THR, mantendo a de maior score): é a "pessoa duplicada"
+// do tiling — caixa PARCIAL num tile vizinho tem IoU BAIXO com a caixa inteira
+// (união grande) e sobrevivia ao NMS. Vale p/ TODOS os consumidores de detectFrame.
+// 0.7 é CONSERVADOR de propósito: duas pessoas realmente próximas lado a lado não
+// atingem 70% de contenção mútua (só oclusão forte atinge — e aí o detector já
+// tende a emitir uma caixa só). Trade-off declarado em nms.ts.
+const CONTAINMENT_THR = 0.7;
 
 // ── (2.4b) TILE ROTATION na GRADE (perfil longo alcance) ─────────────────────
 // Estado por CALLER, keyed por `opts.schedule.key` (ex.: `${cameraId}:atividade`) — vive AQUI
@@ -480,9 +459,17 @@ export async function detectFrame(
     });
   }
 
-  // NMS sempre que houver >1 bloco (funde duplicatas nas bordas) — inclui o caso longo-alcance-na-grade
-  // (`tiled` false + `opts.tiles` multi-bloco) e o conjunto FUNDIDO da rotação (frescos + cache).
-  const merged = tiles.length > 1 ? nms(all, C.nmsIoU) : all;
+  // Supressão de duplicatas:
+  //   • >1 bloco: NMS por IoU (funde as bordas dos tiles) + CONTENÇÃO — inclui o caso
+  //     longo-alcance-na-grade (`tiled` false + `opts.tiles` multi-bloco) e o conjunto
+  //     FUNDIDO da rotação (frescos + cache).
+  //   • single-shot: SÓ a contenção (IoU=∞ desliga o NMS — o coco já fez o dele; não
+  //     mudar o recall do caminho single). A dupla por contenção (caixa parcial + caixa
+  //     inteira da MESMA pessoa) acontece também no single-shot/upscale.
+  const merged =
+    tiles.length > 1
+      ? suppressDuplicates(all, C.nmsIoU, CONTAINMENT_THR)
+      : suppressDuplicates(all, Number.POSITIVE_INFINITY, CONTAINMENT_THR);
   return merged.map((d) => ({
     class: d.cls,
     score: d.score,

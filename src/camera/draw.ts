@@ -16,6 +16,7 @@ import { anySet, type Mask } from "../zoneMask";
 import { ZONE_MODE_LABEL, type Zone } from "../zones";
 import { type CineFrame } from "./cineBuffer";
 import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
+import { coveredByAny } from "../vision/nms";
 
 // Resultado por zona guardado p/ desenho + painel. Vive aqui (perto do desenho que o
 // consome) e é reimportado pelo CameraWorkspace; mover não muda comportamento.
@@ -403,6 +404,14 @@ export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | n
 // transformado (dpr), o retângulo de conteúdo (letterbox) e os dados por-zona (zonas/resultados/
 // camadas/confiança/detalhe) já resolvidos pelo componente. Os GATES de camada (layers.*) e o
 // `maskOf` (getMask, que fecha sobre o estado de pintura) continuam vindo do componente; aqui só o desenho.
+// DECISÃO (bug de campo "2 caixas p/ 1 pessoa"): quando o TRACKER está ativo, a caixa
+// de PESSOA na tela é desenhada SÓ pelo track (drawTracks, camada "caixas"). A camada
+// de dets do modo "objetos" OMITE a det de pessoa já coberta por um track (IoU ≥ 0.45
+// ou contenção ≥ 0.7 — mesma geometria de vision/nms.ts). Sem tracker (câmera só com
+// zona de objetos: tracks vazios), as dets de pessoa seguem sendo desenhadas — nada some.
+const TRACK_COVER_IOU = 0.45;
+const TRACK_COVER_CONTAIN = 0.7;
+
 export function drawZoneOverlays(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
@@ -412,6 +421,9 @@ export function drawZoneOverlays(
   conf: number,
   detailed: boolean,
   maskOf: (z: Zone) => Mask | null,
+  // bboxes normalizadas dos TRACKS de pessoa já desenhados por drawTracks (mesma rodada).
+  // Opcional/aditivo: ausente → comportamento anterior (todas as dets desenhadas).
+  personTrackBoxes: ReadonlyArray<readonly [number, number, number, number]> = [],
 ) {
   for (const z of zones) {
     const x = cr.x + z.x * cr.w,
@@ -441,6 +453,12 @@ export function drawZoneOverlays(
             cy = d.bbox[1] + d.bbox[3] / 2;
           if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
           const oc = objClass(d.key);
+          // 1 pessoa = 1 caixa: det de pessoa já coberta por um track é do track (ver DECISÃO acima)
+          if (
+            oc?.coco.includes("person") &&
+            coveredByAny(d.bbox, personTrackBoxes, TRACK_COVER_IOU, TRACK_COVER_CONTAIN)
+          )
+            continue;
           const cc = oc?.color ?? color;
           const bx = cr.x + d.bbox[0] * cr.w,
             by = cr.y + d.bbox[1] * cr.h;

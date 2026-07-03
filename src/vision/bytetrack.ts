@@ -14,6 +14,10 @@
 //     (perfil LR full: ~0,5–1,3s entre rodadas) o deslocamento real quebra o
 //     IoU com a última bbox observada; a predição o recupera e o id sobrevive.
 //   • MORTE POR TTL: track sem associação por mais que ttlMs é removido.
+//   • GUARDA DE NASCIMENTO (birthIouThreshold, default 0.55): detecção alta sem
+//     par que sobrepõe um track ativo além do limiar NÃO nasce — atualiza o track
+//     livre (associação recuperada) ou é descartada (duplicata). Evita que UMA
+//     pessoa com associação perdida vire DUAS por até ttlMs (bug de campo).
 //
 // LIMITAÇÃO DECLARADA (sem re-ID por aparência): em cruzamento denso, ids podem
 // trocar de pessoa — o tracker segue GEOMETRIA (IoU), não aparência. Ver o
@@ -56,6 +60,18 @@ export type ByteTrackerOptions = {
   iouThreshold?: number;
   /** Morte: track sem associação por mais que isso (ms). Default 1500. */
   ttlMs?: number;
+  /**
+   * GUARDA DE NASCIMENTO (bug de campo "2 pessoas onde há 1"): detecção alta SEM
+   * par que sobrepõe um track ativo além disso NÃO nasce — a pessoa é a MESMA, a
+   * associação é que falhou (predição ruim) ou a detecção é duplicata. Se o track
+   * sobreposto está LIVRE nesta rodada, a detecção o ATUALIZA (recupera a
+   * associação); se já foi pareado, a detecção é DESCARTADA (caixa duplicada).
+   * Default 0.55 — CONSERVADOR de propósito: duas pessoas realmente próximas
+   * ficam bem abaixo disso (lado a lado IoU ≈ 0.2–0.3); só sobreposição de "mesma
+   * pessoa" passa de 0.55. Trade-off declarado: em oclusão QUASE total (IoU>0.55
+   * entre duas pessoas reais), a segunda só nasce quando se separarem.
+   */
+  birthIouThreshold?: number;
 };
 
 export type ByteTracker = {
@@ -100,6 +116,7 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
   const highDefault = opts.highScore ?? 0.4;
   const iouThr = opts.iouThreshold ?? 0.25;
   const ttlMs = opts.ttlMs ?? 1500;
+  const birthIouThr = opts.birthIouThreshold ?? 0.55;
 
   let seq = 0;
   let tracks: InternalTrack[] = [];
@@ -181,7 +198,37 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
     associate(low); // 2ª passada: score baixo RECUPERA os tracks que sobraram
 
     // Nascimento: SÓ detecção de score alto sem par (baixa sem par é descartada).
-    for (const di of high) if (!detUsed.has(di)) tracks.push(newTrack(dets[di], now));
+    // GUARDA DE NASCIMENTO (birthIouThr): detecção sem par que sobrepõe demais um
+    // track existente NÃO vira track novo — a pessoa é a mesma. Compara com a bbox
+    // OBSERVADA e com a PREDITA (a associação falha justamente quando a predição
+    // fugiu da observação; qualquer uma das duas acusa "mesma pessoa"). Track
+    // sobreposto LIVRE → recupera a associação (atualiza); ocupado (inclusive
+    // recém-nascido nesta rodada) → duplicata, descarta.
+    for (const di of high) {
+      if (detUsed.has(di)) continue;
+      const d = dets[di];
+      let bestTi = -1;
+      let bestV = birthIouThr;
+      for (let ti = 0; ti < tracks.length; ti++) {
+        const v = Math.max(
+          iouOf(tracks[ti].bbox, d.bbox),
+          ti < pred.length ? iouOf(pred[ti], d.bbox) : 0,
+        );
+        if (v > bestV) {
+          bestV = v;
+          bestTi = ti;
+        }
+      }
+      if (bestTi >= 0) {
+        if (!trkUsed.has(bestTi)) {
+          trkUsed.add(bestTi);
+          applyObservation(tracks[bestTi], d, now);
+        }
+        continue; // track já pareado nesta rodada → detecção duplicada, descartada
+      }
+      tracks.push(newTrack(d, now));
+      trkUsed.add(tracks.length - 1); // recém-nascido conta como "ocupado" p/ as próximas dets
+    }
 
     // Morte por TTL (tracks sem par ficam com a última posição OBSERVADA até morrer).
     tracks = tracks.filter((t) => now - t.lastSeen <= ttlMs);

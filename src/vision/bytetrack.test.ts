@@ -135,6 +135,44 @@ describe("createByteTracker — 2ª passada (score baixo sustenta)", () => {
   });
 });
 
+describe("createByteTracker — GUARDA DE NASCIMENTO (bug de campo: 1 pessoa ≠ 2 tracks)", () => {
+  it("associação perdida em 1 rodada NÃO vira 2 pessoas: det sobreposta recupera o track", () => {
+    // Velocidade estabelecida "para a direita"; a pessoa PARA. A predição foge da
+    // observação (IoU det×pred < 0.25 → associação falha), mas a det continua em
+    // cima da última bbox OBSERVADA (IoU > 0.55). Antes: nascia track 2 e a cena
+    // reportava 2 pessoas por até ttlMs. Agora: o track existente é ATUALIZADO.
+    const tk = createByteTracker({ iouThreshold: 0.25, ttlMs: 1500, birthIouThreshold: 0.55 });
+    tk.update([det(0.2, 0.5, 0.6)], 0);
+    tk.update([det(0.25, 0.5, 0.6)], 350); // v ≈ +0.05/350ms
+    // t=1050 (rodada lenta, dt=700): pred cx ≈ 0.35; a pessoa quase parou (det cx=0.27)
+    // → IoU det×pred ≈ 0.11 (< 0.25, associação FALHA); IoU det×observada ≈ 0.67 (> 0.55).
+    const out = tk.update([det(0.27, 0.5, 0.6)], 1050);
+    expect(out).toHaveLength(1); // NÃO nasceu segundo track
+    expect(out[0].id).toBe(1);
+    expect(out[0].cx).toBeCloseTo(0.27, 6); // associação recuperada: posição atualizada
+    expect(out[0].lastSeen).toBe(1050);
+  });
+
+  it("caixa DUPLICADA na mesma rodada (2 dets altas sobre a mesma pessoa) não nasce 2×", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55 });
+    // 1ª rodada, tracker vazio: a 1ª det nasce; a 2ª (quase idêntica, IoU ≫ 0.55) é descartada.
+    const r1 = tk.update([det(0.3, 0.5, 0.8), det(0.31, 0.5, 0.6)], 0);
+    expect(r1).toHaveLength(1);
+    // rodada seguinte: track pareado pela det A; det B duplicada não nasce nem rouba o track.
+    const r2 = tk.update([det(0.3, 0.5, 0.8), det(0.31, 0.5, 0.6)], 350);
+    expect(r2).toHaveLength(1);
+    expect(r2[0].id).toBe(1);
+    expect(r2[0].score).toBe(0.8); // ficou com a associação da det de maior IoU/score
+  });
+
+  it("RECALL preservado: 2 pessoas realmente próximas (IoU < 0.55) nascem as duas", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55 });
+    // lado a lado com sobreposição moderada: IoU ≈ 0.25 < 0.55 → são 2 pessoas mesmo
+    const out = tk.update([det(0.3, 0.5, 0.8), det(0.36, 0.5, 0.7)], 0);
+    expect(out).toHaveLength(2);
+  });
+});
+
 describe("createByteTracker — oclusão curta", () => {
   it("some 1 rodada (dentro do TTL) e reaparece no lugar → MESMO id, firstSeen preservado", () => {
     const tk = createByteTracker({ ttlMs: 1500 });
