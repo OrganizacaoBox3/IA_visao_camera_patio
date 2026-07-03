@@ -2,6 +2,7 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { DashboardPage } from "./routes/DashboardPage";
+import { CamerasPage } from "./routes/CamerasPage";
 import { CameraPage } from "./routes/CameraPage";
 import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
@@ -28,6 +29,8 @@ const router = createBrowserRouter([
     ),
     children: [
       { path: "/", element: <DashboardPage /> },
+      // Gestão de câmeras (IP + nó local) — ação única de "adicionar câmera" da Central.
+      { path: "/cameras", element: <CamerasPage /> },
       { path: "/relatorio", element: <ReportPage /> },
       { path: "/alarmes-saude", element: <AlarmHealthPage /> },
       { path: "/usuarios", element: <UsersPage /> },

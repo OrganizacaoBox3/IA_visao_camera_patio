@@ -123,28 +123,48 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   await expect(page.locator(".cam")).toBeVisible();
 });
 
-// Câmera IP/RTSP pela home (superadmin). O e2e loga como "admin", que É superadmin, então o
-// botão "+ Câmera IP" aparece. Cobre: abrir o Dialog e a VALIDAÇÃO de url no cliente (url inválida
-// bloqueia antes de chamar a API). Não confirmamos uma url válida aqui para não cadastrar uma
-// câmera real no hub (subiria ffmpeg); a criação em si é coberta pelo unit test do client + backend.
-test("+ Câmera IP: abre o Dialog e a validação de url bloqueia url inválida (superadmin)", async ({
+// Tela de câmeras (/cameras) — fluxo NOVO que unifica "+ Nó de câmera" e "+ Câmera IP" numa ação
+// só. O e2e loga como "admin", que É superadmin, então vê a seção de câmeras IP. Cobre: o botão
+// único do header da Central navega p/ /cameras; a tela é alcançável pelo MENU; o form de cadastro
+// abre em Dialog; e a VALIDAÇÃO de url no cliente (url inválida bloqueia antes de chamar a API).
+// Não confirmamos uma url válida aqui para não cadastrar uma câmera real no hub (subiria ffmpeg);
+// a criação em si é coberta pelo unit test do client + backend.
+test("Câmeras: botão único leva a /cameras e a validação de url bloqueia url inválida (superadmin)", async ({
   page,
 }) => {
   await login(page);
 
-  const btn = page.getByRole("button", { name: /\+ Câmera IP/i });
-  await expect(btn).toBeVisible(); // visível p/ superadmin
-  await btn.click();
+  // O header da Central tem UM só botão de câmeras (link p/ /cameras); os antigos sumiram.
+  await expect(page.getByRole("button", { name: /\+ Câmera IP/i })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /\+ Nó de câmera/i })).toHaveCount(0);
+  const add = page.getByRole("link", { name: "+ Câmera" });
+  await expect(add).toBeVisible();
+  await add.click();
+  await expect(page).toHaveURL(/\/cameras/);
+  await expect(page.getByRole("heading", { name: "Câmeras" })).toBeVisible();
 
+  // Seções da tela: câmeras IP (superadmin) + câmera local (nó/webcam).
+  await expect(page.getByText("Nenhuma câmera IP cadastrada ainda.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Abrir nó neste dispositivo" })).toBeVisible();
+
+  // Cadastro IP: o form abre em Dialog.
+  await page.getByRole("button", { name: "+ Adicionar câmera IP" }).click();
   const dlg = page.getByRole("dialog");
   await expect(dlg).toBeVisible();
-  await expect(dlg).toContainText(/Câmeras IP/i);
+  await expect(dlg).toContainText(/Adicionar câmera IP/i);
 
   // URL inválida (sem esquema rtsp/http) → validação no cliente bloqueia com mensagem, sem enviar.
   await dlg.getByLabel("URL da câmera").fill("nao-e-uma-url");
   await dlg.getByRole("button", { name: "Adicionar câmera" }).click();
   await expect(dlg.getByText(/URL inválida/i)).toBeVisible();
   await expect(dlg).toBeVisible(); // dialog continua aberto (nada foi criado)
+
+  // A tela também é alcançável pelo item "Câmeras" do menu lateral.
+  await page.keyboard.press("Escape"); // fecha o dialog
+  await page.getByRole("link", { name: "Central" }).click();
+  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+  await page.getByRole("link", { name: "Câmeras" }).click();
+  await expect(page).toHaveURL(/\/cameras/);
 });
 
 // ── R3.3 — cobertura das primitivas Radix da migração (Onda G): Tabs + AlertDialog ──

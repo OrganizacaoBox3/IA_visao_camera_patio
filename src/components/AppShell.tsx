@@ -19,6 +19,7 @@ import {
   Search,
   ShieldCheck,
   Users,
+  Video,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "../auth";
@@ -191,6 +192,9 @@ export function AppShell() {
       title: "Operação",
       items: [
         { to: "/", end: true, icon: LayoutDashboard, label: "Central" },
+        // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
+        // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
+        { to: "/cameras", icon: Video, label: "Câmeras" },
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
       ],
     },

@@ -1,6 +1,88 @@
-/* Câmeras IP/RTSP — cadastro pela home (DashboardPage). Layout leve do formulário dentro do
-   Dialog; a listagem reaproveita as classes de views.css (.views-mgr__row/__name/__foot). */
+/* Câmeras — tela /cameras (CamerasPage + cameras/IpCamerasSection).
+   O form de câmera IP (.cam-ip-*) veio do antigo Dialog da home (dashboard/IpCameraDialog),
+   agora dentro do Dialog aberto pela própria tela. */
 
+/* Corpo da página: seções empilhadas (mesmo ritmo de .users-body/.ah-body). */
+.cam-mgr-body {
+  padding: var(--sp-4);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  width: 100%;
+  max-width: 920px;
+}
+
+.cam-sec-hint {
+  margin: 0 0 var(--sp-3);
+  font-size: 12px;
+}
+
+/* Lista de câmeras IP cadastradas (linha = nome + url mascarada + tipo + estado + ações). */
+.cam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cam-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 8px 10px;
+  border: 1px solid var(--state-neutral-border, #1f2937);
+  border-radius: 8px;
+  background: var(--state-neutral-bg, #161c24);
+}
+.cam-row__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.cam-row__name .muted {
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cam-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Rodapé das seções (ação primária à esquerda, fora da lista). */
+.cam-sec-foot {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* Ações do nó local + link de inscrição (superadmin). */
+.cam-node-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.cam-enroll {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.cam-enroll input {
+  flex: 1;
+  min-width: 220px;
+}
+.cam-enroll .muted {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
+/* ── Form do cadastro/edição IP (dentro do Dialog) ── */
 .cam-ip-form {
   display: grid;
   gap: var(--sp-3);
@@ -22,8 +104,19 @@
   gap: var(--sp-3);
 }
 
+/* Rodapé do form (submit à direita). */
+.cam-ip-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 @media (max-width: 560px) {
   .cam-ip-adv {
     grid-template-columns: 1fr;
+  }
+  .cam-row {
+    flex-wrap: wrap;
   }
 }

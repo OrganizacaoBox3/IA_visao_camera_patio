@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { Video } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { setInferencePriority } from "../vision/scheduler";
@@ -9,7 +11,7 @@ import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { getCameraCfg, setCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
 import { loadZonesForCamera } from "../zones";
 import { useAuth } from "../auth";
-import { Button, Switch, Select, Dialog, Tooltip, useToast } from "../ui";
+import { Button, Switch, Select, Dialog, Tooltip, Badge, useToast } from "../ui";
 import {
   listAlarms,
   ackAlarm,
@@ -26,10 +28,8 @@ import { type Camera, type CameraStatus } from "./dashboard/types";
 import { CameraTile } from "./dashboard/CameraTile";
 import { AlarmDrawer } from "./dashboard/AlarmDrawer";
 import { ViewsManager } from "./dashboard/ViewsManager";
-import { IpCameraDialog } from "./dashboard/IpCameraDialog";
 import "./alarms.css";
 import "./views.css";
-import "./cameras.css";
 
 // ImageBitmap decodificado fora da main thread; só guardamos o último frame (descarta atrasados).
 // INVARIANTE (2.2): w/h refletem SEMPRE o tamanho do BITMAP decodificado (bmp.width/height) — que
@@ -128,7 +128,7 @@ function loadViewPrefs(userId: string): ViewPrefs {
 const AUTOSURFACE_WINDOW_MS = 10 * 60_000;
 
 export function DashboardPage() {
-  const { token, user, logout, isSuper } = useAuth();
+  const { token, user, logout } = useAuth();
   const socketRef = useRef<Socket | null>(null);
   const framesRef = useRef<Map<string, FrameEntry>>(new Map());
   const gettersRef = useRef<Map<string, () => FrameSource | null>>(new Map());
@@ -165,9 +165,6 @@ export function DashboardPage() {
   const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
   const [alarmsOpen, setAlarmsOpen] = useState(false);
   const { toast } = useToast();
-
-  // ── Câmeras IP/RTSP (superadmin) — cadastro + gestão pela home (ver IpCameraDialog) ──
-  const [ipOpen, setIpOpen] = useState(false);
 
   // ── Views salvas por setor + auto-surface (Onda C · item 11) ──
   // Lista de views = backend (compartilhada); activeViewId/autoSurface = prefs locais do operador.
@@ -663,7 +660,6 @@ export function DashboardPage() {
   }
 
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
-  const camNodeUrl = `${location.origin}/camera`;
 
   // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado).
   // useCallback (1.6): identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável
@@ -722,19 +718,16 @@ export function DashboardPage() {
         <Tooltip content="Definir o tipo de cada câmera (área × operador)">
           <Button onClick={() => setShowConfig(true)}>⚙ Câmeras</Button>
         </Tooltip>
-        <Button asChild>
-          <a href={camNodeUrl} target="_blank" rel="noreferrer">
-            + Nó de câmera
-          </a>
-        </Button>
-        {/* Câmera IP/RTSP: cadastro pela home. Só superadmin (guarda `isSuper`); operador não vê. */}
-        {isSuper && (
-          <Tooltip content="Cadastrar câmera IP/RTSP (entra na grade automaticamente)">
-            <Button variant="primary" onClick={() => setIpOpen(true)}>
-              + Câmera IP
-            </Button>
-          </Tooltip>
-        )}
+        {/* Ação ÚNICA de câmeras (substitui "+ Nó de câmera" e "+ Câmera IP"): leva à tela
+            /cameras, que adiciona/gerencia tanto câmera IP (só superadmin lá dentro, como o
+            botão antigo) quanto o nó local (webcam) — visível a todos, como o botão antigo. */}
+        <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
+          <Button asChild variant="primary">
+            <Link to="/cameras">
+              <Video size={16} strokeWidth={1.75} aria-hidden /> + Câmera
+            </Link>
+          </Button>
+        </Tooltip>
         {/* Paginação: réplica do .switch em utilities (gap 4px, como o inline anterior): utility
             em layer não vence o gap:6px do .switch (index.css não-layered) — por isso sem a classe. */}
         {pageCount > 1 && (
@@ -774,18 +767,14 @@ export function DashboardPage() {
             )}
           </Button>
         </Tooltip>
-        <span className="dash-stats" aria-live="polite">
-          <span className="stat">
-            hub <b>{connected ? "ok" : "off"}</b>
+        {/* Going-gray: os chips informativos "hub ok · câmeras N · online N" foram removidos
+            (ruído — a grade já mostra as câmeras e o estado de cada uma). Só o caso ANORMAL
+            permanece: hub desconectado é informação crítica e ganha cor saturada. */}
+        {!connected && (
+          <span aria-live="polite">
+            <Badge tone="alert">hub desconectado</Badge>
           </span>
-          <span className="stat">
-            câmeras <b>{cameras.length}</b>
-          </span>
-          <span className="stat">
-            online{" "}
-            <b>{cameras.filter((c) => (statuses[c.id]?.state ?? "online") === "online").length}</b>
-          </span>
-        </span>
+        )}
       </header>
 
       <div className="dash-body">
@@ -795,13 +784,10 @@ export function DashboardPage() {
               <b>Nenhuma câmera conectada.</b>
             </p>
             <p>
-              Abra <code>/camera</code> neste computador (webcam) ou no celular apontando para o IP
-              do hub.
+              Adicione uma câmera IP/RTSP ou abra um nó de câmera (webcam) pela tela de câmeras.
             </p>
             <Button asChild variant="primary">
-              <a href={camNodeUrl} target="_blank" rel="noreferrer">
-                Abrir um nó de câmera
-              </a>
+              <Link to="/cameras">Adicionar câmera</Link>
             </Button>
             <p className="muted mt-3">
               Hub: <code>{APP_CONFIG.net.serverUrl}</code> ·{" "}
@@ -899,9 +885,6 @@ export function DashboardPage() {
             </div>
           ))}
         </Dialog>
-
-        {/* Câmeras IP/RTSP (superadmin): cadastro + gestão pela home. */}
-        {isSuper && <IpCameraDialog open={ipOpen} onOpenChange={setIpOpen} />}
 
         {/* Gerenciador de views por setor (Onda C · item 11) — criar/renomear/excluir + ordenar */}
         <ViewsManager
