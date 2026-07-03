@@ -1,8 +1,11 @@
 import { type ReactNode } from "react";
 import { ScrollArea } from "../../ui";
+import { SectionTitle } from "./chrome";
 
 // Tabela de eventos (.rtable em ScrollArea) reutilizada por Atividade/Leitura/Objetos/Fadiga.
 // `renderCells` devolve os <td> de uma linha; o cabeçalho e o estado-vazio são padronizados.
+// `flex-1`: o painel PREENCHE o tabpanel (coluna flex) quando há pouca linha; com muitas,
+// mantém a altura natural e o tabpanel rola (min-height:auto — contrato "rola, não corta").
 export function EventsTable<T>({
   title,
   headers,
@@ -17,8 +20,8 @@ export function EventsTable<T>({
   renderCells: (row: T) => ReactNode;
 }) {
   return (
-    <section className="panel panel-events">
-      <h3>{title}</h3>
+    <section className="panel panel-events flex-1">
+      <SectionTitle>{title}</SectionTitle>
       <ScrollArea className="rep-tablescroll">
         <table className="rtable">
           <thead>

@@ -1,8 +1,17 @@
 import { type CSSProperties, type ReactNode } from "react";
 
 // Linha de KPIs "big" reutilizada por todos os modos do Relatório.
-export function KpiRow({ children }: { children: ReactNode }) {
-  return <div className="kpi-row">{children}</div>;
+// `fit` troca o grid fixo de 5 colunas por auto-fit: acomoda 6 KPIs numa linha em telas largas
+// (sem "órfão" na 2ª linha) e 4 sem buraco, quebrando sozinho em telas estreitas.
+export function KpiRow({ children, fit }: { children: ReactNode; fit?: boolean }) {
+  return (
+    <div
+      className="kpi-row"
+      style={fit ? { gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" } : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function Kpi({

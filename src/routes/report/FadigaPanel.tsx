@@ -5,7 +5,7 @@ import {
   type FadigaEventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, Insight, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { TrendChart } from "./TrendChart";
@@ -69,7 +69,7 @@ export function FadigaPanel({
       </KpiRow>
       <Insight label="💡 Operador" tips={ftips} />
       <Tabs
-        className="rep-tabs"
+        className="rep-tabs flex-1"
         ariaLabel="Seção"
         value={tab}
         onValueChange={(v) => onTabChange(v as RepTab)}
@@ -81,9 +81,9 @@ export function FadigaPanel({
       >
         {/* "quando" e "onde" (fallback p/ estado herdado de outro modo) mostram o mesmo heatmap. */}
         {(["quando", "onde"] as const).map((v) => (
-          <TabsContent key={v} value={v} className="rep-tabpanel">
-            <section className="panel">
-              <h3>Quando — tempo de risco por hora (min)</h3>
+          <TabsContent key={v} value={v} className={REP_TABPANEL_CLS}>
+            <section className="panel flex-1">
+              <SectionTitle>Quando — tempo de risco por hora (min)</SectionTitle>
               <Heatmap
                 rows={fhm.rows.map((row) => ({
                   key: row.label,
@@ -101,9 +101,9 @@ export function FadigaPanel({
             </section>
           </TabsContent>
         ))}
-        <TabsContent value="tendencia" className="rep-tabpanel">
-          <section className="panel">
-            <h3>Tendência (14 dias) — % do tempo em alerta</h3>
+        <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
+          <section className="panel flex-1">
+            <SectionTitle>Tendência (14 dias) — % do tempo em alerta</SectionTitle>
             <TrendChart
               bars={fevo.bars.map((b) => ({
                 key: b.dayIndex,
@@ -115,7 +115,7 @@ export function FadigaPanel({
             />
           </section>
         </TabsContent>
-        <TabsContent value="eventos" className="rep-tabpanel">
+        <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable
             title={`Ocorrências de risco (${fevt.length})`}
             headers={["Data / hora", "Posto", "Tipo", "Turno"]}

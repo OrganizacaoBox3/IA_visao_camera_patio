@@ -2,7 +2,7 @@ import { type RefObject } from "react";
 import { alarmKpis, alarmTrend, alarmHeatmap, type AlarmWindow } from "../../report/mock";
 import type { AlarmEvent, AlarmPriority, AlarmState } from "../../types/alarm";
 import { ScrollArea } from "../../ui";
-import { Insight } from "./chrome";
+import { Insight, SectionTitle } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
 
@@ -113,10 +113,10 @@ export function AlarmesPanel({
           <Insight label="🔔 Alarmes" tips={aTips} />
           <div className="rep-2col" ref={trendRef}>
             <section className="panel">
-              <h3>
+              <SectionTitle>
                 Tendência (14 dias){" "}
                 <span className="muted text-[11px] font-normal">— clique p/ filtrar o dia</span>
-              </h3>
+              </SectionTitle>
               <div className="evo">
                 {aTrend.bars.map((b) => {
                   const active = !!(
@@ -145,10 +145,10 @@ export function AlarmesPanel({
               </div>
             </section>
             <section className="panel">
-              <h3>
+              <SectionTitle>
                 Quando — prioridade × hora{" "}
                 <span className="muted text-[11px] font-normal">— clique p/ filtrar a hora</span>
-              </h3>
+              </SectionTitle>
               <Heatmap
                 rows={aHeat.rows.map((row) => ({
                   key: row.priority,
@@ -169,7 +169,7 @@ export function AlarmesPanel({
           </div>
           <section className="panel panel-events">
             <div className="alarm-toolbar">
-              <h3 style={{ margin: 0 }}>Eventos ({alarmsView.length})</h3>
+              <SectionTitle flush>Eventos ({alarmsView.length})</SectionTitle>
               {(alarmWindow || alarmHour != null) && (
                 <span className="alarm-windownote">
                   {alarmWindow

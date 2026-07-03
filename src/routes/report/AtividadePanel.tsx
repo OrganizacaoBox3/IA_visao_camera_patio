@@ -8,7 +8,16 @@ import {
   type EventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, Insight, SHIFTS, type RepTab, type ByShift } from "./chrome";
+import {
+  RepLens,
+  HistoryFooter,
+  Insight,
+  SectionTitle,
+  SHIFTS,
+  REP_TABPANEL_CLS,
+  type RepTab,
+  type ByShift,
+} from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
@@ -63,10 +72,14 @@ export function AtividadePanel({
   busy: boolean;
   onClear: () => void;
 }) {
+  // "fluxo" só é uma aba válida quando o hub expõe o kind "flow"; se o estado herdou "fluxo"
+  // e a seção sumiu (refresh/hub antigo), cai para "quando" sem efeito colateral.
+  const activeTab = tab === "fluxo" && !flow ? "quando" : tab;
   return (
     <>
       <RepLens lens={lens} />
-      <KpiRow>
+      {/* 6 KPIs: grid auto-fit (KpiRow fit) — uma linha em telas largas, sem órfão na 2ª. */}
+      <KpiRow fit>
         <Kpi
           value={fmtMin(k.idleMin)}
           label={
@@ -83,28 +96,32 @@ export function AtividadePanel({
             </>
           }
         />
-        <Kpi value={k.topArea} label="área mais parada" valueStyle={{ fontSize: 17 }} />
+        <Kpi value={k.topArea} label="área mais parada" />
         <Kpi value={`${String(k.peakHour).padStart(2, "0")}h`} label="horário crítico" />
-        <Kpi value={`${k.activePct}%`} label="tempo ativo" valueStyle={{ color: "var(--ok)" }} />
+        {/* going-gray: cor em valor numérico só condicional a estado — sem verde incondicional */}
+        <Kpi value={`${k.activePct}%`} label="tempo ativo" />
         {/* going-gray: contagem é informação neutra — sem cor saturada */}
         <Kpi value={peoplePeak} label="pico de pessoas" />
       </KpiRow>
       <Insight label="💡 Oportunidades" tips={tips} />
       <Tabs
-        className="rep-tabs"
+        className="rep-tabs flex-1"
         ariaLabel="Seção"
-        value={tab}
+        value={activeTab}
         onValueChange={(v) => onTabChange(v as RepTab)}
         items={[
           { value: "quando", label: "Quando para" },
           { value: "onde", label: "Onde para" },
           { value: "tendencia", label: "Tendência" },
           { value: "eventos", label: `Eventos (${evt.length})` },
+          // Fluxo de pessoas (plano 1.3) DENTRO do fluxo rolável: aba própria em vez de bloco
+          // fixo abaixo das tabs (que espremia o tabpanel a ~60px em 1920 e clipava em 1366).
+          ...(flow ? [{ value: "fluxo", label: "Fluxo de pessoas" }] : []),
         ]}
       >
-        <TabsContent value="quando" className="rep-tabpanel">
-          <section className="panel">
-            <h3>Quando para — horários críticos</h3>
+        <TabsContent value="quando" className={REP_TABPANEL_CLS}>
+          <section className="panel flex-1">
+            <SectionTitle>Quando para — horários críticos</SectionTitle>
             <Heatmap
               rows={hm.rows.map((row) => ({
                 key: row.area,
@@ -121,10 +138,10 @@ export function AtividadePanel({
             />
           </section>
         </TabsContent>
-        <TabsContent value="onde" className="rep-tabpanel">
-          <div className="rep-2col">
+        <TabsContent value="onde" className={REP_TABPANEL_CLS}>
+          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
-              <h3>Por área</h3>
+              <SectionTitle>Por área</SectionTitle>
               <RankingBars
                 rows={rank.rows.map((r) => ({
                   key: r.area,
@@ -137,7 +154,7 @@ export function AtividadePanel({
               />
             </section>
             <section className="panel">
-              <h3>Por atividade</h3>
+              <SectionTitle>Por atividade</SectionTitle>
               <RankingBars
                 rows={byAtiv.rows.map((r) => ({
                   key: r.atividade,
@@ -151,10 +168,10 @@ export function AtividadePanel({
             </section>
           </div>
         </TabsContent>
-        <TabsContent value="tendencia" className="rep-tabpanel">
-          <div className="rep-2col">
+        <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
+          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
-              <h3>Tendência (14 dias)</h3>
+              <SectionTitle>Tendência (14 dias)</SectionTitle>
               <TrendChart
                 bars={evo.bars.map((b) => ({
                   key: b.dayIndex,
@@ -166,7 +183,7 @@ export function AtividadePanel({
               />
             </section>
             <section className="panel">
-              <h3>Por turno</h3>
+              <SectionTitle>Por turno</SectionTitle>
               <RankingBars
                 rows={SHIFTS.map((s) => ({
                   key: s,
@@ -179,7 +196,7 @@ export function AtividadePanel({
             </section>
           </div>
         </TabsContent>
-        <TabsContent value="eventos" className="rep-tabpanel">
+        <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable
             title={`Eventos — alertas no período (${evt.length})`}
             headers={["Data / hora", "Área", "Câmera", "Duração", "Turno"]}
@@ -196,9 +213,14 @@ export function AtividadePanel({
             )}
           />
         </TabsContent>
+        {/* Fluxo de pessoas (plano 1.3) — parte da história de atividade, não um modo novo.
+            Vive como ABA (dentro do painel rolável) p/ nunca espremer as demais seções. */}
+        {flow && (
+          <TabsContent value="fluxo" className={REP_TABPANEL_CLS}>
+            <FlowSection flow={flow} />
+          </TabsContent>
+        )}
       </Tabs>
-      {/* Fluxo de pessoas (plano 1.3) — parte da história de atividade, não um modo novo. */}
-      {flow && <FlowSection flow={flow} />}
       <HistoryFooter onClear={onClear} busy={busy} />
     </>
   );
@@ -214,8 +236,8 @@ function FlowSection({ flow }: { flow: FlowView }) {
   if (!hasAny || k.in + k.out === 0) {
     // Estados vazios curtos (padrão das notas existentes): sem linha/cruzamento × recorte vazio.
     return (
-      <section className="panel">
-        <h3>Fluxo de pessoas — linhas de contagem</h3>
+      <section className="panel flex-1">
+        <SectionTitle>Fluxo de pessoas — linhas de contagem</SectionTitle>
         <p className="empty-note">
           {hasAny
             ? "Sem cruzamentos no período/turno selecionado."
@@ -241,9 +263,9 @@ function FlowSection({ flow }: { flow: FlowView }) {
   return (
     <>
       <section className="panel">
-        <h3>Fluxo de pessoas — linhas de contagem</h3>
+        <SectionTitle>Fluxo de pessoas — linhas de contagem</SectionTitle>
         {/* going-gray: fluxo é informação neutra — sem cor saturada */}
-        <KpiRow>
+        <KpiRow fit>
           <Kpi value={k.in} label="entradas no período" />
           <Kpi value={k.out} label="saídas no período" />
           <Kpi value={k.in - k.out} label="saldo (entradas − saídas)" />
@@ -256,7 +278,7 @@ function FlowSection({ flow }: { flow: FlowView }) {
       </section>
       <div className="rep-2col">
         <section className="panel">
-          <h3>Entradas por hora</h3>
+          <SectionTitle>Entradas por hora</SectionTitle>
           <TrendChart
             bars={byHour.hours.map((v, h) => ({
               key: h,
@@ -268,7 +290,7 @@ function FlowSection({ flow }: { flow: FlowView }) {
           />
         </section>
         <section className="panel">
-          <h3>Saídas por hora</h3>
+          <SectionTitle>Saídas por hora</SectionTitle>
           <TrendChart
             read
             bars={byHour.hours.map((v, h) => ({
@@ -281,8 +303,8 @@ function FlowSection({ flow }: { flow: FlowView }) {
           />
         </section>
       </div>
-      <section className="panel">
-        <h3>Por linha / câmera</h3>
+      <section className="panel flex-1">
+        <SectionTitle>Por linha / câmera</SectionTitle>
         <RankingBars
           rows={byLine.rows.map((r) => ({
             key: `${r.cameraId}|${r.tripwireId}`,

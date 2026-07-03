@@ -75,6 +75,7 @@ import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } f
 import {
   Button,
   IconButton,
+  PageHeader,
   Select,
   SegmentedControl,
   Skeleton,
@@ -82,7 +83,7 @@ import {
   AlertDialog,
 } from "../ui";
 import "../report/alarms.css";
-import { SHIFTS } from "./report/chrome";
+import { SHIFTS, type RepTab } from "./report/chrome";
 import { AtividadePanel } from "./report/AtividadePanel";
 import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel, classLabel } from "./report/ObjetosPanel";
@@ -150,7 +151,7 @@ export function ReportPage() {
   const [setor, setSetor] = useState<string | "Todos">("Todos");
   const [posto, setPosto] = useState<string | "Todos">("Todos");
   const [present, setPresent] = useState(false);
-  const [tab, setTab] = useState<"quando" | "onde" | "tendencia" | "eventos">("quando");
+  const [tab, setTab] = useState<RepTab>("quando");
   const [confirmClear, setConfirmClear] = useState(false); // AlertDialog de "limpar histórico"
   const [printedAt, setPrintedAt] = useState("");
   // Estado compartilhado da ligação RELATÓRIO↔EVENTOS (Onda B, item 8).
@@ -682,11 +683,15 @@ export function ReportPage() {
 
   return (
     <div className={`page report ${present ? "present" : ""}`}>
-      <header className="page-head no-print">
-        <h1 className="page-title">Relatório Operacional</h1>
+      {/* Header padrão da casa (átomo PageHeader, h1 título 14) — substitui .page-head/.page-title */}
+      <PageHeader title="Relatório Operacional" className="no-print">
         <SegmentedControl<Mode>
           value={mode}
-          onChange={setMode}
+          onChange={(m) => {
+            setMode(m);
+            // a aba "fluxo" só existe no modo Atividade — devolve o estado compartilhado.
+            if (tab === "fluxo" && m !== "atividade") setTab("quando");
+          }}
           ariaLabel="Modo do relatório"
           options={[
             { value: "resumo", label: "Resumo" },
@@ -698,7 +703,7 @@ export function ReportPage() {
           ]}
         />
         <span className="privacy">● indicadores · sem imagens</span>
-        <div className="spacer" />
+        <div className="flex-1" />
         <span className="muted text-[11px]">
           {isAlarmes
             ? "alarmes · fila de eventos (metadados)"
@@ -710,7 +715,7 @@ export function ReportPage() {
                   ? "operador · fadiga/risco"
                   : "atividade · ocupação/ociosidade"}
         </span>
-      </header>
+      </PageHeader>
 
       <div className="rep-filters no-print">
         <SegmentedControl<Period>
@@ -915,7 +920,8 @@ export function ReportPage() {
                 </div>
                 <div className="rc-kpis">
                   <div className="rc-k">
-                    <b style={{ color: "var(--ok)" }}>{k.activePct}%</b>
+                    {/* going-gray: verde incondicional removido — cor só condicional a estado */}
+                    <b>{k.activePct}%</b>
                     <span>tempo ativo</span>
                   </div>
                   <div className="rc-k">

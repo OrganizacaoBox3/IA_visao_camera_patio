@@ -8,7 +8,16 @@ import {
   type ReadingEventRow,
 } from "../../report/mock";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, Insight, SHIFTS, type RepTab, type ByShift } from "./chrome";
+import {
+  RepLens,
+  HistoryFooter,
+  Insight,
+  SectionTitle,
+  SHIFTS,
+  REP_TABPANEL_CLS,
+  type RepTab,
+  type ByShift,
+} from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
@@ -73,12 +82,12 @@ export function LeituraPanel({
           label="no-reads"
           valueStyle={{ color: rk.noReads > 0 ? "var(--alert)" : undefined }}
         />
-        <Kpi value={rk.topPonto} label="ponto de maior volume" valueStyle={{ fontSize: 15 }} />
+        <Kpi value={rk.topPonto} label="ponto de maior volume" />
         <Kpi value={`${String(rk.peakHour).padStart(2, "0")}h`} label="horário de pico" />
       </KpiRow>
       <Insight label="💡 Leitura" tips={rtips} />
       <Tabs
-        className="rep-tabs"
+        className="rep-tabs flex-1"
         ariaLabel="Seção"
         value={tab}
         onValueChange={(v) => onTabChange(v as RepTab)}
@@ -89,9 +98,9 @@ export function LeituraPanel({
           { value: "eventos", label: `Leituras (${revt.length})` },
         ]}
       >
-        <TabsContent value="quando" className="rep-tabpanel">
-          <section className="panel">
-            <h3>Quando lê — volume por hora</h3>
+        <TabsContent value="quando" className={REP_TABPANEL_CLS}>
+          <section className="panel flex-1">
+            <SectionTitle>Quando lê — volume por hora</SectionTitle>
             <Heatmap
               rows={rhm.rows.map((row) => ({
                 key: row.ponto,
@@ -109,10 +118,10 @@ export function LeituraPanel({
             />
           </section>
         </TabsContent>
-        <TabsContent value="onde" className="rep-tabpanel">
-          <div className="rep-2col">
+        <TabsContent value="onde" className={REP_TABPANEL_CLS}>
+          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
-              <h3>Por ponto</h3>
+              <SectionTitle>Por ponto</SectionTitle>
               <RankingBars
                 rows={rrank.rows.map((r) => ({
                   key: r.ponto,
@@ -131,7 +140,7 @@ export function LeituraPanel({
               />
             </section>
             <section className="panel">
-              <h3>Contribuição por câmera</h3>
+              <SectionTitle>Contribuição por câmera</SectionTitle>
               <RankingBars
                 rows={byCam.rows.map((r) => ({
                   key: r.camera,
@@ -146,10 +155,10 @@ export function LeituraPanel({
             </section>
           </div>
         </TabsContent>
-        <TabsContent value="tendencia" className="rep-tabpanel">
-          <div className="rep-2col">
+        <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
+          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
-              <h3>Tendência (14 dias)</h3>
+              <SectionTitle>Tendência (14 dias)</SectionTitle>
               <TrendChart
                 bars={revo.bars.map((b) => ({
                   key: b.dayIndex,
@@ -162,7 +171,7 @@ export function LeituraPanel({
               />
             </section>
             <section className="panel">
-              <h3>Por turno</h3>
+              <SectionTitle>Por turno</SectionTitle>
               <RankingBars
                 rows={SHIFTS.map((s) => ({
                   key: s,
@@ -176,7 +185,7 @@ export function LeituraPanel({
             </section>
           </div>
         </TabsContent>
-        <TabsContent value="eventos" className="rep-tabpanel">
+        <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable
             title={`Leituras — códigos no período (${revt.length})`}
             headers={["Data / hora", "Ponto", "Código", "Câmeras", "Turno"]}

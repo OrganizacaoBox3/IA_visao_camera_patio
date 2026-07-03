@@ -209,7 +209,10 @@ test("Tabs (Relatório): setas/clique trocam a aba e só o tabpanel ativo é exi
 
   const tablist = page.getByRole("tablist", { name: "Seção" });
   await expect(tablist).toBeVisible();
-  await expect(tablist.getByRole("tab")).toHaveCount(4);
+  // 5 abas: Quando/Onde/Tendência/Eventos + "Fluxo de pessoas" (o hub do e2e expõe o
+  // kind "flow", então a aba condicional existe — comportamento real do produto).
+  await expect(tablist.getByRole("tab")).toHaveCount(5);
+  await expect(tablist.getByRole("tab", { name: "Fluxo de pessoas" })).toBeVisible();
 
   // Estado inicial: "Quando para" ativa; um único tabpanel no DOM, com o conteúdo certo.
   const tQuando = tablist.getByRole("tab", { name: "Quando para" });

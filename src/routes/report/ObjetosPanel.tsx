@@ -9,7 +9,7 @@ import {
 } from "../../report/mock";
 import { objClass } from "../../objects/catalog";
 import { Tabs, TabsContent, ScrollArea } from "../../ui";
-import { RepLens, HistoryFooter, Insight, type RepTab } from "./chrome";
+import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
@@ -64,12 +64,9 @@ export function ObjetosPanel({
       <KpiRow>
         <Kpi value={ok.avgCount} label="objetos médios em cena" />
         <Kpi value={ok.peak} label="pico simultâneo" />
-        <Kpi value={classLabel(ok.topClasse)} label="objeto predominante" valueStyle={{ fontSize: 17 }} />
-        <Kpi
-          value={`${ok.presenceTopPct}%`}
-          label="presença (predominante)"
-          valueStyle={{ color: "var(--accent)" }}
-        />
+        <Kpi value={classLabel(ok.topClasse)} label="objeto predominante" />
+        {/* going-gray: cor em valor numérico só condicional a estado — sem accent incondicional */}
+        <Kpi value={`${ok.presenceTopPct}%`} label="presença (predominante)" />
         <Kpi
           value={oLoads}
           label="carregamentos"
@@ -78,7 +75,7 @@ export function ObjetosPanel({
       </KpiRow>
       <Insight label="💡 Objetos" tips={otips} />
       <Tabs
-        className="rep-tabs"
+        className="rep-tabs flex-1"
         ariaLabel="Seção"
         value={tab}
         onValueChange={(v) => onTabChange(v as RepTab)}
@@ -89,9 +86,9 @@ export function ObjetosPanel({
           { value: "eventos", label: `Eventos (${oevt.length})` },
         ]}
       >
-        <TabsContent value="quando" className="rep-tabpanel">
-          <section className="panel">
-            <h3>Quando — contagem média por hora</h3>
+        <TabsContent value="quando" className={REP_TABPANEL_CLS}>
+          <section className="panel flex-1">
+            <SectionTitle>Quando — contagem média por hora</SectionTitle>
             <Heatmap
               rows={ohm.rows.map((row) => ({
                 key: row.classe,
@@ -109,10 +106,10 @@ export function ObjetosPanel({
             />
           </section>
         </TabsContent>
-        <TabsContent value="onde" className="rep-tabpanel">
-          <div className="rep-2col">
+        <TabsContent value="onde" className={REP_TABPANEL_CLS}>
+          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
-              <h3>Presença por Setor × Classe (% do tempo)</h3>
+              <SectionTitle>Presença por Setor × Classe (% do tempo)</SectionTitle>
               <ScrollArea className="rep-matrixscroll" orientation="both">
                 <table className="obj-matrix">
                   <thead>
@@ -151,7 +148,7 @@ export function ObjetosPanel({
               </ScrollArea>
             </section>
             <section className="panel">
-              <h3>Por setor (média em cena)</h3>
+              <SectionTitle>Por setor (média em cena)</SectionTitle>
               <RankingBars
                 rows={orank.rows.map((r) => ({
                   key: r.setor,
@@ -163,7 +160,7 @@ export function ObjetosPanel({
                 read
                 emptyNote="Sem objetos no período."
               />
-              <h3 style={{ marginTop: 12 }}>Por classe</h3>
+              <SectionTitle className="mt-3">Por classe</SectionTitle>
               <RankingBars
                 rows={obyClass.rows.map((r) => ({
                   key: r.classe,
@@ -177,9 +174,9 @@ export function ObjetosPanel({
             </section>
           </div>
         </TabsContent>
-        <TabsContent value="tendencia" className="rep-tabpanel">
-          <section className="panel">
-            <h3>Tendência (14 dias) — objetos médios/dia</h3>
+        <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
+          <section className="panel flex-1">
+            <SectionTitle>Tendência (14 dias) — objetos médios/dia</SectionTitle>
             <TrendChart
               bars={oevo.bars.map((b) => ({
                 key: b.dayIndex,
@@ -192,7 +189,7 @@ export function ObjetosPanel({
             />
           </section>
         </TabsContent>
-        <TabsContent value="eventos" className="rep-tabpanel">
+        <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable
             title={`Eventos — presença e carregamentos (${oevt.length})`}
             headers={["Data / hora", "Tipo", "Setor", "Classe", "Turno"]}
