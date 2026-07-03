@@ -13,12 +13,22 @@ import { OBJECT_CATALOG } from "../objects/catalog";
 import { type Zone, type ZoneMode } from "../zones";
 import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
 
+// Labels são contrato do e2e (option name "Leitura" etc.) — a explicação vai como
+// hint dinâmico ABAIXO do select, não dentro das options.
 const MODO_OPTS = [
   { value: "atividade", label: "Atividade" },
   { value: "leitura", label: "Leitura" },
   { value: "objetos", label: "Objetos" },
   { value: "fadiga", label: "Fadiga" },
 ];
+
+// 1 linha por modo, visível ao selecionar — o usuário não escolhe mais às cegas.
+const MODO_DESC: Record<ZoneMode, string> = {
+  atividade: "Movimento/ociosidade + contagem de pessoas na área (padrão).",
+  leitura: "Lê código de barras/QR dentro da zona — desenhe-a sobre a esteira/etiqueta.",
+  objetos: "Conta as classes escolhidas (caixa, palete…) — modelo pesado, o 1º uso demora.",
+  fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use ⚙ Câmeras → Operador (fadiga).",
+};
 
 type Props = {
   zone: Zone | null; // cfgZone (null → diálogo fechado)
@@ -65,10 +75,7 @@ export function ConfigZonaDialog({
                   onChange={(e) => patchZone(z.id, { label: e.target.value })}
                 />
               </Field>
-              <Field
-                label="Modo"
-                hint="Modo = preset completo: troca camadas, confiança e métricas em destaque. Geometria/zonas preservadas."
-              >
+              <Field label="Modo" hint={MODO_DESC[z.modo]}>
                 <Select
                   value={z.modo}
                   onChange={(v) => changeZoneMode(z, v as ZoneMode)}

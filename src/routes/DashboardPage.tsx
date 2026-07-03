@@ -861,8 +861,10 @@ export function DashboardPage() {
           title="Configuração de câmeras"
           description={
             <>
-              <b>Câmera de área</b>: você desenha zonas e escolhe o modo de cada uma (atividade /
-              leitura / objetos). <b>Operador</b>: monitor de fadiga (câmera dedicada ao rosto).
+              <b>Câmera de área</b> (padrão): vista geral do setor — abra a câmera e desenhe zonas,
+              cada uma com seu modo (Atividade / Leitura / Objetos / Fadiga).{" "}
+              <b>Operador (fadiga)</b>: câmera dedicada apontada ao rosto de 1 operador — só
+              monitora fadiga, sem zonas.
             </>
           }
         >

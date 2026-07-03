@@ -876,22 +876,30 @@ export function ReportPage() {
                 ainda.
               </b>
             </p>
+            {/* Descoberta dos modos (jul/2026): o vazio agora dá o CAMINHO exato (Central →
+                zona → ⚙ Configurar zona → Modo), no tom do painel de Fluxo. Antes dizia
+                "marque a câmera como Leitura/Objetos" — esse ajuste não existe por câmera. */}
             <p>
               {isReading ? (
                 <>
-                  Marque câmeras como <b>Leitura</b> na Central e aponte para códigos.
+                  Na Central, abra a câmera → desenhe uma zona sobre a etiqueta/esteira (✎ Zona) →
+                  ⚙ Configurar zona → <b>Modo: Leitura</b>.
                 </>
               ) : isObjects ? (
                 <>
-                  Marque câmeras como <b>Objetos</b> na Central.
+                  Na Central, abra a câmera → desenhe uma zona sobre a área (✎ Zona) → ⚙ Configurar
+                  zona → <b>Modo: Objetos</b> e escolha as classes.
                 </>
               ) : isFadiga ? (
                 <>
-                  Marque uma câmera como <b>Operador (fadiga)</b> na Central.
+                  Na Central, <b>⚙ Câmeras</b> → selecione <b>Operador (fadiga)</b> na câmera do
+                  posto — ou desenhe uma zona com <b>Modo: Fadiga</b> numa câmera de área.
                 </>
               ) : (
                 <>
-                  Deixe a <b>Central</b> rodando para acumular indicadores.
+                  Na Central, abra a câmera → desenhe uma zona sobre a área de trabalho (✎ Zona) —
+                  o modo <b>Atividade</b> é o padrão. Deixe a Central rodando para acumular
+                  indicadores.
                 </>
               )}
             </p>

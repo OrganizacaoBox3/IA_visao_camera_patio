@@ -1682,10 +1682,18 @@ export function CameraWorkspace({
             <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
               <TabsContent value="zonas">
                 {zonesLoading && <p className="empty-note">Carregando zonas…</p>}
+                {/* Descoberta dos modos (jul/2026): o caminho zona→⚙→Modo era invisível — hint
+                    acionável no topo da lista; texto apenas, sem tocar em lógica/rAF. */}
+                {!zonesLoading && zones.length > 0 && canConfigure && (
+                  <p className="empty-note">
+                    Cada zona roda um modo de IA na sua área (Atividade, Leitura, Objetos ou
+                    Fadiga). Para trocar: ⚙ na zona → <b>Modo</b>.
+                  </p>
+                )}
                 {!zonesLoading && zones.length === 0 && (
                   <p className="empty-note">
                     {canConfigure
-                      ? "Use “✎ Zona” para desenhar uma área e escolher o modo."
+                      ? "Use “✎ Zona” para desenhar uma área sobre o vídeo; depois ⚙ na zona → Modo (Atividade, Leitura, Objetos ou Fadiga)."
                       : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}
                   </p>
                 )}
