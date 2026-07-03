@@ -84,7 +84,10 @@ function hasStoredZones(cameraId: string): boolean {
 }
 
 // Carrega as zonas da câmera do LOCALSTORAGE (fallback/legado), migrando o formato antigo
-// (modo-de-câmera + zonas só de atividade) e semeando as zonas padrão quando não há nada salvo.
+// (modo-de-câmera + zonas só de atividade). Câmera sem nada salvo → LISTA VAZIA: a câmera nova
+// abre LIMPA e o usuário desenha a própria zona ("✎ Zona"). As antigas 4 zonas-semente
+// (Expedição/Carga/Estoque/Espera) foram removidas por decisão de produto — geravam estranheza
+// para novos usuários e capturavam contagens no lugar da zona desenhada (F6 do diagnóstico).
 export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
   let raw: unknown;
   try {
@@ -137,11 +140,8 @@ export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
       ),
     ];
   }
-  // atividade (default): zonas antigas, ou as zonas-semente padrão
-  if (stored.length) return stored.map((z) => withDefaults({ ...z, modo: "atividade" }, cameraId));
-  return APP_CONFIG.defaultZones.map((z) =>
-    withDefaults({ label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, modo: "atividade" }, cameraId),
-  );
+  // atividade (default): zonas antigas migradas, ou NADA (sem semente automática).
+  return stored.map((z) => withDefaults({ ...z, modo: "atividade" }, cameraId));
 }
 
 // Carga da câmera com o BACKEND como fonte de verdade + FALLBACK gracioso (Onda 2). ASSÍNCRONA
@@ -149,9 +149,8 @@ export function loadZones(cameraId: string, cameraLabel: string): Zone[] {
 // • Backend com zonas → usa (normalizadas) e refresca o cache local.
 // • Backend VAZIO + zonas LEGADAS no localStorage → migração única best-effort (se `canConfigure`,
 //   pois o PUT exige perfil de configuração); sem permissão, usa o legado só nesta sessão.
-// • Backend VAZIO + sem legado → mantém a SEMENTE de zonas padrão (comportamento de hoje — o e2e
-//   depende disso; o hub do e2e roda sem Postgres e devolve []). A semente NÃO é persistida
-//   automaticamente (preserva o comportamento: só grava ao editar).
+// • Backend VAZIO + sem legado → LISTA VAZIA (a câmera abre limpa; o usuário desenha a própria
+//   zona — nada é criado nem persistido automaticamente).
 // • Backend FALHOU (erro/offline) → degrada para o localStorage (loadZones), sem quebrar a câmera.
 export async function loadZonesForCamera(
   cameraId: string,
@@ -170,7 +169,7 @@ export async function loadZonesForCamera(
     cacheZones(cameraId, norm); // mantém o localStorage como cache/fallback
     return norm;
   }
-  // Backend sem zonas → resolve pelo localStorage: migração de legado OU semente padrão.
+  // Backend sem zonas → resolve pelo localStorage: migração de legado OU lista vazia.
   const local = loadZones(cameraId, cameraLabel);
   if (hasStoredZones(cameraId) && canConfigure) {
     try {
@@ -183,7 +182,7 @@ export async function loadZonesForCamera(
       return local;
     }
   }
-  return local; // semente padrão (ou legado sem permissão p/ migrar)
+  return local; // vazio (câmera nova limpa) ou legado sem permissão p/ migrar
 }
 
 // Write-through: grava no cache local (imediato/offline-safe) e persiste no BACKEND. Rejeita em

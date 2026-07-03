@@ -230,16 +230,9 @@ export const APP_CONFIG = {
     jpegQuality: 0.85, // qualidade do JPEG (era 0.75) — menos artefato de re-encode da webcam já comprimida
   },
 
-  // Zonas iniciais (frações do frame: x,y,w,h em 0..1). Editáveis na tela.
-  defaultZones: [
-    { label: "Expedição", x: 0.06, y: 0.12, w: 0.4, h: 0.4 },
-    { label: "Carga", x: 0.54, y: 0.12, w: 0.4, h: 0.4 },
-    { label: "Estoque", x: 0.06, y: 0.58, w: 0.4, h: 0.34 },
-    { label: "Espera", x: 0.54, y: 0.58, w: 0.4, h: 0.34 },
-  ],
+  // (Zonas-semente automáticas removidas em jul/2026 — câmera nova abre LIMPA;
+  // o usuário desenha as próprias zonas. Ver src/zones.ts.)
 } as const;
-
-export type ZoneSeed = (typeof APP_CONFIG.defaultZones)[number];
 
 // Perfil "Longo alcance"/Panorâmica (P0) — tipo exportado p/ as frentes B/C que ligam o perfil
 // por câmera consumirem os parâmetros com tipos corretos. É OPT-IN: default segue `detection.*`.

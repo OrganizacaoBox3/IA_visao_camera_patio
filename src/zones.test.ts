@@ -1,7 +1,7 @@
 // Testes das lógicas PURAS de zona: máscara em grade (geometria + (de)serialização) em zoneMask.ts
 // e os utilitários puros de zones.ts. loadZones/saveZones dependem de localStorage (browser) →
 // PULADOS aqui (cobertos pelo e2e); ver observação no relatório.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createMask,
   maskGet,
@@ -17,7 +17,7 @@ import {
   decodeMask,
   maskFromRect,
 } from "./zoneMask";
-import { newZoneId, ZONE_MODE_COLOR, ZONE_MODE_LABEL } from "./zones";
+import { newZoneId, loadZones, ZONE_MODE_COLOR, ZONE_MODE_LABEL } from "./zones";
 
 describe("zoneMask — geometria de máscara", () => {
   it("get/set respeitam limites e ignoram fora da grade", () => {
@@ -101,6 +101,56 @@ describe("zoneMask — (de)serialização compacta (round-trip)", () => {
     expect(decodeMask("")).toBeNull();
     expect(decodeMask("sem-separador")).toBeNull();
     expect(decodeMask("0x0:abc")).toBeNull();
+  });
+});
+
+// MUDANÇA DE PRODUTO (2026-07): câmera nova abre LIMPA — sem as 4 zonas-semente
+// (Expedição/Carga/Estoque/Espera). loadZones roda em node com um stub de localStorage
+// (Map), suficiente porque a função só usa getItem/setItem.
+describe("zones — loadZones sem seeding automático", () => {
+  const store = new Map<string, string>();
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      get length() {
+        return store.size;
+      },
+    } as Storage);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("câmera sem nada salvo → lista VAZIA (nenhuma zona-semente é criada)", () => {
+    expect(loadZones("cam-nova", "Câmera Nova")).toEqual([]);
+  });
+
+  it("câmera existente com zonas salvas (formato novo) → intocadas, só normalizadas", () => {
+    const saved = [
+      { id: "cam-1-za", label: "Doca 3", x: 0.1, y: 0.2, w: 0.3, h: 0.4, modo: "atividade" },
+    ];
+    store.set("vp-zones-cam-1", JSON.stringify(saved));
+    const zs = loadZones("cam-1", "Cam 1");
+    expect(zs).toHaveLength(1);
+    expect(zs[0]).toMatchObject({ id: "cam-1-za", label: "Doca 3", modo: "atividade", x: 0.1 });
+  });
+
+  it("zonas LEGADAS (sem `modo`) → migradas p/ atividade, sem acrescentar semente", () => {
+    const legacy = [{ id: "cam-2-z1", label: "Antiga", x: 0, y: 0, w: 0.5, h: 0.5 }];
+    store.set("vp-zones-cam-2", JSON.stringify(legacy));
+    const zs = loadZones("cam-2", "Cam 2");
+    expect(zs).toHaveLength(1); // NÃO vira 1 legada + 4 sementes
+    expect(zs[0]).toMatchObject({ id: "cam-2-z1", label: "Antiga", modo: "atividade" });
+  });
+
+  it("migração de câmera legada em modo-de-câmera `leitura` segue criando a zona de leitura", () => {
+    store.set("vp-camcfg-cam-3", JSON.stringify({ modo: "leitura", pontoLeitura: "Doca 1" }));
+    const zs = loadZones("cam-3", "Cam Leitura");
+    expect(zs).toHaveLength(1);
+    expect(zs[0]).toMatchObject({ modo: "leitura", ponto: "Doca 1", label: "Cam Leitura" });
   });
 });
 

@@ -17,6 +17,33 @@ async function connectCamera(context: BrowserContext, dashboard: Page) {
   return cam;
 }
 
+// MUDANÇA DE PRODUTO (2026-07): a câmera nova abre LIMPA — sem zonas-semente. Os testes de
+// config de zona agora DESENHAM a própria zona primeiro: "✎ Zona" + drag real no .cam-stage
+// (mesmo padrão dos specs de diagnóstico). Espera o estado vazio da aba Zonas (garante que a
+// carga assíncrona terminou E prova o novo comportamento) e retry no drag (o onUp descarta o
+// traço se o 1º frame ainda não chegou ao palco).
+async function drawZone(page: Page) {
+  await expect(page.getByText(/Use “✎ Zona” para desenhar/)).toBeVisible();
+  await page.getByRole("button", { name: "✎ Zona" }).click();
+  const stage = page.locator(".cam-stage");
+  const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const box = await stage.boundingBox();
+    if (!box) throw new Error(".cam-stage sem boundingBox");
+    await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.35);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65, { steps: 8 });
+    await page.mouse.up();
+    try {
+      await expect(cfgBtn).toBeVisible({ timeout: 2_000 });
+      return;
+    } catch {
+      /* frame ainda não disponível → tenta de novo */
+    }
+  }
+  await expect(cfgBtn).toBeVisible(); // falha com mensagem clara se nenhum drag pegou
+}
+
 test("login + navegação das telas principais", async ({ page }) => {
   await login(page);
   await page.getByRole("link", { name: /Relatório/i }).click();
@@ -34,8 +61,9 @@ test("regressão: Select abre e seleciona DENTRO do modal de config da zona", as
   await login(page);
   await connectCamera(context, page);
 
-  // abre a câmera (workspace cheio com as zonas padrão)
+  // abre a câmera (workspace abre LIMPO — sem zonas-semente) e desenha a zona do teste
   await page.locator(".tile[title='Abrir câmera']").first().click();
+  await drawZone(page);
 
   // ⚙ Configurar zona → Dialog
   await page.getByRole("button", { name: "Configurar zona" }).first().click();
@@ -109,6 +137,7 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   await login(page);
   await connectCamera(context, page);
   await page.locator(".tile[title='Abrir câmera']").first().click();
+  await drawZone(page); // câmera nova abre sem zonas — desenha antes de configurar
   await page.getByRole("button", { name: "Configurar zona" }).first().click();
   const dlg = page.getByRole("dialog");
   await expect(dlg).toBeVisible();
@@ -141,7 +170,8 @@ test("Câmeras: botão único leva a /cameras e a validação de url bloqueia ur
   await expect(add).toBeVisible();
   await add.click();
   await expect(page).toHaveURL(/\/cameras/);
-  await expect(page.getByRole("heading", { name: "Câmeras" })).toBeVisible();
+  // exact: o h2 "Câmeras IP / RTSP" da mesma tela também casaria por substring (strict mode).
+  await expect(page.getByRole("heading", { name: "Câmeras", exact: true })).toBeVisible();
 
   // Seções da tela: câmeras IP (superadmin) + câmera local (nó/webcam).
   await expect(page.getByText("Nenhuma câmera IP cadastrada ainda.")).toBeVisible();
