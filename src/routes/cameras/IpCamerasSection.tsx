@@ -226,7 +226,10 @@ export function IpCamerasSection() {
             <div key={`ipc-${c.id}`} className="cam-row">
               <div className="cam-row__name">
                 <b>{c.label || "(sem nome)"}</b>
-                {/* url mascarada: mostra host, oculta credenciais (LGPD) */}
+                {/* url mascarada: mostra host, oculta credenciais (LGPD). title= aqui anota um
+                    DADO exibido (span não-interativo), não é affordance de controle — fica no
+                    title= nativo (mesma exceção do heatmap). Os controles interativos da linha
+                    (Editar/Remover, abaixo) é que usam <Tooltip>. */}
                 <span className="muted" title="URL com credenciais ocultas">
                   {maskCameraUrl(c.url)}
                 </span>

@@ -68,6 +68,10 @@ export function Heatmap({
           </span>
         ))}
       </div>
+      {/* title= aqui é DADO (rótulo completo do setor + valor hora×linha de cada célula),
+          não affordance de controle. Exceção documentada (plano-padronizacao-visual §Radix):
+          célula de dado fica no title= nativo — virar <Tooltip> em ~24 células/linha seria
+          overengineering + custo de perf sem ganho de acessibilidade. Não converter. */}
       {rows.map((row) => (
         <div className="hm-row" key={row.key}>
           <span className="hm-area" title={row.title}>
@@ -75,7 +79,7 @@ export function Heatmap({
           </span>
           {row.hours.map((v, h) => {
             const background = cellColor(row, v, h);
-            const title = cellTitle(row, v, h);
+            const title = cellTitle(row, v, h); // title em dado, não affordance (ver nota acima)
             if (onCellClick) {
               const sel = isCellSelected ? isCellSelected(row, h) : false;
               return (

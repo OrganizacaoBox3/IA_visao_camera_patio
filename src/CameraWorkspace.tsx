@@ -1676,6 +1676,9 @@ export function CameraWorkspace({
   // ── TILE ──
   if (mode === "tile") {
     return (
+      // title (não Tooltip) é intencional: a casca do tile é localizada pelo e2e via
+      // `.tile[title='Abrir câmera']` (contrato de seletor, app.spec.ts). Trocar por <Tooltip>
+      // remove o atributo e quebra o teste. Mantido como affordance nativa do card.
       <div className={`tile ${alertCount ? "alerting" : ""}`} onClick={onOpen} title="Abrir câmera">
         <div className="viewport tile-vp" ref={viewportRef}>
           <canvas ref={canvasRef} />
@@ -1714,19 +1717,23 @@ export function CameraWorkspace({
             <>
               <span className="muted">{zones.length} zona(s)</span>
               {activePresetDef && (
-                <span
-                  title={`Preset ativo: ${activePresetDef.label} — ${activePresetDef.description}${presetDirty ? " (ajustado manualmente nesta sessão)" : ""}`}
+                <Tooltip
+                  content={`Preset ativo: ${activePresetDef.label} — ${activePresetDef.description}${presetDirty ? " (ajustado manualmente nesta sessão)" : ""}`}
                 >
-                  <Badge tone={MODE_TONE[activePreset!]}>
-                    {activePresetDef.label}
-                    {presetDirty ? " ·" : ""}
-                  </Badge>
-                </span>
+                  <span>
+                    <Badge tone={MODE_TONE[activePreset!]}>
+                      {activePresetDef.label}
+                      {presetDirty ? " ·" : ""}
+                    </Badge>
+                  </span>
+                </Tooltip>
               )}
               {!canConfigure && (
-                <span title="Edição de configuração requer perfil de engenharia">
-                  <Badge tone="info">🔒 Somente leitura</Badge>
-                </span>
+                <Tooltip content="Edição de configuração requer perfil de engenharia">
+                  <span>
+                    <Badge tone="info">🔒 Somente leitura</Badge>
+                  </span>
+                </Tooltip>
               )}
             </>
           )}
@@ -1868,20 +1875,16 @@ export function CameraWorkspace({
                   {cineSize ? scrubIndex + 1 : 0}/{cineSize}
                 </span>
                 <span className="cine-spacer" />
-                <Button
-                  onClick={downloadSnapshot}
-                  disabled={clipState === "working"}
-                  title="Baixar este quadro como PNG (download local — nunca enviado ao servidor)"
-                >
-                  ⤓ Snapshot
-                </Button>
-                <Button
-                  onClick={exportClip}
-                  disabled={clipState === "working"}
-                  title="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar."
-                >
-                  {clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}
-                </Button>
+                <Tooltip content="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">
+                  <Button onClick={downloadSnapshot} disabled={clipState === "working"}>
+                    ⤓ Snapshot
+                  </Button>
+                </Tooltip>
+                <Tooltip content="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar.">
+                  <Button onClick={exportClip} disabled={clipState === "working"}>
+                    {clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}
+                  </Button>
+                </Tooltip>
                 <Button active onClick={exitReview}>
                   ▶ Ao vivo
                 </Button>
@@ -1953,6 +1956,8 @@ export function CameraWorkspace({
                     <div key={z.id} className={`zone ${st}`}>
                       <div className="row">
                         <span className="zone-head">
+                          {/* title em dado, não affordance: .zone-name trunca (ellipsis) — o title
+                              revela o VALOR completo do rótulo, não é dica de controle. */}
                           <b className="zone-name" title={z.label}>
                             {z.label}
                           </b>
@@ -2126,6 +2131,8 @@ export function CameraWorkspace({
                               const o = objClass(k);
                               const n = r?.modo === "objetos" ? (r.counts[k] ?? 0) : 0;
                               return (
+                                // title em dado, não affordance: o chip mostra emoji + contagem;
+                                // o title revela o VALOR (rótulo da classe atrás do emoji).
                                 <span
                                   key={k}
                                   className={`count-chip ${n > 0 ? "on" : ""}`}
@@ -2213,26 +2220,27 @@ export function CameraWorkspace({
 
               <TabsContent value="linhas">
                 <div className="row" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-2)" }}>
-                  <Button
-                    size="sm"
-                    active={tripwireMode}
-                    disabled={!canConfigure}
-                    onClick={toggleTripwireMode}
-                    title={
+                  <Tooltip
+                    content={
                       canConfigure
                         ? "Clique em A e arraste até B sobre o vídeo"
                         : "Edição requer perfil de engenharia"
                     }
                   >
-                    {tripwireMode ? "Traçando…" : "⇄ Nova linha"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={resetCounts}
-                    title="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece."
-                  >
-                    ↺ Zerar contagem
-                  </Button>
+                    <Button
+                      size="sm"
+                      active={tripwireMode}
+                      disabled={!canConfigure}
+                      onClick={toggleTripwireMode}
+                    >
+                      {tripwireMode ? "Traçando…" : "⇄ Nova linha"}
+                    </Button>
+                  </Tooltip>
+                  <Tooltip content="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece.">
+                    <Button size="sm" onClick={resetCounts}>
+                      ↺ Zerar contagem
+                    </Button>
+                  </Tooltip>
                 </div>
                 {tripwires.length === 0 && (
                   <p className="empty-note">
@@ -2300,18 +2308,22 @@ export function CameraWorkspace({
                         </span>
                       </div>
                       <div className="kpis ws-kpis">
-                        <div className="kpi" title={tipIn}>
-                          <div className="v" style={{ color: "var(--state-info)" }}>
-                            {tIn}
+                        <Tooltip content={tipIn}>
+                          <div className="kpi">
+                            <div className="v" style={{ color: "var(--state-info)" }}>
+                              {tIn}
+                            </div>
+                            <div className="l">entradas hoje</div>
                           </div>
-                          <div className="l">entradas hoje</div>
-                        </div>
-                        <div className="kpi" title={tipOut}>
-                          <div className="v" style={{ color: "var(--state-neutral)" }}>
-                            {tOut}
+                        </Tooltip>
+                        <Tooltip content={tipOut}>
+                          <div className="kpi">
+                            <div className="v" style={{ color: "var(--state-neutral)" }}>
+                              {tOut}
+                            </div>
+                            <div className="l">saídas hoje</div>
                           </div>
-                          <div className="l">saídas hoje</div>
-                        </div>
+                        </Tooltip>
                       </div>
                     </div>
                   );
@@ -2424,13 +2436,11 @@ export function CameraWorkspace({
                     </div>
                     {presetDirty && (
                       <div style={{ marginTop: "var(--sp-2)" }}>
-                        <Button
-                          size="sm"
-                          onClick={() => applyPreset(activePreset!)}
-                          title="Restaura camadas e confiança do preset deste modo."
-                        >
-                          ↺ Reaplicar preset
-                        </Button>
+                        <Tooltip content="Restaura camadas e confiança do preset deste modo.">
+                          <Button size="sm" onClick={() => applyPreset(activePreset!)}>
+                            ↺ Reaplicar preset
+                          </Button>
+                        </Tooltip>
                       </div>
                     )}
                   </div>
@@ -2533,25 +2543,25 @@ export function CameraWorkspace({
             local nem sobe p/ pessoas (tracks vêm do servidor) — o badge de detecção abaixo só
             aparece se algum consumidor local (fadiga/celular, engine local) iniciou o worker. */}
         {analysisEngine === "hub" && (
-          <span className="kb muted" title="indicadores gravados pelo servidor — D-FINE">
-            análise: hub
-          </span>
+          <Tooltip content="indicadores gravados pelo servidor — D-FINE">
+            <span className="kb muted">análise: hub</span>
+          </Tooltip>
         )}
         {/* Backend de detecção (2.4) — going-gray: neutro em GPU; saturado (warn) SÓ em CPU,
             que é o modo degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
         {detBackend != null &&
           (detBackend === "cpu" ? (
-            <span
-              className="kb"
-              style={{ color: "var(--state-warn-fg, #facc15)" }}
-              title="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)"
-            >
-              detecção: CPU ⚠
-            </span>
+            <Tooltip content="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)">
+              <span className="kb" style={{ color: "var(--state-warn-fg, #facc15)" }}>
+                detecção: CPU ⚠
+              </span>
+            </Tooltip>
           ) : (
-            <span className="kb muted" title={`Backend de detecção (tfjs): ${detBackend}`}>
-              detecção: {detBackend === "webgl" || detBackend === "webgpu" ? "GPU" : detBackend}
-            </span>
+            <Tooltip content={`Backend de detecção (tfjs): ${detBackend}`}>
+              <span className="kb muted">
+                detecção: {detBackend === "webgl" || detBackend === "webgpu" ? "GPU" : detBackend}
+              </span>
+            </Tooltip>
           ))}
         {paused && <span className="kb muted">⏸ inspecionando</span>}
       </div>
