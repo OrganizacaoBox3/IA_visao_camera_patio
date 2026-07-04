@@ -3,6 +3,7 @@
 // A view cuida da apresentação (timeline, toast, beep, gravação). SRP + DRY.
 import { APP_CONFIG } from "../config";
 import { fmtDuration } from "../format";
+import { pointInZone } from "../zones";
 import type { Detection } from "../vision/model";
 import type { ZoneSample } from "../report/store";
 import type { Severity, Disposable } from "./types";
@@ -64,6 +65,39 @@ export function activityForLabel(label: string): string {
 // Sensibilidade 1..10 → fator nos limiares de movimento (5 ≈ 1.0; maior = detecta movimento mais sutil).
 export function sensitivityFactor(s: number): number {
   return Math.pow(2, (5 - (s ?? 5)) / 4);
+}
+
+// Zona de EXCLUSÃO no filtro de origem (só x,y,w,h + máscara opcional via `contains`).
+export type ExclusionZone = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  contains?: (nx: number, ny: number) => boolean;
+};
+
+// Filtro de EXCLUSÃO na ORIGEM (calibração — analises/acuracia-modelos.md Medida A). Remove as
+// detecções de PESSOA cujo PÉ (bottom-center do bbox, em PIXELS → normalizado por frameW/H) cai
+// numa zona modo "exclusao" (mask-aware via z.contains). Aplicado UMA vez no CameraWorkspace ANTES
+// do tracker E do cálculo de ocupação, para que presença/counter/overlay E o `occupied`
+// (OCIOSA×VAZIA) vejam a MESMA lista. Sem isso, o filtro só rodava no tracker: um FP mascarado
+// sumia dos tracks mas ctx.dets levava a caixa crua e uma zona de atividade sobreposta ainda o
+// marcava como "ocupada". Exclusão é SÓ p/ pessoa — veículos (occupancyClasses) seguem contando.
+// Espelha inExclusionZone do motor (server/analysis/zones.js), que já filtra a lista de persons na
+// origem do engine. Reusa pointInZone (retângulo + máscara), o mesmo helper puro do front.
+export function filterExcludedPersons(
+  dets: Detection[],
+  excl: readonly ExclusionZone[],
+  frameW: number,
+  frameH: number,
+): Detection[] {
+  if (!excl.length || !dets.length) return dets;
+  return dets.filter((d) => {
+    if (d.class !== "person") return true;
+    const fx = (d.bbox[0] + d.bbox[2] / 2) / frameW;
+    const fy = (d.bbox[1] + d.bbox[3]) / frameH;
+    return !excl.some((z) => pointInZone(z, fx, fy, z.contains));
+  });
 }
 
 // Contexto do frame — calculado UMA vez por frame pela view e compartilhado entre as zonas (DRY/perf).

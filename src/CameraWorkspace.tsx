@@ -5,7 +5,12 @@ import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
-import { AtividadeProcessor, sensitivityFactor, type AtividadeCtx } from "./processors/atividade";
+import {
+  AtividadeProcessor,
+  sensitivityFactor,
+  filterExcludedPersons,
+  type AtividadeCtx,
+} from "./processors/atividade";
 import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
 import { FadigaProcessor } from "./processors/fadiga";
@@ -34,7 +39,6 @@ import {
   newZoneId,
   DEFAULT_GRID,
   ZONE_MODE_LABEL,
-  pointInZone,
   type Zone,
   type ZoneMode,
 } from "./zones";
@@ -744,14 +748,7 @@ export function CameraWorkspace({
   // (minScore..limiar — as detecções 0.15-0.4 que antes eram jogadas fora) só SUSTENTA tracks
   // existentes. Predição linear no gate mantém o id vivo em rodadas lentas (LR full).
   // O contrato downstream é o MESMO: tracks alimentam presença/zona/counter/heatmap.
-  function updateTracks(
-    dets: Detection[],
-    ativ: Zone[],
-    excl: Zone[],
-    vidW: number,
-    vidH: number,
-    now: number,
-  ) {
+  function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
     const T = APP_CONFIG.people.track;
     const tracker =
       trackerRef.current ??
@@ -765,21 +762,12 @@ export function CameraWorkspace({
     const personScoreThr = longRangeRef.current
       ? APP_CONFIG.detection.longRange.peopleScoreThreshold
       : APP_CONFIG.people.scoreThreshold;
+    // `dets` JÁ vem sem as pessoas em zona de exclusão (filtradas 1× na origem — ver o filtro
+    // no rAF). Aqui só resta o filtro de CLASSE (o score é do tracker). A supressão de exclusão
+    // não é reaplicada por track para não divergir do `occupied`: tracker E ocupação partem da
+    // MESMA lista filtrada.
     const persons = dets
-      .filter((d) => d.class === "person") // filtro de CLASSE apenas; o score é do tracker
-      // ── ZONA DE EXCLUSÃO (CALIBRAÇÃO) ──────────────────────────────────────────
-      // Pessoa cujo PÉ (bottom-center do bbox, normalizado) cai numa zona modo "exclusao" é
-      // DESCARTADA antes do tracker → não vira track, logo some de presença/counter/overlay
-      // (todos derivam dos tracks). Mask-aware via containsFn (retângulo OU máscara pintada).
-      // Máscara p/ fontes fixas de falso positivo (grade, placa, janela de van, TV). Mesma
-      // semântica que o motor do hub aplica (frente A); no modo hub os tracks já vêm filtrados,
-      // então este filtro só atua no pipeline LOCAL (updateTracks só roda com engine local).
-      .filter((d) => {
-        if (!excl.length) return true;
-        const fx = (d.bbox[0] + d.bbox[2] / 2) / vidW;
-        const fy = (d.bbox[1] + d.bbox[3]) / vidH;
-        return !excl.some((z) => pointInZone(z, fx, fy, containsFn(z)));
-      })
+      .filter((d) => d.class === "person")
       .map((d) => ({
         score: d.score,
         bbox: [d.bbox[0] / vidW, d.bbox[1] / vidH, d.bbox[2] / vidW, d.bbox[3] / vidH] as [
@@ -1027,14 +1015,27 @@ export function CameraWorkspace({
         hubTracksTsRef.current = 0;
         hubFirstSeenRef.current.clear();
       }
-      const dets = detsRef.current;
+      // ── ZONA DE EXCLUSÃO (CALIBRAÇÃO) — filtro ÚNICO na ORIGEM ─────────────────
+      // Remove a detecção de PESSOA cujo PÉ (bottom-center) cai numa zona modo "exclusao"
+      // (mask-aware) AQUI, 1×, para que TUDO downstream veja a MESMA lista: o tracker
+      // (presença/counter/overlay) E o `occupied` do AtividadeProcessor (OCIOSA×VAZIA, que lê
+      // ctx.dets). Antes o filtro só rodava no tracker — um FP mascarado sumia dos tracks mas
+      // ctx.dets levava a caixa crua e uma zona de atividade sobreposta ainda marcava "ocupada".
+      // Exclusão é só p/ pessoa (veículos de occupancyClasses seguem contando). No modo hub os
+      // dets já vêm filtrados pelo motor → aqui é no-op idempotente. Mesma semântica do engine.
+      const dets = filterExcludedPersons(
+        detsRef.current,
+        excl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) })),
+        f.w,
+        f.h,
+      );
       // (Onda 2) O ByteTracker roda SÓ em rodada NOVA de detecção — não a cada frame de vídeo
       // com o mesmo detsRef stale (que zeraria a velocidade estimada e mataria a predição).
       // Entre rodadas, tracksRef mantém as últimas posições (draw/presença seguem fluidos).
       const freshDets = detsRevRef.current !== consumedDetsRevRef.current;
       if (needPersons && freshDets) {
         consumedDetsRevRef.current = detsRevRef.current;
-        updateTracks(dets, ativ, excl, f.w, f.h, now);
+        updateTracks(dets, ativ, f.w, f.h, now);
       }
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
