@@ -164,6 +164,8 @@ export type HubTrack = {
   cx: number;
   cy: number;
   zone: string | null;
+  /** score real da detecção 0..1 (Fase 4). Ausente = hub antigo → trata como 1 (retrocompat). */
+  score?: number;
 };
 export type HubZone = { id: string; label: string; people: number; occupied: boolean };
 export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
@@ -980,8 +982,9 @@ export function CameraWorkspace({
         }
       }
       // ── F2/F3 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (engine hub, grade e full) ──
-      // Converte HubTrack → Track (shape do drawTracks/presença/heatmap): score=1 (o motor já
-      // filtrou por limiar — nunca atenuado pelo slider local), foot derivado do bbox
+      // Converte HubTrack → Track (shape do drawTracks/presença/heatmap): score REAL da detecção
+      // (Fase 4) — o slider de confiança volta a atenuar/apagar caixas do hub; track sem score (hub
+      // antigo) cai no fallback 1 = comportamento anterior. foot derivado do bbox
       // (bottom-center) e firstSeen mantido POR ID entre payloads (rótulo de permanência).
       // detsRef recebe pseudo-dets "person" (bbox em PIXELS, contrato Detection) — mantém vivo o
       // `occupied` do AtividadeProcessor (OCIOSA×VAZIA), que antes vinha do coco local; sem isso
@@ -1016,12 +1019,17 @@ export function CameraWorkspace({
               firstSeen: fs,
               lastSeen: now,
               zone: t.zone,
-              score: 1,
+              // Score real p/ o DESENHO: o slider (confRef) atenua/apaga fantasmas pontuais.
+              // Retrocompat: hub antigo não envia score → 1 (nunca atenuado, como antes).
+              score: t.score ?? 1,
             };
           });
           seen.forEach((_, id) => {
             if (!alive.has(id)) seen.delete(id); // poda ids mortos (mapa não cresce sem limite)
           });
+          // Pseudo-dets p/ a CONTAGEM/occupied (AtividadeProcessor), NÃO p/ o desenho: score fica
+          // 1 de propósito — o motor já filtrou por people.scoreThreshold; o slider de confiança é
+          // só do overlay (tracksRef acima). Não misturar as duas coisas.
           detsRef.current = hd.tracks.map((t) => ({
             class: "person",
             score: 1,
