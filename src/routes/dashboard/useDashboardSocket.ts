@@ -18,6 +18,9 @@ import { newFrameEntry, type FrameEntry } from "./useFrameRelay";
 type Deps = {
   token: string | null;
   logout: (reason?: string) => void;
+  // ── A1-focus (ADR-009): id da câmera ABERTA em tela cheia (ou null). Só vira pedido de foco ao
+  // hub quando essa câmera é analisada pelo MOTOR ("hub"); do contrário o hub não tem o que boostar.
+  openId: string | null;
   // Refs do relé de frames (useFrameRelay) que o socket alimenta/consulta.
   framesRef: React.RefObject<Map<string, FrameEntry>>;
   activeIdsRef: React.RefObject<Set<string>>;
@@ -43,6 +46,7 @@ export type DashboardSocket = {
 export function useDashboardSocket({
   token,
   logout,
+  openId,
   framesRef,
   activeIdsRef,
   hubAnalysisRef,
@@ -61,6 +65,10 @@ export function useDashboardSocket({
   // ── ADR-006: cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela
   // câmera; o número é repassado às tiles via `tripwiresRev` (re-busca dos tripwires).
   const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
+  // ── A1-focus (ADR-009): último id de foco anunciado ao hub. Ref (não state): mudá-lo não deve
+  // re-renderizar — é só o "espelho" do que o servidor já sabe, usado p/ idempotência (não reemitir
+  // o mesmo id), re-emit no reconnect (o servidor perde o foco no disconnect) e release no unmount.
+  const focusRef = useRef<string | null>(null);
 
   useEffect(() => {
     const socket = io(APP_CONFIG.net.serverUrl, {
@@ -78,6 +86,9 @@ export function useDashboardSocket({
       // 2.1 — a reconexão perde as rooms no servidor: reanuncia o conjunto assistido para voltar
       // a receber frames (o efeito de feeds ativos cobre as MUDANÇAS; aqui cobre o re-connect).
       socket.emit("watch", { ids: [...activeIdsRef.current] });
+      // A1-focus — o servidor perde o foco no disconnect (como as rooms). Se ainda há câmera
+      // focada (motor do hub), reanuncia para o hub voltar a boostar a análise dela na reconexão.
+      if (focusRef.current) socket.emit("analysis-focus", { id: focusRef.current });
     });
     socket.on("disconnect", () => setConnected(false));
     socket.on("connect_error", (err) => {
@@ -161,6 +172,9 @@ export function useDashboardSocket({
       },
     );
     return () => {
+      // A1-focus — libera o foco antes de a conexão cair (unmount ou troca de token). Emite antes
+      // do disconnect p/ o hub baixar o boost; se a conexão já caiu, é inócuo (contrato aditivo).
+      if (focusRef.current) socket.emit("analysis-focus", { id: null });
       socket.disconnect();
     };
   }, [
@@ -175,6 +189,20 @@ export function useDashboardSocket({
     setCameras,
     setAlarms,
   ]);
+
+  // ── A1-focus (ADR-009): quando a câmera ABERTA em tela cheia é analisada pelo MOTOR do hub, pede
+  // ao hub para BOOSTAR a análise dela (`analysis-focus {id}`); ao fechar, TROCAR de câmera aberta,
+  // ou se aquela câmera não é "hub" (engine "local" ou ainda desconhecido), libera (`{id:null}`).
+  // Contrato ADITIVO: só um emit novo — não toca o `watch`/relé de frames. Idempotente (focusRef
+  // evita reemitir o mesmo id). Reconexão é coberta no handler "connect"; unmount/troca-de-token,
+  // no cleanup do efeito do socket. Estrito ao `analysis-status` da câmera (sem fallback p/ default):
+  // só boostamos quando o hub confirmou que é ele quem a analisa — nunca uma câmera do pipeline local.
+  useEffect(() => {
+    const wanted = openId && analysisEngines[openId] === "hub" ? openId : null;
+    if (focusRef.current === wanted) return; // idempotência: nada mudou → não spamma o hub
+    focusRef.current = wanted;
+    socketRef.current?.emit("analysis-focus", { id: wanted });
+  }, [openId, analysisEngines]);
 
   return { socketRef, connected, statuses, analysisEngines, revByCamera };
 }

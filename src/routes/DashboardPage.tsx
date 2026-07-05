@@ -51,6 +51,8 @@ export function DashboardPage() {
   const socket = useDashboardSocket({
     token,
     logout,
+    // A1-focus (ADR-009): a câmera aberta em tela cheia; o hook pede foco ao hub quando ela é "hub".
+    openId,
     framesRef,
     activeIdsRef,
     hubAnalysisRef: relay.hubAnalysisRef,
