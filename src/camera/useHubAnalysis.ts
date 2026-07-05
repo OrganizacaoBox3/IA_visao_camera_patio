@@ -98,6 +98,90 @@ export function applyHubAnalysis(
   }
 }
 
+// ── Suavização DISPLAY-ONLY das caixas do HUB (deslize em vez de salto) ───────────────────────────
+// O hub emite `analysis-tracks` em cadência baixa (~1fps; ~6fps quando a câmera está focada). Como o
+// palco redesenha a ~30fps, a bbox CRUA fica congelada entre payloads e SALTA quando chega o próximo.
+// Aqui guardamos uma bbox EXIBIDA por track (Map por id do ByteTrack, que SOBREVIVE à troca de payload)
+// e a cada frame do rAF a deslizamos (LERP) até o ALVO = a bbox EXATA do último payload.
+//
+// É SÓ p/ DESENHO. O track real (contagem por linha, pé em zona de exclusão, tripwire, ocupação) segue
+// lendo `tracksRef` EXATO — foot/cx/cy/bbox reais NÃO mudam (a lógica já rodou antes do drawScene). O
+// grid (routes/dashboard/TrackOverlay) tem a própria via de suavização (camera/interpolate.ts, modelo
+// de velocidade com fade/expire); aqui a via é mais LEVE de propósito: pega carona no pipeline de
+// tracks EXATOS do workspace e preserva o aparecer/sumir imediato (track fora do payload some, como
+// hoje) — só ADICIONA o deslize da bbox. Nada de fade/extrapolação.
+
+// Fator do LERP por frame: ~0.25 acomoda em ~100–150ms @~60fps (constante de tempo τ ≈ Δt/−ln(1−f)).
+export const HUB_EASE_FACTOR = 0.25;
+
+/** LERP escalar puro (t=0 → a, t=1 → b) — base do deslize da caixa exibida. Testável em Vitest. */
+export function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+// Estado do easing REUSADO entre frames (sem alocar no hot-path do rAF):
+//  box  = bbox EXIBIDA por id (tupla mutada in-place a cada frame; sobrevive à troca de payload)
+//  pool = wrapper Track reusado por id p/ o desenho (bbox = a MESMA tupla suavizada de `box`)
+//  out  = array de saída reusado (consumido por drawTracks/personTrackBoxes)
+export type HubEaseState = {
+  box: Map<number, [number, number, number, number]>;
+  pool: Map<number, Track>;
+  out: Track[];
+};
+export function makeHubEaseState(): HubEaseState {
+  return { box: new Map(), pool: new Map(), out: [] };
+}
+
+function hasId(tracks: readonly Track[], id: number): boolean {
+  for (let i = 0; i < tracks.length; i++) if (tracks[i].id === id) return true;
+  return false;
+}
+
+// Passo por-frame do rAF (SÓ no modo hub): desliza a bbox EXIBIDA de cada track até o ALVO (bbox
+// exata do último payload) e devolve os tracks com a bbox SUAVIZADA p/ DESENHO. Reusa buffers — só
+// aloca p/ id NOVO. Track novo NASCE no alvo (sem deslizar do zero). Id que sumiu do payload é podado
+// (box/pool não vazam). SEPARAÇÃO display×lógica: só a `bbox` é a exibida; id/score/firstSeen/zone
+// (e cx/cy/foot, não usados no desenho) são os EXATOS do track — a lógica lê `tracksRef`, não isto.
+export function easeHubTracks(tracks: readonly Track[], st: HubEaseState, factor: number): Track[] {
+  const { box, pool, out } = st;
+  out.length = 0; // reusa o array (não realoca o backing store)
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    let d = box.get(t.id);
+    if (d === undefined) {
+      d = [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]]; // nova detecção → nasce NO alvo
+      box.set(t.id, d);
+    } else {
+      d[0] = lerp(d[0], t.bbox[0], factor); // desliza in-place até o alvo
+      d[1] = lerp(d[1], t.bbox[1], factor);
+      d[2] = lerp(d[2], t.bbox[2], factor);
+      d[3] = lerp(d[3], t.bbox[3], factor);
+    }
+    let w = pool.get(t.id);
+    if (w === undefined) {
+      w = { ...t, bbox: d }; // wrapper novo (bbox = a tupla suavizada)
+      pool.set(t.id, w);
+    } else {
+      // reusa o wrapper: campos EXATOS do track + bbox SUAVIZADA (mesma tupla `d`, mutada acima)
+      w.id = t.id;
+      w.cx = t.cx;
+      w.cy = t.cy;
+      w.foot = t.foot;
+      w.firstSeen = t.firstSeen;
+      w.lastSeen = t.lastSeen;
+      w.zone = t.zone;
+      w.score = t.score;
+      w.bbox = d;
+    }
+    out.push(w);
+  }
+  // Poda ids que sumiram do payload (só quando há sobra → o caso comum é no-op, sem varredura).
+  if (box.size > tracks.length) for (const id of box.keys()) if (!hasId(tracks, id)) box.delete(id);
+  if (pool.size > tracks.length)
+    for (const id of pool.keys()) if (!hasId(tracks, id)) pool.delete(id);
+  return out;
+}
+
 export function useHubAnalysis(
   analysisEngine: "hub" | "local",
   cameraId: string,
@@ -116,6 +200,9 @@ export function useHubAnalysis(
   const hubZonesRef = useRef<HubZone[] | null>(null); // zones[] do último payload FRESCO do hub
   const hubTracksTsRef = useRef(0); // ts do último payload consumido (gate "payload novo")
   const hubFirstSeenRef = useRef<Map<number, number>>(new Map()); // id do hub → 1ª vez visto aqui
+  // Estado do easing DISPLAY-ONLY das caixas do hub (buffers reusados; lido no drawScene). Só o
+  // desenho o consome — a lógica (contagem/exclusão/tripwire) segue no tracksRef EXATO.
+  const hubEaseRef = useRef<HubEaseState>(makeHubEaseState());
 
   // "hoje" das linhas no MODO HUB — refresh periódico do SERVIDOR, SEM somar a sessão. Com o motor
   // ligado, o servidor grava os MESMOS cruzamentos que o counter local vê; exibir flowBase+sessão
@@ -153,6 +240,7 @@ export function useHubAnalysis(
     hubZonesRef,
     hubTracksTsRef,
     hubFirstSeenRef,
+    hubEaseRef,
     hubFlowRef,
     hubFlowToday,
   };

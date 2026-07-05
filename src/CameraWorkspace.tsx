@@ -92,7 +92,7 @@ import {
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import { useTelemetry } from "./camera/useTelemetry";
 import { useWebrtcTransport } from "./camera/useWebrtcTransport";
-import { useHubAnalysis, applyHubAnalysis } from "./camera/useHubAnalysis";
+import { useHubAnalysis, applyHubAnalysis, easeHubTracks, HUB_EASE_FACTOR } from "./camera/useHubAnalysis";
 import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
 import { MODE_TONE } from "./camera/tabs/tone";
 import { ZonasTab } from "./camera/tabs/ZonasTab";
@@ -446,6 +446,7 @@ export function CameraWorkspace({
     hubZonesRef,
     hubTracksTsRef,
     hubFirstSeenRef,
+    hubEaseRef,
     hubFlowRef,
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
@@ -1342,9 +1343,19 @@ export function CameraWorkspace({
     // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
     if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
 
+    // ── SUAVIZAÇÃO DISPLAY-ONLY das caixas do hub (deslize em vez de salto) ─────────────────────
+    // No modo HUB os tracks chegam em cadência baixa (~1fps; ~6fps focado) e a bbox CRUA SALTA entre
+    // payloads. easeHubTracks desliza a bbox EXIBIDA até o alvo (bbox exata) por id — SÓ p/ DESENHO.
+    // A LÓGICA (contagem/exclusão/tripwire/ocupação) JÁ RODOU acima sobre `tracksRef` EXATO; aqui só
+    // muda o que se VÊ. Modo LOCAL (coco-ssd, fallback ~3fps) NÃO suaviza: usa o track cru, como hoje.
+    const hubEngine = analysisEngineRef.current === "hub";
+    const displayTracks = hubEngine
+      ? easeHubTracks(tracksRef.current, hubEaseRef.current, HUB_EASE_FACTOR)
+      : tracksRef.current;
+
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)
-      drawTracks(ctx, cr, tracksRef.current, confRef.current, pausedRef.current && detailed);
+      drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed);
 
     // Laço por-zona (retângulo/máscara + rótulo + detecções + overlay de fadiga) → ./camera/draw.
     // Passa os valores já resolvidos (refs/estado) + getMask; os gates de camada seguem lá dentro.
@@ -1360,7 +1371,7 @@ export function CameraWorkspace({
       confRef.current,
       detailed,
       getMask,
-      layersRef.current.boxes ? tracksRef.current.map((t) => t.bbox) : [],
+      layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
     );
 
     // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
@@ -1370,7 +1381,7 @@ export function CameraWorkspace({
     // refresh ~30s); somar a sessão local contaria cada cruzamento 2× (o hub grava os mesmos
     // cruzamentos). counts=EMPTY zera a parcela da sessão; paused=false pois o motor conta
     // 24/7 mesmo com o tile fechado (a mensagem "conta na câmera aberta" só vale no modo local).
-    const hubEngine = analysisEngineRef.current === "hub";
+    // (hubEngine já resolvido acima, na suavização das caixas — reusa a mesma leitura do ref.)
     drawTripwires(
       ctx,
       cr,
