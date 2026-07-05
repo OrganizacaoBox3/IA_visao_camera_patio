@@ -6,8 +6,16 @@ import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera
 import { Tooltip } from "../ui";
 
 // Fase 5 (plano-retrofit-performance.md §Fase 5 + plano-fase1-go2rtc.md): transmite o vídeo do nó
-// por WebRTC/WHIP ao go2rtc em vez do loop JPEG→socket. OFF por default → nada muda (byte-a-byte).
-const WHIP_ENABLED = APP_CONFIG.webcam.whip.enabled;
+// por WebRTC/WHIP ao go2rtc em vez do loop JPEG→socket. Onda 1 da simplificação de config: a decisão
+// é em RUNTIME por PROBE (não mais um gate build-time). Por default o nó TENTA WHIP; se não
+// estabelecer dentro do probe (go2rtc ausente/timeout/erro), CAI SOZINHO p/ o JPEG-socket legado —
+// fallback automático, sem flag. VITE_WEBCAM_WHIP=0 é o único escape hatch (força JPEG, sem probe).
+const WHIP_ATTEMPT = APP_CONFIG.webcam.whip.enabled; // default true; só "0" desliga
+const WHIP_PROBE_TIMEOUT_MS = APP_CONFIG.webcam.whip.probeTimeoutMs;
+
+// Caminho de vídeo ATIVO do nó (reflete no badge). "probing": tentando WHIP, ainda sem decidir;
+// "webrtc": WHIP estabelecido; "jpeg": loop JPEG-socket legado (default sem go2rtc ou pós-fallback).
+type Transport = "probing" | "webrtc" | "jpeg";
 
 // Token do nó de câmera: ?key=<CAMERA_TOKEN> (enrolamento de dispositivo) ou, em fallback,
 // a sessão de um humano logado no mesmo navegador. Câmera não exige login humano.
@@ -33,6 +41,9 @@ export function CameraPage() {
   const [status, setStatus] = useState<Status>("connecting");
   const [hubConnected, setHubConnected] = useState(false); // estado REAL do socket (transmissão ao hub)
   const [whipState, setWhipState] = useState<WhipState>("idle"); // estado da publicação WebRTC (Fase 5)
+  // Caminho de vídeo resolvido em runtime pelo probe: começa "probing" se vamos tentar WHIP,
+  // senão já "jpeg" (escape hatch VITE_WEBCAM_WHIP=0). Só um dos pipelines roda (nunca os dois).
+  const [transport, setTransport] = useState<Transport>(WHIP_ATTEMPT ? "probing" : "jpeg");
   const [error, setError] = useState("");
   const [profile, setProfile] = useState("");
 
@@ -93,26 +104,54 @@ export function CameraPage() {
         }
       });
 
-      // ── Fase 5: caminho WebRTC/WHIP (OFF por default) ──────────────────────────────────────────
+      // ── Fase 5: PROBE de runtime — tenta WHIP; cai p/ JPEG sozinho se não estabelecer ──────────
       // Publica o vídeo direto ao go2rtc por RTCPeerConnection (não estrangula em 2º plano → some a
       // "câmera lenta ao minimizar"). O socket ACIMA segue vivo só como REGISTRO/controle (o hub
-      // sabe que a câmera existe, status/camcfg); NÃO instalamos o loop JPEG nem o keep-alive de
-      // áudio (WebRTC dispensa ambos). O nome do stream = id da câmera (contrato com o consumidor
-      // `/api/ws?src=<id>` do dashboard). Rollback = desligar a flag → volta ao JPEG-socket abaixo.
-      if (WHIP_ENABLED) {
-        whipPublisher = publishWebcamWhip({
-          stream: streamRef.current!,
-          streamName: idRef.current,
-          baseUrl: APP_CONFIG.go2rtc.baseUrl,
-          maxBitrateKbps: APP_CONFIG.webcam.whip.maxBitrateKbps,
-          maxFramerate: APP_CONFIG.webcam.whip.maxFramerate,
-          onState: (s) => {
-            if (alive) setWhipState(s);
-          },
+      // sabe que a câmera existe, status/camcfg). Nome do stream = id da câmera (contrato com o
+      // consumidor `/api/ws?src=<id>` do dashboard). A decisão WHIP×JPEG é ASSÍNCRONA (o handshake
+      // WebRTC leva tempo): o probe resolve `true` (WHIP estabeleceu → segue WebRTC, sem JPEG) ou
+      // `false` (timeout / estado terminal negativo / go2rtc ausente → cai p/ o JPEG-socket abaixo).
+      // Fallback AUTOMÁTICO, sem flag. NUNCA os dois pipelines juntos (só um instala captura/relé).
+      const probeWhip = () =>
+        new Promise<boolean>((resolve) => {
+          let settled = false;
+          let timer = 0;
+          const finish = (ok: boolean) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            if (!ok && whipPublisher) {
+              whipPublisher.stop(); // encerra a tentativa (idempotente) antes de entregar ao JPEG
+              whipPublisher = null;
+            }
+            resolve(ok);
+          };
+          // Backstop: sem "connected" até aqui → go2rtc indisponível/lento → cai p/ JPEG.
+          timer = window.setTimeout(() => finish(false), WHIP_PROBE_TIMEOUT_MS);
+          whipPublisher = publishWebcamWhip({
+            stream: streamRef.current!,
+            streamName: idRef.current,
+            baseUrl: APP_CONFIG.go2rtc.baseUrl,
+            maxBitrateKbps: APP_CONFIG.webcam.whip.maxBitrateKbps,
+            maxFramerate: APP_CONFIG.webcam.whip.maxFramerate,
+            onState: (s) => {
+              if (!alive) return;
+              setWhipState(s); // badge acompanha (no probe E depois, no reconnect do publisher)
+              if (s === "connected") finish(true);
+              // Estado terminal negativo ANTES de estabelecer (fetch erro/404/ICE) → fallback já.
+              else if (s === "failed" || s === "closed" || s === "disconnected") finish(false);
+            },
+          });
         });
+
+      if (WHIP_ATTEMPT && (await probeWhip())) {
+        if (!alive) return; // desmontou durante o probe — cleanup já parou publisher/socket
+        setTransport("webrtc");
         setProfile(`WebRTC · ${APP_CONFIG.webcam.whip.maxFramerate}fps`);
-        return; // NÃO instala o pipeline JPEG-socket (o caminho abaixo é o legado/rollback)
+        return; // WebRTC vivo (o publisher reconecta sozinho) — NÃO instala o pipeline JPEG abaixo
       }
+      if (!alive) return; // idem: não instala o JPEG num componente já desmontado
+      setTransport("jpeg"); // escape hatch (=0) ou fallback do probe: segue no caminho legado
 
       // Perfil de captura — pode ser elevado pela central (modo leitura = alta resolução).
       let frameWidth: number = APP_CONFIG.net.frameWidth;
@@ -280,9 +319,32 @@ export function CameraPage() {
     };
   }, [name]);
 
-  // "Transmitindo": no modo WebRTC/WHIP (Fase 5) o vídeo vai pela conexão WebRTC, então depende dela
-  // (e do socket, que registra a câmera no hub); no modo JPEG-socket (default) depende só do socket.
-  const transmitting = WHIP_ENABLED ? hubConnected && whipState === "connected" : hubConnected;
+  // "Transmitindo": no caminho WebRTC/WHIP o vídeo vai pela conexão WebRTC, então depende dela (e do
+  // socket, que registra a câmera no hub); no caminho JPEG-socket depende só do socket. Enquanto o
+  // probe ainda decide ("probing"), nada transmite (nenhum pipeline instalado ainda).
+  const transmitting =
+    transport === "webrtc"
+      ? hubConnected && whipState === "connected"
+      : transport === "jpeg"
+        ? hubConnected
+        : false;
+  // Texto do badge — reflete o caminho de vídeo ATIVO resolvido em runtime pelo probe.
+  const statusLabel =
+    status === "connecting"
+      ? "conectando…"
+      : status === "denied"
+        ? "câmera negada"
+        : status === "error"
+          ? "erro"
+          : transport === "probing"
+            ? "câmera ok · testando WebRTC…"
+            : transport === "webrtc"
+              ? transmitting
+                ? "transmitindo ao hub (WebRTC)"
+                : "câmera ok · conectando vídeo (WebRTC)…"
+              : transmitting
+                ? "transmitindo ao hub"
+                : "câmera ok · reconectando ao hub…";
   return (
     <div className="cam-node">
       <video ref={videoRef} playsInline muted />
@@ -292,21 +354,7 @@ export function CameraPage() {
           className={`dot-status ${status === "on" ? (transmitting ? "on" : "connecting") : status}`}
         />
         <b>{name}</b>
-        <span className="muted">
-          {status === "on"
-            ? transmitting
-              ? WHIP_ENABLED
-                ? "transmitindo ao hub (WebRTC)"
-                : "transmitindo ao hub"
-              : WHIP_ENABLED
-                ? "câmera ok · conectando vídeo (WebRTC)…"
-                : "câmera ok · reconectando ao hub…"
-            : status === "connecting"
-              ? "conectando…"
-              : status === "denied"
-                ? "câmera negada"
-                : "erro"}
-        </span>
+        <span className="muted">{statusLabel}</span>
         {profile && (
           <Tooltip content="Perfil de captura definido pela central">
             <span className="muted">· {profile}</span>

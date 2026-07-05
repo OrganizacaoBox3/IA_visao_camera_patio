@@ -249,14 +249,23 @@ export const APP_CONFIG = {
   },
 
   // Nó de webcam (/camera) — publicação de vídeo por WebRTC/WHIP ao go2rtc (Fase 5 do retrofit).
-  // OFF por DEFAULT (VITE_WEBCAM_WHIP != "1"): o nó segue EXATAMENTE no caminho JPEG-por-socket
-  // atual, byte-a-byte. Ligado (VITE_WEBCAM_WHIP=1), o vídeo vai por RTCPeerConnection → go2rtc
+  //
+  // DEFAULT = TENTA WebRTC/WHIP (Onda 1 da simplificação de config: "o melhor como base, sem flag").
+  // A decisão é em RUNTIME por PROBE: o nó tenta publicar por RTCPeerConnection → go2rtc
   // (`POST ${go2rtc.baseUrl}/api/webrtc?dst=<id>`) — que o navegador NÃO estrangula em 2º plano,
-  // eliminando a "câmera lenta ao minimizar". O socket segue vivo só como registro/controle.
-  // O consumidor (tile do dashboard) exige camcfg.transport="webrtc" p/ ESSA câmera (Fase 1).
+  // eliminando a "câmera lenta ao minimizar". Se a negociação ESTABELECER, segue WebRTC. Se FALHAR
+  // (go2rtc ausente/timeout/erro de conexão), o nó CAI SOZINHO (fallback automático, sem flag) para
+  // o caminho JPEG-por-socket legado, byte-a-byte — retrocompat total (sem go2rtc = igual a hoje).
+  //
+  // Escape hatch (raro): VITE_WEBCAM_WHIP=0 FORÇA o JPEG sem sequer tentar o WHIP (build-time; p/ o
+  // caso extremo de um browser/ambiente que precise ser fixado no legado). Qualquer outro valor
+  // (ausente/"1"/…) = tenta WHIP. Antes esta flag era opt-in build-time do MELHOR (exigia rebuild
+  // p/ ter o bom); agora o melhor é o default e a flag só serve p/ DESLIGAR.
   webcam: {
     whip: {
-      enabled: (import.meta.env as Record<string, string | undefined>).VITE_WEBCAM_WHIP === "1",
+      // "attempt": tenta WHIP por default; só "0" desliga (escape hatch). Consumido em CameraPage.
+      enabled: (import.meta.env as Record<string, string | undefined>).VITE_WEBCAM_WHIP !== "0",
+      probeTimeoutMs: 6000, // janela do probe: sem WHIP estabelecido até aqui → cai p/ JPEG (auto)
       maxBitrateKbps: 1500, // teto de banda sensato p/ vigilância (nitidez × custo em LAN)
       maxFramerate: 15, // fps do encoder — vigilância não precisa de 30
     },
