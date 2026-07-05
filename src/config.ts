@@ -1,5 +1,12 @@
 // Parâmetros e thresholds da POC. Ajuste aqui e recarregue para calibrar a demo.
 
+// Acesso TIPADO às envs de build-time (Vite). Centraliza o cast largo
+// `import.meta.env as Record<string, string | undefined>` que antes se repetia em cada
+// leitura de VITE_* — um único ponto para ler variável de ambiente. undefined = ausente.
+function env(key: string): string | undefined {
+  return (import.meta.env as Record<string, string | undefined>)[key];
+}
+
 export const APP_CONFIG = {
   detection: {
     // Detecção de MOVIMENTO (diferença de frames, independente de classe)
@@ -12,7 +19,6 @@ export const APP_CONFIG = {
     // Detecção de OCUPAÇÃO (objetos) — coco-ssd (roda em WORKER, fora da main thread)
     base: "mobilenet_v2" as "mobilenet_v1" | "mobilenet_v2" | "lite_mobilenet_v2", // melhor recall que lite_*
     objectIntervalMs: 350, // cadência da inferência na câmera ABERTA (full)
-    objectIntervalMsTile: 1200, // cadência nas tiles do grid (economiza GPU; câmera aberta é a foco)
     objectScoreThreshold: 0.5,
     maxBoxes: 40, // teto de detecções por inferência (coco default é só 20 → perdia gente)
     minScore: 0.25, // limiar BRUTO do coco (baixo de propósito; filtramos por classe depois)
@@ -56,16 +62,14 @@ export const APP_CONFIG = {
     // config para manter (overengineering). A fonte medida de falso positivo é objeto ESTÁTICO
     // (grade/placa/TV), tratada pelo modo de zona "Exclusão" (máscara), não por baixar o limiar —
     // baixar o corte AUMENTARIA os FPs estáticos. Reavaliar só se a medição mudar (acuracia-modelos.md).
-    trackMaxDist: 0.12, // distância normalizada p/ casar detecção com track existente
-    trackTimeoutMs: 1500, // remove o track se a pessoa some por mais que isso
     dwellMinMs: 800, // ignora aparições muito curtas (flicker)
     // ByteTrack-lite (Onda 2 do plano-contagem-pessoas): associação em 2 PASSADAS por IoU —
     // score alto associa/nasce; score BAIXO (minScore..scoreThreshold, antes descartado) só
-    // SUSTENTA tracks existentes. Substitui o greedy por distância (trackMaxDist/trackTimeoutMs
-    // acima ficam como legado do caminho antigo). Consumido por vision/bytetrack.ts + counter.
+    // SUSTENTA tracks existentes. Substitui o greedy por distância do caminho antigo (o antigo
+    // trackMaxDist/trackTimeoutMs foi removido). Consumido por vision/bytetrack.ts + counter.
     track: {
       iouThreshold: 0.25, // IoU mínimo p/ associar detecção×track (contra a bbox PREDITA)
-      ttlMs: 1500, // morte do track sem associação (ms) — espelha trackTimeoutMs
+      ttlMs: 1500, // morte do track sem associação (ms)
       // Gate de TELEPORTE do counter (counting.ts maxDist). Era 0.25; com o ByteTracker o id só
       // avança por IoU com a predição (deslocamentos de id são estruturalmente plausíveis) e uma
       // rodada LENTA (LR full ~0,5-1,3s) desloca até ~0.3 do frame — 0.35 deixa o cruzamento real
@@ -90,8 +94,7 @@ export const APP_CONFIG = {
   //   • env build-time VITE_DEMO_MODE=1  → default ligado (ambiente de demo); ou
   //   • o toggle "Limite curto (10s)" na central (override manual por sessão).
   demo: {
-    shortLimitDefault:
-      (import.meta.env as Record<string, string | undefined>).VITE_DEMO_MODE === "1",
+    shortLimitDefault: env("VITE_DEMO_MODE") === "1",
   },
 
   // OVERLAY da câmera ao vivo (Onda A — fundação consumida pela Onda 2/CameraWorkspace).
@@ -220,7 +223,7 @@ export const APP_CONFIG = {
     //     Isso evita mixed-content (página https + ws:// é bloqueado pelo navegador).
     //  3) dev: mesma máquina na porta 4000 (permite celular apontar p/ o IP do laptop).
     serverUrl:
-      (import.meta.env as Record<string, string | undefined>).VITE_HUB_URL ??
+      env("VITE_HUB_URL") ??
       (typeof location !== "undefined"
         ? import.meta.env.DEV
           ? `http://${location.hostname}:4000`
@@ -244,8 +247,7 @@ export const APP_CONFIG = {
   // `${baseUrl}/api/ws?src=<cameraId>` (o setter http→ws do componente cuida do protocolo).
   // Override por VITE_GO2RTC_BASE (ex.: dev apontando direto p/ `http://<host>:1984`).
   go2rtc: {
-    baseUrl:
-      (import.meta.env as Record<string, string | undefined>).VITE_GO2RTC_BASE ?? "/go2rtc",
+    baseUrl: env("VITE_GO2RTC_BASE") ?? "/go2rtc",
   },
 
   // Nó de webcam (/camera) — publicação de vídeo por WebRTC/WHIP ao go2rtc (Fase 5 do retrofit).
@@ -264,7 +266,7 @@ export const APP_CONFIG = {
   webcam: {
     whip: {
       // "attempt": tenta WHIP por default; só "0" desliga (escape hatch). Consumido em CameraPage.
-      enabled: (import.meta.env as Record<string, string | undefined>).VITE_WEBCAM_WHIP !== "0",
+      enabled: env("VITE_WEBCAM_WHIP") !== "0",
       probeTimeoutMs: 6000, // janela do probe: sem WHIP estabelecido até aqui → cai p/ JPEG (auto)
       maxBitrateKbps: 1500, // teto de banda sensato p/ vigilância (nitidez × custo em LAN)
       maxFramerate: 15, // fps do encoder — vigilância não precisa de 30

@@ -44,7 +44,8 @@ export function newZoneId(cameraId: string) {
 }
 
 // Preenche defaults de TODOS os modos numa zona (campos planos), respeitando o que já existe.
-function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
+// Exportada p/ teste unitário (pura, exceto o id gerado quando ausente via newZoneId).
+export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
   const label = z.label ?? "Área";
   return {
     id: z.id ?? newZoneId(cameraId),

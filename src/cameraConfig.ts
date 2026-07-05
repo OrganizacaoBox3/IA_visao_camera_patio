@@ -44,7 +44,8 @@ function key(cameraId: string) {
 }
 
 // Normaliza/valida uma config (de qualquer origem: localStorage OU backend) aplicando defaults.
-function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCfg {
+// Exportada p/ teste unitário (pura, sem I/O): valida modo/capture/transport e filtra classes.
+export function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCfg {
   if (!c) return { ...DEFAULT, selectedClasses: [...OBJECT_KEYS] };
   const sel = Array.isArray(c.selectedClasses)
     ? c.selectedClasses.filter((k) => OBJECT_KEYS.includes(k))

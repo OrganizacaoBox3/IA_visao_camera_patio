@@ -2,7 +2,7 @@
 // por-navegador). Somente INDICADORES (LGPD: nunca imagens). As funções e shapes públicos são as
 // MESMAS de antes — só a fonte mudou — então o relatório/telas não precisaram mudar.
 // record* = POST /api/ingest (fire-and-forget). load* = GET /api/data/*. clearAll = clear.
-import { apiGet, apiSend } from "../api";
+import { apiGet, apiSend, listAlarms, type ListAlarmsParams } from "../api";
 import {
   shiftOf,
   type Period,
@@ -20,10 +20,32 @@ import {
   type FadigaCell,
   type FadigaEventRow,
 } from "./mock";
-import type { AlarmEvent, AlarmPriority, AlarmState } from "../types/alarm";
 
 const DAY = 86_400_000;
 const shiftFor = (ts: number) => shiftOf(new Date(ts).getHours());
+
+// ── Geometria de JANELA compartilhada pelos load*Dataset (extraída do boilerplate 5×) ──
+// Ambas PURAS: dado o mesmo `hourStarts`/`startMs` (e `now`) devolvem o mesmo resultado.
+
+/** Dia-base (startMs = meia-noite do bucket mais antigo) e nº de dias cobertos até `now`.
+ *  Espelha a derivação repetida em loadDataset/loadReading/loadObject/loadFadiga/loadFlow.
+ *  Requer `hourStarts` NÃO vazio (os chamadores já tratam a lista vazia antes). */
+export function deriveWindow(
+  hourStarts: number[],
+  now: number = Date.now(),
+): { days: number; startMs: number } {
+  const startMs = Math.floor(Math.min(...hourStarts) / DAY) * DAY;
+  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  return { days, startMs };
+}
+
+/** Posição de um bucket na janela: índice do dia (0-based desde startMs) e hora do dia (0..23). */
+export function cellTime(hourStart: number, startMs: number): { dayIndex: number; hour: number } {
+  return {
+    dayIndex: Math.floor((hourStart - startMs) / DAY),
+    hour: new Date(hourStart).getHours(),
+  };
+}
 
 // Telemetria de falha do ingest (plano 1.2): antes o erro era 100% engolido e "gravando" era
 // indistinguível de "perdendo dados". Contador módulo-nível de falhas CONSECUTIVAS + warn 1×
@@ -130,16 +152,13 @@ export function peoplePeakOf(cells: Cell[]): number {
 export async function loadDataset(): Promise<Dataset> {
   const buckets = await fetchBuckets<Bucket>("ativ");
   if (!buckets.length) return { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() };
-  const now = Date.now();
-  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
-  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const { days, startMs } = deriveWindow(buckets.map((b) => b.hourStart));
   const areas = new Set<string>();
   const cells: AtivCell[] = buckets.map((b) => {
     areas.add(b.area);
     return {
       area: b.area,
-      dayIndex: Math.floor((b.hourStart - startMs) / DAY),
-      hour: new Date(b.hourStart).getHours(),
+      ...cellTime(b.hourStart, startMs),
       idleMin: Math.round(b.idleMs / 60000),
       alerts: b.alerts,
       activePct: b.samples ? Math.round((b.activeSamples / b.samples) * 100) : 0,
@@ -258,15 +277,12 @@ const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
 export async function loadFlowDataset(): Promise<FlowDataset> {
   const buckets = await fetchBuckets<FlowBucket>("flow");
   if (!buckets.length) return { days: 0, cells: [], startMs: Date.now() };
-  const now = Date.now();
-  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
-  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const { days, startMs } = deriveWindow(buckets.map((b) => b.hourStart));
   const cells: FlowCell[] = buckets.map((b) => ({
     cameraId: b.cameraId,
     cameraLabel: b.cameraLabel,
     tripwireId: b.tripwireId,
-    dayIndex: Math.floor((b.hourStart - startMs) / DAY),
-    hour: new Date(b.hourStart).getHours(),
+    ...cellTime(b.hourStart, startMs),
     in: b.in,
     out: b.out,
   }));
@@ -351,9 +367,7 @@ export async function loadReadingDataset(): Promise<ReadingDataset> {
   const buckets = await fetchBuckets<ReadingBucket>("read");
   if (!buckets.length)
     return { days: 0, pontos: [], cameraLabels: {}, cells: [], startMs: Date.now() };
-  const now = Date.now();
-  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
-  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const { days, startMs } = deriveWindow(buckets.map((b) => b.hourStart));
   const pontos = new Set<string>();
   const cameraLabels: Record<string, string> = {};
   const cells: ReadingCell[] = buckets.map((b) => {
@@ -365,8 +379,7 @@ export async function loadReadingDataset(): Promise<ReadingDataset> {
     }
     return {
       ponto: b.ponto,
-      dayIndex: Math.floor((b.hourStart - startMs) / DAY),
-      hour: new Date(b.hourStart).getHours(),
+      ...cellTime(b.hourStart, startMs),
       boxes: b.boxes,
       reads: b.reads,
       multiReads: b.multiReads,
@@ -413,9 +426,7 @@ export function recordObjectEvent(e: ObjectEvent): Promise<void> {
 export async function loadObjectDataset(): Promise<ObjectDataset> {
   const buckets = await fetchBuckets<ObjectBucket>("obj");
   if (!buckets.length) return { days: 0, setores: [], classes: [], cells: [], startMs: Date.now() };
-  const now = Date.now();
-  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
-  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const { days, startMs } = deriveWindow(buckets.map((b) => b.hourStart));
   const setores = new Set<string>(),
     classes = new Set<string>();
   const cells: ObjectCell[] = buckets.map((b) => {
@@ -424,8 +435,7 @@ export async function loadObjectDataset(): Promise<ObjectDataset> {
     return {
       setor: b.setor,
       classe: b.classe,
-      dayIndex: Math.floor((b.hourStart - startMs) / DAY),
-      hour: new Date(b.hourStart).getHours(),
+      ...cellTime(b.hourStart, startMs),
       samples: b.samples,
       countSum: b.countSum,
       peak: b.peak,
@@ -474,16 +484,13 @@ export function recordFadigaEvent(e: FadigaEvent): Promise<void> {
 export async function loadFadigaDataset(): Promise<FadigaDataset> {
   const buckets = await fetchBuckets<FadigaBucket>("fad");
   if (!buckets.length) return { days: 0, postos: [], cells: [], startMs: Date.now() };
-  const now = Date.now();
-  const startMs = Math.floor(Math.min(...buckets.map((b) => b.hourStart)) / DAY) * DAY;
-  const days = Math.max(1, Math.ceil((now - startMs) / DAY));
+  const { days, startMs } = deriveWindow(buckets.map((b) => b.hourStart));
   const postos = new Set<string>();
   const cells: FadigaCell[] = buckets.map((b) => {
     postos.add(b.posto);
     return {
       posto: b.posto,
-      dayIndex: Math.floor((b.hourStart - startMs) / DAY),
-      hour: new Date(b.hourStart).getHours(),
+      ...cellTime(b.hourStart, startMs),
       samples: b.samples,
       ok: b.ok,
       fadiga: b.fadiga,
@@ -508,19 +515,8 @@ export async function clearAll(): Promise<void> {
 // ── EVENTOS DE ALARME (consome contrato B1: GET /api/alarms) ──────────────────
 // SÓ METADADOS (sem imagens, LGPD). Erro é PROPAGADO (mesmo padrão dos load* acima):
 // o ReportPage distingue erro de "sem alarmes" no estado da página.
-export type AlarmQuery = {
-  limit?: number;
-  since?: number;
-  state?: AlarmState;
-  priority?: AlarmPriority;
-};
-
-export function loadAlarms(q: AlarmQuery = {}): Promise<AlarmEvent[]> {
-  const p = new URLSearchParams();
-  if (q.limit != null) p.set("limit", String(q.limit));
-  if (q.since != null) p.set("since", String(q.since));
-  if (q.state) p.set("state", q.state);
-  if (q.priority) p.set("priority", q.priority);
-  const qs = p.toString();
-  return apiGet<AlarmEvent[]>(`/api/alarms${qs ? `?${qs}` : ""}`);
-}
+// FONTE ÚNICA: `loadAlarms`/`AlarmQuery` eram cópia byte-a-byte de `listAlarms`/`ListAlarmsParams`
+// de api.ts — agora REUSAM o cliente de api.ts (um só ponto de manutenção do contrato). Os nomes
+// públicos daqui são preservados (re-export/alias) para o ReportPage seguir importando via store.
+export type AlarmQuery = ListAlarmsParams;
+export const loadAlarms = listAlarms;

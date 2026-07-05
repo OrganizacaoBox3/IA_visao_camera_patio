@@ -17,7 +17,16 @@ import {
   decodeMask,
   maskFromRect,
 } from "./zoneMask";
-import { newZoneId, loadZones, pointInZone, ZONE_MODE_COLOR, ZONE_MODE_LABEL } from "./zones";
+import {
+  newZoneId,
+  loadZones,
+  pointInZone,
+  withDefaults,
+  ZONE_MODE_COLOR,
+  ZONE_MODE_LABEL,
+} from "./zones";
+import { APP_CONFIG } from "./config";
+import { OBJECT_KEYS } from "./objects/catalog";
 
 describe("zoneMask — geometria de máscara", () => {
   it("get/set respeitam limites e ignoram fora da grade", () => {
@@ -194,6 +203,59 @@ describe("zones — utilitários puros", () => {
     expect(zs).toHaveLength(1);
     expect(zs[0]).toMatchObject({ modo: "exclusao", label: "Grade" });
     vi.unstubAllGlobals();
+  });
+});
+
+// withDefaults: preenche os campos planos de TODOS os modos numa zona, respeitando o que já existe.
+describe("zones — withDefaults (defaults de zona)", () => {
+  it("partial vazio → defaults completos + id gerado com prefixo da câmera", () => {
+    const z = withDefaults({}, "cam-9");
+    expect(z.id).toMatch(/^cam-9-z/);
+    expect(z.label).toBe("Área");
+    expect(z).toMatchObject({
+      x: 0,
+      y: 0,
+      w: 1,
+      h: 1,
+      modo: "atividade",
+      sensitivity: 5,
+      idleAlertMs: APP_CONFIG.zones.defaultIdleAlertMs,
+      ponto: APP_CONFIG.reading.defaultPonto,
+      atividade: "Indefinida", // label "Área" não casa nenhuma atividade
+    });
+    expect(z.selectedClasses).toEqual([...OBJECT_KEYS]);
+    expect(z.mask).toBeUndefined();
+  });
+
+  it("preserva id, geometria, sensibilidade e atividade explícitos", () => {
+    const z = withDefaults(
+      { id: "z-fixo", label: "Doca 3", x: 0.1, y: 0.2, w: 0.3, h: 0.4, sensitivity: 8, atividade: "Carga" },
+      "cam-1",
+    );
+    expect(z).toMatchObject({
+      id: "z-fixo",
+      label: "Doca 3",
+      x: 0.1,
+      y: 0.2,
+      w: 0.3,
+      h: 0.4,
+      sensitivity: 8,
+      atividade: "Carga",
+    });
+  });
+
+  it("modo: preserva os válidos (inclui exclusao); inválido → atividade", () => {
+    expect(withDefaults({ modo: "leitura" }, "c").modo).toBe("leitura");
+    expect(withDefaults({ modo: "exclusao" }, "c").modo).toBe("exclusao");
+    expect(withDefaults({ modo: "objetos" }, "c").modo).toBe("objetos");
+    expect(withDefaults({ modo: "xpto" as never }, "c").modo).toBe("atividade");
+  });
+
+  it("mask só é mantida quando é string; selectedClasses vazio → todas", () => {
+    expect(withDefaults({ mask: "8x8:AAAA" }, "c").mask).toBe("8x8:AAAA");
+    expect(withDefaults({ mask: 123 as never }, "c").mask).toBeUndefined();
+    expect(withDefaults({ selectedClasses: [] }, "c").selectedClasses).toEqual([...OBJECT_KEYS]);
+    expect(withDefaults({ selectedClasses: ["caixa"] }, "c").selectedClasses).toEqual(["caixa"]);
   });
 });
 
