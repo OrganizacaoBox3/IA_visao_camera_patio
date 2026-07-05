@@ -44,6 +44,8 @@ export function CameraPage() {
     let timer: number | null = null;
     let rvfcHandle: number | null = null;
     let rvfcVideo: HTMLVideoElement | null = null; // elemento onde o rVFC foi registrado (p/ cancelar no cleanup)
+    let audioCtx: AudioContext | null = null; // keep-alive de 2º plano (ver ensureKeepAlive)
+    let onVisibility: (() => void) | null = null;
 
     (async () => {
       try {
@@ -137,9 +139,12 @@ export function CameraPage() {
       // visível (limitação de plataforma, igual ao setInterval anterior).
       const video = videoRef.current!;
       const useRvfc = typeof video.requestVideoFrameCallback === "function"; // feature-detect 1×
+      // Modo de captura: "rvfc" (aba VISÍVEL — alinhado a frames reais, eficiente) ou "timer"
+      // (aba OCULTA/minimizada — o rVFC PARA em 2º plano; o timer segue enviando p/ a câmera não morrer).
+      let mode: "rvfc" | "timer" = useRvfc ? "rvfc" : "timer";
       let lastSent = 0;
       const rvfcLoop = (now: DOMHighResTimeStamp) => {
-        if (!alive) return;
+        if (!alive || mode !== "rvfc") return; // deixa de re-armar quando trocamos p/ timer (2º plano)
         rvfcHandle = video.requestVideoFrameCallback(rvfcLoop); // re-agenda ANTES de processar
         const interval = 1000 / frameFps;
         if (now - lastSent >= interval - 1) {
@@ -152,10 +157,63 @@ export function CameraPage() {
         if (timer) clearInterval(timer);
         timer = window.setInterval(sendFrame, Math.round(1000 / frameFps));
       };
+      const stopTimer = () => {
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+      // KEEP-ALIVE de 2º plano: Chrome/Edge estrangulam timers de aba oculta (1/s, e 1/min após
+      // ~5min) e PARAM o rVFC — a webcam "morre" ao minimizar. Uma aba que está TOCANDO ÁUDIO é
+      // isenta desse estrangulamento; então mantemos um oscilador INAUDÍVEL (ganho ~0) tocando
+      // enquanto a captura roda. Efeito: minimizar mantém a câmera online e perto da taxa normal.
+      // Sem WebAudio (ou bloqueado): degrada p/ o timer estrangulado — câmera ~1fps, mas não morre.
+      const ensureKeepAlive = () => {
+        try {
+          const Ctx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (!Ctx) return;
+          if (!audioCtx) {
+            audioCtx = new Ctx();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0.0001; // > 0 (conta como "tocando"), muito abaixo do audível
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start();
+          }
+          if (audioCtx.state === "suspended") void audioCtx.resume();
+        } catch {
+          /* WebAudio indisponível/bloqueado — segue só com o timer */
+        }
+      };
       if (useRvfc) {
         rvfcVideo = video;
         rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
-      } else startTimer(); // fallback: navegador sem rVFC mantém o comportamento anterior
+      } else startTimer(); // sem rVFC: timer é o único caminho
+
+      // Alterna rVFC↔timer pela visibilidade e liga o keep-alive quando a aba/janela some de vista.
+      onVisibility = () => {
+        if (document.hidden) {
+          ensureKeepAlive(); // isenta o timer do estrangulamento agressivo
+          if (mode !== "timer") {
+            mode = "timer";
+            if (rvfcHandle !== null) {
+              rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
+              rvfcHandle = null;
+            }
+            startTimer(); // envia frames mesmo minimizada
+          }
+        } else if (useRvfc && mode !== "rvfc") {
+          stopTimer(); // voltou a ficar visível: retoma o rVFC (mais eficiente/alinhado ao frame real)
+          mode = "rvfc";
+          lastSent = 0;
+          rvfcVideo = video;
+          rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
+        }
+      };
+      document.addEventListener("visibilitychange", onVisibility);
+      if (document.hidden) onVisibility(); // já abriu em 2º plano? entra em modo timer na hora
 
       // A central pode pedir um perfil de captura (ex.: leitura de código → alta resolução).
       socket.on("capture", (cfg: { width?: number; quality?: number; fps?: number }) => {
@@ -163,7 +221,7 @@ export function CameraPage() {
         if (cfg?.quality) jpegQuality = cfg.quality;
         if (cfg?.fps && cfg.fps !== frameFps) {
           frameFps = cfg.fps;
-          if (!useRvfc) startTimer(); // no caminho rVFC o gate já lê frameFps a cada callback
+          if (mode === "timer") startTimer(); // rVFC lê frameFps a cada callback; no timer, re-cria com o novo fps
         }
         setProfile(`${frameWidth}px · q${Math.round(jpegQuality * 100)}`);
       });
@@ -171,8 +229,10 @@ export function CameraPage() {
 
     return () => {
       alive = false;
+      if (onVisibility) document.removeEventListener("visibilitychange", onVisibility);
       if (timer) clearInterval(timer);
       if (rvfcHandle !== null) rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
+      audioCtx?.close().catch(() => {});
       socketRef.current?.disconnect();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };

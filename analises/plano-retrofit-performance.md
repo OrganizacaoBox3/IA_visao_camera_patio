@@ -6,6 +6,17 @@
 > jul/2026. Doutrina (`../agentes/`): sem evidência não há pronto; medir antes de afirmar; entregas
 > pequenas e reversíveis; **a simplicidade é o sidecar provado, não a pilha de micro-otimizações**.
 
+## 0. Escopo (inegociável)
+
+O retrofit vale para **TODA E QUALQUER câmera de rede** — não para as câmeras públicas de teste
+(Pula/Gorizia/Mošćenička são só streams HLS convenientes enquanto não há câmeras do CD). Tudo aqui é
+**agnóstico de câmera**: Fase 0 (pausar tiles/motion-gate/HUD) vale para qualquer feed; o motor
+D-FINE-S roda em toda câmera relaiada; e o go2rtc (Fase 1) é um **ingestor universal** (RTSP/ONVIF/
+RTMP/HLS/USB). **A câmera RTSP real do CD é o caso NATIVO e MELHOR** (codec-copy = passthrough, 0
+re-encode, decode por HW) — performa melhor que os HLS de teste, não pior. O único fator que varia por
+câmera é o que ela e a rede entregam (resolução/fps/codec/banda); o retrofit remove os gargalos
+**sistêmicos** (decode MJPEG na main-thread, CPU do relé) para todas de uma vez.
+
 ## 1. Diagnóstico — por que está 1/10 (com evidência)
 
 A causa **não é uma** — são camadas somadas. Separando o que **não está ativo** (config/deploy) do
