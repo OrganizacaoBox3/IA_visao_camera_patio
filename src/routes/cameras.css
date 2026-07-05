@@ -62,6 +62,27 @@
   gap: var(--sp-2);
 }
 
+/* ── "Ajustes desta câmera" (papel + vídeo no painel por câmera) ──
+   Reusa a linha neutra .cam-row; os dois Selects ficam à direita, empilhando no mobile. */
+.cam-set-controls {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 220px;
+}
+.cam-set-note {
+  margin: var(--sp-3) 0 0;
+  font-size: 12px;
+}
+@media (max-width: 560px) {
+  .cam-set-row {
+    flex-wrap: wrap;
+  }
+  .cam-set-controls {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 /* Rodapé das seções (ação primária à esquerda, fora da lista). */
 .cam-sec-foot {
   display: flex;

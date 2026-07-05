@@ -28,7 +28,7 @@ const MODO_DESC: Record<ZoneMode, string> = {
   atividade: "Movimento/ociosidade + contagem de pessoas na área (padrão).",
   leitura: "Lê código de barras/QR dentro da zona — desenhe-a sobre a esteira/etiqueta.",
   objetos: "Conta as classes escolhidas (caixa, palete…) — modelo pesado, o 1º uso demora.",
-  fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use ⚙ Câmeras → Operador (fadiga).",
+  fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use Câmeras → Ajustes desta câmera → Operador (fadiga).",
   exclusao:
     "Ignora detecções de pessoa nesta área — use sobre fontes fixas de falso positivo (grade, placa, janela de van, TV). Não gera indicador.",
 };

@@ -892,8 +892,8 @@ export function ReportPage() {
                 </>
               ) : isFadiga ? (
                 <>
-                  Na Central, <b>⚙ Câmeras</b> → selecione <b>Operador (fadiga)</b> na câmera do
-                  posto — ou desenhe uma zona com <b>Modo: Fadiga</b> numa câmera de área.
+                  Em <b>Câmeras → Ajustes desta câmera</b>, selecione <b>Operador (fadiga)</b> na
+                  câmera do posto — ou desenhe uma zona com <b>Modo: Fadiga</b> numa câmera de área.
                 </>
               ) : (
                 <>

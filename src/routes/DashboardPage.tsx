@@ -13,10 +13,10 @@ import {
 } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
-import { getCameraCfg, setCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
+import { getCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
 import { loadZonesForCamera } from "../zones";
 import { useAuth } from "../auth";
-import { Button, Switch, Select, Dialog, Tooltip, Badge, useToast } from "../ui";
+import { Button, Switch, Select, Tooltip, Badge, useToast } from "../ui";
 import {
   listAlarms,
   ackAlarm,
@@ -171,7 +171,6 @@ export function DashboardPage() {
   const [analysisEngines, setAnalysisEngines] = useState<Record<string, "hub" | "local">>({});
   const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
   const [openId, setOpenId] = useState<string | null>(null);
-  const [showConfig, setShowConfig] = useState(false);
   const [page, setPage] = useState(0);
   // Modo demo ("Limite curto 10s") OFF por padrão (produção). Liga via env VITE_DEMO_MODE=1 ou toggle;
   // a escolha do toggle é lembrada na sessão para não voltar a disparar alertas falsos a cada reload.
@@ -751,24 +750,10 @@ export function DashboardPage() {
   // Fase 1/5 (go2rtc): transporte de VÍDEO NO PAINEL por câmera. A flag `transport` vive no camcfg
   // (normalizado em cameraConfig; default "mjpeg" = tile atual, OFF por default). É o que decide o
   // modo de render do CameraTile (mjpeg = frames Socket.IO; webrtc = WHEP/WHIP via go2rtc).
+  // O papel (modo) e o transporte são EDITADOS na tela /cameras ("Ajustes desta câmera"); aqui a
+  // Central só LÊ o camcfg (via cfgOf) para decidir render/pipeline de cada tile.
   function transportOf(id: string): "mjpeg" | "webrtc" {
     return cfgOf(id).transport === "webrtc" ? "webrtc" : "mjpeg";
-  }
-  function setKind(id: string, fadiga: boolean) {
-    setCfgs((prev) => {
-      const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" };
-      setCameraCfg(id, merged);
-      return { ...prev, [id]: merged };
-    });
-  }
-  // Liga/desliga o transporte WebRTC da câmera (persiste no camcfg via setCameraCfg — mesmo caminho
-  // do papel). Atualiza `cfgs` para que transportOf/CameraTile reflitam a troca no mesmo tick.
-  function setTransport(id: string, webrtc: boolean) {
-    setCfgs((prev) => {
-      const merged: CameraCfg = { ...cfgOf(id), transport: webrtc ? "webrtc" : "mjpeg" };
-      setCameraCfg(id, merged);
-      return { ...prev, [id]: merged };
-    });
   }
 
   // Seleção da view ativa (preferência local do operador). "__all__" = "Todas as câmeras".
@@ -845,9 +830,6 @@ export function DashboardPage() {
             />{" "}
             Limite curto (10s)
           </span>
-        </Tooltip>
-        <Tooltip content="Definir o tipo de cada câmera (área × operador)">
-          <Button onClick={() => setShowConfig(true)}>⚙ Câmeras</Button>
         </Tooltip>
         {/* Ação ÚNICA de câmeras (substitui "+ Nó de câmera" e "+ Câmera IP"): leva à tela
             /cameras, que adiciona/gerencia tanto câmera IP (só superadmin lá dentro, como o
@@ -996,55 +978,8 @@ export function DashboardPage() {
           </div>
         )}
 
-        {/* Modal: tipo de cada câmera */}
-        <Dialog
-          open={showConfig}
-          onOpenChange={setShowConfig}
-          title="Configuração de câmeras"
-          description={
-            <>
-              <b>Câmera de área</b> (padrão): vista geral do setor — abra a câmera e desenhe zonas,
-              cada uma com seu modo (Atividade / Leitura / Objetos / Fadiga).{" "}
-              <b>Operador (fadiga)</b>: câmera dedicada apontada ao rosto de 1 operador — só
-              monitora fadiga, sem zonas.
-            </>
-          }
-        >
-          {cameras.length === 0 && <p className="empty-note">Nenhuma câmera conectada.</p>}
-          {cameras.map((c) => (
-            <div key={`cfg-${c.id}`} className="cfg-row">
-              <div className="cfg-name">
-                <b>{c.label}</b>
-                <span className="muted">{c.id}</span>
-              </div>
-              <div style={{ display: "grid", gap: "var(--sp-2)" }}>
-                <Select
-                  value={isFadiga(c.id) ? "fadiga" : "area"}
-                  onChange={(v) => setKind(c.id, v === "fadiga")}
-                  ariaLabel="Tipo da câmera"
-                  options={[
-                    { value: "area", label: "Câmera de área (zonas)" },
-                    { value: "fadiga", label: "Operador (fadiga)" },
-                  ]}
-                />
-                {/* Transporte do VÍDEO NO PAINEL (Fase 1/5, go2rtc). Rótulo desambiguado do
-                    `transport` tcp/udp do RTSP no /cameras — aquele é do ffmpeg. */}
-                <Select
-                  value={transportOf(c.id)}
-                  onChange={(v) => setTransport(c.id, v === "webrtc")}
-                  ariaLabel="Vídeo no painel"
-                  options={[
-                    { value: "mjpeg", label: "Vídeo no painel: MJPEG" },
-                    { value: "webrtc", label: "Vídeo no painel: WebRTC" },
-                  ]}
-                />
-                <span className="muted" style={{ fontSize: 10 }}>
-                  WebRTC = vídeo fluido via go2rtc (requer go2rtc ligado)
-                </span>
-              </div>
-            </div>
-          ))}
-        </Dialog>
+        {/* O antigo modal "⚙ Câmeras" (papel + vídeo no painel por câmera) foi INCORPORADO à
+            tela /cameras ("Ajustes desta câmera") — fim da fragmentação da config por-câmera. */}
 
         {/* Gerenciador de views por setor (Onda C · item 11) — criar/renomear/excluir + ordenar */}
         <ViewsManager

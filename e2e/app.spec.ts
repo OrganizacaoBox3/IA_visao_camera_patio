@@ -81,15 +81,26 @@ test("regressão: Select abre e seleciona DENTRO do modal de config da zona", as
   await expect(modo).toContainText("Leitura"); // valor mudou → confirmado
 });
 
-test("regressão: Select funciona no modal '⚙ Câmeras' do dashboard", async ({ page, context }) => {
+// MIGRAÇÃO (2026-07): o modal standalone "⚙ Câmeras" da Central foi INCORPORADO à tela /cameras
+// (seção "Ajustes desta câmera") — fim da fragmentação da config por-câmera. O Select "Tipo da
+// câmera" (papel: área × operador/fadiga) agora vive lá, numa seção comum (não mais num Dialog).
+// Este teste mantém a COBERTURA DO PAPEL: a câmera conectada aparece em /cameras e o Select muda
+// o tipo. (A cobertura de Select-DENTRO-de-Dialog segue nos testes de "Modo da zona" acima e no
+// teste do form de cadastro IP abaixo.)
+test("Ajustes da câmera (/cameras): o Select de papel (área × fadiga) muda o tipo", async ({
+  page,
+  context,
+}) => {
   await login(page);
   await connectCamera(context, page);
 
-  await page.getByRole("button", { name: /Câmeras/i }).click();
-  const dlg = page.getByRole("dialog");
-  await expect(dlg).toBeVisible();
+  // Navega à tela de câmeras pelo menu lateral; a câmera conectada entra na seção de ajustes
+  // (CameraSettingsSection abre seu próprio socket p/ a lista, sem receber frames de vídeo).
+  await page.getByRole("link", { name: "Câmeras" }).click();
+  await expect(page).toHaveURL(/\/cameras/);
 
-  const tipo = dlg.getByLabel("Tipo da câmera");
+  const tipo = page.getByLabel("Tipo da câmera").first();
+  await expect(tipo).toBeVisible({ timeout: 30_000 });
   await tipo.click();
   const opt = page.getByRole("option", { name: /Operador \(fadiga\)/i });
   await expect(opt).toBeVisible();
@@ -99,20 +110,23 @@ test("regressão: Select funciona no modal '⚙ Câmeras' do dashboard", async (
 
 // BUG relatado: abrir um Select e fechá-lo (ESC ou clique fora) estava FECHANDO O MODAL.
 // O Radix deve dismissar só a camada de cima (o Select), mantendo o Dialog aberto.
-test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashboard)", async ({
+// MIGRAÇÃO (2026-07): o antigo alvo (modal "⚙ Câmeras") saiu da Central; a cobertura de
+// Select-em-Dialog + dismiss por camadas passa a usar o Dialog do CADASTRO DE CÂMERA IP em
+// /cameras (Select "Transporte RTSP", visível por padrão pois rtsp é o esquema default do form).
+test("Select aberto em Dialog: ESC e clique-fora fecham só o Select, não o Dialog (/cameras)", async ({
   page,
-  context,
 }) => {
-  await login(page);
-  await connectCamera(context, page);
+  await login(page); // admin = superadmin → vê o cadastro de câmeras IP
+  await page.getByRole("link", { name: "Câmeras" }).click();
+  await expect(page).toHaveURL(/\/cameras/);
 
-  await page.getByRole("button", { name: /Câmeras/i }).click();
+  await page.getByRole("button", { name: "+ Adicionar câmera IP" }).click();
   const dlg = page.getByRole("dialog");
   await expect(dlg).toBeVisible();
-  const tipo = dlg.getByLabel("Tipo da câmera");
+  const sel = dlg.getByLabel("Transporte RTSP");
 
   // 1) ESC fecha só o Select
-  await tipo.click();
+  await sel.click();
   await expect(page.getByRole("option").first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("option")).toHaveCount(0); // select fechou
@@ -121,7 +135,7 @@ test("Select aberto: ESC e clique-fora fecham só o Select, não o Dialog (dashb
   // 2) clique no OVERLAY com o Select aberto deve fechar só o Select (Radix:
   //    Select tem disableOutsidePointerEvents → blinda o Dialog na 1ª interação).
   //    Usa locator CSS porque o Select aberto deixa o resto aria-hidden.
-  await tipo.click();
+  await sel.click();
   await expect(page.getByRole("option").first()).toBeVisible();
   await page.locator(".ui-overlay").click({ position: { x: 5, y: 5 } });
   await expect(page.getByRole("option")).toHaveCount(0); // select fechou
