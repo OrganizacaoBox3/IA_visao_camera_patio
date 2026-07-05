@@ -1,17 +1,15 @@
 // Configuração COMPARTILHADA das câmeras entre operadores/turnos:
-//  • VIEWS  — layouts salvos do dashboard (lista GLOBAL): { id, name, cameraIds[] }.
 //  • TRIPWIRES — linhas de contagem POR CÂMERA: { id, a:{x,y}, b:{x,y} } (coords normalizadas 0..1).
 //  • ZONES — zonas (ROIs + modo/config) POR CÂMERA: array de Zone (formato de src/zones.ts).
 //  • CAMCONFIG — config de câmera POR CÂMERA: objeto CameraCfg (formato de src/cameraConfig.ts).
 // Antes viviam no localStorage de cada operador; agora ficam centralizadas para serem partilhadas.
 // Espelha o padrão de recipients.js/settings.js: cache em memória + Postgres (se configurado) ou
-// camcfg.json (fallback). LGPD: SÓ geometria/ids/nomes/config — nunca imagem, frame ou PII.
+// camcfg.json (fallback). LGPD: SÓ geometria/ids/config — nunca imagem, frame ou PII.
 const fs = require("node:fs");
 const path = require("node:path");
 const db = require("./db");
 
 const FILE = path.join(__dirname, "camcfg.json");
-let views = []; // SavedView[] — lista global ordenada
 let tripwires = new Map(); // cameraId -> Tripwire[]
 let zones = new Map(); // cameraId -> Zone[]
 let camConfigs = new Map(); // cameraId -> CameraCfg
@@ -35,27 +33,6 @@ const clamp01 = (v, d) => {
 };
 const strList = (v) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
 
-function cleanView(v) {
-  if (!v || typeof v !== "object") return null;
-  const id = str(v.id);
-  const name = str(v.name);
-  if (!id || !name) return null;
-  const cameraIds = Array.isArray(v.cameraIds) ? v.cameraIds.map(str).filter(Boolean) : [];
-  return { id, name, cameraIds };
-}
-function cleanViews(arr) {
-  if (!Array.isArray(arr)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const v of arr) {
-    const c = cleanView(v);
-    if (c && !seen.has(c.id)) {
-      seen.add(c.id);
-      out.push(c);
-    }
-  }
-  return out;
-}
 function cleanTripwire(w) {
   if (!w || typeof w !== "object" || !w.a || !w.b) return null;
   const id = str(w.id);
@@ -137,7 +114,6 @@ function saveFile() {
       FILE,
       JSON.stringify(
         {
-          views,
           tripwires: Object.fromEntries(tripwires),
           zones: Object.fromEntries(zones),
           camConfigs: Object.fromEntries(camConfigs),
@@ -148,36 +124,6 @@ function saveFile() {
     );
   } catch (e) {
     console.error("[camcfg] falha ao salvar:", e.message);
-  }
-}
-// Views: substitui a lista inteira (delete-all + reinsert mantendo a ordem via `ord`).
-// R4: TRANSAÇÃO numa única conexão do pool — o delete-all + N inserts é atômico. Se um insert
-// falhar, ROLLBACK preserva as views anteriores (antes, uma falha parcial zerava a lista global).
-async function persistViews() {
-  if (!usingPg) return saveFile();
-  const client = await db.getPool().connect();
-  try {
-    await client.query("begin");
-    await client.query("delete from app_views");
-    for (let i = 0; i < views.length; i++) {
-      const v = views[i];
-      await client.query("insert into app_views (id,name,cameras,ord) values ($1,$2,$3,$4)", [
-        v.id,
-        v.name,
-        JSON.stringify(v.cameraIds),
-        i,
-      ]);
-    }
-    await client.query("commit");
-  } catch (e) {
-    try {
-      await client.query("rollback");
-    } catch {
-      /* rollback best-effort: a conexão pode já estar quebrada */
-    }
-    throw e;
-  } finally {
-    client.release();
   }
 }
 // Tripwires: substitui as linhas de UMA câmera (upsert; remove a linha se ficou vazia).
@@ -223,12 +169,6 @@ async function persistCamConfig(cameraId) {
 async function init() {
   if (db.configured()) {
     try {
-      const rv = await db.query(
-        "select id, name, cameras from app_views order by ord asc nulls first, id asc",
-      );
-      views = rv.rows
-        .map((r) => cleanView({ id: r.id, name: r.name, cameraIds: r.cameras }))
-        .filter(Boolean);
       const rt = await db.query("select camera_id, data from cam_tripwires");
       tripwires = new Map();
       for (const row of rt.rows) {
@@ -249,7 +189,7 @@ async function init() {
       }
       usingPg = true;
       console.log(
-        `[camcfg] ${views.length} view(s); tripwires de ${tripwires.size}, zonas de ${zones.size} e config de ${camConfigs.size} câmera(s) do Postgres`,
+        `[camcfg] tripwires de ${tripwires.size}, zonas de ${zones.size} e config de ${camConfigs.size} câmera(s) do Postgres`,
       );
       return;
     } catch (e) {
@@ -259,7 +199,6 @@ async function init() {
   usingPg = false;
   try {
     const data = JSON.parse(fs.readFileSync(FILE, "utf8"));
-    views = cleanViews(data && data.views);
     tripwires = new Map();
     for (const [cam, arr] of Object.entries((data && data.tripwires) || {})) {
       const list = cleanTripwires(arr);
@@ -276,7 +215,6 @@ async function init() {
       if (cfg) camConfigs.set(String(cam), cfg);
     }
   } catch {
-    views = [];
     tripwires = new Map();
     zones = new Map();
     camConfigs = new Map();
@@ -284,15 +222,6 @@ async function init() {
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────
-function allViews() {
-  return views;
-}
-// Substitui a lista inteira de views (compartilhada) e persiste; devolve a lista salva.
-async function saveViews(input) {
-  views = cleanViews(input);
-  await persistViews();
-  return views;
-}
 function getTripwires(cameraId) {
   return tripwires.get(str(cameraId)) || [];
 }
@@ -336,8 +265,6 @@ async function saveCamConfig(cameraId, input) {
 
 module.exports = {
   init,
-  allViews,
-  saveViews,
   getTripwires,
   saveTripwires,
   getZones,

@@ -26,7 +26,6 @@ function ctxWith(dets: Detection[]): AtividadeCtx {
   return {
     now: 0,
     frameDt: 0,
-    demoMode: false,
     paused: false,
     luma: null,
     prev: null,

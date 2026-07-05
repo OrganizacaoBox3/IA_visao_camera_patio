@@ -1,29 +1,11 @@
-// Rotas de configuração de câmera (store camcfg): views (layouts) + tripwires/zones/camconfig por
-// câmera. GET = qualquer autenticado; PUT = autenticado (views) ou requireConfigurer (por câmera).
+// Rotas de configuração de câmera (store camcfg): tripwires/zones/camconfig por
+// câmera. GET = qualquer autenticado; PUT = requireConfigurer (por câmera).
 // Emite "camcfg-updated" aos painéis via io a cada gravação.
 const camcfg = require("../camcfg");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireConfigurer, io } = ctx;
   const path0 = req.url ? req.url.split("?")[0] : "";
-
-  // ── VIEWS (layouts do dashboard) — COMPARTILHADAS, lista global ───────────
-  // GET (qualquer autenticado) lê; PUT (qualquer autenticado) substitui a lista inteira e persiste.
-  if (path0 === "/api/views") {
-    if (req.method === "GET") {
-      if (!requireAuth(req, res)) return true;
-      json(res, 200, camcfg.allViews());
-      return true;
-    }
-    if (req.method === "PUT") {
-      if (!requireAuth(req, res)) return true;
-      const body = JSON.parse((await readBody(req, 200_000)) || "{}");
-      const saved = await camcfg.saveViews(body && body.views);
-      io.to("dashboards").emit("camcfg-updated", { kind: "views" });
-      json(res, 200, saved);
-      return true;
-    }
-  }
 
   // ── TRIPWIRES (linhas de contagem) — COMPARTILHADAS, por câmera ───────────
   // GET (qualquer autenticado) lê; PUT exige perfil de configuração (engenharia).

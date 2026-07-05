@@ -250,7 +250,6 @@ type Props = {
   label: string;
   getFrame: () => FrameSource | null;
   mode: "tile" | "full";
-  demoMode?: boolean;
   onOpen?: () => void;
   onClose?: () => void;
   onAlert?: (msg: string) => void;
@@ -291,7 +290,6 @@ export function CameraWorkspace({
   label,
   getFrame,
   mode,
-  demoMode = true,
   onOpen,
   onClose,
   onAlert,
@@ -1098,7 +1096,6 @@ export function CameraWorkspace({
           const ctx: AtividadeCtx = {
             now,
             frameDt: activityDt, // (3.4) inclui o dt dos frames pulados na grade (tempo real)
-            demoMode,
             paused: pausedRef.current,
             luma,
             prev,
@@ -1300,7 +1297,7 @@ export function CameraWorkspace({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getFrame, mode, demoMode, cameraId, label]);
+  }, [getFrame, mode, cameraId, label]);
 
   function drawScene(canvas: HTMLCanvasElement, viewport: HTMLDivElement, f: FrameSource) {
     const dpr = window.devicePixelRatio || 1;
@@ -2068,7 +2065,6 @@ export function CameraWorkspace({
 
       <ConfigZonaDialog
         zone={cfgZone}
-        demoMode={demoMode}
         histState={histState}
         histDataset={histDataset}
         onClose={() => setCfgZoneId(null)}

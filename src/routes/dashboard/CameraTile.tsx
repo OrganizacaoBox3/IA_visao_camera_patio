@@ -180,7 +180,6 @@ type CameraTileProps = {
   paused?: boolean;
   isFadiga: boolean;
   getFrame: () => FrameSource | null;
-  demoMode: boolean;
   tripwiresRev: number;
   status: CameraStatus | undefined;
   // F1-C (ADR-009): fonte da análise da câmera. "hub" = motor server-side grava os indicadores
@@ -216,7 +215,6 @@ export const CameraTile = memo(function CameraTile({
   paused,
   isFadiga,
   getFrame,
-  demoMode,
   tripwiresRev,
   status,
   analysisEngine,
@@ -267,7 +265,6 @@ export const CameraTile = memo(function CameraTile({
       label={camera.label}
       getFrame={getFrame}
       mode="tile"
-      demoMode={demoMode}
       tripwiresRev={tripwiresRev}
       analysisEngine={analysisEngine}
       getHubAnalysis={getHubAnalysis}

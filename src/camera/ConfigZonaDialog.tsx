@@ -35,7 +35,6 @@ const MODO_DESC: Record<ZoneMode, string> = {
 
 type Props = {
   zone: Zone | null; // cfgZone (null → diálogo fechado)
-  demoMode: boolean;
   histState: "idle" | "loading" | "ready" | "error";
   histDataset: Dataset | null;
   onClose: () => void;
@@ -45,7 +44,6 @@ type Props = {
 
 export function ConfigZonaDialog({
   zone,
-  demoMode,
   histState,
   histDataset,
   onClose,
@@ -100,17 +98,9 @@ export function ConfigZonaDialog({
                       ariaLabel="Atividade da zona"
                     />
                   </Field>
-                  <Field
-                    label="Alerta se parada acima de"
-                    hint={
-                      demoMode
-                        ? `Modo demo força ${fmtLimit(APP_CONFIG.zones.demoIdleAlertMs)}.`
-                        : undefined
-                    }
-                  >
+                  <Field label="Alerta se parada acima de">
                     <Select
                       value={String(z.idleAlertMs)}
-                      disabled={demoMode}
                       onChange={(v) => patchZone(z.id, { idleAlertMs: Number(v) })}
                       options={APP_CONFIG.zones.limitPresetsMs.map((ms) => ({
                         value: String(ms),
@@ -163,8 +153,7 @@ export function ConfigZonaDialog({
                               </b>{" "}
                               alerta(s)/dia estimados{" "}
                               <span className="muted">
-                                (base {p.baselinePerDay}/dia · {p.days}d
-                                {demoMode ? " · limite curto demo eleva o real" : ""})
+                                (base {p.baselinePerDay}/dia · {p.days}d)
                               </span>
                             </span>
                           );

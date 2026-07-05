@@ -84,17 +84,7 @@ export const APP_CONFIG = {
     // Limite de inatividade p/ disparar alerta. Tempo SEMPRE exibido em valor REAL (sem escala).
     // Agora é definido POR ÁREA na interface; este é só o default de zonas novas/semente.
     defaultIdleAlertMs: 15 * 60_000, // limite operacional (15 min)
-    demoIdleAlertMs: 10_000, // limite curto p/ demonstrar ao vivo (10 s) — sobrepõe por-área quando "Limite curto" está ligado
     limitPresetsMs: [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000], // 30s..30min
-  },
-
-  // Modo DEMONSTRAÇÃO. O "Limite curto (10s)" encurta o tempo de inatividade p/ disparar alertas
-  // ao vivo (zones.demoIdleAlertMs), gerando alertas/andon/WhatsApp em massa. Em PRODUÇÃO deve ficar
-  // DESLIGADO (alertas seguem o limite real por área). Liga-se explicitamente por:
-  //   • env build-time VITE_DEMO_MODE=1  → default ligado (ambiente de demo); ou
-  //   • o toggle "Limite curto (10s)" na central (override manual por sessão).
-  demo: {
-    shortLimitDefault: env("VITE_DEMO_MODE") === "1",
   },
 
   // OVERLAY da câmera ao vivo (Onda A — fundação consumida pela Onda 2/CameraWorkspace).

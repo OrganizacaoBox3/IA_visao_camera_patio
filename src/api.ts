@@ -262,13 +262,6 @@ function apiPut<T>(path: string, body: unknown): Promise<T> {
   );
 }
 
-// VIEWS — layouts salvos do dashboard (lista global). { id, name, cameraIds[] }.
-export type SavedView = { id: string; name: string; cameraIds: string[] };
-// GET /api/views → SavedView[]. Auth: qualquer usuário autenticado.
-export const getViews = () => apiGet<SavedView[]>("/api/views");
-// PUT /api/views {views} → substitui a lista inteira; responde a lista salva. Auth: autenticado.
-export const saveViews = (views: SavedView[]) => apiPut<SavedView[]>("/api/views", { views });
-
 // TRIPWIRES — linhas de contagem por câmera. coords NORMALIZADAS 0..1.
 export type Tripwire = { id: string; a: { x: number; y: number }; b: { x: number; y: number } };
 // GET /api/tripwires/:cameraId → Tripwire[]. Auth: qualquer usuário autenticado.

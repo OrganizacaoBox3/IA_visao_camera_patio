@@ -11,7 +11,7 @@ import {
   type HubZone,
 } from "../../CameraWorkspace";
 import { loadCamConfig } from "../../cameraConfig";
-import { getViews, type AlarmEvent, type SavedView } from "../../api";
+import { type AlarmEvent } from "../../api";
 import { type Camera, type CameraStatus } from "./types";
 import { newFrameEntry, type FrameEntry } from "./useFrameRelay";
 
@@ -25,10 +25,9 @@ type Deps = {
   readingZoneRef: React.RefObject<Map<string, boolean>>;
   drainDecode: (id: string) => void;
   loadReadingFlag: (id: string, label: string) => void;
-  // Setters das outras frentes (câmeras + alarmes + views).
+  // Setters das outras frentes (câmeras + alarmes).
   setCameras: React.Dispatch<React.SetStateAction<Camera[]>>;
   setAlarms: React.Dispatch<React.SetStateAction<AlarmEvent[]>>;
-  setViews: React.Dispatch<React.SetStateAction<SavedView[]>>;
 };
 
 export type DashboardSocket = {
@@ -52,7 +51,6 @@ export function useDashboardSocket({
   loadReadingFlag,
   setCameras,
   setAlarms,
-  setViews,
 }: Deps): DashboardSocket {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -140,25 +138,11 @@ export function useDashboardSocket({
       if (activeIdsRef.current.has(p.id)) drainDecode(p.id);
     });
     // Sincronização ao vivo de config compartilhada (ADR-006). Evento aditivo na sala `dashboards`:
-    //   • kind:"views" → recarrega a LISTA de views do backend (last-write-wins). A seleção local
-    //     (activeViewId) é preservada; se a view selecionada sumiu, o efeito de validação cai p/ "Todas".
-    //     Idempotente: como o próprio salvar já atualiza o estado, recarregar não dispara toasts (silencioso
-    //     em sucesso; só loga em falha p/ não quebrar a central nem repetir avisos).
     //   • kind:"tripwires" → incrementa a revisão daquela câmera; a prop `tripwiresRev` faz a tile re-buscar.
     socket.on(
       "camcfg-updated",
-      (
-        p:
-          | { kind: "views" }
-          | { kind: "tripwires" | "zones" | "camconfig"; cameraId: string },
-      ) => {
-        if (p?.kind === "views") {
-          getViews()
-            .then((remote) => setViews(remote))
-            .catch((e) => {
-              console.error("[views] recarga ao vivo falhou", e);
-            });
-        } else if (p?.kind === "tripwires" && typeof p.cameraId === "string") {
+      (p: { kind: "tripwires" | "zones" | "camconfig"; cameraId: string }) => {
+        if (p?.kind === "tripwires" && typeof p.cameraId === "string") {
           setRevByCamera((prev) => {
             const next = new Map(prev);
             next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
@@ -190,7 +174,6 @@ export function useDashboardSocket({
     loadReadingFlag,
     setCameras,
     setAlarms,
-    setViews,
   ]);
 
   return { socketRef, connected, statuses, analysisEngines, revByCamera };

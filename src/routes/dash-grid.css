@@ -1,0 +1,19 @@
+/* Grade responsiva do dashboard — MECANISMO ÚNICO (going-gray R2.3). Importado SÓ por
+   DashboardPage.tsx. A contagem de colunas no DESKTOP vem do atributo [data-cols="N"]
+   (N = colsFor(), escrito por DashboardPage), nunca de style inline. Estas regras atuam SÓ
+   acima de 900px (desktop); abaixo, o index.css assume o controle via media queries
+   (@900px → 2 col, @640px → 1 col). Fallback estático (3 col) fica na base .dash-grid. */
+@media (min-width: 901px) {
+  .dash-grid[data-cols="1"] {
+    grid-template-columns: 1fr;
+  }
+  .dash-grid[data-cols="2"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .dash-grid[data-cols="3"] {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .dash-grid[data-cols="4"] {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}

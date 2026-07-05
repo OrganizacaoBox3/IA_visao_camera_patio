@@ -104,7 +104,6 @@ export function filterExcludedPersons(
 export type AtividadeCtx = {
   now: number;
   frameDt: number;
-  demoMode: boolean;
   paused: boolean;
   luma: Float32Array | null;
   prev: Float32Array | null;
@@ -307,9 +306,7 @@ export class AtividadeProcessor implements Disposable {
     if (strong || slow) rt.lastActivityAt = now;
     rt.idleMs = now - rt.lastActivityAt;
 
-    const idleLimit = ctx.demoMode
-      ? APP_CONFIG.zones.demoIdleAlertMs
-      : (z.idleAlertMs ?? APP_CONFIG.zones.defaultIdleAlertMs);
+    const idleLimit = z.idleAlertMs ?? APP_CONFIG.zones.defaultIdleAlertMs;
     let target: ZoneState;
     if (rt.idleMs > idleLimit) target = "ALERTA";
     else if (slow) target = "LENTA";
