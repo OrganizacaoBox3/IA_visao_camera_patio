@@ -75,9 +75,9 @@ export function CameraSettingsSection() {
       return { ...prev, [id]: merged };
     });
   }
-  function setTransport(id: string, webrtc: boolean) {
+  function setTransport(id: string, transport: CameraCfg["transport"]) {
     setCfgs((prev) => {
-      const merged: CameraCfg = { ...cfgOf(id), transport: webrtc ? "webrtc" : "mjpeg" };
+      const merged: CameraCfg = { ...cfgOf(id), transport };
       setCameraCfg(id, merged);
       return { ...prev, [id]: merged };
     });
@@ -104,7 +104,7 @@ export function CameraSettingsSection() {
           {cameras.map((c) => {
             const cfg = cfgOf(c.id);
             const isFadiga = cfg.modo === "fadiga";
-            const transport = cfg.transport === "webrtc" ? "webrtc" : "mjpeg";
+            const transport = cfg.transport; // "auto" (padrão) | "mjpeg" | "webrtc"
             return (
               <div key={`cset-${c.id}`} className="cam-row cam-set-row">
                 <div className="cam-row__name">
@@ -121,13 +121,15 @@ export function CameraSettingsSection() {
                       { value: "fadiga", label: "Operador (fadiga)" },
                     ]}
                   />
-                  {/* Transporte do VÍDEO NO PAINEL (Fase 1/5, go2rtc). Rótulo desambiguado do
-                      `transport` tcp/udp do RTSP (no cadastro IP acima) — aquele é do ffmpeg. */}
+                  {/* Transporte do VÍDEO NO PAINEL (go2rtc). Rótulo desambiguado do `transport`
+                      tcp/udp do RTSP (no cadastro IP acima) — aquele é do ffmpeg. "Automático" (padrão)
+                      = melhor disponível; MJPEG/WebRTC são OVERRIDES manuais (escape hatch). */}
                   <Select
                     value={transport}
-                    onChange={(v) => setTransport(c.id, v === "webrtc")}
+                    onChange={(v) => setTransport(c.id, v as CameraCfg["transport"])}
                     ariaLabel="Vídeo no painel"
                     options={[
+                      { value: "auto", label: "Vídeo no painel: Automático (melhor disponível)" },
                       { value: "mjpeg", label: "Vídeo no painel: MJPEG" },
                       { value: "webrtc", label: "Vídeo no painel: WebRTC" },
                     ]}
@@ -139,7 +141,9 @@ export function CameraSettingsSection() {
         </div>
       )}
       <p className="muted cam-set-note">
-        WebRTC = vídeo fluido via go2rtc (requer go2rtc ligado). MJPEG (padrão) = frames do relé.
+        <b>Automático</b> (padrão) = melhor disponível: usa WebRTC (vídeo fluido via go2rtc) quando o
+        go2rtc serve a câmera e cai para MJPEG (frames do relé) quando não — sem configurar nada.
+        <b> MJPEG</b> e <b>WebRTC</b> forçam um transporte fixo (override manual).
       </p>
     </section>
   );

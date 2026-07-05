@@ -170,6 +170,11 @@ export function DashboardPage() {
   // Hub antigo sem o evento → mapa vazio → tudo "local" (comportamento idêntico ao atual).
   const [analysisEngines, setAnalysisEngines] = useState<Record<string, "hub" | "local">>({});
   const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
+  // ── Onda 2 (simplificação de config): STREAMS que o go2rtc conhece agora ──
+  // Alimenta o transporte "auto" (melhor disponível) de `transportOf`: um id neste Set = o go2rtc
+  // serve a câmera → "auto" resolve WebRTC; ausente / Set vazio (go2rtc fora) → "auto" resolve MJPEG.
+  // Refrescado no mount + a cada ~5s pelo efeito de descoberta abaixo (GET /go2rtc/api/streams).
+  const [go2rtcStreams, setGo2rtcStreams] = useState<Set<string>>(() => new Set());
   const [openId, setOpenId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   // Modo demo ("Limite curto 10s") OFF por padrão (produção). Liga via env VITE_DEMO_MODE=1 ou toggle;
@@ -470,6 +475,41 @@ export function DashboardPage() {
     });
   }, [cameras]);
 
+  // ── Descoberta de streams do go2rtc (transporte "auto") ──────────────────────────────────────
+  // GET /go2rtc/api/streams (proxy same-origin) → objeto { <id>: {...} }; as CHAVES são os ids que
+  // o gateway serve (RTSP do yaml + WHIP dinâmicos). Refresca no mount + a cada 5s. Se a chamada
+  // FALHAR (go2rtc desligado/subindo, timeout, 502 do proxy) → Set VAZIO → todo "auto" cai para
+  // MJPEG (o tile de hoje). Sem flag: go2rtc no ar + câmera conhecida = WebRTC automático.
+  useEffect(() => {
+    let alive = true;
+    const url = `${APP_CONFIG.go2rtc.baseUrl}/api/streams`;
+    async function refresh() {
+      let ids: string[] = [];
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data: unknown = await res.json();
+          if (data && typeof data === "object")
+            ids = Object.keys(data as Record<string, unknown>);
+        }
+      } catch {
+        ids = []; // go2rtc fora/subindo → sem streams → "auto" resolve MJPEG (fallback automático)
+      }
+      if (!alive) return;
+      setGo2rtcStreams((prev) => {
+        // Só re-renderiza se o conjunto mudou (evita re-render a cada 5s sem motivo).
+        if (prev.size === ids.length && ids.every((id) => prev.has(id))) return prev;
+        return new Set(ids);
+      });
+    }
+    void refresh();
+    const t = setInterval(refresh, 5000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
   // Persiste só as PREFS locais (seleção + auto-surface) no localStorage (por usuário + host).
   // A LISTA de views é compartilhada e vive no backend (ver efeito de carga/migração abaixo).
   useEffect(() => {
@@ -747,13 +787,19 @@ export function DashboardPage() {
   function isFadiga(id: string): boolean {
     return cfgOf(id).modo === "fadiga";
   }
-  // Fase 1/5 (go2rtc): transporte de VÍDEO NO PAINEL por câmera. A flag `transport` vive no camcfg
-  // (normalizado em cameraConfig; default "mjpeg" = tile atual, OFF por default). É o que decide o
-  // modo de render do CameraTile (mjpeg = frames Socket.IO; webrtc = WHEP/WHIP via go2rtc).
-  // O papel (modo) e o transporte são EDITADOS na tela /cameras ("Ajustes desta câmera"); aqui a
-  // Central só LÊ o camcfg (via cfgOf) para decidir render/pipeline de cada tile.
+  // Transporte de VÍDEO NO PAINEL por câmera → decide o render do CameraTile (mjpeg = frames
+  // Socket.IO; webrtc = WHEP/WHIP via go2rtc). O campo `transport` vive no camcfg (normalizado em
+  // cameraConfig; default "auto"). Onda 2: "auto" = MELHOR DISPONÍVEL, resolvido AQUI —
+  //   • "mjpeg"  → "mjpeg" (override manual: força o relé JPEG);
+  //   • "webrtc" → "webrtc" (override manual: força o go2rtc);
+  //   • "auto"/ausente → "webrtc" SE o go2rtc serve a câmera (id ∈ go2rtcStreams), senão "mjpeg".
+  // Assim: go2rtc no ar + câmera conhecida = WebRTC automático; go2rtc fora (Set vazio) = MJPEG
+  // automático — sem flag, com fallback automático. Overrides são editados na tela /cameras.
   function transportOf(id: string): "mjpeg" | "webrtc" {
-    return cfgOf(id).transport === "webrtc" ? "webrtc" : "mjpeg";
+    const t = cfgOf(id).transport;
+    if (t === "mjpeg") return "mjpeg";
+    if (t === "webrtc") return "webrtc";
+    return go2rtcStreams.has(id) ? "webrtc" : "mjpeg"; // "auto": melhor disponível
   }
 
   // Seleção da view ativa (preferência local do operador). "__all__" = "Todas as câmeras".

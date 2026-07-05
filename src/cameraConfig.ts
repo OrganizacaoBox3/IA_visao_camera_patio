@@ -20,11 +20,14 @@ export type CameraCfg = {
   // câmera; default false = comportamento atual. Ligado → o CameraWorkspace aplica tiling na grade +
   // tile maior + limiares menores (detection.longRange) e movimento/pessoas mais sensíveis.
   longRange: boolean;
-  // Fase 1/5 (go2rtc): transporte de VÍDEO NO PAINEL por câmera. "mjpeg" (padrão) = o tile atual;
-  // "webrtc" = vídeo fluido via go2rtc (RTSP→WHEP / webcam→WHIP). NÃO confundir com o `transport`
-  // tcp/udp do RTSP no /cameras (aquele é do ffmpeg, conceito diferente). Default "mjpeg" = OFF,
-  // comportamento atual preservado.
-  transport: "mjpeg" | "webrtc";
+  // Transporte de VÍDEO NO PAINEL por câmera. NÃO confundir com o `transport` tcp/udp do RTSP no
+  // /cameras (aquele é do ffmpeg, conceito diferente).
+  //   "auto"   (PADRÃO, Onda 2): "melhor disponível" — o dashboard resolve WebRTC quando o go2rtc
+  //            serve a câmera (id ∈ GET /api/streams) e MJPEG quando não (go2rtc fora / stream ainda
+  //            não montada). Sem o operador marcar câmera-a-câmera; fallback é AUTOMÁTICO, não opt-out.
+  //   "mjpeg"  (OVERRIDE): força o relé JPEG por socket (o tile de sempre). Escape hatch.
+  //   "webrtc" (OVERRIDE): força o vídeo fluido via go2rtc (RTSP→WHEP / webcam→WHIP). Escape hatch.
+  transport: "auto" | "mjpeg" | "webrtc";
 };
 
 const DEFAULT: CameraCfg = {
@@ -33,7 +36,7 @@ const DEFAULT: CameraCfg = {
   capture: "alta",
   selectedClasses: [...OBJECT_KEYS],
   longRange: false,
-  transport: "mjpeg",
+  transport: "auto",
 };
 
 function key(cameraId: string) {
@@ -56,7 +59,9 @@ function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCfg {
     capture: c.capture === "media" || c.capture === "maxima" ? c.capture : "alta",
     selectedClasses: sel.length ? sel : [...OBJECT_KEYS],
     longRange: c.longRange === true, // opt-in; qualquer coisa != true (inclusive ausente) → false
-    transport: c.transport === "webrtc" ? "webrtc" : "mjpeg", // ausente/inválido → "mjpeg" (tile atual)
+    // Retrocompat: overrides antigos ("mjpeg"/"webrtc") são PRESERVADOS; ausente/inválido → "auto"
+    // (novo default = melhor disponível, resolvido no dashboard por transportOf).
+    transport: c.transport === "mjpeg" || c.transport === "webrtc" ? c.transport : "auto",
   };
 }
 
