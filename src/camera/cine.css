@@ -148,6 +148,83 @@
   background: var(--cam-surface-bg, #05080c);
 }
 
+/* ── Utilitários de espaçamento do drawer (tokens --sp-*) — substituem style inline cru ── */
+.cam-drawer .mt-sp2 {
+  margin-top: var(--sp-2);
+}
+.cam-drawer .mt-sp3 {
+  margin-top: var(--sp-3);
+}
+/* nota curta ao pé de uma zona (fadiga/exclusão) */
+.cam-drawer .zone-note {
+  margin: 4px 0 0;
+}
+
+/* Aba "Linhas": barra de ações (nova linha / zerar). */
+.cam-drawer .tw-actions {
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+/* Aba "Camadas": cartão do preset ativo + cartão do perfil de longo alcance.
+   Migrados de style inline (px cru) p/ classe — computado idêntico, tokens onde há. */
+.cam-drawer .preset-card {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2);
+  border-radius: 8px;
+  border: 1px solid var(--cam-panel-border);
+  background: var(--cam-surface-bg);
+}
+.cam-drawer .preset-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: 4px;
+}
+.cam-drawer .preset-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+}
+.cam-drawer .preset-dirty {
+  font-size: 11px;
+  color: var(--state-warn-fg, #fde68a);
+}
+.cam-drawer .preset-desc {
+  font-size: 12px;
+  color: var(--cam-panel-fg);
+}
+.cam-drawer .preset-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.cam-drawer .preset-metric {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--cam-panel-border);
+  color: var(--cam-panel-fg);
+}
+.cam-drawer .lr-card {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2);
+  border-radius: 8px;
+  border: 1px solid var(--cam-panel-border);
+  background: var(--cam-surface-bg);
+}
+.cam-drawer .lr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.cam-drawer .lr-note {
+  margin: 6px 0 0;
+}
+
 /* ── Palco + drawer LADO A LADO (A5): fit em vez de crop ──
    index.css posiciona .cam-drawer como overlay absoluto DENTRO do palco — o vídeo
    ficava coberto/cortado à direita. Aqui (seletores mais específicos vencem o

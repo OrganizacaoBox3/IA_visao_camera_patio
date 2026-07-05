@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
-import type { VideoStreamElement } from "./vendor/go2rtc/go2rtc";
-import { fmtDuration, clock } from "./format";
+import { fmtDuration } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
 import {
   AtividadeProcessor,
-  sensitivityFactor,
   filterExcludedPersons,
   type AtividadeCtx,
 } from "./processors/atividade";
@@ -16,7 +14,6 @@ import { LeituraProcessor } from "./processors/leitura";
 import { ObjetosProcessor } from "./processors/objetos";
 import { FadigaProcessor } from "./processors/fadiga";
 import { loadFadigaThresholds } from "./fadiga/calibration";
-import { type RiskState } from "./fadiga/landmarks";
 import { pushRead, pushPass } from "./reading/cluster";
 import {
   recordSamples,
@@ -29,7 +26,6 @@ import {
   recordFadigaSamples,
   recordFadigaEvent,
   loadDataset,
-  loadFlowToday,
   type ZoneSample,
 } from "./report/store";
 import { type Dataset } from "./report/mock";
@@ -69,24 +65,18 @@ import {
   IconButton,
   Select,
   Slider,
-  Switch,
-  ToggleRow,
   Tabs,
   TabsContent,
   ScrollArea,
   Toggle,
   Tooltip,
   Badge,
-  Field,
-  type Tone,
 } from "./ui";
 import { useCineLoop } from "./camera/useCineLoop";
 import { useTripwires } from "./camera/useTripwires";
-import { MetricCell } from "./components/Sparkline";
 import { useAuth } from "./auth";
 import {
   getContentRect,
-  stateVar,
   cssVar,
   drawOccupancyHeatmap,
   drawTracks,
@@ -100,19 +90,16 @@ import {
   type ZoneResult,
 } from "./camera/draw";
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
-import {
-  OCC_HI,
-  EAR_HI,
-  NOREAD_BAND,
-  RATE_BAND,
-  OCC_BAND,
-  stateToMetric,
-  riskToMetric,
-  rateToMetric,
-  noReadMetric,
-  occMetric,
-  useTelemetry,
-} from "./camera/useTelemetry";
+import { useTelemetry } from "./camera/useTelemetry";
+import { useWebrtcTransport } from "./camera/useWebrtcTransport";
+import { useHubAnalysis, applyHubAnalysis } from "./camera/useHubAnalysis";
+import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
+import { MODE_TONE } from "./camera/tabs/tone";
+import { ZonasTab } from "./camera/tabs/ZonasTab";
+import { LinhasTab } from "./camera/tabs/LinhasTab";
+import { CamadasTab } from "./camera/tabs/CamadasTab";
+import { TimelineTab, type TimelineItem } from "./camera/tabs/TimelineTab";
+import { PresencaTab } from "./camera/tabs/PresencaTab";
 import "./camera/cine.css";
 
 const BRUSH_OPTS = [
@@ -148,11 +135,8 @@ const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · 
 // NÃO é afetado — throttle não se aplica. Leitura/objetos/fadiga seguem 100% locais e intactos.
 const HUB_MOTION_INTERVAL_MS = 500;
 
-// ── F1-C (ADR-009): análise no HUB — anti-duplicação de ingest + "hoje" servido ──
-// Cadência do refresh do acumulado "hoje" das linhas quando o MOTOR DO HUB analisa a câmera
-// (o hub grava os mesmos cruzamentos; o browser só EXIBE o valor do servidor — ver useEffect).
-const HUB_FLOW_REFRESH_MS = 30_000;
 // Contadores de sessão "vazios" p/ o HUD no modo hub (constante única — sem alocar por frame).
+// Espelho do hub (refs + "hoje" servido + applyHubAnalysis) vive em ./camera/useHubAnalysis.
 const EMPTY_TW_COUNTS: Record<string, TripwireCounts> = {};
 
 // ── F2 (ADR-009): overlays SERVIDOS — contrato do evento `analysis-tracks` (aditivo, volatile
@@ -170,32 +154,13 @@ export type HubTrack = {
 };
 export type HubZone = { id: string; label: string; people: number; occupied: boolean };
 export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
-// Payload do hub mais velho que isto é STALE (motor reiniciando/rede) → não desenhar caixa velha.
-const HUB_TRACKS_STALE_MS = 5000;
 
-// ── Fase 1 (go2rtc): camada de vídeo WebRTC na câmera ABERTA (tela cheia) ──────────────────────
-// OPT-IN por câmera (prop `transport:"webrtc"`; default "mjpeg" = caminho atual, byte-a-byte).
-// Quando ligado, o vídeo vem de `<video-stream>` (WebRTC/MSE/HLS/MJPEG auto-negociado, decode por
-// HW fora da main-thread → ESTÁVEL, sem a rajada do MJPEG) ATRÁS do canvas; o canvas de
-// zonas/tracks/editor fica TRANSPARENTE por cima. Espelha o CameraTile (Go2rtcVideoTile) — mas por
-// PROPRIEDADE DE ARQUIVO não editamos o CameraTile: duplicamos aqui ~5 linhas do registro do
-// custom element (vendorizado/self-host, importado DINAMICAMENTE 1× — câmeras "mjpeg" nunca baixam
-// o JS).
-let videoStreamModule: Promise<unknown> | null = null;
-function ensureVideoStreamRegistered(): Promise<unknown> {
-  if (!videoStreamModule) videoStreamModule = import("./vendor/go2rtc/video-stream.js");
-  return videoStreamModule;
-}
+// ── Fase 1 (go2rtc): transporte de VÍDEO WebRTC da câmera aberta → ./camera/useWebrtcTransport ──
 // Cadência da ANÁLISE/overlay no transporte WebRTC: o <video> roda liso por HW (decode fora da
 // main-thread); amostramos o ELEMENTO p/ motion/inferência/overlay a ~15fps (paridade com o MJPEG
 // da câmera aberta) via bucket de tempo no gate de "frame novo" do rAF. O vídeo NÃO depende disto
 // — só o trabalho de análise/desenho, que assim não re-carrega a main-thread no rAF (~60fps).
 const WEBRTC_TICK_MS = 66;
-// Fase 1 (go2rtc): janela p/ o WebRTC da TELA CHEIA estabelecer vídeo. Após pedir o src, damos este
-// prazo p/ o <video> decodificar o 1º quadro (videoWidth>0). Esgotado sem vídeo (fonte caída no
-// go2rtc, sem peer, sem quadro), reportamos a falha 1× → o pai remonta a câmera aberta em MJPEG. ~7s
-// cobre negociação WebRTC + fallback interno (mse/hls/mjpeg) do componente sem punir uma fonte lenta.
-const WEBRTC_FAIL_MS = 7000;
 
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
@@ -205,18 +170,14 @@ const WEBRTC_FAIL_MS = 7000;
 
 // resultado por zona guardado p/ desenho + painel → tipo em ./camera/draw (ZoneResult).
 
-type Holder = {
-  modo: ZoneMode;
-  proc: AtividadeProcessor | LeituraProcessor | ObjetosProcessor | FadigaProcessor;
-};
-
-// risco → rótulo (RISK_LABEL) + cor de canvas (riskCanvasColor) em ./camera/draw.
-const RISK_TONE: Record<RiskState, Tone> = {
-  OK: "ok",
-  ALERTA_FADIGA: "warn",
-  ALERTA_CELULAR: "warn",
-  ALERTA_DUPLO: "alert",
-};
+// União DISCRIMINADA (modo↔proc): o compilador estreita `proc` pelo `modo`, eliminando os casts
+// `as XProcessor` no laço quente — um pareamento errado modo↔processador vira erro de tipo (ADR/R6).
+// "exclusao" NÃO instancia processador (o laço faz `continue` antes de holderFor) → fora da união.
+type Holder =
+  | { modo: "atividade"; proc: AtividadeProcessor }
+  | { modo: "leitura"; proc: LeituraProcessor }
+  | { modo: "objetos"; proc: ObjetosProcessor }
+  | { modo: "fadiga"; proc: FadigaProcessor };
 
 // ── (plano-performance-bit 1.10) assinatura BARATA do snapshot do painel ──
 // Serializa, por zona, SÓ o que o JSX do painel exibe (id + estado + números na granularidade
@@ -251,15 +212,7 @@ function twSig(counts: Record<string, { in: number; out: number }>): string {
   return sig;
 }
 
-// taxa de leitura → cor (verde ≥95 · âmbar ≥80 · vermelho abaixo). Espelha a semântica do relatório.
-const MODE_TONE: Record<ZoneMode, Tone> = {
-  atividade: "ok",
-  leitura: "info",
-  objetos: "warn",
-  fadiga: "info",
-  exclusao: "info", // supressão (going-gray); Tone não tem neutro, "info" é o mais discreto
-};
-
+// MODE_TONE (modo→Tone do Badge) + RISK_TONE ficam em ./camera/tabs/tone (compartilhados com o drawer).
 // Telemetria "nunca número cru" (constantes/bandas/metric fns/useTelemetry) em ./camera/useTelemetry.
 
 // MODO-COMO-PRESET: o workspace tem N zonas (cada uma com seu modo), mas overlays/confiança
@@ -277,7 +230,8 @@ function dominantMode(zs: Zone[]): ModeKey {
 }
 
 // Overlay compacto de fadiga DENTRO da zona (drawFadigaZone) em ./camera/draw.
-type Track = {
+// Track é EXPORTADO p/ o espelho do hub (useHubAnalysis.applyHubAnalysis) montar o mesmo shape.
+export type Track = {
   id: number;
   cx: number;
   cy: number;
@@ -289,7 +243,7 @@ type Track = {
   zone: string | null;
   score: number;
 };
-type TimelineItem = { id: number; ts: number; text: string; sev: "info" | "warn" | "high" };
+// TimelineItem (evento da sessão) mora com a aba que o exibe → ./camera/tabs/TimelineTab.
 
 type Props = {
   cameraId: string;
@@ -347,13 +301,6 @@ export function CameraWorkspace({
   transport = "mjpeg",
   onWebrtcFail,
 }: Props) {
-  // Fase 1 (go2rtc): transporte WebRTC ativo? Só no mode "full" (a grade webrtc é do CameraTile).
-  // `webrtc` governa o RENDER (camada de vídeo + key do canvas); `webrtcRef` é o espelho lido DENTRO
-  // do rAF/drawScene (o loop é criado 1× por câmera e a prop pode trocar em runtime — go2rtc entra/sai
-  // da descoberta —, mesmo padrão de analysisEngineRef/getHubAnalysisRef).
-  const webrtc = transport === "webrtc" && mode === "full";
-  const webrtcRef = useRef(webrtc);
-  const videoStreamRef = useRef<VideoStreamElement | null>(null);
   // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
   // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
   // camadas, mas NÃO edita configuração (criar/apagar/pintar zona, thresholds/sensibilidade/limite).
@@ -479,6 +426,32 @@ export function CameraWorkspace({
   const [histDataset, setHistDataset] = useState<Dataset | null>(null);
   const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
+  // ── Fase 1 (go2rtc): transporte de VÍDEO WebRTC da câmera aberta ── hook ./camera/useWebrtcTransport.
+  // `webrtc` governa o RENDER (camada de vídeo + key do canvas); `webrtcRef` é o espelho lido no
+  // rAF/drawScene; `currentFrame` é a fonte da GEOMETRIA do editor/tripwire (WebRTC → <video>; MJPEG
+  // → getFrame). Chamado antes de useTripwires (que consome currentFrame). Byte-a-byte no MJPEG.
+  const { webrtc, webrtcRef, videoStreamRef, currentFrame } = useWebrtcTransport({
+    transport,
+    mode,
+    cameraId,
+    getFrame,
+    onWebrtcFail,
+    paused,
+    review,
+  });
+
+  // ── F1/F2/F3 (ADR-009): espelho do MOTOR DO HUB ── hook ./camera/useHubAnalysis.
+  // Refs lidos no rAF/drawScene (engine/getter/zonas/ts/firstSeen/flow) + "hoje" das linhas servido.
+  const {
+    analysisEngineRef,
+    getHubAnalysisRef,
+    hubZonesRef,
+    hubTracksTsRef,
+    hubFirstSeenRef,
+    hubFlowRef,
+    hubFlowToday,
+  } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
+
   // ── Tripwires (linhas de contagem) ── hook dedicado (./camera/useTripwires).
   // Estado/refs/editor + ciclo de vida (load/migração/sync ADR-006 + fiação do counter).
   // O rAF principal cria/atualiza `counterRef`; o desenho lê `tripwiresRef`/`twCountsRef`/`twDrawRef`;
@@ -508,7 +481,7 @@ export function CameraWorkspace({
     // Fase 1 (go2rtc): `currentFrame` (não `getFrame`) → o commit da LINHA mapeia o traçado pelo
     // content-rect do <video> no WebRTC (mesmo letterbox do palco/editor); no MJPEG é o getFrame()
     // de sempre. O hook só lê getFrame no commitTripwire (não em deps de efeito), então a identidade
-    // por-render de currentFrame é inócua. currentFrame é function declaration (hoisted).
+    // por-render de currentFrame (const do useWebrtcTransport) é inócua.
     getFrame: currentFrame,
     viewportRef,
     onAlertRef,
@@ -518,127 +491,8 @@ export function CameraWorkspace({
     },
   });
 
-  // ── F1-C (ADR-009): fonte da análise ("hub" × "local") ──
-  // Ref espelho p/ leitura DENTRO do rAF/drawScene (o loop é criado 1× por câmera e a prop pode
-  // mudar em runtime quando o motor do hub liga/desliga — mesmo padrão de onAlertRef/pausedRef).
-  const analysisEngineRef = useRef(analysisEngine);
-  useEffect(() => {
-    analysisEngineRef.current = analysisEngine;
-  }, [analysisEngine]);
-
-  // ── Fase 1 (go2rtc): espelho do transporte + fiação do <video-stream> ──
-  useEffect(() => {
-    webrtcRef.current = webrtc;
-  }, [webrtc]);
-  // Espelho estável do callback de fallback (lido dentro do efeito assíncrono/timer sem re-armar a
-  // fiação a cada re-render que troca a identidade da prop — mesmo padrão de onAlertRef).
-  const onWebrtcFailRef = useRef(onWebrtcFail);
-  useEffect(() => {
-    onWebrtcFailRef.current = onWebrtcFail;
-  }, [onWebrtcFail]);
-  // Registra o custom element e aplica src/mode/media/background IMPERATIVAMENTE via ref (as props
-  // do <video-stream> são SETTERS JS, não atributos), APÓS o define — mesmo padrão do CameraTile.
-  // mjpeg/ausente → efeito INERTE (nem importa o JS): caminho atual byte-a-byte.
-  useEffect(() => {
-    if (!webrtc) return;
-    let cancelled = false;
-    // Guard: onWebrtcFail dispara NO MÁXIMO 1× por (câmera, montagem). Como o efeito re-arma em
-    // [webrtc, cameraId], a flag reseta ao trocar de câmera/entrar em cena → 1 reporte por tentativa.
-    let reported = false;
-    let failTimer: ReturnType<typeof setTimeout> | null = null;
-    const node = videoStreamRef.current; // estável por toda a vida do elemento (captura p/ cleanup)
-    const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(cameraId)}`;
-    // Detecção de fonte caída (WebRTC da tela cheia sem vídeo): reporta o id UMA vez → o pai remonta
-    // em MJPEG. `cancelled` impede reporte tardio após desmontar/trocar (o pai já não espera).
-    const failNow = () => {
-      if (reported || cancelled) return;
-      reported = true;
-      onWebrtcFailRef.current?.(cameraId);
-    };
-    ensureVideoStreamRegistered()
-      .then(() => customElements.whenDefined("video-stream"))
-      .then(() => {
-        if (cancelled || !node) return;
-        const el = node;
-        el.mode = "webrtc,mse,hls,mjpeg"; // ordem importa: config ANTES de src (o setter de src conecta)
-        el.media = "video"; // vigilância silenciosa: sem áudio
-        el.background = false; // solta o stream quando a aba/tela sai de vista
-        if (el.video) el.video.controls = false; // sem controles nativos (o palco trata a interação)
-        el.src = src;
-        // Reforço: erro nativo do <video> interno derruba pro MJPEG já (não espera o prazo). O timer
-        // continua sendo o mecanismo primário — o <video> pode nem existir/emitir erro numa fonte caída.
-        el.video?.addEventListener("error", failNow);
-        // Timer primário: ao fim de WEBRTC_FAIL_MS, se o <video> não decodificou quadro (videoWidth
-        // 0/undefined) → falha. videoWidth>0 = vídeo estabelecido → NÃO chama. Lê a ref no disparo
-        // (o <video> pode ser criado após este ponto) e é limpo no cleanup abaixo.
-        failTimer = setTimeout(() => {
-          failTimer = null;
-          if (!videoStreamRef.current?.video?.videoWidth) failNow();
-        }, WEBRTC_FAIL_MS);
-      })
-      .catch(() => {
-        // go2rtc indisponível (JS não registrou / whenDefined rejeitou) → WebRTC não vai subir: cai
-        // pro MJPEG já, em vez de deixar a tela cheia sem vídeo.
-        failNow();
-      });
-    return () => {
-      cancelled = true;
-      if (failTimer) clearTimeout(failTimer); // limpa o prazo ao desmontar/trocar de câmera
-      node?.video?.removeEventListener("error", failNow);
-      try {
-        node?.ondisconnect?.(); // solta ws/pc JÁ ao desmontar/trocar (não espera o timeout interno)
-      } catch {
-        /* no-op */
-      }
-    };
-  }, [webrtc, cameraId]);
-
-  // ── F2 (ADR-009): espelho dos overlays SERVIDOS (grade com engine==="hub") ──
-  // O getter vem estável da central (cache por câmera), mas espelhamos em ref pelo mesmo motivo
-  // do analysisEngineRef: o rAF é criado 1× por câmera e a prop pode trocar em runtime.
-  const getHubAnalysisRef = useRef(getHubAnalysis);
-  useEffect(() => {
-    getHubAnalysisRef.current = getHubAnalysis;
-  }, [getHubAnalysis]);
-  const hubZonesRef = useRef<HubZone[] | null>(null); // zones[] do último payload FRESCO do hub
-  const hubTracksTsRef = useRef(0); // ts do último payload consumido (gate "payload novo")
-  const hubFirstSeenRef = useRef<Map<number, number>>(new Map()); // id do hub → 1ª vez visto aqui
-
-  // F1-C: "hoje" das linhas no MODO HUB — refresh periódico do SERVIDOR, SEM somar a sessão.
-  // Com o motor do hub ligado, o servidor grava os MESMOS cruzamentos que o counter local vê;
-  // exibir flowBase+sessão (modo local, item 1.2) contaria cada cruzamento 2× (uma vez na sessão
-  // local, outra quando o acumulado do servidor é recarregado). Aqui o "hoje" exibido (HUD do
-  // canvas via hubFlowRef + painel via hubFlowToday) é SÓ o valor do servidor, re-buscado a cada
-  // ~30s. A sessão local segue viva como feedback imediato (timeline + tooltip do painel), mas
-  // NÃO entra na soma exibida. Modo local: efeito inerte → comportamento atual intacto.
-  const hubFlowRef = useRef<Record<string, TripwireCounts>>({}); // lido no rAF (HUD, sem alocar)
-  const [hubFlowToday, setHubFlowToday] = useState<Record<string, TripwireCounts>>({});
-  useEffect(() => {
-    if (analysisEngine !== "hub") return; // local → nada muda (flowBase carrega 1×, como hoje)
-    let cancelled = false;
-    const refresh = () =>
-      loadFlowToday(cameraId)
-        .then((acc) => {
-          if (cancelled) return;
-          hubFlowRef.current = acc;
-          // Preserva a referência quando nada mudou — evita re-render a cada tick de 30s.
-          setHubFlowToday((prev) =>
-            JSON.stringify(prev) === JSON.stringify(acc) ? prev : acc,
-          );
-        })
-        .catch(() => {
-          /* mantém o último valor exibido; o próximo tick tenta de novo */
-        });
-    refresh();
-    const t = setInterval(refresh, HUB_FLOW_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-      hubFlowRef.current = {};
-      setHubFlowToday({});
-    };
-  }, [analysisEngine, cameraId]);
-
+  // Espelhos do transporte WebRTC e do motor do hub vivem em useWebrtcTransport/useHubAnalysis
+  // (chamados acima). Aqui seguem só os espelhos de callbacks/estado próprios deste componente.
   useEffect(() => {
     onAlertRef.current = onAlert;
   }, [onAlert]);
@@ -651,17 +505,7 @@ export function CameraWorkspace({
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
-  // Fase 1 (go2rtc): ⏸ Pausar / ❄ Congelar precisam CONGELAR o vídeo. No MJPEG o palco para de
-  // redesenhar e o canvas retém o último frame; no WebRTC o vídeo é nativo ATRÁS do canvas, então
-  // pausamos o <video> (senão ele seguiria correndo sob o overlay congelado). Ao retomar, volta ao
-  // vivo (play; pode saltar p/ a borda live — aceito p/ uma inspeção curta). Inerte no MJPEG.
-  useEffect(() => {
-    if (!webrtc) return;
-    const v = videoStreamRef.current?.video;
-    if (!v) return;
-    if (paused || review) v.pause();
-    else void v.play().catch(() => {});
-  }, [webrtc, paused, review]);
+  // (⏸ Pausar / ❄ Congelar CONGELAM o <video> nativo do WebRTC → useWebrtcTransport, efeito [paused,review].)
   useEffect(() => {
     zonesRef.current = zones;
   }, [zones]);
@@ -805,8 +649,26 @@ export function CameraWorkspace({
   // AtividadeProcessor.setLongRange faz early-return se não mudou; ObjetosProcessor só seta um bool.
   function applyLongRange(h: Holder) {
     const lr = longRangeRef.current;
-    if (h.modo === "atividade") (h.proc as AtividadeProcessor).setLongRange(lr);
-    else if (h.modo === "objetos") (h.proc as ObjetosProcessor).setLongRange(lr);
+    // União discriminada: `h.modo` estreita `h.proc` — sem cast (só atividade/objetos consomem).
+    if (h.modo === "atividade") h.proc.setLongRange(lr);
+    else if (h.modo === "objetos") h.proc.setLongRange(lr);
+  }
+  // Constrói o Holder DISCRIMINADO (pareamento modo↔proc estabelecido num único ponto). "exclusao"
+  // nunca chega aqui (o laço faz `continue` antes) → mapeado p/ atividade, como o `else` do original.
+  function makeHolder(modo: Holder["modo"]): Holder {
+    switch (modo) {
+      case "leitura":
+        return { modo, proc: new LeituraProcessor() };
+      case "objetos":
+        return { modo, proc: new ObjetosProcessor() };
+      case "fadiga": {
+        const proc = new FadigaProcessor();
+        proc.setThresholds(loadFadigaThresholds()); // calibração global
+        return { modo, proc };
+      }
+      case "atividade":
+        return { modo, proc: new AtividadeProcessor(performance.now()) };
+    }
   }
   function holderFor(z: Zone): Holder {
     const cur = holdersRef.current.get(z.id);
@@ -816,16 +678,7 @@ export function CameraWorkspace({
     }
     cur?.proc.dispose();
     if (cur?.modo === "fadiga") cropsRef.current.delete(z.id);
-    const proc =
-      z.modo === "leitura"
-        ? new LeituraProcessor()
-        : z.modo === "objetos"
-          ? new ObjetosProcessor()
-          : z.modo === "fadiga"
-            ? new FadigaProcessor()
-            : new AtividadeProcessor(performance.now());
-    if (z.modo === "fadiga") (proc as FadigaProcessor).setThresholds(loadFadigaThresholds()); // calibração global
-    const h: Holder = { modo: z.modo, proc };
+    const h = makeHolder(z.modo === "exclusao" ? "atividade" : z.modo);
     holdersRef.current.set(z.id, h);
     applyLongRange(h); // processador recém-criado herda o perfil atual da câmera
     return h;
@@ -1096,24 +949,15 @@ export function CameraWorkspace({
         // spawn). Engine hub→local em runtime reentra por este gate e o worker sobe na hora;
         // enquanto o worker carrega, detectFrame devolve [] (mesma semântica do boot atual).
         ensureDetectClient();
-        const objInterval = mode === "full" ? C.objectIntervalMs : TILE_OBJECT_INTERVAL_MS;
-        const objBusy = objInFlightRef.current;
-        if (now - lastObjAtRef.current > objInterval && !objBusy) {
+        // Gate/intervalo/opts do agendamento → sub-passos puros em ./camera/rafSteps (testáveis).
+        const objInterval = detectionInterval(mode, C.objectIntervalMs, TILE_OBJECT_INTERVAL_MS);
+        if (shouldRunDetection(now, lastObjAtRef.current, objInterval, objInFlightRef.current)) {
           lastObjAtRef.current = now;
           objInFlightRef.current = true;
           const el = f.el,
             fw = f.w,
-            fh = f.h,
-            tiled = mode === "full";
-          // Longo alcance: liga o tiling na GRADE (mesmo fora do full) + tile maior + limiar baixo.
-          const LR = APP_CONFIG.detection.longRange;
-          const schedule = {
-            key: `${cameraId}:atividade`,
-            priority: mode === "full" ? ("high" as const) : ("low" as const),
-          };
-          const opts = longRangeRef.current
-            ? { tiles: LR.tiles, tileWidth: LR.detectTileWidth, minScore: LR.minScore, schedule }
-            : { schedule };
+            fh = f.h;
+          const { tiled, opts } = detectScheduleOpts(cameraId, mode, longRangeRef.current);
           detectFrame(el, fw, fh, tiled, opts)
             .then((res) => {
               if (res) {
@@ -1128,73 +972,16 @@ export function CameraWorkspace({
         }
       }
       // ── F2/F3 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (engine hub, grade e full) ──
-      // Converte HubTrack → Track (shape do drawTracks/presença/heatmap): score REAL da detecção
-      // (Fase 4) — o slider de confiança volta a atenuar/apagar caixas do hub; track sem score (hub
-      // antigo) cai no fallback 1 = comportamento anterior. foot derivado do bbox
-      // (bottom-center) e firstSeen mantido POR ID entre payloads (rótulo de permanência).
-      // detsRef recebe pseudo-dets "person" (bbox em PIXELS, contrato Detection) — mantém vivo o
-      // `occupied` do AtividadeProcessor (OCIOSA×VAZIA), que antes vinha do coco local; sem isso
-      // a última detecção local congelaria o estado. Motion/estado/alarme seguem 100% locais.
-      // Conversão SÓ quando o payload muda (~1fps) — nada aloca por frame; payload mais velho
-      // que HUB_TRACKS_STALE_MS é descartado (limpa as caixas em vez de desenhar dado morto).
-      if (hubActive) {
-        const hd = getHubAnalysisRef.current?.() ?? null;
-        const fresh = !!hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS;
-        if (!fresh) {
-          if (tracksRef.current.length) tracksRef.current = [];
-          if (detsRef.current.length) detsRef.current = [];
-          hubZonesRef.current = null;
-          if (hubFirstSeenRef.current.size) hubFirstSeenRef.current.clear();
-        } else if (hd.ts !== hubTracksTsRef.current) {
-          hubTracksTsRef.current = hd.ts;
-          const seen = hubFirstSeenRef.current;
-          const alive = new Set<number>();
-          tracksRef.current = hd.tracks.map((t) => {
-            alive.add(t.id);
-            let fs = seen.get(t.id);
-            if (fs == null) {
-              fs = now;
-              seen.set(t.id, fs);
-            }
-            return {
-              id: t.id,
-              cx: t.cx,
-              cy: t.cy,
-              foot: { x: t.bbox[0] + t.bbox[2] / 2, y: t.bbox[1] + t.bbox[3] },
-              bbox: t.bbox,
-              firstSeen: fs,
-              lastSeen: now,
-              zone: t.zone,
-              // Score real p/ o DESENHO: o slider (confRef) atenua/apaga fantasmas pontuais.
-              // Retrocompat: hub antigo não envia score → 1 (nunca atenuado, como antes).
-              score: t.score ?? 1,
-            };
-          });
-          seen.forEach((_, id) => {
-            if (!alive.has(id)) seen.delete(id); // poda ids mortos (mapa não cresce sem limite)
-          });
-          // Pseudo-dets p/ a CONTAGEM/occupied (AtividadeProcessor), NÃO p/ o desenho: score fica
-          // 1 de propósito — o motor já filtrou por people.scoreThreshold; o slider de confiança é
-          // só do overlay (tracksRef acima). Não misturar as duas coisas.
-          detsRef.current = hd.tracks.map((t) => ({
-            class: "person",
-            score: 1,
-            bbox: [t.bbox[0] * f.w, t.bbox[1] * f.h, t.bbox[2] * f.w, t.bbox[3] * f.h] as [
-              number,
-              number,
-              number,
-              number,
-            ],
-          }));
-          hubZonesRef.current = hd.zones;
-        }
-      } else if (hubZonesRef.current) {
-        // saiu do modo espelho (engine voltou a local) → limpa o resíduo do hub;
-        // o pipeline local reassume na próxima rodada de detecção (fallback = comportamento atual).
-        hubZonesRef.current = null;
-        hubTracksTsRef.current = 0;
-        hubFirstSeenRef.current.clear();
-      }
+      // Sub-passo PURO em ./camera/useHubAnalysis (applyHubAnalysis): converte HubTrack → Track e
+      // pseudo-dets "person", com gate de payload novo + descarte de STALE. Muta tracksRef/detsRef/
+      // hubZonesRef/hubTracksTsRef/hubFirstSeenRef. Motion/estado/alarme seguem 100% locais.
+      applyHubAnalysis(hubActive, hubActive ? (getHubAnalysisRef.current?.() ?? null) : null, now, f.w, f.h, {
+        tracksRef,
+        detsRef,
+        hubZonesRef,
+        hubTracksTsRef,
+        hubFirstSeenRef,
+      });
       // ── ZONA DE EXCLUSÃO (CALIBRAÇÃO) — filtro ÚNICO na ORIGEM ─────────────────
       // Remove a detecção de PESSOA cujo PÉ (bottom-center) cai numa zona modo "exclusao"
       // (mask-aware) AQUI, 1×, para que TUDO downstream veja a MESMA lista: o tracker
@@ -1302,7 +1089,9 @@ export function CameraWorkspace({
           if (now - lastHeavy < TILE_HEAVY_INTERVAL_MS) continue;
           lastHeavyAtRef.current.set(z.id, now);
         }
-        if (z.modo === "atividade") {
+        // Dispatch pelo `h.modo` (união discriminada) → `h.proc` estreita sem cast. h.modo === z.modo
+        // (holderFor garante), então a semântica é idêntica à do dispatch por z.modo anterior.
+        if (h.modo === "atividade") {
           // (3.4) meio-frame da grade: sem luma nova → sem process(); resultsRef mantém o último
           // estado p/ o draw (que continua todo frame). O dt pulado já está acumulado em activityDt.
           if (!analyzeActivity) continue;
@@ -1338,7 +1127,7 @@ export function CameraWorkspace({
             atividade: z.atividade,
             contains: containsFn(z),
           };
-          const r = (h.proc as AtividadeProcessor).process(az, ctx);
+          const r = h.proc.process(az, ctx);
           // F2/F3 (ADR-009): pessoas por zona EXIBIDAS (rótulo no canvas + pill do painel) vêm do
           // zones[] do hub quando disponível — a atribuição de zona do MOTOR é a autoridade
           // (mesma que grava o indicador). Estado/motion/alarme locais seguem intactos.
@@ -1366,8 +1155,8 @@ export function CameraWorkspace({
               durationMin: r.alert.durationMin,
             });
           }
-        } else if (z.modo === "leitura") {
-          const r = (h.proc as LeituraProcessor).process(
+        } else if (h.modo === "leitura") {
+          const r = h.proc.process(
             { x: z.x, y: z.y, w: z.w, h: z.h, ponto: z.ponto },
             { frame: f, now, cameraId, cameraLabel: label },
           );
@@ -1392,8 +1181,8 @@ export function CameraWorkspace({
             ratePct: r.ratePct,
             noReads: r.noReads,
           });
-        } else if (z.modo === "objetos") {
-          const r = (h.proc as ObjetosProcessor).process(
+        } else if (h.modo === "objetos") {
+          const r = h.proc.process(
             [{ id: z.id, label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) }],
             z.selectedClasses,
             { frame: f, now },
@@ -1407,7 +1196,7 @@ export function CameraWorkspace({
           resultsRef.current.set(z.id, { modo: "objetos", counts: r.counts, total, dets: r.dets });
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
-          const r = (h.proc as FadigaProcessor).process({ frame: cropFor(z, f), now, srcEl: f.el });
+          const r = h.proc.process({ frame: cropFor(z, f), now, srcEl: f.el });
           // F1-C (ADR-009): recordFadigaEvent/recordFadigaSamples MANTIDOS mesmo no modo hub —
           // Fadiga (MediaPipe) fica no cliente por decisão da ADR-009 (exceção declarada).
           r.events.forEach((e) => {
@@ -1646,18 +1435,7 @@ export function CameraWorkspace({
   }
 
   // ── editor de zonas ──
-  // Frame CORRENTE p/ a GEOMETRIA do editor (letterbox → coords normalizadas). No WebRTC (Fase 1)
-  // vem do <video> nativo (mesmas dimensões que o drawScene usa p/ o content-rect), pois o getFrame()
-  // do relé MJPEG pode estar ausente/em outra resolução p/ uma câmera webrtc. No MJPEG é o getFrame()
-  // de sempre → mapeamento idêntico ao atual.
-  function currentFrame(): FrameSource | null {
-    if (webrtcRef.current) {
-      const video = videoStreamRef.current?.video;
-      if (!video || !video.videoWidth || !video.videoHeight) return null;
-      return { el: video, w: video.videoWidth, h: video.videoHeight };
-    }
-    return getFrame();
-  }
+  // `currentFrame` (fonte da GEOMETRIA do editor, WebRTC × MJPEG) vem de useWebrtcTransport.
   function vpPoint(e: ReactMouseEvent) {
     const r = viewportRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -2171,590 +1949,60 @@ export function CameraWorkspace({
           >
             <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
               <TabsContent value="zonas">
-                {zonesLoading && <p className="empty-note">Carregando zonas…</p>}
-                {/* Descoberta dos modos (jul/2026): o caminho zona→⚙→Modo era invisível — hint
-                    acionável no topo da lista; texto apenas, sem tocar em lógica/rAF. */}
-                {!zonesLoading && zones.length > 0 && canConfigure && (
-                  <p className="empty-note">
-                    Cada zona roda um modo de IA na sua área (Atividade, Leitura, Objetos ou
-                    Fadiga). Para trocar: ⚙ na zona → <b>Modo</b>.
-                  </p>
-                )}
-                {!zonesLoading && zones.length === 0 && (
-                  <p className="empty-note">
-                    {canConfigure
-                      ? "Use “✎ Zona” para desenhar uma área sobre o vídeo; depois ⚙ na zona → Modo (Atividade, Leitura, Objetos ou Fadiga)."
-                      : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}
-                  </p>
-                )}
-                {zones.map((z) => {
-                  const r = panel.get(z.id);
-                  const st = r?.modo === "atividade" ? r.view.state : "ATIVA";
-                  return (
-                    <div key={z.id} className={`zone ${st}`}>
-                      <div className="row">
-                        <span className="zone-head">
-                          {/* title em dado, não affordance: .zone-name trunca (ellipsis) — o title
-                              revela o VALOR completo do rótulo, não é dica de controle. */}
-                          <b className="zone-name" title={z.label}>
-                            {z.label}
-                          </b>
-                          <Badge tone={MODE_TONE[z.modo]}>{ZONE_MODE_LABEL[z.modo]}</Badge>
-                        </span>
-                        <span className="zone-tools">
-                          <Tooltip
-                            content={
-                              canConfigure
-                                ? "Configurar zona (modo e parâmetros)"
-                                : "Configuração requer perfil de engenharia"
-                            }
-                          >
-                            <button
-                              className="del"
-                              disabled={!canConfigure}
-                              aria-label="Configurar zona"
-                              onClick={() => canConfigure && setCfgZoneId(z.id)}
-                            >
-                              ⚙
-                            </button>
-                          </Tooltip>
-                          <Tooltip
-                            content={
-                              canConfigure
-                                ? "Pintar a área (blueprint em grade)"
-                                : "Edição requer perfil de engenharia"
-                            }
-                          >
-                            <button
-                              className={`del ${paintZoneId === z.id ? "on" : ""}`}
-                              disabled={!canConfigure}
-                              aria-label="Pintar área"
-                              onClick={() =>
-                                canConfigure &&
-                                (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))
-                              }
-                            >
-                              🖌
-                            </button>
-                          </Tooltip>
-                          <Tooltip
-                            content={
-                              canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"
-                            }
-                          >
-                            <button
-                              className="del"
-                              disabled={!canConfigure}
-                              aria-label="Remover zona"
-                              onClick={() => canConfigure && removeZone(z.id)}
-                            >
-                              ✕
-                            </button>
-                          </Tooltip>
-                        </span>
-                      </div>
-
-                      {z.modo === "atividade" &&
-                        (r?.modo === "atividade" ? (
-                          (() => {
-                            const ms = stateToMetric(r.view.state);
-                            const activeThr = sensitivityFactor(z.sensitivity) / 6; // limiar ATIVA em unidades de view.motion
-                            return (
-                              <>
-                                {/* estado/parada: indicadores categóricos/temporais (mantidos como KPI) */}
-                                <div className="kpis ws-kpis">
-                                  <div className="kpi">
-                                    <div
-                                      className="v"
-                                      style={{ color: stateVar(r.view.state), fontSize: 13 }}
-                                    >
-                                      {r.view.state}
-                                    </div>
-                                    <div className="l">estado</div>
-                                  </div>
-                                  <div className="kpi">
-                                    <div className="v">{fmtDuration(r.view.idleMs)}</div>
-                                    <div className="l">parada</div>
-                                  </div>
-                                </div>
-                                {/* telemetria "nunca número cru": valor + sparkline + faixa-alvo */}
-                                <MetricCell
-                                  label="Movimento"
-                                  value={`${Math.round(r.view.motion * 100)}%`}
-                                  values={hist(z.id, "motion")}
-                                  band={{ lo: activeThr, hi: 1 }}
-                                  bandLabel="alvo: zona ativa"
-                                  state={ms}
-                                  min={0}
-                                  max={1}
-                                />
-                                <MetricCell
-                                  label="Ocupação"
-                                  value={`${r.view.people}`}
-                                  values={hist(z.id, "people")}
-                                  band={OCC_BAND}
-                                  bandLabel={`alvo 1–${OCC_HI} pessoas`}
-                                  state={occMetric(r.view.people)}
-                                  min={0}
-                                />
-                                <div className="zone-flow">
-                                  <span>Fluxo</span>
-                                  <span className={`flow-chip ${r.view.flowLevel}`}>
-                                    {r.view.flowLevel}
-                                  </span>
-                                  <span className="spark">
-                                    {r.view.flow.map((s, i) => (
-                                      <i
-                                        key={i}
-                                        style={{ height: `${Math.max(6, Math.round(s * 100))}%` }}
-                                      />
-                                    ))}
-                                  </span>
-                                </div>
-                              </>
-                            );
-                          })()
-                        ) : (
-                          <p className="ws-wait">iniciando…</p>
-                        ))}
-
-                      {z.modo === "leitura" &&
-                        (r?.modo === "leitura" ? (
-                          <>
-                            {/* telemetria "nunca número cru": valor + sparkline + faixa-alvo */}
-                            <MetricCell
-                              label="Taxa de leitura"
-                              value={`${r.ratePct}%`}
-                              values={hist(z.id, "rate")}
-                              band={RATE_BAND}
-                              bandLabel="alvo ≥ 95%"
-                              state={rateToMetric(r.ratePct)}
-                              min={0}
-                              max={100}
-                            />
-                            <MetricCell
-                              label="Lidas/min"
-                              value={`${r.perMin}`}
-                              values={hist(z.id, "perMin")}
-                              min={0}
-                            />
-                            <MetricCell
-                              label="No-reads"
-                              value={`${r.noReads}`}
-                              values={hist(z.id, "noReads")}
-                              band={NOREAD_BAND}
-                              bandLabel="alvo 0"
-                              state={noReadMetric(r.noReads)}
-                              min={0}
-                            />
-                            <div className="ws-code">
-                              <span className="muted">último código</span>
-                              <code>{r.lastCode ?? "—"}</code>
-                            </div>
-                            <div className="ws-metric-row">
-                              Ponto <b>{z.ponto}</b> · {r.passes} passagens
-                            </div>
-                          </>
-                        ) : (
-                          <p className="ws-wait">iniciando…</p>
-                        ))}
-
-                      {z.modo === "objetos" && (
-                        <>
-                          <div className="ws-counts">
-                            {z.selectedClasses.length === 0 && (
-                              <span className="muted">nenhuma classe — abra ⚙</span>
-                            )}
-                            {z.selectedClasses.map((k) => {
-                              const o = objClass(k);
-                              const n = r?.modo === "objetos" ? (r.counts[k] ?? 0) : 0;
-                              return (
-                                // title em dado, não affordance: o chip mostra emoji + contagem;
-                                // o title revela o VALOR (rótulo da classe atrás do emoji).
-                                <span
-                                  key={k}
-                                  className={`count-chip ${n > 0 ? "on" : ""}`}
-                                  style={
-                                    n > 0 ? { borderColor: o?.color, color: o?.color } : undefined
-                                  }
-                                  title={o?.label}
-                                >
-                                  {o?.emoji} <b>{n}</b>
-                                </span>
-                              );
-                            })}
-                          </div>
-                          {/* telemetria: total em cena com tendência (sem faixa-alvo fixa — depende da cena) */}
-                          <MetricCell
-                            label="Total em cena"
-                            value={`${r?.modo === "objetos" ? r.total : 0}`}
-                            values={hist(z.id, "total")}
-                            min={0}
-                          />
-                        </>
-                      )}
-
-                      {z.modo === "fadiga" && (
-                        <>
-                          <div className="ws-fadiga">
-                            {r?.modo === "fadiga" && r.faceState === "ready" ? (
-                              <>
-                                <Badge tone={RISK_TONE[r.risk]}>{RISK_LABEL[r.risk]}</Badge>
-                                <span className="muted">📱 {r.phone ? "sim" : "não"}</span>
-                              </>
-                            ) : (
-                              <span className="muted">
-                                {r?.modo === "fadiga"
-                                  ? r.faceState === "loading"
-                                    ? "carregando modelo…"
-                                    : "modelo falhou"
-                                  : "iniciando…"}
-                              </span>
-                            )}
-                          </div>
-                          {r?.modo === "fadiga" && r.faceState === "ready" && (
-                            /* telemetria "nunca número cru": EAR com faixa-alvo (olhos abertos) */
-                            <MetricCell
-                              label="EAR (abertura ocular)"
-                              value={r.ear == null ? "--" : r.ear.toFixed(2)}
-                              values={hist(z.id, "ear")}
-                              band={{ lo: APP_CONFIG.fadiga.eyesClosedEarThreshold, hi: EAR_HI }}
-                              bandLabel={`alvo ≥ ${APP_CONFIG.fadiga.eyesClosedEarThreshold.toFixed(2)}`}
-                              state={riskToMetric(r.risk)}
-                              min={0}
-                              max={EAR_HI}
-                            />
-                          )}
-                          <p className="empty-note" style={{ margin: "4px 0 0" }}>
-                            Monitora 1 operador na ROI da zona (recorte). Som/calibração na câmera
-                            dedicada.
-                          </p>
-                        </>
-                      )}
-
-                      {z.modo === "exclusao" && (
-                        <p className="empty-note" style={{ margin: "4px 0 0" }}>
-                          Máscara de supressão: pessoas com o pé nesta área são ignoradas (não
-                          contam, não rastreiam). Sem indicador.
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-                {legend.length > 0 && (
-                  <div className="ws-legend">
-                    <div className="ws-legend-title">Legenda do overlay</div>
-                    <div className="ws-legend-items">
-                      {legend.map((e, i) => (
-                        <span key={i} className="leg">
-                          <i style={{ background: e.color }} />
-                          {e.label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <ZonasTab
+                  zonesLoading={zonesLoading}
+                  zones={zones}
+                  canConfigure={canConfigure}
+                  panel={panel}
+                  paintZoneId={paintZoneId}
+                  hist={hist}
+                  legend={legend}
+                  setCfgZoneId={setCfgZoneId}
+                  startPaint={startPaint}
+                  setPaintZoneId={setPaintZoneId}
+                  removeZone={removeZone}
+                />
               </TabsContent>
 
               <TabsContent value="linhas">
-                <div className="row" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-2)" }}>
-                  <Tooltip
-                    content={
-                      canConfigure
-                        ? "Clique em A e arraste até B sobre o vídeo"
-                        : "Edição requer perfil de engenharia"
-                    }
-                  >
-                    <Button
-                      size="sm"
-                      active={tripwireMode}
-                      disabled={!canConfigure}
-                      onClick={toggleTripwireMode}
-                    >
-                      {tripwireMode ? "Traçando…" : "⇄ Nova linha"}
-                    </Button>
-                  </Tooltip>
-                  <Tooltip content="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece.">
-                    <Button size="sm" onClick={resetCounts}>
-                      ↺ Zerar contagem
-                    </Button>
-                  </Tooltip>
-                </div>
-                {tripwires.length === 0 && (
-                  <p className="empty-note">
-                    {canConfigure
-                      ? "Use “⇄ Nova linha” e arraste sobre o vídeo (A→B). Cruzar da esquerda→direita da seta conta como Entrada; o sentido oposto, Saída."
-                      : "Nenhuma linha de contagem configurada. A edição requer perfil de engenharia."}
-                  </p>
-                )}
-                {tripwires.map((w, i) => {
-                  // (1.2) "hoje" = acumulado do DIA no servidor (flowBase, sobrevive a reload)
-                  // + sessão corrente (twCounts). Load falhou/hub antigo → flowBase vazio (só sessão).
-                  // F1-C (ADR-009) — modo HUB: o servidor conta os MESMOS cruzamentos que a
-                  // sessão local → somar os dois exibiria 2×. "hoje" passa a ser SÓ o servidor
-                  // (hubFlowToday, refresh ~30s); a sessão local vira feedback imediato no
-                  // tooltip (não entra na soma exibida).
-                  const c = twCounts[w.id] ?? { in: 0, out: 0 };
-                  const hub = analysisEngine === "hub";
-                  const b = (hub ? hubFlowToday[w.id] : flowBase[w.id]) ?? { in: 0, out: 0 };
-                  const tIn = hub ? b.in : b.in + c.in;
-                  const tOut = hub ? b.out : b.out + c.out;
-                  const tipIn = hub
-                    ? `servidor (hoje) ${b.in} · sessão local ${c.in} (não somada — o hub grava os mesmos cruzamentos)`
-                    : `sessão ${c.in} · dia (servidor) ${b.in}`;
-                  const tipOut = hub
-                    ? `servidor (hoje) ${b.out} · sessão local ${c.out} (não somada — o hub grava os mesmos cruzamentos)`
-                    : `sessão ${c.out} · dia (servidor) ${b.out}`;
-                  return (
-                    <div key={w.id} className="zone">
-                      <div className="row">
-                        <span className="zone-head">
-                          <b className="zone-name">Linha {i + 1}</b>
-                          <Badge tone="info">contagem</Badge>
-                        </span>
-                        <span className="zone-tools">
-                          <Tooltip
-                            content={
-                              canConfigure
-                                ? "Inverter direção (troca Entrada↔Saída)"
-                                : "Edição requer perfil de engenharia"
-                            }
-                          >
-                            <button
-                              className="del"
-                              disabled={!canConfigure}
-                              aria-label="Inverter direção"
-                              onClick={() => canConfigure && invertTripwire(w.id)}
-                            >
-                              ⇄
-                            </button>
-                          </Tooltip>
-                          <Tooltip
-                            content={
-                              canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"
-                            }
-                          >
-                            <button
-                              className="del"
-                              disabled={!canConfigure}
-                              aria-label="Remover linha"
-                              onClick={() => canConfigure && removeTripwire(w.id)}
-                            >
-                              ✕
-                            </button>
-                          </Tooltip>
-                        </span>
-                      </div>
-                      <div className="kpis ws-kpis">
-                        <Tooltip content={tipIn}>
-                          <div className="kpi">
-                            <div className="v" style={{ color: "var(--state-info)" }}>
-                              {tIn}
-                            </div>
-                            <div className="l">entradas hoje</div>
-                          </div>
-                        </Tooltip>
-                        <Tooltip content={tipOut}>
-                          <div className="kpi">
-                            <div className="v" style={{ color: "var(--state-neutral)" }}>
-                              {tOut}
-                            </div>
-                            <div className="l">saídas hoje</div>
-                          </div>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  );
-                })}
-                {/* Nota mecânica só quando HÁ linhas (explica os contadores); vazia, a
-                    instrução de cima basta — estado vazio compacto, sem empurrar conteúdo. */}
-                {tripwires.length > 0 && (
-                  <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-                    A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) —
-                    depende de ao menos uma zona de Atividade ativa p/ detectar pessoas. Contadores
-                    são por sessão.
-                  </p>
-                )}
+                <LinhasTab
+                  tripwireMode={tripwireMode}
+                  canConfigure={canConfigure}
+                  toggleTripwireMode={toggleTripwireMode}
+                  resetCounts={resetCounts}
+                  tripwires={tripwires}
+                  twCounts={twCounts}
+                  analysisEngine={analysisEngine}
+                  hubFlowToday={hubFlowToday}
+                  flowBase={flowBase}
+                  invertTripwire={invertTripwire}
+                  removeTripwire={removeTripwire}
+                />
               </TabsContent>
 
               <TabsContent value="timeline">
-                {timeline.length === 0 ? (
-                  <p className="empty-note">
-                    Sem eventos nesta sessão. Alertas de zona e cruzamentos de linha aparecem aqui
-                    em tempo real.
-                  </p>
-                ) : (
-                  <ul className="tl">
-                    {timeline.map((e) => (
-                      <li key={e.id}>
-                        <span className={`dot ${e.sev}`} />
-                        <span className="t">{clock(new Date(e.ts))}</span>
-                        <span>{e.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <TimelineTab timeline={timeline} />
               </TabsContent>
 
               <TabsContent value="presenca">
-                <div className="kpis">
-                  <div className="kpi">
-                    <div className="v">{presence.now}</div>
-                    <div className="l">agora</div>
-                  </div>
-                  <div className="kpi">
-                    <div className="v">{presence.peak}</div>
-                    <div className="l">pico</div>
-                  </div>
-                  <div className="kpi">
-                    <div className="v">{fmtDuration(presence.dwell)}</div>
-                    <div className="l">permanência</div>
-                  </div>
-                </div>
-                <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-                  Pessoas recebem ID efêmero (sem identidade); reseta por sessão.
-                  {paused ? " ⏸ Pausado: rótulos com tempo em cena." : ""}
-                </p>
+                <PresencaTab presence={presence} paused={paused} />
               </TabsContent>
 
               <TabsContent value="camadas">
-                {activePresetDef && (
-                  <div
-                    style={{
-                      marginBottom: "var(--sp-3)",
-                      padding: "var(--sp-2)",
-                      borderRadius: 8,
-                      border: "1px solid var(--cam-panel-border)",
-                      background: "var(--cam-surface-bg)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--sp-2)",
-                        marginBottom: 4,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 11,
-                          textTransform: "uppercase",
-                          letterSpacing: ".4px",
-                          color: "var(--text-dim)",
-                        }}
-                      >
-                        Preset ativo
-                      </span>
-                      <Badge tone={MODE_TONE[activePreset!]}>{activePresetDef.label}</Badge>
-                      {presetDirty && (
-                        <span style={{ fontSize: 11, color: "var(--state-warn-fg, #fde68a)" }}>
-                          · ajustado
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--cam-panel-fg)" }}>
-                      {activePresetDef.description}
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
-                      {activePresetDef.metrics.map((m) => (
-                        <span
-                          key={m.key}
-                          style={{
-                            fontSize: 11,
-                            padding: "2px 7px",
-                            borderRadius: 999,
-                            border: "1px solid var(--cam-panel-border)",
-                            color: "var(--cam-panel-fg)",
-                          }}
-                        >
-                          {m.label}
-                        </span>
-                      ))}
-                    </div>
-                    {presetDirty && (
-                      <div style={{ marginTop: "var(--sp-2)" }}>
-                        <Tooltip content="Restaura camadas e confiança do preset deste modo.">
-                          <Button size="sm" onClick={() => applyPreset(activePreset!)}>
-                            ↺ Reaplicar preset
-                          </Button>
-                        </Tooltip>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {(
-                  [
-                    ["boxes", "Caixas / detecções"],
-                    ["mask", "Máscara (área pintada)"],
-                    ["zones", "Zonas (retângulos)"],
-                    ["heatmap", "Heatmap de ocupação"],
-                  ] as [keyof OverlayLayers, string][]
-                ).map(([k, lbl]) => (
-                  <ToggleRow
-                    key={k}
-                    label={lbl}
-                    checked={layers[k]}
-                    onCheckedChange={(v) => setLayers((s) => ({ ...s, [k]: v }))}
-                  />
-                ))}
-                <div style={{ marginTop: "var(--sp-3)" }}>
-                  <Field
-                    label={`Confiança mínima · ${Math.round(conf * 100)}%`}
-                    hint="Filtra/atenua detecções abaixo do limiar sobre o vídeo (em tempo real)."
-                  >
-                    <div className="cfg-slider">
-                      <span className="ss-end">0</span>
-                      <Slider
-                        value={Math.round(conf * 100)}
-                        min={0}
-                        max={100}
-                        step={5}
-                        onChange={(v) => setConf(v / 100)}
-                        ariaLabel="Confiança mínima"
-                      />
-                      <span className="ss-end">100</span>
-                    </div>
-                  </Field>
-                </div>
-                <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-                  Camadas e confiança seguem o preset do modo ativo; ajustes manuais valem só nesta
-                  sessão e sobrepõem o preset (padrões em APP_CONFIG.overlay / MODE_PRESETS).
-                  Heatmap acumula a presença de pessoas.
-                </p>
-
-                {/* Perfil de detecção da CÂMERA (persiste no backend) — só engenharia edita. */}
-                {canConfigure && (
-                  <div
-                    style={{
-                      marginTop: "var(--sp-3)",
-                      padding: "var(--sp-2)",
-                      borderRadius: 8,
-                      border: "1px solid var(--cam-panel-border)",
-                      background: "var(--cam-surface-bg)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "var(--sp-2)",
-                      }}
-                    >
-                      <span>Longo alcance / Panorâmica</span>
-                      <Switch
-                        checked={longRange}
-                        onCheckedChange={onLongRangeChange}
-                        ariaLabel="Longo alcance / Panorâmica"
-                      />
-                    </div>
-                    <p className="empty-note" style={{ margin: "6px 0 0" }}>
-                      Para câmeras panorâmicas/de longo alcance (ex.: rua vista de cima): detecta
-                      objetos pequenos/distantes com mais tiles e limiares menores; usa mais CPU.
-                    </p>
-                  </div>
-                )}
+                <CamadasTab
+                  activePresetDef={activePresetDef}
+                  activePreset={activePreset}
+                  presetTone={activePreset ? MODE_TONE[activePreset] : "info"}
+                  presetDirty={presetDirty}
+                  applyPreset={applyPreset}
+                  layers={layers}
+                  setLayers={setLayers}
+                  conf={conf}
+                  setConf={setConf}
+                  canConfigure={canConfigure}
+                  longRange={longRange}
+                  onLongRangeChange={onLongRangeChange}
+                />
               </TabsContent>
             </ScrollArea>
           </Tabs>

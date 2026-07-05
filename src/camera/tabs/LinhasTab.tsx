@@ -1,0 +1,145 @@
+// Aba "Linhas" do drawer da câmera — linhas de contagem (tripwires) + contadores in/out "hoje".
+// Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace (edição via hook useTripwires).
+import { Button, Tooltip, Badge } from "../../ui";
+import { type Tripwire, type TripwireCounts } from "../../vision/counting";
+
+type Props = {
+  tripwireMode: boolean;
+  canConfigure: boolean;
+  toggleTripwireMode: () => void;
+  resetCounts: () => void;
+  tripwires: Tripwire[];
+  twCounts: Record<string, TripwireCounts>;
+  // "hub" → o "hoje" exibido é SÓ o acumulado do servidor (o hub grava os mesmos cruzamentos);
+  // "local" → acumulado do dia (servidor) + sessão corrente.
+  analysisEngine: "hub" | "local";
+  hubFlowToday: Record<string, TripwireCounts>;
+  flowBase: Record<string, TripwireCounts>;
+  invertTripwire: (id: string) => void;
+  removeTripwire: (id: string) => void;
+};
+
+export function LinhasTab({
+  tripwireMode,
+  canConfigure,
+  toggleTripwireMode,
+  resetCounts,
+  tripwires,
+  twCounts,
+  analysisEngine,
+  hubFlowToday,
+  flowBase,
+  invertTripwire,
+  removeTripwire,
+}: Props) {
+  return (
+    <>
+      <div className="row tw-actions">
+        <Tooltip
+          content={
+            canConfigure
+              ? "Clique em A e arraste até B sobre o vídeo"
+              : "Edição requer perfil de engenharia"
+          }
+        >
+          <Button size="sm" active={tripwireMode} disabled={!canConfigure} onClick={toggleTripwireMode}>
+            {tripwireMode ? "Traçando…" : "⇄ Nova linha"}
+          </Button>
+        </Tooltip>
+        <Tooltip content="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece.">
+          <Button size="sm" onClick={resetCounts}>
+            ↺ Zerar contagem
+          </Button>
+        </Tooltip>
+      </div>
+      {tripwires.length === 0 && (
+        <p className="empty-note">
+          {canConfigure
+            ? "Use “⇄ Nova linha” e arraste sobre o vídeo (A→B). Cruzar da esquerda→direita da seta conta como Entrada; o sentido oposto, Saída."
+            : "Nenhuma linha de contagem configurada. A edição requer perfil de engenharia."}
+        </p>
+      )}
+      {tripwires.map((w, i) => {
+        // (1.2) "hoje" = acumulado do DIA no servidor (flowBase) + sessão corrente (twCounts).
+        // F1-C (ADR-009) — modo HUB: o servidor conta os MESMOS cruzamentos que a sessão local →
+        // somar os dois exibiria 2×. "hoje" passa a ser SÓ o servidor (hubFlowToday); a sessão
+        // local vira feedback imediato no tooltip (não entra na soma exibida).
+        const c = twCounts[w.id] ?? { in: 0, out: 0 };
+        const hub = analysisEngine === "hub";
+        const b = (hub ? hubFlowToday[w.id] : flowBase[w.id]) ?? { in: 0, out: 0 };
+        const tIn = hub ? b.in : b.in + c.in;
+        const tOut = hub ? b.out : b.out + c.out;
+        const tipIn = hub
+          ? `servidor (hoje) ${b.in} · sessão local ${c.in} (não somada — o hub grava os mesmos cruzamentos)`
+          : `sessão ${c.in} · dia (servidor) ${b.in}`;
+        const tipOut = hub
+          ? `servidor (hoje) ${b.out} · sessão local ${c.out} (não somada — o hub grava os mesmos cruzamentos)`
+          : `sessão ${c.out} · dia (servidor) ${b.out}`;
+        return (
+          <div key={w.id} className="zone">
+            <div className="row">
+              <span className="zone-head">
+                <b className="zone-name">Linha {i + 1}</b>
+                <Badge tone="info">contagem</Badge>
+              </span>
+              <span className="zone-tools">
+                <Tooltip
+                  content={
+                    canConfigure
+                      ? "Inverter direção (troca Entrada↔Saída)"
+                      : "Edição requer perfil de engenharia"
+                  }
+                >
+                  <button
+                    className="del"
+                    disabled={!canConfigure}
+                    aria-label="Inverter direção"
+                    onClick={() => canConfigure && invertTripwire(w.id)}
+                  >
+                    ⇄
+                  </button>
+                </Tooltip>
+                <Tooltip content={canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"}>
+                  <button
+                    className="del"
+                    disabled={!canConfigure}
+                    aria-label="Remover linha"
+                    onClick={() => canConfigure && removeTripwire(w.id)}
+                  >
+                    ✕
+                  </button>
+                </Tooltip>
+              </span>
+            </div>
+            <div className="kpis ws-kpis">
+              <Tooltip content={tipIn}>
+                <div className="kpi">
+                  <div className="v" style={{ color: "var(--state-info)" }}>
+                    {tIn}
+                  </div>
+                  <div className="l">entradas hoje</div>
+                </div>
+              </Tooltip>
+              <Tooltip content={tipOut}>
+                <div className="kpi">
+                  <div className="v" style={{ color: "var(--state-neutral)" }}>
+                    {tOut}
+                  </div>
+                  <div className="l">saídas hoje</div>
+                </div>
+              </Tooltip>
+            </div>
+          </div>
+        );
+      })}
+      {/* Nota mecânica só quando HÁ linhas (explica os contadores); vazia, a instrução
+          de cima basta — estado vazio compacto, sem empurrar conteúdo. */}
+      {tripwires.length > 0 && (
+        <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
+          A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) — depende de ao
+          menos uma zona de Atividade ativa p/ detectar pessoas. Contadores são por sessão.
+        </p>
+      )}
+    </>
+  );
+}
