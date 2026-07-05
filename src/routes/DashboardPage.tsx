@@ -1,196 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Video } from "lucide-react";
-import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { setInferencePriority } from "../vision/scheduler";
-import { type FrameSource } from "../frame";
-import {
-  CameraWorkspace,
-  type HubAnalysis,
-  type HubTrack,
-  type HubZone,
-} from "../CameraWorkspace";
+import { CameraWorkspace } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
-import { getCameraCfg, loadCamConfig, type CameraCfg } from "../cameraConfig";
-import { loadZonesForCamera } from "../zones";
+import { getCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
 import { Button, Switch, Select, Tooltip, Badge, useToast } from "../ui";
-import {
-  listAlarms,
-  ackAlarm,
-  forwardAlarm,
-  getViews,
-  saveViews,
-  ApiError,
-  type AlarmEvent,
-  type AlarmPriority,
-  type AlarmState,
-  type SavedView,
-} from "../api";
-import { type Camera, type CameraStatus } from "./dashboard/types";
+import { type Camera } from "./dashboard/types";
 import { CameraTile } from "./dashboard/CameraTile";
 import { AlarmDrawer } from "./dashboard/AlarmDrawer";
 import { ViewsManager } from "./dashboard/ViewsManager";
+import { useFrameRelay } from "./dashboard/useFrameRelay";
+import { useDashboardSocket } from "./dashboard/useDashboardSocket";
+import { useVideoTransport } from "./dashboard/useVideoTransport";
+import { useSavedViews } from "./dashboard/useSavedViews";
+import { useAlarms } from "./dashboard/useAlarms";
+import { colsFor, orderedCameras as computeOrdered } from "./dashboard/autoSurface";
 import "./alarms.css";
 import "./views.css";
 
-// ImageBitmap decodificado fora da main thread; só guardamos o último frame (descarta atrasados).
-// INVARIANTE (2.2): w/h refletem SEMPRE o tamanho do BITMAP decodificado (bmp.width/height) — que
-// pode ser MENOR que o frame nativo quando o decode de tile aplica resize. Os consumidores
-// (cropFor/motion no CameraWorkspace) usam zonas normalizadas 0..1 sobre f.w/f.h, então crops e
-// leituras de luma permanecem consistentes com o bitmap entregue.
-type FrameEntry = {
-  bmp: ImageBitmap | null;
-  w: number;
-  h: number;
-  srcW: number; // largura NATIVA informada no payload (0 = desconhecida; RTSP não envia w/h)
-  ts: number;
-  pending: ArrayBuffer | null;
-  decoding: boolean;
-  // ── Telemetria leve (Fase 0.1) — contadores por câmera no holder de frames, p/ MEDIR o "trava".
-  //   recvFps: frames RECEBIDOS por segundo (EMA do intervalo entre chegadas — sem timer extra).
-  //   dropped: frames sobrescritos ANTES de decodificar (pending trocado sem consumo = "último-vence").
-  // Vivem no ref (zero re-render); um HUD/inspeção lê aqui. Não são desenhados por padrão.
-  recvFps: number;
-  dropped: number;
-};
-
-// Largura do decode reduzido para feeds que estão SÓ em tile (a grade exibe ~400px).
-const TILE_DECODE_WIDTH = 640;
-
-function colsFor(n: number): number {
-  return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
-}
-
-// ── Views salvas por setor (Onda C · item 11) ──────────────────────────────────────────────
-// Uma "view" é um subconjunto ordenado de câmeras (ex.: "Docas", "Expedição"). A ordem dos ids
-// define a ordem dos tiles. A view especial "Todas" (activeViewId=null) mostra tudo como hoje.
-//
-// FONTE DAS VIEWS = BACKEND (compartilhada): a LISTA de views agora vive no hub (GET/PUT
-// /api/views, via getViews/saveViews de api.ts) — uma lista global vista por todos os operadores.
-// O tipo `SavedView` é o canônico exportado de api.ts (sem cópia local).
-//
-// PREFERÊNCIAS LOCAIS (não compartilhadas): a view selecionada (`activeViewId`) e o toggle
-// `autoSurface` continuam por operador, no localStorage (chave nova `vp-view-prefs::...`), pois
-// são preferências do posto de trabalho, não estado compartilhado.
-//
-// MIGRAÇÃO (best-effort, única): instalações antigas guardavam a lista de views no localStorage
-// (chave legada `vp-views::user::host`). Na 1ª carga, se o backend vier VAZIO e existirem views
-// legadas, fazemos um upload único delas (saveViews) para não perder o trabalho do operador. A
-// chave legada é preservada como backup (não a apagamos); como o backend passa a ter as views,
-// recargas seguintes leem do backend e a migração não dispara de novo.
-type LegacyViewsStore = { views: SavedView[]; activeViewId: string | null; autoSurface: boolean };
-type ViewPrefs = { activeViewId: string | null; autoSurface: boolean };
-
-// Chave LEGADA (combinava views + prefs) — só lida para migração/fallback de prefs.
-function legacyViewsKey(userId: string): string {
-  return `vp-views::${userId}::${APP_CONFIG.net.serverUrl}`;
-}
-// Chave NOVA: só preferências locais do operador (activeViewId + autoSurface).
-function viewPrefsKey(userId: string): string {
-  return `vp-view-prefs::${userId}::${APP_CONFIG.net.serverUrl}`;
-}
-
-// Lê a store legada (combinada). Usada como fonte da migração e como fallback de prefs.
-function loadLegacyStore(userId: string): LegacyViewsStore {
-  try {
-    const raw = localStorage.getItem(legacyViewsKey(userId));
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<LegacyViewsStore>;
-      const views = Array.isArray(p.views)
-        ? p.views.filter(
-            (v): v is SavedView =>
-              !!v &&
-              typeof v.id === "string" &&
-              typeof v.name === "string" &&
-              Array.isArray(v.cameraIds),
-          )
-        : [];
-      const activeViewId = typeof p.activeViewId === "string" ? p.activeViewId : null;
-      return { views, activeViewId, autoSurface: !!p.autoSurface };
-    }
-  } catch {
-    /* no-op */
-  }
-  return { views: [], activeViewId: null, autoSurface: false };
-}
-
-// Carrega as PREFS locais: chave nova primeiro; se ausente, herda da chave legada (continuidade).
-function loadViewPrefs(userId: string): ViewPrefs {
-  try {
-    const raw = localStorage.getItem(viewPrefsKey(userId));
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<ViewPrefs>;
-      return {
-        activeViewId: typeof p.activeViewId === "string" ? p.activeViewId : null,
-        autoSurface: !!p.autoSurface,
-      };
-    }
-  } catch {
-    /* no-op */
-  }
-  const legacy = loadLegacyStore(userId);
-  return { activeViewId: legacy.activeViewId, autoSurface: legacy.autoSurface };
-}
-
-// Janela de "atividade recente" para o auto-surface (ver activityScore abaixo).
-const AUTOSURFACE_WINDOW_MS = 10 * 60_000;
-
-// Auto-fallback WebRTC→MJPEG (transportOf): quando um tile/full REPORTA que o <video-stream>
-// não estabeleceu vídeo, a câmera fica em cooldown no relé MJPEG por este período. Ao expirar,
-// transportOf volta a TENTAR WebRTC (a fonte pode ter voltado); se falhar de novo, re-marca —
-// retry periódico, sem flicker rápido. Curto o bastante p/ recuperar cedo; longo p/ não piscar.
-const WEBRTC_FAIL_COOLDOWN_MS = 30_000;
-
+// ── Central de câmeras: ORQUESTRAÇÃO ──────────────────────────────────────────────────────────
+// O god-component foi quebrado em hooks por domínio (auditoria §S1 · R2): relé de frames
+// (useFrameRelay), socket (useDashboardSocket), transporte de vídeo (useVideoTransport), views +
+// auto-surface (useSavedViews) e alarmes (useAlarms); a lógica pura vive em transport.ts/autoSurface.ts
+// (testadas). Aqui ficam só a cola entre as frentes, a paginação/feeds ativos e o JSX.
 export function DashboardPage() {
   const { token, user, logout } = useAuth();
-  const socketRef = useRef<Socket | null>(null);
-  const framesRef = useRef<Map<string, FrameEntry>>(new Map());
-  const gettersRef = useRef<Map<string, () => FrameSource | null>>(new Map());
-  // ── F2 (ADR-009): overlays SERVIDOS — último `analysis-tracks` por câmera ──
-  // Evento volatile @1fps do MOTOR DO HUB (tracks + zonas). SEM setState por evento (padrão
-  // framesRef): o payload vai a este ref e o rAF do CameraWorkspace o lê via getter estável
-  // (padrão gettersRef, hubGetterFor abaixo) — zero re-render da grade por frame de análise.
-  const hubAnalysisRef = useRef<Map<string, HubAnalysis>>(new Map());
-  const hubGettersRef = useRef<Map<string, () => HubAnalysis | null>>(new Map());
-  // Conjunto de feeds ATIVOS (página atual + câmera aberta). Só estes são decodificados/processados.
-  const activeIdsRef = useRef<Set<string>>(new Set());
-  // Câmera aberta espelhada em ref: drainDecode (estável, useCallback []) decide o resize sem
-  // religar efeitos; atualizada no efeito de feeds ativos (que já depende de openId).
-  const openIdRef = useRef<string | null>(null);
-  // 2.2 — cache: a câmera TEM zona de modo "leitura"? (true/false). AUSENTE = ainda não carregado
-  // → default SEGURO é decode nativo (ZXing precisa de pixels). Carregado 1× por câmera quando a
-  // lista chega (loadZonesForCamera) e invalidado/recarregado no `camcfg-updated { kind:"zones" }`.
-  const readingZoneRef = useRef<Map<string, boolean>>(new Map());
-  const readingLoadingRef = useRef<Set<string>>(new Set());
+  const { toast } = useToast();
 
+  // Estado próprio da orquestração (feeds/paginação/overlay/demo). O demais é dos hooks abaixo.
   const [cameras, setCameras] = useState<Camera[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, CameraStatus>>({});
-  // ── F1-C (ADR-009): fonte da ANÁLISE por câmera (anti-duplicação de ingest) ──
-  // O hub anuncia via evento socket ADITIVO `analysis-status {cameraId, engine:"hub"|"local"}`
-  // (snapshot no connect + mudanças) quais câmeras o MOTOR server-side está analisando. O mapa
-  // desce como prop `analysisEngine` aos tiles/câmera aberta: com "hub", o CameraWorkspace
-  // SUPRIME os ingests locais (recordSamples/recordFlow) — o servidor é a fonte dos indicadores.
-  // Hub antigo sem o evento → mapa vazio → tudo "local" (comportamento idêntico ao atual).
-  const [analysisEngines, setAnalysisEngines] = useState<Record<string, "hub" | "local">>({});
   const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
-  // ── Onda 2 (simplificação de config): STREAMS que o go2rtc conhece agora ──
-  // Alimenta o transporte "auto" (melhor disponível) de `transportOf`: um id neste Set = o go2rtc
-  // serve a câmera → "auto" resolve WebRTC; ausente / Set vazio (go2rtc fora) → "auto" resolve MJPEG.
-  // Refrescado no mount + a cada ~5s pelo efeito de descoberta abaixo (GET /go2rtc/api/streams).
-  const [go2rtcStreams, setGo2rtcStreams] = useState<Set<string>>(() => new Set());
-  // ── Auto-fallback WebRTC→MJPEG: cooldowns de FALHA de WebRTC por câmera ──────────────────────
-  // O bug: `transportOf` resolve WebRTC quando o go2rtc REGISTRA o stream — não quando ele tem
-  // FRAMES. Fonte caída → stream órfão → o <video-stream> quebra ("mse: unsupported url"). Quando
-  // um tile/full reporta a falha (onWebrtcFail), guardamos aqui id → TIMESTAMP DE EXPIRAÇÃO (ms).
-  // Enquanto agora < expiração, transportOf força MJPEG p/ essa câmera (mesmo com go2rtc listando
-  // o stream). Ref (não state) p/ não re-render por escrita; o re-render vem do tick abaixo, que só
-  // bumpa na TRANSIÇÃO (entrar em cooldown / expirar) — anti-flood. Vazio = comportamento atual.
-  const webrtcFailRef = useRef<Map<string, number>>(new Map());
-  // Contador que força o re-render de `transportOf` quando um cooldown entra/expira (ver acima).
-  const [, setWebrtcFailTick] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   // Modo demo ("Limite curto 10s") OFF por padrão (produção). Liga via env VITE_DEMO_MODE=1 ou toggle;
@@ -204,278 +47,50 @@ export function DashboardPage() {
     }
     return APP_CONFIG.demo.shortLimitDefault;
   });
-  const [connected, setConnected] = useState(false);
-  // ── Fila de alarmes acionável (Onda B · item 7) — consome o backend B1 (só metadados, LGPD) ──
-  const [alarms, setAlarms] = useState<AlarmEvent[]>([]);
-  const [alarmsOpen, setAlarmsOpen] = useState(false);
-  const { toast } = useToast();
 
-  // ── Views salvas por setor + auto-surface (Onda C · item 11) ──
-  // Lista de views = backend (compartilhada); activeViewId/autoSurface = prefs locais do operador.
-  const initialPrefs = useMemo(() => loadViewPrefs(user.id), [user.id]);
-  // Fonte da migração: views legadas capturadas EM MEMÓRIA no 1º render (antes de qualquer escrita
-  // de prefs no localStorage), para não perdê-las caso a migração precise rodar depois.
-  const legacyViews = useMemo(() => loadLegacyStore(user.id).views, [user.id]);
-  const [views, setViews] = useState<SavedView[]>([]);
-  const [viewsLoading, setViewsLoading] = useState(true);
-  const migratedRef = useRef(false);
-  const [activeViewId, setActiveViewId] = useState<string | null>(() => initialPrefs.activeViewId);
-  const [autoSurface, setAutoSurface] = useState<boolean>(() => initialPrefs.autoSurface);
-  const [viewsMgrOpen, setViewsMgrOpen] = useState(false);
-  // ── Sincronização ao vivo (ADR-006) — revisão de tripwires por câmera ──
-  // Cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela câmera; o número
-  // é repassado às tiles via prop `tripwiresRev` (CameraWorkspace re-busca os tripwires quando muda).
-  const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
-  // "Tick" para reordenar periodicamente no auto-surface (a recência decai com o tempo, mesmo sem
-  // novos eventos socket). Só roda quando o modo está ligado.
-  const [surfaceTick, setSurfaceTick] = useState(0);
+  // Relé de frames (decode fora da main-thread, getters estáveis, poda de câmeras removidas).
+  // Desestruturado em membros ESTÁVEIS (refs + useCallbacks): usá-los direto (em vez do objeto
+  // `relay`, recriado a cada render) mantém as deps dos efeitos estáveis (efeito de feeds ativos
+  // só re-roda em pageCameras/openId, como no original).
+  const relay = useFrameRelay(cameras);
+  const { framesRef, activeIdsRef, openIdRef, drainDecode, getterFor, hubGetterFor } = relay;
+  // Alarmes + views: criados ANTES do socket (que empurra os eventos ao vivo para os seus setters).
+  const alarmsApi = useAlarms(user.usuario, toast);
+  const savedViews = useSavedViews(user.id, toast);
+  // Socket: roteia os eventos do hub para os refs do relé e para os setters das frentes acima.
+  const socket = useDashboardSocket({
+    token,
+    logout,
+    framesRef,
+    activeIdsRef,
+    hubAnalysisRef: relay.hubAnalysisRef,
+    readingZoneRef: relay.readingZoneRef,
+    drainDecode,
+    loadReadingFlag: relay.loadReadingFlag,
+    setCameras,
+    setAlarms: alarmsApi.setAlarms,
+    setViews: savedViews.setViews,
+  });
+  const { socketRef, connected, statuses, analysisEngines, revByCamera } = socket;
+  const { alarms, alarmsOpen, setAlarmsOpen, newCount, topNewPriority, actOnAlarm } = alarmsApi;
+  const {
+    views,
+    setViews,
+    viewsLoading,
+    activeViewId,
+    setActiveViewId,
+    activeView,
+    autoSurface,
+    setAutoSurface,
+    viewsMgrOpen,
+    setViewsMgrOpen,
+    surfaceTick,
+  } = savedViews;
 
-  // Decodifica o frame mais recente em ImageBitmap (assíncrono, fora da main thread); mantém só o último.
-  // Estável (useCallback []): só toca `framesRef`/`activeIdsRef` (refs estáveis); a recursão usa o nome
-  // da própria função (não a const externa). Identidade fixa → entra nas deps dos efeitos sem religá-los.
-  const drainDecode = useCallback(function drainDecode(id: string) {
-    const f = framesRef.current.get(id);
-    if (!f || f.decoding || !f.pending) return;
-    const buf = f.pending;
-    f.pending = null;
-    f.decoding = true;
-    // 2.2 — decode com RESIZE p/ tiles: feed que está só na grade não precisa de pixels nativos
-    // (o tile exibe ~400px; decodificar 1280×720 RGBA p/ isso desperdiça CPU/GPU/memória).
-    // Exceções — decode NATIVO sempre:
-    //  (a) câmera ABERTA (id === openIdRef): zoom/cine-loop/análise full usam o frame inteiro;
-    //  (b) `getCameraCfg(id).longRange === true`: o tiling 4×4 NA GRADE recorta o frame nativo;
-    //  (c) câmera com zona de modo "leitura": ZXing decodifica código de barras (precisa de
-    //      pixels). Enquanto as zonas da câmera não carregaram (flag ausente), assume leitura —
-    //      default seguro é nativo;
-    //  (d) frame nativo já ≤ TILE_DECODE_WIDTH (quando conhecido): resize só faria upscale.
-    // Consistência: f.w/f.h recebem SEMPRE bmp.width/height (abaixo), então os consumidores veem
-    // as dimensões REAIS do bitmap (não as nativas) — crops/motion normalizam por proporção.
-    const tileOnly = id !== openIdRef.current;
-    const mayResize =
-      tileOnly &&
-      readingZoneRef.current.get(id) === false &&
-      getCameraCfg(id).longRange !== true &&
-      !(f.srcW > 0 && f.srcW <= TILE_DECODE_WIDTH);
-    // Sem resizeHeight: createImageBitmap preserva a proporção sozinho (RTSP não manda w/h).
-    const opts: ImageBitmapOptions | undefined = mayResize
-      ? { resizeWidth: TILE_DECODE_WIDTH, resizeQuality: "low" }
-      : undefined;
-    createImageBitmap(new Blob([buf], { type: "image/jpeg" }), opts)
-      .then((bmp) => {
-        // Corrida (1.7): se o feed saiu do conjunto ativo (paginação) ou a entrada foi podada
-        // (câmera removida) enquanto o decode estava em voo, fecha o bitmap recém-criado e não
-        // reatribui — antes ele virava um f.bmp órfão que ninguém fechava (vazamento de GPU/RAM).
-        if (!activeIdsRef.current.has(id) || framesRef.current.get(id) !== f) {
-          bmp.close();
-          return;
-        }
-        const old = f.bmp;
-        f.bmp = bmp;
-        f.w = bmp.width;
-        f.h = bmp.height;
-        if (old) old.close();
-      })
-      .catch(() => {})
-      .finally(() => {
-        f.decoding = false;
-        // Só re-agenda se o feed continua ativo e a entrada ainda é a mesma — evita a cadeia
-        // decode→pending→decode se auto-perpetuar para um feed que já saiu da página.
-        if (f.pending && activeIdsRef.current.has(id) && framesRef.current.get(id) === f)
-          drainDecode(id);
-      });
-  }, []);
-
-  // 2.2 — carrega (1× por câmera) o flag "tem zona de leitura?" usado nas exceções do resize.
-  // canConfigure=false: leitura pura, sem disparar a migração best-effort de zonas do legado.
-  // Em falha, o flag fica AUSENTE → drainDecode segue no decode nativo (default seguro).
-  const loadReadingFlag = useCallback((id: string, label: string) => {
-    if (readingZoneRef.current.has(id) || readingLoadingRef.current.has(id)) return;
-    readingLoadingRef.current.add(id);
-    loadZonesForCamera(id, label, false)
-      .then((zones) => {
-        readingZoneRef.current.set(
-          id,
-          zones.some((z) => z.modo === "leitura"),
-        );
-      })
-      .catch(() => {
-        /* flag ausente = decode nativo (seguro) */
-      })
-      .finally(() => {
-        readingLoadingRef.current.delete(id);
-      });
-  }, []);
-
-  useEffect(() => {
-    const socket = io(APP_CONFIG.net.serverUrl, {
-      transports: ["websocket"],
-      auth: { token },
-      query: { role: "dashboard" },
-    });
-    socketRef.current = socket;
-    // Cópia local do Map de frames (estável) p/ usar no cleanup sem ler `framesRef.current` lá
-    // (evita o aviso de ref que "pode ter mudado"); é o mesmo Map, então fecha todos os bitmaps.
-    const frames = framesRef.current;
-    socket.on("connect", () => {
-      setConnected(true);
-      // F1-C — a reconexão pode ter trocado o hub (com/sem motor): zera o mapa de engines; o
-      // snapshot `analysis-status` emitido no connect repovoa. Sem o evento (hub antigo/motor
-      // desligado), tudo volta a "local" — o default seguro (browser volta a gravar).
-      setAnalysisEngines({});
-      // 2.1 — a reconexão perde as rooms no servidor: reanuncia o conjunto assistido para voltar
-      // a receber frames (o efeito de feeds ativos cobre as MUDANÇAS; aqui cobre o re-connect).
-      socket.emit("watch", { ids: [...activeIdsRef.current] });
-    });
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("connect_error", (err) => {
-      if (err.message === "unauthorized") logout("Sessão expirada. Entre novamente.");
-    });
-    socket.on("cameras", (list: Camera[]) => setCameras(list));
-    socket.on("camera-status", (s: CameraStatus) =>
-      setStatuses((prev) => ({ ...prev, [s.id]: s })),
-    );
-    // Alarmes ao vivo (aditivos, B1): novo evento → topo da fila; update → casa por id e substitui.
-    socket.on("alarm-event", (a: AlarmEvent) =>
-      setAlarms((prev) => [a, ...prev.filter((x) => x.id !== a.id)]),
-    );
-    socket.on("alarm-update", (a: AlarmEvent) =>
-      setAlarms((prev) => {
-        let found = false;
-        const next = prev.map((x) => (x.id === a.id ? ((found = true), a) : x));
-        return found ? next : [a, ...next];
-      }),
-    );
-    // F1-C (ADR-009) — fonte da análise por câmera (snapshot no connect + mudanças). Update
-    // funcional que PRESERVA a referência quando nada mudou (evita re-render da grade à toa).
-    // Payload defensivo: engine desconhecida degrada p/ "local" (browser grava — sem buraco).
-    socket.on("analysis-status", (p: { cameraId: string; engine: "hub" | "local" }) => {
-      if (!p || typeof p.cameraId !== "string") return;
-      const engine = p.engine === "hub" ? "hub" : "local";
-      setAnalysisEngines((prev) =>
-        prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
-      );
-    });
-    // F2 (ADR-009) — overlays servidos: guarda o último payload por câmera no REF (sem setState —
-    // ver hubAnalysisRef acima). `ts` = RECEPÇÃO local (Date.now): o gate de stale (~5s) no
-    // CameraWorkspace compara com o relógio local e fica imune a skew hub×cliente. Payload
-    // defensivo: campos ausentes viram lista vazia (tile fica sem caixas, nunca quebra).
-    socket.on(
-      "analysis-tracks",
-      (p: { cameraId: string; ts?: number; tracks?: HubTrack[]; zones?: HubZone[] }) => {
-        if (!p || typeof p.cameraId !== "string") return;
-        hubAnalysisRef.current.set(p.cameraId, {
-          ts: Date.now(),
-          tracks: Array.isArray(p.tracks) ? p.tracks : [],
-          zones: Array.isArray(p.zones) ? p.zones : [],
-        });
-      },
-    );
-    socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
-      let f = framesRef.current.get(p.id);
-      if (!f) {
-        f = {
-          bmp: null,
-          w: 0,
-          h: 0,
-          srcW: 0,
-          ts: 0,
-          pending: null,
-          decoding: false,
-          recvFps: 0,
-          dropped: 0,
-        };
-        framesRef.current.set(p.id, f);
-      }
-      // 0.1 — telemetria: um `pending` ainda não consumido sendo sobrescrito = frame DROPADO
-      // (último-vence). Bom termômetro do "trava" (decode/draw não acompanham a chegada).
-      if (f.pending) f.dropped++;
-      f.pending = p.buf;
-      // Largura NATIVA do payload (webcam envia w/h; RTSP não) — usada só p/ evitar UPSCALE no
-      // resize de tile (2.2). f.w/f.h continuam sendo as dimensões do bitmap decodificado.
-      if (typeof p.w === "number" && p.w > 0) f.srcW = p.w;
-      // 0.1 — recvFps por EMA a partir do intervalo desde a última chegada (f.ts anterior). Sem
-      // timer: barato e suficiente p/ ver a cadência REAL de recepção por câmera.
-      const now = Date.now();
-      if (f.ts > 0) {
-        const dt = now - f.ts;
-        if (dt > 0) {
-          const inst = 1000 / dt;
-          f.recvFps = f.recvFps > 0 ? f.recvFps * 0.8 + inst * 0.2 : inst;
-        }
-      }
-      f.ts = now;
-      // Só decodifica feeds ATIVOS: feeds fora da página atual não pagam createImageBitmap (CPU/memória).
-      if (activeIdsRef.current.has(p.id)) drainDecode(p.id);
-    });
-    // Sincronização ao vivo de config compartilhada (ADR-006). Evento aditivo na sala `dashboards`:
-    //   • kind:"views" → recarrega a LISTA de views do backend (last-write-wins). A seleção local
-    //     (activeViewId) é preservada; se a view selecionada sumiu, o efeito de validação cai p/ "Todas".
-    //     Idempotente: como o próprio salvar já atualiza o estado, recarregar não dispara toasts (silencioso
-    //     em sucesso; só loga em falha p/ não quebrar a central nem repetir avisos).
-    //   • kind:"tripwires" → incrementa a revisão daquela câmera; a prop `tripwiresRev` faz a tile re-buscar.
-    socket.on(
-      "camcfg-updated",
-      (
-        p:
-          | { kind: "views" }
-          | { kind: "tripwires" | "zones" | "camconfig"; cameraId: string },
-      ) => {
-        if (p?.kind === "views") {
-          getViews()
-            .then((remote) => setViews(remote))
-            .catch((e) => {
-              console.error("[views] recarga ao vivo falhou", e);
-            });
-        } else if (p?.kind === "tripwires" && typeof p.cameraId === "string") {
-          setRevByCamera((prev) => {
-            const next = new Map(prev);
-            next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
-            return next;
-          });
-        } else if (p?.kind === "zones" && typeof p.cameraId === "string") {
-          // 2.2 — zonas mudaram (talvez ganhou/perdeu zona de leitura): invalida o flag e
-          // recarrega; enquanto recarrega, o flag ausente força decode NATIVO (seguro p/ ZXing).
-          readingZoneRef.current.delete(p.cameraId);
-          loadReadingFlag(p.cameraId, p.cameraId);
-        } else if (p?.kind === "camconfig" && typeof p.cameraId === "string") {
-          // 2.2 — longRange pode ter mudado em OUTRO posto: refresca o cache local (localStorage)
-          // que o leitor síncrono getCameraCfg usa na exceção do resize.
-          loadCamConfig(p.cameraId, false).catch(() => {});
-        }
-      },
-    );
-    return () => {
-      socket.disconnect();
-      frames.forEach((f) => f.bmp?.close());
-    };
-  }, [token, logout, drainDecode, loadReadingFlag]);
-
-  // Poda entradas de câmeras que saíram da lista (1.7): fecha o bitmap e descarta a entrada
-  // (pending incluso) — antes framesRef/gettersRef só cresciam. Um decode em voo da entrada
-  // removida se auto-descarta no `.then` (a entrada não está mais no Map). Se a câmera voltar,
-  // o handler `frame` recria a entrada e `getterFor` recria o getter.
-  useEffect(() => {
-    if (cameras.length === 0) return; // lista vazia inicial (pré-socket) não é remoção
-    const ids = new Set(cameras.map((c) => c.id));
-    framesRef.current.forEach((f, id) => {
-      if (ids.has(id)) return;
-      f.bmp?.close();
-      framesRef.current.delete(id);
-      gettersRef.current.delete(id);
-    });
-    // F2: poda também o espelho de análise do hub (payload + getter) da câmera removida.
-    hubAnalysisRef.current.forEach((_, id) => {
-      if (ids.has(id)) return;
-      hubAnalysisRef.current.delete(id);
-      hubGettersRef.current.delete(id);
-    });
-  }, [cameras]);
-
-  // 2.2 — quando a lista de câmeras chega/muda, carrega 1× por câmera o flag "tem zona de
-  // leitura?" (async; até resolver, o decode de tile fica NATIVO — ver drainDecode).
-  useEffect(() => {
-    for (const c of cameras) loadReadingFlag(c.id, c.label);
-  }, [cameras, loadReadingFlag]);
+  // Config por câmera (default = atividade → retrocompatível); leitor síncrono usado no transporte.
+  const cfgOf = useCallback((id: string): CameraCfg => cfgs[id] ?? getCameraCfg(id), [cfgs]);
+  // Transporte de vídeo no painel (go2rtc/WebRTC vs relé MJPEG) + auto-fallback WebRTC→MJPEG.
+  const { transportOf, handleWebrtcFail } = useVideoTransport(cfgOf);
 
   // garante uma config carregada por câmera (default = atividade → retrocompatível)
   useEffect(() => {
@@ -491,154 +106,6 @@ export function DashboardPage() {
     });
   }, [cameras]);
 
-  // ── Descoberta de streams do go2rtc (transporte "auto") ──────────────────────────────────────
-  // GET /go2rtc/api/streams (proxy same-origin) → objeto { <id>: {...} }; as CHAVES são os ids que
-  // o gateway serve (RTSP do yaml + WHIP dinâmicos). Refresca no mount + a cada 5s. Se a chamada
-  // FALHAR (go2rtc desligado/subindo, timeout, 502 do proxy) → Set VAZIO → todo "auto" cai para
-  // MJPEG (o tile de hoje). Sem flag: go2rtc no ar + câmera conhecida = WebRTC automático.
-  useEffect(() => {
-    let alive = true;
-    const url = `${APP_CONFIG.go2rtc.baseUrl}/api/streams`;
-    async function refresh() {
-      let ids: string[] = [];
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          const data: unknown = await res.json();
-          if (data && typeof data === "object")
-            ids = Object.keys(data as Record<string, unknown>);
-        }
-      } catch {
-        ids = []; // go2rtc fora/subindo → sem streams → "auto" resolve MJPEG (fallback automático)
-      }
-      if (!alive) return;
-      setGo2rtcStreams((prev) => {
-        // Só re-renderiza se o conjunto mudou (evita re-render a cada 5s sem motivo).
-        if (prev.size === ids.length && ids.every((id) => prev.has(id))) return prev;
-        return new Set(ids);
-      });
-      // Expira cooldowns de falha de WebRTC vencidos (auto-fallback). Ao remover, força re-render:
-      // transportOf re-resolve e a câmera TORNA A TENTAR WebRTC (a fonte pode ter voltado). Se
-      // falhar de novo, o tile re-reporta e re-entra em cooldown — retry periódico, sem flicker.
-      const now = Date.now();
-      let anyExpired = false;
-      for (const [cid, until] of webrtcFailRef.current) {
-        if (until <= now) {
-          webrtcFailRef.current.delete(cid);
-          anyExpired = true;
-        }
-      }
-      if (anyExpired) setWebrtcFailTick((n) => n + 1);
-    }
-    void refresh();
-    const t = setInterval(refresh, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
-
-  // Persiste só as PREFS locais (seleção + auto-surface) no localStorage (por usuário + host).
-  // A LISTA de views é compartilhada e vive no backend (ver efeito de carga/migração abaixo).
-  useEffect(() => {
-    try {
-      localStorage.setItem(viewPrefsKey(user.id), JSON.stringify({ activeViewId, autoSurface }));
-    } catch {
-      /* no-op */
-    }
-  }, [user.id, activeViewId, autoSurface]);
-
-  // Carga inicial das views compartilhadas + migração única do localStorage legado.
-  // • Sucesso com lista → usa o backend como fonte.
-  // • Sucesso VAZIO + views legadas → upload único (saveViews) e adota o resultado salvo.
-  // • Falha → degrada para lista vazia + toast (a central segue funcionando: "Todas as câmeras").
-  useEffect(() => {
-    let alive = true;
-    setViewsLoading(true);
-    getViews()
-      .then(async (remote) => {
-        if (!alive) return;
-        if (remote.length === 0 && legacyViews.length > 0 && !migratedRef.current) {
-          migratedRef.current = true; // garante upload único
-          try {
-            const saved = await saveViews(legacyViews);
-            if (alive) {
-              setViews(saved);
-              toast("Views locais migradas para o servidor (compartilhadas).", "ok");
-            }
-          } catch (e) {
-            console.error("[views] migração falhou", e);
-            if (alive)
-              toast(
-                e instanceof ApiError ? e.message : "Não foi possível migrar as views locais.",
-                "alert",
-              );
-          }
-        } else {
-          setViews(remote);
-        }
-      })
-      .catch((e) => {
-        console.error("[views] carga falhou", e);
-        if (!alive) return;
-        setViews([]); // degrada sem quebrar a central
-        toast(
-          e instanceof ApiError ? e.message : "Não foi possível carregar as views compartilhadas.",
-          "alert",
-        );
-      })
-      .finally(() => {
-        if (alive) setViewsLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // activeViewId inválido (view excluída por outro operador, migração falha, etc.) → "Todas".
-  useEffect(() => {
-    if (viewsLoading) return; // espera a lista chegar para não derrubar uma seleção válida
-    if (activeViewId != null && !views.some((v) => v.id === activeViewId)) setActiveViewId(null);
-  }, [viewsLoading, views, activeViewId]);
-
-  // No auto-surface, reavalia a ordem a cada 15s para que a recência (decaimento) atualize o ranking
-  // mesmo sem novos eventos chegando pelo socket.
-  useEffect(() => {
-    if (!autoSurface) return;
-    const t = setInterval(() => setSurfaceTick((n) => n + 1), 15_000);
-    return () => clearInterval(t);
-  }, [autoSurface]);
-
-  // View ativa (null = "Todas"). Se o id apontar para uma view inexistente, comporta-se como "Todas".
-  const activeView = useMemo(
-    () => views.find((v) => v.id === activeViewId) ?? null,
-    [views, activeViewId],
-  );
-
-  // Critério de ATIVIDADE para o auto-surface (documentado): combina os sinais já disponíveis na central:
-  //   • alarmes recentes da câmera (últimos 10 min) — sinal mais forte de "está acontecendo algo",
-  //     ponderado por prioridade (crítico=100 / alta=40 / informativo=15) e por recência (decai linear);
-  //   • fps do camera-status (frames fluindo = câmera viva/movimentada) como contribuição menor;
-  //   • câmeras em erro/paradas afundam para o fim (não faz sentido destacá-las).
-  function activityScore(camId: string): number {
-    const s = statuses[camId];
-    const state = s?.state ?? "online";
-    if (state === "error" || state === "stopped") return -1_000 + (s?.fps ?? 0); // afunda offline/erro
-    const now = Date.now();
-    let score = 0;
-    for (const a of alarms) {
-      if (a.cameraId !== camId) continue;
-      const age = now - a.ts;
-      if (age < 0 || age > AUTOSURFACE_WINDOW_MS) continue;
-      const w = a.priority === "critical" ? 100 : a.priority === "high" ? 40 : 15;
-      const recency = 1 - age / AUTOSURFACE_WINDOW_MS; // 1 (agora) → 0 (limite da janela)
-      score += w * (0.5 + 0.5 * recency);
-    }
-    score += (s?.fps ?? 0) * 0.5; // câmera com mais frames/s pesa um pouco mais
-    return score;
-  }
-
   // Conjunto base = câmeras da view ativa (na ordem salva), ou todas. Câmeras da view que não estão
   // mais conectadas são silenciosamente omitidas (o id permanece salvo para quando voltarem).
   const viewCameras = useMemo<Camera[]>(() => {
@@ -647,17 +114,13 @@ export function DashboardPage() {
     return activeView.cameraIds.map((id) => byId.get(id)).filter((c): c is Camera => !!c);
   }, [cameras, activeView]);
 
-  // Ordem final: auto-surface reordena por atividade; senão mantém a ordem da view/lista.
-  const orderedCameras = useMemo<Camera[]>(() => {
-    if (!autoSurface) return viewCameras;
-    // Pré-computa o score 1× por câmera (O(N·alarmes)) em vez de recalcular a cada comparação
-    // do sort (O(N·log N·alarmes)).
-    const scores = new Map(viewCameras.map((c) => [c.id, activityScore(c.id)]));
-    return [...viewCameras].sort(
-      (a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0),
-    );
+  // Ordem final: auto-surface reordena por atividade (lógica pura em autoSurface.ts); senão mantém a
+  // ordem da view/lista. surfaceTick força o recálculo periódico (a recência decai com o tempo).
+  const orderedCameras = useMemo<Camera[]>(
+    () => computeOrdered(viewCameras, autoSurface, statuses, alarms, Date.now()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewCameras, autoSurface, statuses, alarms, surfaceTick]);
+    [viewCameras, autoSurface, statuses, alarms, surfaceTick],
+  );
 
   // Ao trocar de view ou ligar/desligar auto-surface, volta para a 1ª página (evita ficar "preso").
   useEffect(() => {
@@ -714,7 +177,7 @@ export function DashboardPage() {
       const f = framesRef.current.get(id);
       if (f?.pending && !f.decoding) drainDecode(id);
     });
-  }, [pageCameras, openId, drainDecode]);
+  }, [pageCameras, openId, framesRef, activeIdsRef, openIdRef, drainDecode, socketRef]);
 
   // Eleva a prioridade da câmera ABERTA na fila do scheduler de inferência (A1). As tiles pedem
   // "low" e a câmera aberta (full) já pede "high"; aqui reforçamos a key na transição de abertura.
@@ -731,112 +194,8 @@ export function DashboardPage() {
     }
   }, [demoMode]);
 
-  // Carga inicial da fila de alarmes (ts desc); ao vivo entra pelos sockets acima. Falha não quebra a central.
-  useEffect(() => {
-    let alive = true;
-    listAlarms({ limit: 200 })
-      .then((list) => {
-        if (alive) setAlarms(list);
-      })
-      .catch((e) => {
-        console.error("[alarms] carga inicial falhou", e);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // Contador de "novos" (estado new) — realce glanceable no cabeçalho. Prioridade máx. entre os novos.
-  const newAlarms = useMemo(() => alarms.filter((a) => a.state === "new"), [alarms]);
-  const newCount = newAlarms.length;
-  const topNewPriority: AlarmPriority = useMemo(
-    () =>
-      newAlarms.some((a) => a.priority === "critical")
-        ? "critical"
-        : newAlarms.some((a) => a.priority === "high")
-          ? "high"
-          : "advisory",
-    [newAlarms],
-  );
-
-  // Ack/forward otimista: reflete o estado já; confirma com a resposta (e o socket `alarm-update` reforça).
-  async function actOnAlarm(a: AlarmEvent, kind: "ack" | "forward") {
-    if (a.state !== "new") return; // já tratado
-    const prevState = a.state;
-    const optimistic: AlarmState = kind === "ack" ? "acknowledged" : "forwarded";
-    setAlarms((prev) =>
-      prev.map((x) =>
-        x.id === a.id ? { ...x, state: optimistic, ackBy: user.usuario, ackAt: Date.now() } : x,
-      ),
-    );
-    try {
-      const updated = await (kind === "ack"
-        ? ackAlarm(a.id, user.usuario)
-        : forwardAlarm(a.id, user.usuario));
-      setAlarms((prev) => prev.map((x) => (x.id === a.id ? updated : x)));
-      toast(kind === "ack" ? "Alarme reconhecido." : "Alarme encaminhado.", "ok");
-    } catch (e) {
-      setAlarms((prev) =>
-        prev.map((x) =>
-          x.id === a.id ? { ...x, state: prevState, ackBy: undefined, ackAt: undefined } : x,
-        ),
-      ); // rollback
-      toast(e instanceof ApiError ? e.message : "Não foi possível atualizar o alarme.", "alert");
-    }
-  }
-
-  function getterFor(id: string): () => FrameSource | null {
-    let g = gettersRef.current.get(id);
-    if (!g) {
-      g = () => {
-        const f = framesRef.current.get(id);
-        if (!f || !f.bmp) return null;
-        return { el: f.bmp, w: f.w, h: f.h };
-      };
-      gettersRef.current.set(id, g);
-    }
-    return g;
-  }
-
-  // F2 (ADR-009): getter estável por câmera do último `analysis-tracks` (padrão getterFor).
-  // Identidade fixa por id → não quebra o React.memo do CameraTile nem religa efeitos.
-  function hubGetterFor(id: string): () => HubAnalysis | null {
-    let g = hubGettersRef.current.get(id);
-    if (!g) {
-      g = () => hubAnalysisRef.current.get(id) ?? null;
-      hubGettersRef.current.set(id, g);
-    }
-    return g;
-  }
-
-  function cfgOf(id: string): CameraCfg {
-    return cfgs[id] ?? getCameraCfg(id);
-  }
   function isFadiga(id: string): boolean {
     return cfgOf(id).modo === "fadiga";
-  }
-  // Transporte de VÍDEO NO PAINEL por câmera → decide o render do CameraTile (mjpeg = frames
-  // Socket.IO; webrtc = WHEP/WHIP via go2rtc). O campo `transport` vive no camcfg (normalizado em
-  // cameraConfig; default "auto"). Onda 2: "auto" = MELHOR DISPONÍVEL, resolvido AQUI —
-  //   • "mjpeg"  → "mjpeg" (override manual: força o relé JPEG);
-  //   • "webrtc" → "webrtc" (override manual: força o go2rtc);
-  //   • "auto"/ausente → "webrtc" SE o go2rtc serve a câmera (id ∈ go2rtcStreams), senão "mjpeg".
-  // Assim: go2rtc no ar + câmera conhecida = WebRTC automático; go2rtc fora (Set vazio) = MJPEG
-  // automático — sem flag, com fallback automático. Overrides são editados na tela /cameras.
-  function transportOf(id: string): "mjpeg" | "webrtc" {
-    const t = cfgOf(id).transport;
-    if (t === "mjpeg") return "mjpeg"; // único FORÇA de verdade (nunca WebRTC)
-    // Auto-fallback: se o WebRTC FALHOU há pouco p/ esta câmera (tile/full reportou via
-    // onWebrtcFail), cai pro relé MJPEG durante o cooldown — MESMO que go2rtcStreams.has(id):
-    // registrado ≠ com frames. É este o miolo do fix (fonte caída deixa o stream órfão e o
-    // <video-stream> quebra). Vale p/ "auto" E p/ o "webrtc" manual: o webrtc factualmente
-    // quebrado usa o fallback e, ao expirar o cooldown, torna a tentar WebRTC (retry).
-    const failUntil = webrtcFailRef.current.get(id);
-    if (failUntil != null && failUntil > Date.now()) return "mjpeg";
-    // "webrtc" e "auto" PREFEREM WebRTC, mas só quando o go2rtc de fato serve a câmera
-    // (id ∈ streams). go2rtc fora / stream ausente → caem pra MJPEG — evita o tile preso em
-    // "loading" tentando um go2rtc indisponível (um "webrtc" fixo não deve travar o preview).
-    return go2rtcStreams.has(id) ? "webrtc" : "mjpeg";
   }
 
   // Seleção da view ativa (preferência local do operador). "__all__" = "Todas as câmeras".
@@ -846,12 +205,10 @@ export function DashboardPage() {
 
   // ── 0.6 (ADR-009): PREFERIR O PIPELINE DO HUB por default ──
   // O hub emite `analysis-status {engine:"hub"}` por câmera analisada; com o MOTOR LIGADO ele
-  // cria estado e analisa TODA câmera relayada (server/analysis/engine.js: onFrame→createState),
-  // logo qualquer "hub" observado significa "motor ativo". Nesse caso o default EFETIVO de uma
-  // câmera ainda sem status explícito passa a ser "hub" (não "local"/coco): evita o flash do
-  // pipeline local (coco-ssd) na janela curta até o snapshot/mudança daquela câmera chegar, e o
-  // CameraWorkspace já suprime o coco quando engine==="hub". FALLBACK preservado: sem NENHUM
-  // "hub" (motor desligado / hub antigo / download do modelo falhou) o default segue "local".
+  // cria estado e analisa TODA câmera relayada, logo qualquer "hub" observado significa "motor
+  // ativo". Nesse caso o default EFETIVO de uma câmera ainda sem status explícito passa a ser "hub"
+  // (evita o flash do pipeline local até o snapshot/mudança daquela câmera chegar). FALLBACK
+  // preservado: sem NENHUM "hub" (motor desligado / hub antigo) o default segue "local".
   const hubEngineActive = useMemo(
     () => Object.values(analysisEngines).some((e) => e === "hub"),
     [analysisEngines],
@@ -861,31 +218,17 @@ export function DashboardPage() {
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
 
   // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado).
-  // useCallback (1.6): identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável
-  // — useCallback([]) no ToastProvider; o socket vai via ref).
+  // useCallback (1.6): identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável).
   const handleAlert = useCallback(
     (msg: string) => {
       toast(msg, msg.includes("⚠") ? "alert" : "default");
       socketRef.current?.emit("alert", { text: msg, ts: Date.now() });
     },
-    [toast],
+    [toast, socketRef],
   );
 
   // Abertura de câmera (1.6): callback único e estável; o tile chama com o próprio id.
   const handleOpen = useCallback((id: string) => setOpenId(id), []);
-
-  // Auto-fallback WebRTC→MJPEG (CONTRATO com CameraTile/CameraWorkspace): a câmera aberta ou um
-  // tile chama isto quando o <video-stream> não estabelece vídeo (sem videoWidth em ~7s) ou erra.
-  // Marca a câmera em cooldown (agora + COOLDOWN) e força re-render → transportOf re-resolve p/
-  // MJPEG só naquela câmera. Identidade estável (useCallback []): não quebra o React.memo do tile.
-  const handleWebrtcFail = useCallback((cameraId: string) => {
-    const now = Date.now();
-    const prevUntil = webrtcFailRef.current.get(cameraId);
-    webrtcFailRef.current.set(cameraId, now + WEBRTC_FAIL_COOLDOWN_MS);
-    // Só re-renderiza na TRANSIÇÃO p/ cooldown (câmera ainda não estava em MJPEG por falha). Um
-    // re-report enquanto já em cooldown apenas ESTENDE o prazo, sem re-render — evita flood.
-    if (prevUntil == null || prevUntil <= now) setWebrtcFailTick((n) => n + 1);
-  }, []);
 
   return (
     <div className="page">
@@ -1063,7 +406,7 @@ export function DashboardPage() {
                 getFrame={getterFor(open.id)}
                 mode="full"
                 // Transporte de VÍDEO na câmera ABERTA (tela cheia): MESMA resolução "auto/melhor
-                // disponível" da grade (transportOf ~798). go2rtc serve a câmera → WebRTC estável
+                // disponível" da grade (transportOf). go2rtc serve a câmera → WebRTC estável
                 // (<video-stream>); go2rtc fora / stream ausente → MJPEG (relé JPEG, atual). Sem a
                 // prop o full seguia sempre MJPEG. `open` é não-nulo neste ramo → open.id é seguro.
                 transport={transportOf(open.id)}

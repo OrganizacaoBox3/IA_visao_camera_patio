@@ -160,14 +160,13 @@ function statusInfo(s: CameraStatus | undefined): {
         : state === "stopped"
           ? "var(--state-neutral-dim)"
           : "var(--state-neutral)"; // online (normal) → neutro, sem cor de alarme
+  // stopped e online (normal) compartilham a borda neutra → um só ramo default (going-gray).
   const border =
     state === "connecting"
       ? "var(--state-info-border)"
       : state === "error"
         ? "var(--state-critical-border)"
-        : state === "stopped"
-          ? "var(--state-neutral-border)"
-          : "var(--state-neutral-border)";
+        : "var(--state-neutral-border)";
   return { text, dot, border, fps: s?.fps };
 }
 
@@ -280,13 +279,9 @@ export const CameraTile = memo(function CameraTile({
     <div className="relative grid min-h-0">
       {inner}
       <Tooltip content={status?.lastError || st.text}>
-        {/* Pílula de status: estático em utilities; só a COR da borda é dinâmica (token por
-            estado, going-gray) e fica no style. border-solid explícito: sem preflight, o
-            border-style default do <span> é none. */}
-        <span
-          className="absolute top-1.5 left-1.5 z-[2] inline-flex items-center gap-[5px] [font-family:var(--mono)] text-[11px] bg-[var(--cam-overlay-scrim)] text-[var(--cam-overlay-fg)] border border-solid rounded-full px-[7px] py-[2px]"
-          style={{ borderColor: st.border }}
-        >
+        {/* Pílula de status (.cam-status-pill em go2rtc-tile.css): estático na classe; só a COR da
+            borda é dinâmica (token por estado, going-gray) e fica no style. */}
+        <span className="cam-status-pill" style={{ borderColor: st.border }}>
           {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
           <span className="dot-status" aria-hidden="true" style={{ background: st.dot }} />
           {st.text}

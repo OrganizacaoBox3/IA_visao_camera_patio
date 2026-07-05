@@ -15,6 +15,28 @@
   background: #05080c;
 }
 
+/* Pílula de status/fps sobreposta ao tile (canto superior esquerdo). Extraída do amontoado de
+   utilities arbitrárias no CameraTile (auditoria "frente Dashboard" · item D) — mesmos valores,
+   como classe semântica. A COR da borda continua dinâmica (token por estado, going-gray) via
+   `style={{ borderColor }}`; `border-style:solid` explícito porque sem preflight o default é none. */
+.cam-status-pill {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--cam-overlay-scrim);
+  color: var(--cam-overlay-fg);
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 9999px;
+  padding: 2px 7px;
+}
+
 /* Fase 2: overlay de caixas do hub (interpoladas) — <canvas> transparente exatamente sobre o
    vídeo. pointer-events:none → o clique atravessa e abre a câmera (como no tile sem overlay). */
 .rtc-vp .rtc-overlay {
