@@ -1,6 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { visualizer } from "rollup-plugin-visualizer";
+
+// Bundle-analyzer sob flag: `ANALYZE=1 npm run build` (ou `npm run analyze`) gera dist/stats.html
+// com o treemap dos chunks. Sem a flag, o build normal fica intocado (plugin não entra).
+const analyze = !!process.env.ANALYZE;
 
 // Headers de segurança SÓ do dev/preview (vite). Em produção o CSP é o do nginx (mesma origem).
 // `http:` no connect-src libera o hub local (http://localhost:4000 / IP-da-LAN:4000) p/ o /api/login;
@@ -13,7 +18,13 @@ const securityHeaders = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    ...(analyze
+      ? [visualizer({ filename: "dist/stats.html", gzipSize: true, brotliSize: true })]
+      : []),
+  ],
   server: {
     headers: securityHeaders,
     // Proxy de DEV para o go2rtc (Fases 1/3/5): o front usa o default same-origin `/go2rtc`
