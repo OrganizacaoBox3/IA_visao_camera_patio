@@ -6,7 +6,7 @@
 
 import { APP_CONFIG } from "../config";
 import { loadDetector } from "../vision/model";
-import { OBJECT_CATALOG, keyForCoco, objClass } from "./catalog";
+import { OBJECT_CATALOG, keyForCoco } from "./catalog";
 
 export type ObjDetection = { key: string; score: number; bbox: [number, number, number, number] }; // bbox 0..1
 export type ObjBackend = "carregando" | "coco" | "owlvit" | "indisponível";
@@ -164,6 +164,3 @@ export async function detectObjects(
 
   return [];
 }
-
-// usado pela UI p/ rótulo do backend
-export { objClass };

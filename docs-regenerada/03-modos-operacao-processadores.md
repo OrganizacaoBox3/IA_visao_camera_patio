@@ -132,7 +132,6 @@ Há **anti-flicker**: transições (exceto entrar em ALERTA) só confirmam após
 | `activeHoldMs` | 1200 | mantém ATIVA após movimento | `src/config.ts:28` |
 | `stateConfirmationMs` | 900 | confirma transição | `src/config.ts:29` |
 | `defaultIdleAlertMs` | 15 min | limite de ociosidade (default) | `src/config.ts:43` |
-| `demoIdleAlertMs` | 10 s | limite curto p/ demo | `src/config.ts:44` |
 | `alertBeepCooldownMs` | 4000 | cooldown do beep | `src/config.ts:50` |
 
 A **sensibilidade** (1..10) por zona ajusta os limiares de movimento:

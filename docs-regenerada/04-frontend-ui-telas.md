@@ -151,8 +151,6 @@ um *tile*; ao abrir uma câmera, mostra-a em overlay de tela cheia.
 
 **O que exibe / interações (cabeçalho — `:103-115`).**
 - Título "Central de câmeras".
-- `Switch` "Limite curto (10s)" (`demoMode`) dentro de um `Tooltip` explicativo — encurta
-  o limite de parada para demonstração ao vivo.
 - Botão "⚙ Câmeras" → abre o modal de configuração de tipo de câmera.
 - Link "+ Nó de câmera" → abre `/camera` em nova aba (`camNodeUrl`, `:86`).
 - Estatísticas ao vivo (`aria-live="polite"`): estado do hub e número de câmeras.
@@ -165,7 +163,7 @@ um *tile*; ao abrir uma câmera, mostra-a em overlay de tela cheia.
 
 **Renderização por câmera (`renderTile`, `:94-99`).** Cada câmera é roteada por **tipo**:
 - Tipo "fadiga" (operador) → `FadigaView` em `mode="tile"`.
-- Caso contrário → `CameraWorkspace` em `mode="tile"` (passando `demoMode`).
+- Caso contrário → `CameraWorkspace` em `mode="tile"`.
 - A câmera atualmente aberta mostra um placeholder "aberta no painel" no lugar do tile
   (`:95`).
 
@@ -352,7 +350,7 @@ ROI; o componente compõe o overlay (canvas) e o painel num único lugar
 (comentário em `:26-27`).
 
 **Props (`:75-84`).** `cameraId`, `label`, `getFrame()` (fonte do frame), `mode`
-(`"tile" | "full"`), `demoMode`, e callbacks `onOpen`/`onClose`/`onAlert`.
+(`"tile" | "full"`), e callbacks `onOpen`/`onClose`/`onAlert`.
 
 **Loop de render (`useEffect` + `requestAnimationFrame`, `:190-288`).** A cada frame:
 1. Mede FPS (`FrameMeter`). Se pausado, congela (não processa nem redesenha, `:202`).

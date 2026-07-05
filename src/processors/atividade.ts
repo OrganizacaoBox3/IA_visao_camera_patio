@@ -38,13 +38,6 @@ export type ZoneView = {
   flowLevel: FlowLevel;
 };
 
-export const STATE_COLOR: Record<ZoneState, string> = {
-  ATIVA: "#22c55e",
-  LENTA: "#fb923c",
-  OCIOSA: "#eab308",
-  VAZIA: "#64748b",
-  ALERTA: "#ef4444",
-};
 export const ACTIVITIES = [
   "Indefinida",
   "Carga",

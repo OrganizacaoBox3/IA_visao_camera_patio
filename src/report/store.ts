@@ -2,7 +2,7 @@
 // por-navegador). Somente INDICADORES (LGPD: nunca imagens). As funções e shapes públicos são as
 // MESMAS de antes — só a fonte mudou — então o relatório/telas não precisaram mudar.
 // record* = POST /api/ingest (fire-and-forget). load* = GET /api/data/*. clearAll = clear.
-import { apiGet, apiSend, listAlarms, type ListAlarmsParams } from "../api";
+import { apiGet, apiSend, listAlarms } from "../api";
 import {
   shiftOf,
   type Period,
@@ -50,24 +50,8 @@ export function cellTime(hourStart: number, startMs: number): { dayIndex: number
 // Telemetria de falha do ingest (plano 1.2): antes o erro era 100% engolido e "gravando" era
 // indistinguível de "perdendo dados". Contador módulo-nível de falhas CONSECUTIVAS + warn 1×
 // por sequência de falhas (sem toast global: o ingest roda no dashboard, não no relatório).
-export type IngestHealth = {
-  failing: boolean;
-  consecutiveFailures: number;
-  lastError: string | null;
-  lastFailureTs: number | null;
-};
 let ingestFailures = 0;
 let ingestLastError: string | null = null;
-let ingestLastFailureTs: number | null = null;
-
-export function getIngestHealth(): IngestHealth {
-  return {
-    failing: ingestFailures > 0,
-    consecutiveFailures: ingestFailures,
-    lastError: ingestLastError,
-    lastFailureTs: ingestLastFailureTs,
-  };
-}
 
 // envio resiliente: gravação nunca pode lançar dentro do loop de vídeo
 function ingest(kind: string, op: string, payload: unknown): Promise<void> {
@@ -78,7 +62,6 @@ function ingest(kind: string, op: string, payload: unknown): Promise<void> {
     .catch((e) => {
       ingestFailures += 1;
       ingestLastError = e instanceof Error ? e.message : String(e);
-      ingestLastFailureTs = Date.now();
       if (ingestFailures === 1)
         console.warn(
           `[ingest] histórico NÃO está sendo gravado (${kind}/${op}): ${ingestLastError}`,
@@ -186,10 +169,6 @@ export async function loadEvents(): Promise<EventRow[]> {
     durationMin: e.durationMin,
     shift: e.shift,
   }));
-}
-
-export async function hasData(): Promise<boolean> {
-  return (await fetchBuckets<Bucket>("ativ")).length > 0;
 }
 
 // ── Modo LEITURA ────────────────────────────────────────────────────────────--
@@ -515,8 +494,7 @@ export async function clearAll(): Promise<void> {
 // ── EVENTOS DE ALARME (consome contrato B1: GET /api/alarms) ──────────────────
 // SÓ METADADOS (sem imagens, LGPD). Erro é PROPAGADO (mesmo padrão dos load* acima):
 // o ReportPage distingue erro de "sem alarmes" no estado da página.
-// FONTE ÚNICA: `loadAlarms`/`AlarmQuery` eram cópia byte-a-byte de `listAlarms`/`ListAlarmsParams`
-// de api.ts — agora REUSAM o cliente de api.ts (um só ponto de manutenção do contrato). Os nomes
-// públicos daqui são preservados (re-export/alias) para o ReportPage seguir importando via store.
-export type AlarmQuery = ListAlarmsParams;
+// FONTE ÚNICA: `loadAlarms` era cópia byte-a-byte de `listAlarms` de api.ts — agora REUSA o cliente
+// de api.ts (um só ponto de manutenção do contrato). O nome público daqui é preservado (alias) para
+// o ReportPage seguir importando via store.
 export const loadAlarms = listAlarms;

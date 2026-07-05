@@ -277,13 +277,8 @@ export const APP_CONFIG = {
   // o usuário desenha as próprias zonas. Ver src/zones.ts.)
 } as const;
 
-// Perfil "Longo alcance"/Panorâmica (P0) — tipo exportado p/ as frentes B/C que ligam o perfil
-// por câmera consumirem os parâmetros com tipos corretos. É OPT-IN: default segue `detection.*`.
-export type LongRangeProfile = typeof APP_CONFIG.detection.longRange;
-
-// Overlay (Onda A) — tipos exportados p/ a Onda 2 (CameraWorkspace) consumir.
+// Overlay (Onda A) — tipo exportado p/ a Onda 2 (CameraWorkspace) consumir.
 export type OverlayLayers = typeof APP_CONFIG.overlay.layers;
-export type OverlayConfig = typeof APP_CONFIG.overlay;
 
 // ── MODO-COMO-PRESET (Onda B item 9) ───────────────────────────────────────────
 // Cada MODO é um PRESET COMPLETO: ao trocar o modo de uma zona, a sessão recarrega

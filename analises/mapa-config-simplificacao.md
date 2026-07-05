@@ -151,7 +151,8 @@ Legenda categoria: **(D)** deployment · **(Q)** qualidade (alvo) · **(T)** tun
 | `VITE_HUB_URL`      | `config.ts:223`   | mesma origem / :4000 dev | endpoint do hub Socket.IO                  | D   |
 | `VITE_GO2RTC_BASE`  | `config.ts:248`   | `/go2rtc`          | base do gateway (proxy same-origin)             | D/T |
 | **`VITE_WEBCAM_WHIP`** | `config.ts:259`| **off**            | webcam publica por WebRTC/WHIP (mata "câmera lenta ao minimizar") | **Q** |
-| `VITE_DEMO_MODE`    | `config.ts:94`    | off                | "Limite curto (10s)" default ligado (só demo)   | Q(demo) |
+
+> Nota (jul/2026): `VITE_DEMO_MODE` (o "Limite curto (10s)" de demo) foi **removido** — commit `e0d6963`.
 
 > **`VITE_WEBCAM_WHIP` é build-time** — trocar exige **rebuild**. É a pior forma de flag de qualidade: nem
 > o operador nem o admin conseguem ligar em runtime. Consumido em `routes/CameraPage.tsx:10,102`.

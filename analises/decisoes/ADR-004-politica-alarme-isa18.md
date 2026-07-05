@@ -12,7 +12,7 @@ WhatsApp), em ponto único de decisão:
 - Supressão de inundação: rajada (feed caiu) → 1 resumo de causa-raiz, não N alertas.
 - Priorização em 3 níveis (advisory/high/critical), crítico reservado (meta ≤5%).
 - Shelving com expiração (manutenção), métricas de taxa, anti-flapping.
-- Demo "Limite 10s" desligado por padrão (`VITE_DEMO_MODE=1` liga).
+- ~~Demo "Limite 10s" desligado por padrão (`VITE_DEMO_MODE=1` liga).~~ Recurso de demo removido em jul/2026 (commit `e0d6963` — Central sem views/auto-destaque/limite-curto).
 
 ## Consequências
 - (+) Andon/WhatsApp acionáveis, não ruidosos; alinhado a EEMUA 191.
