@@ -127,6 +127,27 @@
   min-height: 0;
 }
 
+/* ── Fase 1 (go2rtc): camada de vídeo WebRTC ATRÁS do canvas (câmera aberta) ──
+   Só quando a câmera tem transport:"webrtc". O <video-stream> preenche o palco com o vídeo
+   por HW (estável, sem a oscilação do MJPEG); o canvas .overlay (transparente) fica POR CIMA
+   desenhando zonas/tracks/editor. pointer-events:none no vídeo → os eventos de mouse do editor
+   vão direto ao palco (.cam-stage já trata onMouseDown/Move/Up). Empilhamento por ORDEM do DOM
+   (canvas vem depois → pinta acima); a barra/selo do cine-loop têm z-index próprio e ficam acima. */
+.cam-stage video-stream {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.cam-stage video-stream video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--cam-surface-bg, #05080c);
+}
+
 /* ── Palco + drawer LADO A LADO (A5): fit em vez de crop ──
    index.css posiciona .cam-drawer como overlay absoluto DENTRO do palco — o vídeo
    ficava coberto/cortado à direita. Aqui (seletores mais específicos vencem o

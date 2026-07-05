@@ -1012,6 +1012,11 @@ export function DashboardPage() {
                 label={open.label}
                 getFrame={getterFor(open.id)}
                 mode="full"
+                // Transporte de VÍDEO na câmera ABERTA (tela cheia): MESMA resolução "auto/melhor
+                // disponível" da grade (transportOf ~798). go2rtc serve a câmera → WebRTC estável
+                // (<video-stream>); go2rtc fora / stream ausente → MJPEG (relé JPEG, atual). Sem a
+                // prop o full seguia sempre MJPEG. `open` é não-nulo neste ramo → open.id é seguro.
+                transport={transportOf(open.id)}
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
                 analysisEngine={analysisEngines[open.id] ?? defaultEngine}

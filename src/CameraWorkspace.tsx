@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
+import type { VideoStreamElement } from "./vendor/go2rtc/go2rtc";
 import { fmtDuration, clock } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
@@ -172,6 +173,25 @@ export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
 // Payload do hub mais velho que isto é STALE (motor reiniciando/rede) → não desenhar caixa velha.
 const HUB_TRACKS_STALE_MS = 5000;
 
+// ── Fase 1 (go2rtc): camada de vídeo WebRTC na câmera ABERTA (tela cheia) ──────────────────────
+// OPT-IN por câmera (prop `transport:"webrtc"`; default "mjpeg" = caminho atual, byte-a-byte).
+// Quando ligado, o vídeo vem de `<video-stream>` (WebRTC/MSE/HLS/MJPEG auto-negociado, decode por
+// HW fora da main-thread → ESTÁVEL, sem a rajada do MJPEG) ATRÁS do canvas; o canvas de
+// zonas/tracks/editor fica TRANSPARENTE por cima. Espelha o CameraTile (Go2rtcVideoTile) — mas por
+// PROPRIEDADE DE ARQUIVO não editamos o CameraTile: duplicamos aqui ~5 linhas do registro do
+// custom element (vendorizado/self-host, importado DINAMICAMENTE 1× — câmeras "mjpeg" nunca baixam
+// o JS).
+let videoStreamModule: Promise<unknown> | null = null;
+function ensureVideoStreamRegistered(): Promise<unknown> {
+  if (!videoStreamModule) videoStreamModule = import("./vendor/go2rtc/video-stream.js");
+  return videoStreamModule;
+}
+// Cadência da ANÁLISE/overlay no transporte WebRTC: o <video> roda liso por HW (decode fora da
+// main-thread); amostramos o ELEMENTO p/ motion/inferência/overlay a ~15fps (paridade com o MJPEG
+// da câmera aberta) via bucket de tempo no gate de "frame novo" do rAF. O vídeo NÃO depende disto
+// — só o trabalho de análise/desenho, que assim não re-carrega a main-thread no rAF (~60fps).
+const WEBRTC_TICK_MS = 66;
+
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
 // CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
@@ -292,6 +312,12 @@ type Props = {
   // mandou) e deixa de agendar o coco local.
   // OPCIONAL/retrocompatível: ausente/null → comportamento atual (pipeline local).
   getHubAnalysis?: () => HubAnalysis | null;
+  // Fase 1 (go2rtc): transporte de VÍDEO da câmera aberta (tela cheia). "webrtc" → o vídeo vem de
+  // `<video-stream>` (decode por HW, estável) ATRÁS de um canvas TRANSPARENTE de zonas/tracks/editor.
+  // "mjpeg"/ausente → EXATAMENTE o comportamento atual (frames MJPEG desenhados no canvas), byte-a-byte.
+  // A mudança é ADITIVA (um branch webrtc); o caminho MJPEG fica INTACTO. Só vale no mode "full"
+  // (na grade o webrtc é servido pelo CameraTile/Go2rtcVideoTile, não por este componente).
+  transport?: "mjpeg" | "webrtc";
 };
 
 const C = APP_CONFIG.detection;
@@ -308,7 +334,15 @@ export function CameraWorkspace({
   tripwiresRev,
   analysisEngine = "local",
   getHubAnalysis,
+  transport = "mjpeg",
 }: Props) {
+  // Fase 1 (go2rtc): transporte WebRTC ativo? Só no mode "full" (a grade webrtc é do CameraTile).
+  // `webrtc` governa o RENDER (camada de vídeo + key do canvas); `webrtcRef` é o espelho lido DENTRO
+  // do rAF/drawScene (o loop é criado 1× por câmera e a prop pode trocar em runtime — go2rtc entra/sai
+  // da descoberta —, mesmo padrão de analysisEngineRef/getHubAnalysisRef).
+  const webrtc = transport === "webrtc" && mode === "full";
+  const webrtcRef = useRef(webrtc);
+  const videoStreamRef = useRef<VideoStreamElement | null>(null);
   // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
   // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
   // camadas, mas NÃO edita configuração (criar/apagar/pintar zona, thresholds/sensibilidade/limite).
@@ -460,7 +494,11 @@ export function CameraWorkspace({
     label,
     canConfigure,
     tripwiresRev,
-    getFrame,
+    // Fase 1 (go2rtc): `currentFrame` (não `getFrame`) → o commit da LINHA mapeia o traçado pelo
+    // content-rect do <video> no WebRTC (mesmo letterbox do palco/editor); no MJPEG é o getFrame()
+    // de sempre. O hook só lê getFrame no commitTripwire (não em deps de efeito), então a identidade
+    // por-render de currentFrame é inócua. currentFrame é function declaration (hoisted).
+    getFrame: currentFrame,
     viewportRef,
     onAlertRef,
     onEnterEditMode: () => {
@@ -476,6 +514,42 @@ export function CameraWorkspace({
   useEffect(() => {
     analysisEngineRef.current = analysisEngine;
   }, [analysisEngine]);
+
+  // ── Fase 1 (go2rtc): espelho do transporte + fiação do <video-stream> ──
+  useEffect(() => {
+    webrtcRef.current = webrtc;
+  }, [webrtc]);
+  // Registra o custom element e aplica src/mode/media/background IMPERATIVAMENTE via ref (as props
+  // do <video-stream> são SETTERS JS, não atributos), APÓS o define — mesmo padrão do CameraTile.
+  // mjpeg/ausente → efeito INERTE (nem importa o JS): caminho atual byte-a-byte.
+  useEffect(() => {
+    if (!webrtc) return;
+    let cancelled = false;
+    const node = videoStreamRef.current; // estável por toda a vida do elemento (captura p/ cleanup)
+    const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(cameraId)}`;
+    ensureVideoStreamRegistered()
+      .then(() => customElements.whenDefined("video-stream"))
+      .then(() => {
+        if (cancelled || !node) return;
+        const el = node;
+        el.mode = "webrtc,mse,hls,mjpeg"; // ordem importa: config ANTES de src (o setter de src conecta)
+        el.media = "video"; // vigilância silenciosa: sem áudio
+        el.background = false; // solta o stream quando a aba/tela sai de vista
+        if (el.video) el.video.controls = false; // sem controles nativos (o palco trata a interação)
+        el.src = src;
+      })
+      .catch(() => {
+        // go2rtc indisponível → sem vídeo; o overlay ainda desenha (canvas transparente sobre o fundo).
+      });
+    return () => {
+      cancelled = true;
+      try {
+        node?.ondisconnect?.(); // solta ws/pc JÁ ao desmontar/trocar (não espera o timeout interno)
+      } catch {
+        /* no-op */
+      }
+    };
+  }, [webrtc, cameraId]);
 
   // ── F2 (ADR-009): espelho dos overlays SERVIDOS (grade com engine==="hub") ──
   // O getter vem estável da central (cache por câmera), mas espelhamos em ref pelo mesmo motivo
@@ -535,6 +609,17 @@ export function CameraWorkspace({
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
+  // Fase 1 (go2rtc): ⏸ Pausar / ❄ Congelar precisam CONGELAR o vídeo. No MJPEG o palco para de
+  // redesenhar e o canvas retém o último frame; no WebRTC o vídeo é nativo ATRÁS do canvas, então
+  // pausamos o <video> (senão ele seguiria correndo sob o overlay congelado). Ao retomar, volta ao
+  // vivo (play; pode saltar p/ a borda live — aceito p/ uma inspeção curta). Inerte no MJPEG.
+  useEffect(() => {
+    if (!webrtc) return;
+    const v = videoStreamRef.current?.video;
+    if (!v) return;
+    if (paused || review) v.pause();
+    else void v.play().catch(() => {});
+  }, [webrtc, paused, review]);
   useEffect(() => {
     zonesRef.current = zones;
   }, [zones]);
@@ -827,7 +912,26 @@ export function CameraWorkspace({
         viewport = viewportRef.current;
       if (!canvas || !viewport) return;
       const proc = procRef.current ?? (procRef.current = document.createElement("canvas")); // canvas de motion offscreen
-      const f = getFrame();
+      // ── Fonte do frame ── MJPEG: getFrame() (relé socket.io), como sempre. WebRTC (Fase 1): o
+      // "frame" de ANÁLISE é o <video> nativo (decode por HW). O `el` é o próprio elemento — drawImage
+      // /getImageData/createImageBitmap aceitam HTMLVideoElement, então motion, crops (fadiga/objetos/
+      // leitura), detecção local e cine-loop funcionam SEM caminho especial. O `ts` é um BUCKET de tempo
+      // (~WEBRTC_TICK_MS): como o <video> tem identidade estável, o gate de "frame novo" abaixo passa a
+      // throttlar o tick a ~15fps (o vídeo segue liso por HW; só a análise/overlay amostram na cadência
+      // do MJPEG, sem carregar a main-thread a 60fps).
+      let f: FrameSource | null;
+      if (webrtcRef.current) {
+        const video = videoStreamRef.current?.video;
+        if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+        f = {
+          el: video,
+          w: video.videoWidth,
+          h: video.videoHeight,
+          ts: Math.floor(performance.now() / WEBRTC_TICK_MS),
+        };
+      } else {
+        f = getFrame();
+      }
       if (!f || !f.w || !f.h) return;
       // ── GATE de "frame novo": o loop roda no refresh do monitor (~60fps), mas o frame chega a
       //    ~15fps. Se o ImageBitmap (identidade do `el`) / `ts` não mudou desde o último processamento,
@@ -1383,12 +1487,27 @@ export function CameraWorkspace({
     // área restante, agora pintada na cor de sempre → zero mudança visual.
     // NOTA: mesmo canvas do drawReviewFrame (camera/draw.ts) — os atributos do 1º getContext valem
     // p/ sempre; os dois pedem os MESMOS atributos p/ não depender de quem chama primeiro.
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true })!;
+    // Fase 1 (go2rtc): no WebRTC o vídeo nativo (<video-stream>) fica ATRÁS; o canvas é só overlay
+    // TRANSPARENTE (alpha:true → clearRect deixa ver o vídeo). No MJPEG segue opaco (alpha:false +
+    // fillRect do fundo + drawImage do frame), byte-a-byte. O canvas usa `key` por transporte no JSX,
+    // então cada instância só vê UM modo → o atributo do 1º getContext (travado p/ sempre) é o certo.
+    const wrtc = webrtcRef.current;
+    const ctx = canvas.getContext(
+      "2d",
+      wrtc ? { alpha: true, desynchronized: true } : { alpha: false, desynchronized: true },
+    )!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = cssVar("--cam-surface-bg", "#05080c");
-    ctx.fillRect(0, 0, vpW, vpH);
+    // Retângulo de conteúdo (letterbox). No WebRTC f.w/f.h = videoWidth/Height do <video>, que usa
+    // object-fit:contain no MESMO palco → getContentRect dá EXATAMENTE o box do vídeo: zonas/tracks
+    // caem sobre o vídeo sem depender do frame MJPEG (mesmo mapeamento do TrackOverlay do tile).
     const cr = getContentRect(vpW, vpH, f.w, f.h);
-    ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
+    if (wrtc) {
+      ctx.clearRect(0, 0, vpW, vpH);
+    } else {
+      ctx.fillStyle = cssVar("--cam-surface-bg", "#05080c");
+      ctx.fillRect(0, 0, vpW, vpH);
+      ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
+    }
     const detailed = mode === "full";
 
     // Heatmap de ocupação (camada) — agora UNIFICADO na lib pura counting.ts (occ.grid() já normalizado 0..1).
@@ -1485,12 +1604,24 @@ export function CameraWorkspace({
   }
 
   // ── editor de zonas ──
+  // Frame CORRENTE p/ a GEOMETRIA do editor (letterbox → coords normalizadas). No WebRTC (Fase 1)
+  // vem do <video> nativo (mesmas dimensões que o drawScene usa p/ o content-rect), pois o getFrame()
+  // do relé MJPEG pode estar ausente/em outra resolução p/ uma câmera webrtc. No MJPEG é o getFrame()
+  // de sempre → mapeamento idêntico ao atual.
+  function currentFrame(): FrameSource | null {
+    if (webrtcRef.current) {
+      const video = videoStreamRef.current?.video;
+      if (!video || !video.videoWidth || !video.videoHeight) return null;
+      return { el: video, w: video.videoWidth, h: video.videoHeight };
+    }
+    return getFrame();
+  }
   function vpPoint(e: ReactMouseEvent) {
     const r = viewportRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
   function normPoint(e: ReactMouseEvent): { nx: number; ny: number } | null {
-    const f = getFrame(),
+    const f = currentFrame(),
       viewport = viewportRef.current;
     if (!f || !viewport) return null;
     const r = viewport.getBoundingClientRect();
@@ -1568,7 +1699,7 @@ export function CameraWorkspace({
     const d = drawRef.current;
     if (!d?.active) return;
     drawRef.current = null;
-    const f = getFrame(),
+    const f = currentFrame(),
       viewport = viewportRef.current;
     if (!f || !viewport) return;
     const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
@@ -1888,7 +2019,15 @@ export function CameraWorkspace({
             if (paintZone) e.preventDefault();
           }}
         >
-          <canvas className="overlay" ref={canvasRef} />
+          {/* Fase 1 (go2rtc): camada de vídeo WebRTC ATRÁS do canvas. Decode por HW (estável) →
+              elimina a oscilação do MJPEG (rajada de HLS + spike de CPU do motor). Props aplicadas
+              imperativamente no efeito acima. Só quando webrtc; câmera mjpeg nem monta o elemento. */}
+          {webrtc && <video-stream ref={videoStreamRef} />}
+          {/* `key` por transporte: o canvas é opaco (alpha:false) no MJPEG e transparente
+              (alpha:true) no WebRTC; os atributos do 1º getContext travam p/ sempre, então uma
+              troca de transporte em runtime remonta o canvas com o alpha certo. DOM: o canvas vem
+              DEPOIS do <video-stream> → pinta POR CIMA (z-index auto = ordem de pintura). */}
+          <canvas className="overlay" key={webrtc ? "rtc" : "mjpeg"} ref={canvasRef} />
           {review && (
             <>
               <div className="cine-flag">
