@@ -20,6 +20,11 @@ export type CameraCfg = {
   // câmera; default false = comportamento atual. Ligado → o CameraWorkspace aplica tiling na grade +
   // tile maior + limiares menores (detection.longRange) e movimento/pessoas mais sensíveis.
   longRange: boolean;
+  // Fase 1/5 (go2rtc): transporte de VÍDEO NO PAINEL por câmera. "mjpeg" (padrão) = o tile atual;
+  // "webrtc" = vídeo fluido via go2rtc (RTSP→WHEP / webcam→WHIP). NÃO confundir com o `transport`
+  // tcp/udp do RTSP no /cameras (aquele é do ffmpeg, conceito diferente). Default "mjpeg" = OFF,
+  // comportamento atual preservado.
+  transport: "mjpeg" | "webrtc";
 };
 
 const DEFAULT: CameraCfg = {
@@ -28,6 +33,7 @@ const DEFAULT: CameraCfg = {
   capture: "alta",
   selectedClasses: [...OBJECT_KEYS],
   longRange: false,
+  transport: "mjpeg",
 };
 
 function key(cameraId: string) {
@@ -50,6 +56,7 @@ function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCfg {
     capture: c.capture === "media" || c.capture === "maxima" ? c.capture : "alta",
     selectedClasses: sel.length ? sel : [...OBJECT_KEYS],
     longRange: c.longRange === true, // opt-in; qualquer coisa != true (inclusive ausente) → false
+    transport: c.transport === "webrtc" ? "webrtc" : "mjpeg", // ausente/inválido → "mjpeg" (tile atual)
   };
 }
 

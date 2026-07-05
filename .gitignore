@@ -49,6 +49,9 @@ server/data-hist.json.tmp
 # Modelo ONNX do motor de análise (baixado no boot com verificação de sha — ver server/analysis/README.md)
 server/models/
 
+# Scratchpad de trabalho/POC — NUNCA versionar (o scratchpad real fica fora do repo, em temp).
+scratchpad/
+
 # go2rtc: yaml GERADO a partir das câmeras (contém URLs RTSP com credenciais) — nunca versionar.
 # O default fica FORA do repo (dir do binário); estes patterns são trava de segurança extra.
 go2rtc*.yaml

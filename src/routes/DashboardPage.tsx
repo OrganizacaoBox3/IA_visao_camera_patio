@@ -748,15 +748,24 @@ export function DashboardPage() {
   function isFadiga(id: string): boolean {
     return cfgOf(id).modo === "fadiga";
   }
-  // Fase 1 (go2rtc): transporte de vídeo por câmera. A flag `transport` vive no camcfg (contrato
-  // com a frente do servidor; aditivo). Leitura DEFENSIVA (cast) para não depender do schema ainda
-  // em evolução: qualquer valor != "webrtc" (inclusive ausente) → "mjpeg" = tile atual, OFF por default.
+  // Fase 1/5 (go2rtc): transporte de VÍDEO NO PAINEL por câmera. A flag `transport` vive no camcfg
+  // (normalizado em cameraConfig; default "mjpeg" = tile atual, OFF por default). É o que decide o
+  // modo de render do CameraTile (mjpeg = frames Socket.IO; webrtc = WHEP/WHIP via go2rtc).
   function transportOf(id: string): "mjpeg" | "webrtc" {
-    return (cfgOf(id) as { transport?: unknown }).transport === "webrtc" ? "webrtc" : "mjpeg";
+    return cfgOf(id).transport === "webrtc" ? "webrtc" : "mjpeg";
   }
   function setKind(id: string, fadiga: boolean) {
     setCfgs((prev) => {
       const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" };
+      setCameraCfg(id, merged);
+      return { ...prev, [id]: merged };
+    });
+  }
+  // Liga/desliga o transporte WebRTC da câmera (persiste no camcfg via setCameraCfg — mesmo caminho
+  // do papel). Atualiza `cfgs` para que transportOf/CameraTile reflitam a troca no mesmo tick.
+  function setTransport(id: string, webrtc: boolean) {
+    setCfgs((prev) => {
+      const merged: CameraCfg = { ...cfgOf(id), transport: webrtc ? "webrtc" : "mjpeg" };
       setCameraCfg(id, merged);
       return { ...prev, [id]: merged };
     });
@@ -1008,15 +1017,31 @@ export function DashboardPage() {
                 <b>{c.label}</b>
                 <span className="muted">{c.id}</span>
               </div>
-              <Select
-                value={isFadiga(c.id) ? "fadiga" : "area"}
-                onChange={(v) => setKind(c.id, v === "fadiga")}
-                ariaLabel="Tipo da câmera"
-                options={[
-                  { value: "area", label: "Câmera de área (zonas)" },
-                  { value: "fadiga", label: "Operador (fadiga)" },
-                ]}
-              />
+              <div style={{ display: "grid", gap: "var(--sp-2)" }}>
+                <Select
+                  value={isFadiga(c.id) ? "fadiga" : "area"}
+                  onChange={(v) => setKind(c.id, v === "fadiga")}
+                  ariaLabel="Tipo da câmera"
+                  options={[
+                    { value: "area", label: "Câmera de área (zonas)" },
+                    { value: "fadiga", label: "Operador (fadiga)" },
+                  ]}
+                />
+                {/* Transporte do VÍDEO NO PAINEL (Fase 1/5, go2rtc). Rótulo desambiguado do
+                    `transport` tcp/udp do RTSP no /cameras — aquele é do ffmpeg. */}
+                <Select
+                  value={transportOf(c.id)}
+                  onChange={(v) => setTransport(c.id, v === "webrtc")}
+                  ariaLabel="Vídeo no painel"
+                  options={[
+                    { value: "mjpeg", label: "Vídeo no painel: MJPEG" },
+                    { value: "webrtc", label: "Vídeo no painel: WebRTC" },
+                  ]}
+                />
+                <span className="muted" style={{ fontSize: 10 }}>
+                  WebRTC = vídeo fluido via go2rtc (requer go2rtc ligado)
+                </span>
+              </div>
             </div>
           ))}
         </Dialog>
