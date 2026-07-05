@@ -87,12 +87,15 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 12px; /* mesmo gap ícone→rótulo dos itens */
   flex: 1;
   min-width: 0;
-  padding: var(--sp-1) var(--sp-1) var(--sp-1) 4px;
+  /* pad-left 12px = gutter do rail-item: alinha o ícone da marca à MESMA
+     coluna dos ícones de navegação (centro em x=30) e o nome à coluna dos
+     rótulos (x=52). */
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) 12px;
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--fs-body);
   text-align: left;
 }
 .rail--app .rail-brand-lb {
@@ -134,7 +137,9 @@
 }
 .rail--app .rail-search .rs-ic {
   position: absolute;
-  left: 10px;
+  /* ícone da busca na MESMA coluna dos ícones de navegação (centro em x=30):
+     8px rail + 14px + 7.5px (metade do ícone 15px) ≈ 30. */
+  left: 14px;
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;
@@ -144,13 +149,15 @@
 .rail--app .rail-search-in {
   width: 100%;
   height: 32px;
-  padding: 0 10px 0 32px;
+  /* pad-left 44px = coluna dos rótulos (x=52): o texto/placeholder da busca
+     começa alinhado aos rótulos dos itens de navegação. */
+  padding: 0 10px 0 44px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
   font-family: inherit;
-  font-size: 12px; /* escala da casa (12.5 fora da escala → sec/12) */
+  font-size: var(--fs-sec); /* escala da casa (12.5 fora da escala → sec/12) */
 }
 .rail--app .rail-search-in::placeholder {
   color: var(--text-muted);
@@ -185,7 +192,7 @@
   padding: 7px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-dim);
-  font-size: 12px; /* escala da casa (12.5 fora da escala → sec/12) */
+  font-size: var(--fs-sec); /* escala da casa (12.5 fora da escala → sec/12) */
   cursor: pointer;
 }
 .rail--app .rail-search-opt.sel {
@@ -200,7 +207,7 @@
   white-space: nowrap;
 }
 .rail--app .rail-search-opt .rs-hint {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -209,7 +216,7 @@
 .rail--app .rail-search-empty {
   padding: 8px 10px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-sec);
 }
 
 /* ── Grupos: micro-headers uppercase 11px (some no modo só-ícones) ──────── */
@@ -222,9 +229,11 @@
   margin-top: var(--sp-3);
 }
 .rail--app .rail-group-h {
+  /* pad-left 12px = mesmo gutter do rail-item: o header alinha à esquerda com
+     a coluna de ícones dos itens do grupo. */
   padding: 0 12px;
   margin-bottom: 2px;
-  font-size: 11px;
+  font-size: var(--fs-label);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -264,7 +273,7 @@
 
 /* ── Rodapé do rail: menu de usuário (gatilho) ──────────────────────────── */
 .rail--app .rail-user {
-  gap: var(--sp-2);
+  gap: 12px; /* mesmo gap ícone→rótulo dos demais rail-item */
 }
 .rail--app .rail-user .ri-lb {
   flex: 1;
@@ -282,14 +291,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  /* 20px = mesma caixa dos ícones (.ri-ic): mantém o centro do avatar na
+     coluna x=30 e a linha da conta com a MESMA altura dos rail-item (36px). */
+  width: 20px;
+  height: 20px;
   flex: none;
   border-radius: 999px;
   background: var(--state-neutral-bg);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-label);
   font-weight: 600;
 }
 .rail--app .rail-user[data-state="open"] .ri-caret {
@@ -370,6 +381,8 @@
   .rail--app .rail-brand {
     flex: none;
     justify-content: center;
+    /* reseta o pad-left 12px do modo aberto: ícone centrado no rail de 52px */
+    padding: var(--sp-1);
   }
   .rail--app .rail-group + .rail-group {
     margin-top: var(--sp-2);

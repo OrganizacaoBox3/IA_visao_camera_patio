@@ -73,7 +73,7 @@
      md  ≤ 900px  → Tablet: rail vira ícones; painéis laterais empilham/encolhem
                     (imagem soberana); grades densas → 2 colunas.
      lg  ≤ 1200px → Desktop estreito: densidade máxima da grade do dashboard
-                    (até 4 col via [data-cols] em views.css); reduções finas.
+                    (até 4 col via [data-cols] em dash-grid.css); reduções finas.
 
    Onde o layout reage à largura do PRÓPRIO container (e não da viewport),
    prefira container queries (@container) — ver .side / .cam-drawer abaixo.
@@ -539,7 +539,7 @@ label.file input {
 }
 /* Grade do dashboard — UM mecanismo só (going-gray R2.3): a densidade no desktop
    vem do atributo [data-cols="N"] (N = colsFor(), 1..4) escrito por DashboardPage,
-   com as regras em views.css (@min-width:901px). No tablet/mobile, as media queries
+   com as regras em dash-grid.css (@min-width:901px). No tablet/mobile, as media queries
    md/sm abaixo assumem (2 col / 1 col). A regra base aqui é só o FALLBACK estático
    (3 col) quando data-cols está ausente. minmax(0,1fr) impede que um tile largo
    estoure a coluna. (O antigo --dash-cols era morto — nunca era atribuído; removido.) */
@@ -1205,7 +1205,7 @@ label.file input {
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 .rail-item:hover {
   background: var(--panel);
@@ -1799,7 +1799,7 @@ button.rail-item {
   }
   .rail-item .ri-lb {
     display: block;
-    font-size: 10px;
+    font-size: var(--fs-micro);
   }
   .page-head {
     flex-wrap: wrap;
