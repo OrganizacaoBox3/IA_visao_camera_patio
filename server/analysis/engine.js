@@ -21,6 +21,9 @@
 //   • ausente (default) → LIGADO se o modelo já existe em server/models/;
 //     ausente+sem modelo → desligado (log explica como ligar). Ou seja: o 1º
 //     boot com ANALYSIS_ENABLED=1 baixa o modelo; dali em diante o default liga.
+//   • FASE 4 — DETECÇÃO ATIVA POR DEFAULT: com o modelo presente o usuário NÃO precisa
+//     ligar nada; o motor sobe sozinho no boot e cobre TODA câmera do relé (exceto as em
+//     modo=fadiga, que rodam no cliente). ANALYSIS_ENABLED=0 é o único desligamento explícito.
 //
 // OVERLAYS SERVIDOS (F2 — ADITIVO): a cada rodada de análise o hub emite
 // `analysis-tracks { cameraId, ts, tracks, zones }` (volatile, room "dashboards")
@@ -117,6 +120,13 @@ let MODEL_PATH = MODEL_OVERRIDE || path.join(__dirname, "..", "models", modelSpe
 // ── Parâmetros de operação (defaults espelham APP_CONFIG.people.track do front) ──
 const FPS = Math.min(4, Math.max(0.2, Number(process.env.ANALYSIS_FPS) || 1));
 const ROUND_MS = Math.round(1000 / FPS);
+// Cadência ELEVADA p/ câmera COM tripwire/linha (Fase 4): a contagem de linha quebra por
+// recall×cadência (acuracia-modelos.md §3 e Medida D) — a 0,5-1fps um caminhante cruza em
+// 2-3 rodadas, insuficiente p/ nascimento+histerese; a ≥2fps o ByteTrack tem rodadas de
+// sobra na travessia. SÓ a câmera com linha paga o custo; a sem linha segue @ANALYSIS_FPS.
+// ANALYSIS_FPS_LINE (default 2) nunca abaixo do ANALYSIS_FPS nem acima de 4fps.
+const FPS_LINE = Math.min(4, Math.max(FPS, Number(process.env.ANALYSIS_FPS_LINE) || 2));
+const ROUND_MS_LINE = Math.round(1000 / FPS_LINE);
 // Ponto de operação do spike §8: nascimento/1ª passada em ~0.35; o worker devolve ≥0.25,
 // que alimenta a 2ª passada do ByteTrack (score baixo SUSTENTA track, não nasce).
 const HIGH_SCORE = Number(process.env.ANALYSIS_HIGH_SCORE ?? 0.35);
@@ -124,11 +134,37 @@ const AGG_MS = Math.max(1000, Number(process.env.ANALYSIS_AGG_MS ?? 3000));
 // TTL escala com a cadência (a 1fps, o 1500ms do front mataria o track numa rodada perdida).
 const TTL_MS = Math.max(1500, Math.round(ROUND_MS * 3.5));
 const PRUNE_MS = 5 * 60_000; // câmera sem frame há tanto tempo sai do estado/status
-const TICK_MS = Math.min(250, Math.max(50, Math.round(ROUND_MS / 4)));
+// Resolução do tick baseada na cadência MAIS RÁPIDA (linha) p/ o dispatch honrar 2fps.
+const TICK_MS = Math.min(250, Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_MS_LINE) / 4)));
 // Grid do perfil "Longo alcance/Panorâmica" (F3): 2×2 com overlap 0.1 — espelha o
 // tiling do front (src/vision/detect.ts tileGrid). Fixo de propósito (YAGNI): um
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
 const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
+
+// ── Auto-máscara de exclusão APRENDIDA (Fase 4 — OPT-IN, OFF por default) ─────
+// ANALYSIS_AUTOMASK: ausente/"off"/"0" (feature OFF — nada aprende, nada suprime, custo zero);
+//   "suggest" (aprende + expõe a sugestão em status() + loga, mas NÃO suprime — transparência
+//    sem risco; caminho RECOMENDADO p/ validar contra a realidade antes de esconder);
+//   "hide"/"1"/"on" (aprende + SUPRIME as células aprendidas + loga — como a zona de exclusão
+//    manual, mas APRENDIDA). Aprende a célula do grid onde há detecção de pessoa PRESENTE
+//   ~100% do tempo E com bbox quase ESTÁTICO por uma janela ≥10min = objeto fixo lido como
+//   pessoa no piso de score (acuracia-modelos.md §2: 47-86% dos FP são poucos objetos fixos).
+//   CONSERVADOR de propósito: pessoa real num posto AINDA varia (pé/tronco oscilam, ela sai
+//   de quadro); objeto fixo não. Por isso o gate é presença altíssima + jitter baixíssimo +
+//   janela longa. Auto-suprimir é o modo ARRISCADO (pode esconder pessoa quase imóvel) → OFF.
+const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "").toLowerCase();
+const AUTOMASK_MODE = /^(1|on|hide|true)$/.test(AUTOMASK_RAW)
+  ? "hide"
+  : /^(suggest|sug|learn)$/.test(AUTOMASK_RAW)
+    ? "suggest"
+    : "off";
+const AUTOMASK_ON = AUTOMASK_MODE !== "off";
+const AM_COLS = Math.max(4, Math.min(64, Number(process.env.ANALYSIS_AUTOMASK_COLS) || 24));
+const AM_ROWS = Math.max(4, Math.min(64, Number(process.env.ANALYSIS_AUTOMASK_ROWS) || 18));
+const AM_WIN_MS = Math.max(60_000, Number(process.env.ANALYSIS_AUTOMASK_WIN_MS) || 600_000); // janela ≥10min
+const AM_PRESENT = Math.min(1, Math.max(0.5, Number(process.env.ANALYSIS_AUTOMASK_PRESENT) || 0.97));
+const AM_JITTER = Math.max(0.001, Number(process.env.ANALYSIS_AUTOMASK_JITTER) || 0.02); // std norm máx p/ "fixo"
+const AM_MIN_ROUNDS = Math.max(30, Number(process.env.ANALYSIS_AUTOMASK_MIN_ROUNDS) || 120);
 
 // ── Fonte go2rtc (Fase 3): pull de frame.jpeg p/ câmeras SEM relé (ex.: WHIP) ──
 // ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
@@ -325,6 +361,81 @@ function longRangeOf(cameraId) {
   return !!(cfg && cfg.longRange === true);
 }
 
+// Papel da câmera (CameraCfg.modo — src/cameraConfig.ts). "fadiga" é modo ESPECIALIZADO que
+// roda no CLIENTE (MediaPipe/face mesh do operador) — o hub NÃO deve detectar/contar PESSOA
+// nela: (a) economiza CPU do worker, (b) tira do relatório o ruído de "pessoa" contada sobre
+// o rosto do operador em close. Leitura DEFENSIVA (mesma disciplina do longRange): sem config
+// salva → cleanCamConfig default "atividade" → não é fadiga.
+function modoOf(cameraId) {
+  const cfg = camcfg.getCamConfig(cameraId);
+  return (cfg && cfg.modo) || "atividade";
+}
+function isFadiga(cameraId) {
+  return modoOf(cameraId) === "fadiga";
+}
+
+// ── Auto-máscara: estado por câmera + observação/avaliação (Fase 4) ──────────
+function createAutoMask() {
+  // cells: cellIndex → { present, n, mean:[fx,fy,w,h], m2:[...] } (Welford p/ variância).
+  return { rounds: 0, windowStart: Date.now(), cells: new Map(), suppressed: new Set(), suggestions: [] };
+}
+/** célula do grid AM p/ um ponto NORMALIZADO (o PÉ da detecção — igual à zona de exclusão). */
+function amCell(fx, fy) {
+  const c = Math.min(AM_COLS - 1, Math.max(0, Math.floor(fx * AM_COLS)));
+  const r = Math.min(AM_ROWS - 1, Math.max(0, Math.floor(fy * AM_ROWS)));
+  return r * AM_COLS + c;
+}
+/** acumula uma observação (pé + tamanho do bbox) na célula; marca presença desta rodada. */
+function amObserve(am, cell, vals, roundCells) {
+  roundCells.add(cell);
+  let c = am.cells.get(cell);
+  if (!c) am.cells.set(cell, (c = { present: 0, n: 0, mean: [0, 0, 0, 0], m2: [0, 0, 0, 0] }));
+  c.n += 1;
+  for (let k = 0; k < 4; k++) {
+    const delta = vals[k] - c.mean[k];
+    c.mean[k] += delta / c.n;
+    c.m2[k] += delta * (vals[k] - c.mean[k]);
+  }
+}
+/** Fim da janela: reavalia quais células são objeto fixo, loga transições, reinicia a janela. */
+function evaluateAutoMask(st, now) {
+  const am = st.autoMask;
+  const prev = am.suppressed;
+  const next = new Set();
+  const suggestions = [];
+  for (const [cell, c] of am.cells) {
+    if (c.n < AM_MIN_ROUNDS) continue; // pouca amostra → não decide
+    const presentPct = c.present / am.rounds;
+    if (presentPct < AM_PRESENT) continue; // não está presente ~100% do tempo → não é objeto fixo
+    const std0 = Math.sqrt(c.m2[0] / c.n);
+    const std1 = Math.sqrt(c.m2[1] / c.n);
+    const std2 = Math.sqrt(c.m2[2] / c.n);
+    const std3 = Math.sqrt(c.m2[3] / c.n);
+    const jitter = Math.max(std0, std1, std2, std3);
+    if (jitter > AM_JITTER) continue; // ainda VARIA (pé/tamanho oscilam) → provável pessoa real
+    next.add(cell);
+    suggestions.push({ cell, presentPct, jitter });
+  }
+  for (const cell of next) {
+    if (prev.has(cell)) continue; // já conhecida — só loga a novidade
+    const col = cell % AM_COLS;
+    const row = Math.floor(cell / AM_COLS);
+    const c = am.cells.get(cell);
+    console.log(
+      `[analysis:${st.id}] auto-máscara ${AUTOMASK_MODE === "hide" ? "SUPRIMINDO" : "SUGESTÃO"} ` +
+        `célula (${col},${row}) ~${Math.round(((col + 0.5) / AM_COLS) * 100)}%,${Math.round(((row + 0.5) / AM_ROWS) * 100)}% ` +
+        `— presente ${Math.round((c.present / am.rounds) * 100)}% da janela (${Math.round(AM_WIN_MS / 60000)}min), objeto fixo provável`,
+    );
+  }
+  am.suppressed = next;
+  am.suggestions = suggestions;
+  // reinicia a janela: re-aprende do zero → objeto que SOME deixa de ser reaprendido e a
+  // supressão cai na próxima avaliação (adaptativo, com atraso de até uma janela).
+  am.cells = new Map();
+  am.rounds = 0;
+  am.windowStart = now;
+}
+
 function createState(id) {
   const st = {
     id,
@@ -347,13 +458,18 @@ function createState(id) {
     zonesAtiv: ativZonesOf(id),
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
     longRange: longRangeOf(id), // F3: true → pedido ao worker leva tiles 2×2 (LR_TILES)
+    fadiga: isFadiga(id), // F4: câmera modo=fadiga NÃO é analisada no hub (roda no cliente)
+    roundMs: camcfg.getTripwires(id).length ? ROUND_MS_LINE : ROUND_MS, // F4: câmera com linha amostra mais rápido
+    autoMask: AUTOMASK_ON ? createAutoMask() : null, // F4: aprendizado de hotspots fixos (opt-in)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
     detsLog: [], // { t, n } pessoas por rodada (p/ dets1m)
     lastMs: 0,
   };
   states.set(id, st);
-  emitAnalysisStatus(id, "hub");
+  // Fadiga: o hub não cobre PESSOA nessa câmera → anuncia engine:null (front mantém o modo
+  // especializado local, não liga o ingest de pessoa). Demais câmeras: engine:"hub".
+  emitAnalysisStatus(id, st.fadiga ? null : "hub");
   return st;
 }
 
@@ -370,16 +486,37 @@ function processDets(st, dets, now) {
   // a pessoa real se move, então mascarar o hotspot mata o FP sem custar recall.
   const persons = [];
   let excluded = 0;
+  let autoHidden = 0;
+  const am = st.autoMask; // F4: auto-máscara aprendida (null quando a feature está OFF)
+  const roundCells = am ? new Set() : null; // células com ≥1 pé NESTA rodada (presença por rodada)
   for (const d of dets) {
     if (!d || d.class !== "person" || !Array.isArray(d.bbox)) continue;
     if (st.zonesExcl.length && inExclusionZone(d.bbox, st.zonesExcl)) {
       excluded += 1;
       continue;
     }
+    // Auto-máscara (F4): o PÉ (bottom-center) → célula do grid aprendido. APRENDE de TODAS as
+    // detecções (mesmo as já suprimidas): assim um objeto fixo AINDA presente segue confirmado
+    // (e suprimido); quando ele some, deixa de ser reaprendido e a supressão cai (adaptativo).
+    if (am) {
+      const fx = d.bbox[0] + d.bbox[2] / 2;
+      const fy = d.bbox[1] + d.bbox[3];
+      const cell = amCell(fx, fy);
+      amObserve(am, cell, [fx, fy, d.bbox[2], d.bbox[3]], roundCells);
+      if (AUTOMASK_MODE === "hide" && am.suppressed.has(cell)) {
+        autoHidden += 1; // célula aprendida como objeto fixo → suprime (como zona de exclusão manual)
+        continue;
+      }
+    }
     persons.push({ score: d.score, bbox: d.bbox });
   }
+  if (am) {
+    am.rounds += 1;
+    for (const cell of roundCells) am.cells.get(cell).present += 1; // 1 presença/rodada/célula
+    if (now - am.windowStart >= AM_WIN_MS && am.rounds >= AM_MIN_ROUNDS) evaluateAutoMask(st, now);
+  }
   st.rounds.push(now);
-  st.detsLog.push({ t: now, n: persons.length, x: excluded });
+  st.detsLog.push({ t: now, n: persons.length, x: excluded, a: autoHidden });
   const cutoff = now - 60_000;
   while (st.rounds.length && st.rounds[0] < cutoff) st.rounds.shift();
   while (st.detsLog.length && st.detsLog[0].t < cutoff) st.detsLog.shift();
@@ -454,6 +591,10 @@ function emitTracks(st, tracks, zoneByTrack, perLabel, ts) {
       bbox: [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], // normalizado 0..1
       cx: t.cx,
       cy: t.cy,
+      // F4 (ADITIVO ao contrato analysis-tracks): score REAL (0..1) da detecção que sustenta o
+      // track nesta rodada — antes era descartado no emit. O front usa p/ o slider de confiança
+      // no modo hub (hoje forçado a 1). Sustentado por det de score baixo → reflete o piso 0.25.
+      score: t.score,
       zone: zoneByTrack.get(t.id) ?? null,
     })),
     zones: st.zonesAtiv.map((z) => {
@@ -491,7 +632,11 @@ function tick() {
   if (!workerReady || !worker) return;
   const now = Date.now();
   for (const st of states.values()) {
-    if (st.busy || !st.latest || now - st.lastSentAt < ROUND_MS) continue;
+    // F4: câmera modo=fadiga não é analisada no hub (roda no cliente) — nada de inferência,
+    // tracks ou ingest de PESSOA nela. Este é o único choke point (pega relé E pull go2rtc).
+    if (st.fadiga) continue;
+    // F4: câmera com linha amostra @ROUND_MS_LINE (≥2fps); sem linha, @ROUND_MS (1fps).
+    if (st.busy || !st.latest || now - st.lastSentAt < (st.roundMs || ROUND_MS)) continue;
     const frame = st.latest;
     st.latest = null;
     st.busy = true;
@@ -646,12 +791,21 @@ function onCamcfgUpdated(p) {
   if (!st) return;
   if (p.kind === "tripwires") {
     st.counter.setTripwires(camcfg.getTripwires(st.id)); // preserva contadores por id
+    // F4: ganhou/perdeu linha → recalcula a cadência (câmera com linha amostra a ≥2fps).
+    st.roundMs = camcfg.getTripwires(st.id).length ? ROUND_MS_LINE : ROUND_MS;
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
     st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // F3: liga/desliga o tiling na PRÓXIMA rodada
+    // F4: entrou/saiu do modo fadiga → atualiza o contrato anti-duplicação (hub ⇄ cliente).
+    const wasFadiga = st.fadiga;
+    st.fadiga = isFadiga(st.id);
+    if (st.fadiga !== wasFadiga) {
+      if (st.fadiga) st.window = { frames: 0, zones: new Map() }; // descarta janela pendente
+      emitAnalysisStatus(st.id, st.fadiga ? null : "hub");
+    }
   }
 }
 
@@ -663,7 +817,8 @@ function isAnalyzing() {
 /** Snapshot do contrato anti-duplicação p/ um dashboard que acabou de conectar. */
 function snapshotTo(socket) {
   if (!enabled) return;
-  for (const id of states.keys()) socket.emit("analysis-status", { cameraId: id, engine: "hub" });
+  // Fadiga: engine:null (o hub não cobre pessoa nela — front mantém o modo especializado local).
+  for (const [id, st] of states) socket.emit("analysis-status", { cameraId: id, engine: st.fadiga ? null : "hub" });
 }
 
 /** GET /api/analysis/status — métricas por câmera (aditivo). */
@@ -672,24 +827,52 @@ function status() {
   for (const [id, st] of states) {
     let dets1m = 0;
     let excluded1m = 0;
+    let automasked1m = 0;
     for (const d of st.detsLog) {
       dets1m += d.n;
       excluded1m += d.x || 0;
+      automasked1m += d.a || 0;
     }
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
+      targetFps: st.fadiga ? 0 : st.roundMs === ROUND_MS_LINE ? FPS_LINE : FPS, // F4 (aditivo): cadência efetiva
       queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
       lastMs: st.lastMs,
       dets1m,
       excluded1m, // aditivo: dets de pessoa suprimidas por zona de exclusão em 60s
       longRange: st.longRange, // F3 (aditivo): true = rodada com tiling 2×2 no worker
+      fadiga: st.fadiga, // F4 (aditivo): true = câmera modo=fadiga (NÃO analisada no hub)
       source: st.source, // aditivo: origem do último frame ("relay" | "go2rtc")
     };
+    // F4 (aditivo): sugestões/supressões da auto-máscara aprendida — TRANSPARÊNCIA. Cada célula
+    // vem como rect NORMALIZADO, pronto p/ o operador pintar uma zona de exclusão manual ali.
+    if (st.autoMask) {
+      perCamera[id].automasked1m = automasked1m; // dets suprimidas pela auto-máscara em 60s
+      perCamera[id].autoMask = {
+        mode: AUTOMASK_MODE, // "suggest" (só expõe) | "hide" (suprime)
+        // células ENFORCED (suprimindo dets) — só no modo "hide"; em "suggest" nada é suprimido.
+        suppressed: AUTOMASK_MODE === "hide" ? st.autoMask.suppressed.size : 0,
+        suggestions: (st.autoMask.suggestions || []).map((s) => {
+          const col = s.cell % AM_COLS;
+          const row = Math.floor(s.cell / AM_COLS);
+          return {
+            x: col / AM_COLS,
+            y: row / AM_ROWS,
+            w: 1 / AM_COLS,
+            h: 1 / AM_ROWS,
+            presentPct: Math.round(s.presentPct * 100) / 100,
+            jitter: Math.round(s.jitter * 1000) / 1000,
+          };
+        }),
+      };
+    }
   }
   return {
     enabled,
     model: path.basename(MODEL_PATH),
     targetFps: FPS,
+    lineFps: FPS_LINE, // F4 (aditivo): cadência das câmeras com linha/tripwire
+    autoMask: { mode: AUTOMASK_MODE }, // F4 (aditivo): modo global da auto-máscara ("off"|"suggest"|"hide")
     worker: { ready: workerReady, pid: workerPid, respawns, cpuPct },
     // Fonte go2rtc (Fase 3, aditivo): estado do pull p/ diagnóstico.
     go2rtcPull: { active: pullActive(), mode: PULL_FORCE_ALL ? "all" : "relay-less", streams: go2rtcStreams.size },
@@ -722,11 +905,15 @@ async function init({ io, cameras }) {
   timers.push(setInterval(flushAtiv, AGG_MS));
   timers.push(setInterval(prune, 60_000));
   timers.push(setInterval(logMinute, 60_000));
-  // Fonte go2rtc (Fase 3): ronda de pull @ROUND_MS. Inerte (no-op) enquanto go2rtc estiver
-  // desligado (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
-  timers.push(setInterval(pullTick, ROUND_MS));
+  // Fonte go2rtc (Fase 3): ronda de pull na cadência MAIS RÁPIDA (linha) p/ alimentar 2fps
+  // quando a câmera de linha é puxada. Inerte (no-op) enquanto go2rtc estiver desligado
+  // (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
+  timers.push(setInterval(pullTick, Math.min(ROUND_MS, ROUND_MS_LINE)));
   for (const t of timers) if (t.unref) t.unref();
-  console.log(`[analysis] motor ATIVO — ${modelSpec.label} no hub @${FPS}fps/câmera (worker process, CPU EP)`);
+  console.log(
+    `[analysis] motor ATIVO — ${modelSpec.label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
+      `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (worker process, CPU EP)`,
+  );
 }
 
 /** Desliga o motor (usado em testes/encerramento). */
