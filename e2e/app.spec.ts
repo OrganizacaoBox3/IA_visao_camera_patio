@@ -27,7 +27,9 @@ async function drawZone(page: Page) {
   await page.getByRole("button", { name: "✎ Zona" }).click();
   const stage = page.locator(".cam-stage");
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // 8 tentativas (era 5): sob carga (probe WHIP do nó + fetch /go2rtc/api/streams) o 1º frame
+  // pode demorar a chegar ao palco; o onUp descarta o traço até lá. Mais retry = menos flake.
+  for (let attempt = 0; attempt < 8; attempt++) {
     const box = await stage.boundingBox();
     if (!box) throw new Error(".cam-stage sem boundingBox");
     await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.35);

@@ -25,6 +25,11 @@ export default defineConfig({
     url: "http://127.0.0.1:5180",
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { VITE_HUB_URL: "http://127.0.0.1:4100" },
+    // VITE_GO2RTC_BASE numa porta MORTA: o e2e não tem go2rtc próprio, e o default "/go2rtc"
+    // (proxy Vite → 127.0.0.1:1984) bateria em QUALQUER go2rtc rodando na máquina (ex.: um hub de
+    // dev do desenvolvedor) — cross-talk que faz o transporte "auto" resolver WebRTC sem frames.
+    // Apontando p/ um endpoint que ninguém escuta, toda chamada go2rtc falha → "auto" cai p/ MJPEG
+    // (o caminho que o e2e testa), isolando-o de qualquer go2rtc externo.
+    env: { VITE_HUB_URL: "http://127.0.0.1:4100", VITE_GO2RTC_BASE: "http://127.0.0.1:59999" },
   },
 });
