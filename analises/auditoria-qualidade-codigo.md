@@ -70,3 +70,16 @@
 
 ## Veredito
 Código **maduro e honesto** — a acreção de dívida (god components, densidade de comentário, dedup residual) é o esperado de uma maratona de features, e as **fundações são fortes** (contratos, tipos, LGPD, libs puras testadas, módulos-modelo). Prioridade: **R1 (segurança) já**, Onda A (limpeza barata), Onda B (fecha o débito de teste), e a Onda C (god components) como o retrofit R2 planejado. Nenhum bug funcional bloqueante foi encontrado.
+
+## Status — EXECUTADO (jul/2026, 7 frentes paralelas, verify 312 + e2e 8/8)
+
+As 4 ondas foram executadas num marco só, por propriedade exclusiva de arquivo, validadas no tree combinado. Resultados:
+
+- **Riscos**: **R1 (vazamento de credencial) CORRIGIDO** (redact global no stderr antes do broadcast); R2 (readBody 413), R3 (400/413/500 distintos+log), R4 (persistViews transacional), R5 (leak do `pulls` podado), R6 (Holder discriminado → 7 casts removidos). ✅
+- **God components** (S1): CameraWorkspace 2833→2080, DashboardPage 1111→454, engine.js 938→582, ReportPage `downloadCSV` 205→55, index.js → `shed.js`+`http-auth.js`. Comportamento byte-a-byte; rAF/ADR-007/contratos socket intactos. ✅
+- **Testabilidade** (S2): +87 testes das puras (scheduler, auto-máscara/Welford, transport, autoSurface, normalizeCfg, withDefaults, aggregate, store) — 225→**312**. ✅
+- **Duplicação** (S4): `cx` ×14→1 (`ui/cx.ts`), `H2_SEC` ×7→1 (`ui/SectionTitle`), cliente de alarmes store↔api unificado. ✅
+- **Consistência** (S5): going-gray consolidado (`--state-*`, verde-para-bom removido); estilos inline→CSS. ✅
+- **Config** (S6): dead-config removida (`objectIntervalMsTile`, `trackMaxDist/Timeout`), auto-máscara 7→2 envs, dead-telemetry (`recvFps`/`dropped`) fora do hot-path, helper `env()`. ✅
+
+**Resíduos deferidos** (menores, anotados): `iouXYWH`×`iouOf` duplicado (dedup mexe em 2 APIs+testes — frente própria); NotificacoesTab prop-drilling (tradeoff Radix legítimo); densidade de comentário (S3) reduzida onde os módulos migraram, mas não eliminada. Nenhum bloqueante.

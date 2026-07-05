@@ -103,14 +103,15 @@ Legenda categoria: **(D)** deployment · **(Q)** qualidade (alvo) · **(T)** tun
 | --------------------------- | -------------------- | ------- | ------------------------------------------------- | --- |
 | **`ANALYSIS_ENABLED`**      | `engine.js:888`      | (auto)  | `0`=off; `1`=liga **e baixa o modelo no boot**; ausente=roda **só se o modelo já existe** | **Q** |
 | **`ANALYSIS_MODEL`**        | `engine.js:116`      | `s`     | `n`\|`s`\|`m` — tamanho/recall do modelo           | **Q** |
-| **`ANALYSIS_AUTOMASK`**     | `engine.js:155`      | **off** | `off`\|`suggest`\|`hide` — defesa a FP de objeto fixo | **Q**/T |
+| **`ANALYSIS_AUTOMASK`**     | `automask.js`        | **suggest** | `off`\|`suggest`\|`hide` — defesa a FP de objeto fixo (Onda 1: default→suggest) | **Q**/T |
 | `ANALYSIS_SOURCE`           | `engine.js:173`      | (relay-less) | `go2rtc`=puxa todas as streams do gateway     | Q/T |
 | `ANALYSIS_GO2RTC_PULL`      | `engine.js:174`      | on      | opt-out do pull mesmo com go2rtc ligado           | T   |
 | `ANALYSIS_MODEL_PATH`       | `engine.js:115`, `worker.js:53` | catálogo | fixa o `.onnx` (usado pelo `eval/`)     | T/D |
 | `ANALYSIS_FPS` / `_FPS_LINE`| `engine.js:121,128`  | 1 / 2   | cadência de inferência (geral / câmera com linha) | T   |
 | `ANALYSIS_HIGH_SCORE`       | `engine.js:132`      | 0.35    | limiar de nascimento de track                     | T   |
 | `ANALYSIS_AGG_MS`           | `engine.js:133`      | 3000    | janela de agregação de atividade                  | T   |
-| `ANALYSIS_AUTOMASK_COLS/ROWS/WIN_MS/PRESENT/JITTER/MIN_ROUNDS` | `engine.js:162-167` | 24/18/600k/0.97/0.02/120 | gate da auto-máscara aprendida | T |
+| `ANALYSIS_AUTOMASK_JITTER` | `automask.js` | 0.02 | limiar de jitter (o único knob que muda por câmera) | T |
+| ~~`AUTOMASK_COLS/ROWS/WIN_MS/PRESENT/MIN_ROUNDS`~~ | — | 24/18/600k/0.97/120 | **viraram CONSTANTES** (refactor F3: enxugado 7→2 envs) | — |
 | `ANALYSIS_GO2RTC_TIMEOUT_MS`/`_STREAMS_MS` | `engine.js:178-179` | 2000/4000 | timeouts do pull go2rtc            | T   |
 | `ANALYSIS_SCORE_MIN`        | `worker.js:55`       | 0.25    | corte bruto do worker                             | T   |
 | `ANALYSIS_NMS_IOU`          | `worker.js:56`       | 0.6     | NMS do worker                                     | T   |
