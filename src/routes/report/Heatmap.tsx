@@ -27,11 +27,18 @@ const HEATMAP_MIN_WIDTH = 640;
 // Reusa a classe .rep-matrixscroll (mesmo tratamento de impressão da matriz Setor×Classe).
 function HeatScroll({ children }: { children: ReactNode }) {
   return (
-    <ScrollArea className="rep-matrixscroll" orientation="horizontal">
-      <div className="heatmap" style={{ minWidth: HEATMAP_MIN_WIDTH }}>
-        {children}
+    <>
+      {/* Hint de rolagem: some no desktop; no estreito o heatmap rola DENTRO da
+          caixa (overflow-x), sem empurrar a página. */}
+      <div className="rep-scrollhint" aria-hidden="true">
+        deslize para ver todas as horas →
       </div>
-    </ScrollArea>
+      <ScrollArea className="rep-matrixscroll" orientation="horizontal">
+        <div className="heatmap" style={{ minWidth: HEATMAP_MIN_WIDTH }}>
+          {children}
+        </div>
+      </ScrollArea>
+    </>
   );
 }
 

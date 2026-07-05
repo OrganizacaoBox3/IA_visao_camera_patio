@@ -558,7 +558,7 @@ export function ReportPage() {
         </span>
       </PageHeader>
 
-      <div className="rep-filters no-print">
+      <div className="rep-filters rep-filters-m no-print">
         <SegmentedControl<Period>
           value={period}
           onChange={setPeriod}

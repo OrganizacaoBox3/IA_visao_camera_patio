@@ -22,7 +22,12 @@ export function EventsTable<T>({
   return (
     <section className="panel panel-events flex-1">
       <SectionTitle>{title}</SectionTitle>
-      <ScrollArea className="rep-tablescroll">
+      {/* Hint de rolagem: some no desktop; no estreito a tabela (min-width) rola
+          DENTRO da caixa (overflow-x), sem empurrar a página. */}
+      <div className="rep-scrollhint" aria-hidden="true">
+        deslize a tabela para o lado →
+      </div>
+      <ScrollArea className="rep-tablescroll" orientation="both">
         <table className="rtable">
           <thead>
             <tr>

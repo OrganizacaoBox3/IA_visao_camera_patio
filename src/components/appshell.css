@@ -398,6 +398,16 @@
     gap: 2px;
     padding: var(--sp-1) var(--sp-2);
     min-height: 44px;
+    /* Cada item divide a largura por igual (flex:1 + min-width:0): 3–6 itens
+       (operador → superadmin) cabem em 390px sem estourar a barra. O rótulo
+       trunca com reticências em vez de empurrar a linha (rule #1: sem scroll H). */
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .rail--app .rail-item .ri-lb {
+    display: block;
+    width: 100%;
+    text-align: center;
   }
   .rail--app .rail-item.on::before {
     left: 22%;

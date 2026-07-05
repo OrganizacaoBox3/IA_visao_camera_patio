@@ -1825,6 +1825,41 @@ button.rail-item {
   input[type="search"] {
     min-height: 44px;
   }
+  /* Controles pressáveis dos átomos Radix (Button/Toggle/Select-trigger = <button>)
+     nas barras que ESTA frente possui: sobem para ≥44px. `min-height` vence o
+     `h-[34px]` do átomo porque index.css NÃO é layered (> utilities do Tailwind).
+     `:not([role="switch"])` poupa o pill do Switch (tamanho fixo h-5/w-9 — esticá-lo
+     o deformaria); a linha .switch abaixo ganha altura confortável no lugar. */
+  .page-head button:not([role="switch"]),
+  .cam-head button:not([role="switch"]),
+  .cam-kpibar button:not([role="switch"]),
+  .cine-bar button:not([role="switch"]),
+  .drawer-tabs button:not([role="switch"]),
+  .toolbar button:not([role="switch"]),
+  .full-head button:not([role="switch"]) {
+    min-height: 44px;
+  }
+  /* Linha do Switch (toggle + rótulo): área de toque vertical confortável, pill centrado. */
+  .page-head .switch,
+  .cam-head .switch,
+  .toolbar .switch {
+    min-height: 44px;
+  }
+
+  /* ── Relatório no celular (rule #1: ZERO scroll horizontal da PÁGINA) ──
+     Os filtros sticky quebram em vez de estourar; o heatmap (grid de 24h) e a
+     tabela rolam DENTRO do próprio container, nunca empurram a página. */
+  .rep-filters {
+    flex-wrap: wrap;
+  }
+  .heatmap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .hm-axis,
+  .hm-row {
+    min-width: 460px;
+  }
 }
 
 /* Fluxo + atividade por área */

@@ -73,15 +73,6 @@
   margin: var(--sp-3) 0 0;
   font-size: 12px;
 }
-@media (max-width: 560px) {
-  .cam-set-row {
-    flex-wrap: wrap;
-  }
-  .cam-set-controls {
-    width: 100%;
-    min-width: 0;
-  }
-}
 
 /* Rodapé das seções (ação primária à esquerda, fora da lista). */
 .cam-sec-foot {
@@ -142,11 +133,41 @@
   margin-top: var(--sp-2);
 }
 
-@media (max-width: 560px) {
+/* ── Celular (≤640px, alinhado ao breakpoint sm do app) ──
+   Rubrica: sem scroll horizontal · listas viram cards empilhados · o form IP e os
+   "Ajustes desta câmera" empilham em coluna. */
+@media (max-width: 640px) {
+  /* Campos avançados (fps/largura/qualidade) empilham. */
   .cam-ip-adv {
     grid-template-columns: 1fr;
   }
+
+  /* Lista de câmeras IP: a linha quebra — o nome ocupa a 1ª linha (flex:1) e badge/estado/
+     ações acomodam como chips abaixo, sem espremer 4 itens em ~326px nem transbordar. */
   .cam-row {
     flex-wrap: wrap;
+  }
+  .cam-row__actions {
+    margin-left: auto;
+  }
+
+  /* (4) "Ajustes desta câmera": nome em cima e os dois Selects (papel × vídeo) empilhados
+     em largura total (coluna). Declarado depois de .cam-row → vence a direção da linha. */
+  .cam-set-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cam-set-controls {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Nó local: o campo do link de inscrição encolhe para caber e o botão passa à linha
+     de baixo (full-width via .cam-enroll flex-wrap). */
+  .cam-enroll input {
+    min-width: 0;
+  }
+  .cam-enroll button {
+    width: 100%;
   }
 }

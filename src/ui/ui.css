@@ -181,4 +181,50 @@
   .users-new {
     gap: var(--sp-2);
   }
+
+  /* ── Config no celular (F-B) — /usuarios, /perfil, /cameras, /alarmes-saude usáveis
+     em ~390px. Escopo nos wrappers de página (.users-body/.cam-mgr-body/.ah-body — base
+     definida no index.css, aqui só REFERENCIADA como ancestral, nunca editada) para
+     NÃO mexer na densidade das abas/selects do drawer compacto da câmera (cine.css).
+     A especificidade (0,2,0) vence a base (0,1,0) do index.css independente da ordem
+     de carga dos bundles. ── */
+
+  /* (2) Formulários empilhados full-width: a .users-new base é linha com flex-wrap;
+     no estreito vira coluna e cada controle (Input/Select/Button/senha) ocupa a linha
+     inteira (stretch), em vez de espremer 2–3 por linha. */
+  .users-body .users-new {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .users-body .users-new .users-pwd {
+    width: 100%;
+  }
+  .users-body .users-new .users-pwd > input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Barras de ação (Salvar/Pré-visualizar + estado) quebram em vez de espremer. */
+  .users-body .prof-actions {
+    flex-wrap: wrap;
+  }
+
+  /* (5) Abas de Usuários (Usuários/Notificações/Câmeras) por toque: alvo ≥44px e
+     quebra de linha se não couberem — nunca empurram a página (rubrica #1). */
+  .users-body .ui-tablist {
+    flex-wrap: wrap;
+  }
+  .users-body .ui-tablist [role="tab"] {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* (5) Selects Radix (combobox) das telas de config com alvo de toque ≥44px — o
+     index.css já eleva inputs nativos (≤640), isto cobre o gap dos átomos Radix. */
+  .users-body [role="combobox"],
+  .cam-mgr-body [role="combobox"],
+  .ah-body [role="combobox"] {
+    min-height: 44px;
+  }
 }

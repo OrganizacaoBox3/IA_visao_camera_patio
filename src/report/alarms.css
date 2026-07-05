@@ -237,3 +237,52 @@
 .alarm-windownote .linkbtn {
   margin-left: var(--sp-2);
 }
+
+/* ── Relatório no celular (≤640px) ────────────────────────────────────────
+   Escopo estrito: só o que ESTE módulo desenha (a barra de filtros via a classe
+   própria .rep-filters-m no MESMO elemento de .rep-filters, e os hints de rolagem).
+   Os seletores-base do relatório que vivem no index.css (.kpi-row, .rtable,
+   .heatmap, .rep-2col) já colapsam lá — não são redefinidos aqui (propriedade da F-A).
+   Preserva o desktop: tudo abaixo é guardado por @media (max-width: 640px). */
+
+/* Barra de filtros (período/turno/filtros/exportar): quebra em linhas no estreito
+   — evita o scroll horizontal DA PÁGINA — e sobe os controles para alvo de toque
+   ≥44px (WCAG 2.5.5). min-height vence a height fixa (h-[34px]/--ui-ctrl-h) das
+   utilities dos átomos Radix (Select/Button md), que não têm bump mobile próprio. */
+@media (max-width: 640px) {
+  .rep-filters-m {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+  .rep-filters-m button {
+    min-height: 44px;
+  }
+  /* O separador flexível (empurra as ações à direita no desktop) perde função ao
+     quebrar em linhas — some para não abrir um vão antes dos botões de exportar. */
+  .rep-filters-m .spacer {
+    display: none;
+  }
+}
+
+/* Hint de rolagem das caixas roláveis (EventsTable / heatmaps / matriz Setor×Classe).
+   Oculto no desktop (não muda o layout de min-width); no estreito sinaliza que o
+   conteúdo rola DENTRO da própria caixa (overflow-x), sem empurrar a página.
+   Decorativo (aria-hidden no TSX) — não entra na árvore de acessibilidade. */
+.rep-scrollhint {
+  display: none;
+}
+@media (max-width: 640px) {
+  .rep-scrollhint {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+    margin-bottom: var(--sp-1);
+    user-select: none;
+  }
+}
+@media print {
+  .rep-scrollhint {
+    display: none !important;
+  }
+}

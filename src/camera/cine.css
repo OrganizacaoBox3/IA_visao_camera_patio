@@ -257,4 +257,11 @@
   .cam-body .cam-drawer {
     height: 58%;
   }
+  /* Palco estreito: a barra de revisão já quebra (regra @980); aqui o scrubber
+     ocupa uma linha inteira (dedo tem curso), acima dos botões de ação. */
+  .cine-bar .cine-slider {
+    flex-basis: 100%;
+    order: -1;
+    min-width: 0;
+  }
 }

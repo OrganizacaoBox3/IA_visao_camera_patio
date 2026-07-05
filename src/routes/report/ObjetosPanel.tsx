@@ -110,6 +110,11 @@ export function ObjetosPanel({
           <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
               <SectionTitle>Presença por Setor × Classe (% do tempo)</SectionTitle>
+              {/* Hint de rolagem: some no desktop; no estreito a matriz rola
+                  DENTRO da caixa (overflow-x), sem empurrar a página. */}
+              <div className="rep-scrollhint" aria-hidden="true">
+                deslize para ver todas as classes →
+              </div>
               <ScrollArea className="rep-matrixscroll" orientation="both">
                 <table className="obj-matrix">
                   <thead>

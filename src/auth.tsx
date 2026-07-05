@@ -143,6 +143,7 @@ function LoginScreen({
             type="text"
             autoFocus
             autoComplete="username"
+            className="max-[640px]:min-h-[44px]"
             value={usuario}
             onChange={(e) => setUsuario(e.target.value)}
           />
@@ -152,11 +153,18 @@ function LoginScreen({
             id="login-pass"
             type="password"
             autoComplete="current-password"
+            className="max-[640px]:min-h-[44px]"
             value={senha}
             onChange={(e) => setSenha(e.target.value)}
           />
         </Field>
-        <Button variant="primary" block type="submit" disabled={busy || !usuario.trim() || !senha}>
+        <Button
+          variant="primary"
+          block
+          type="submit"
+          className="max-[640px]:min-h-[44px]"
+          disabled={busy || !usuario.trim() || !senha}
+        >
           {busy ? "Entrando…" : "Entrar"}
         </Button>
       </form>
