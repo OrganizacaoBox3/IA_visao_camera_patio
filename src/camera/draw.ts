@@ -357,6 +357,62 @@ export function drawTripwires(
   }
 }
 
+// ── HUD de telemetria (Fase 0.1 — retrofit de performance) — a RÉGUA da câmera aberta ──
+// Overlay pequeno no canto do vídeo: FPS exibido, ms/frame na main-thread, pipeline ativo
+// (hub/local) e IDADE do overlay (ms desde o último track do hub — expõe a caixa "congelada"
+// a ~1fps). Going-gray: base NEUTRA; cada linha satura p/ warn SÓ na anormalidade (fps baixo,
+// main-thread estourada, overlay velho). Função FOLHA/pura: pinta a partir do snapshot `s`;
+// os GATES (toggle + modo full) ficam no componente. `dropped`/`recvFps` são opcionais (outra
+// frente pode expô-los no FrameSource) — desenhados só quando presentes.
+export type HudStats = {
+  fps: number; // FPS exibido (frames desenhados/s)
+  msFrame: number; // ms na main-thread por tick do rAF (rolling)
+  pipeline: "hub" | "local"; // motor ativo no que o usuário vê
+  overlayAgeMs: number | null; // ms desde o último payload de track do hub (null = local/sem payload)
+  dropped?: number; // opcional: frames dropados na recepção
+  recvFps?: number; // opcional: fps de RECEPÇÃO de frames
+};
+// Limiares de anormalidade (going-gray: satura só acima deles).
+const HUD_FPS_LOW = 12; // abaixo disso o vídeo "pula"
+const HUD_MS_HI = 8; // meta do plano: <8 ms/frame na main-thread
+const HUD_OVERLAY_STALE_MS = 1200; // overlay mais velho que isto = caixa congelada visível
+export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: HudStats) {
+  const neutral = cssVar("--cam-overlay-fg", "#cbd5e1");
+  const warn = cssVar("--state-warn", "#eab308");
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  // [texto, anômalo?] — o anômalo satura p/ warn (going-gray).
+  const lines: Array<[string, boolean]> = [
+    [`${Math.round(s.fps)} fps`, s.fps > 0 && s.fps < HUD_FPS_LOW],
+    [`${s.msFrame.toFixed(1)} ms/frame`, s.msFrame > HUD_MS_HI],
+    [`pipe ${s.pipeline}`, false],
+  ];
+  if (s.overlayAgeMs != null)
+    lines.push([
+      `overlay ${Math.round(s.overlayAgeMs)}ms`,
+      s.overlayAgeMs > HUD_OVERLAY_STALE_MS,
+    ]);
+  if (s.recvFps != null) lines.push([`recv ${Math.round(s.recvFps)} fps`, s.recvFps < HUD_FPS_LOW]);
+  if (s.dropped != null) lines.push([`drop ${s.dropped}`, s.dropped > 0]);
+  ctx.font = "11px ui-monospace, monospace";
+  const lh = 14,
+    pad = 5;
+  let bw = 0;
+  for (const [t] of lines) bw = Math.max(bw, ctx.measureText(t).width);
+  const boxW = bw + pad * 2,
+    boxH = lines.length * lh + pad * 2 - 2;
+  // canto SUPERIOR DIREITO do retângulo de conteúdo (os rótulos de zona vivem no top-left).
+  const bx = cr.x + cr.w - boxW - 6,
+    by = cr.y + 6;
+  ctx.fillStyle = scrim;
+  ctx.fillRect(bx, by, boxW, boxH);
+  ctx.textBaseline = "top";
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillStyle = lines[i][1] ? warn : neutral;
+    ctx.fillText(lines[i][0], bx + pad, by + pad + i * lh);
+  }
+  ctx.textBaseline = "alphabetic"; // restaura o default (o resto do palco assume-o)
+}
+
 // Grade de pintura (ao editar a máscara de uma zona).
 export function drawPaintGrid(ctx: CanvasRenderingContext2D, cr: Rect, cols: number, rows: number) {
   const cw = cr.w / cols,

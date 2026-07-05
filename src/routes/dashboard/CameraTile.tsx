@@ -48,6 +48,11 @@ function statusInfo(s: CameraStatus | undefined): {
 type CameraTileProps = {
   camera: Camera;
   isOpen: boolean; // câmera já aberta no painel (overlay full)
+  // 0.2 — PAUSA DE FUNDO: outra câmera está aberta no painel, então este tile (de fundo) para o
+  // trabalho pesado. Renderiza um placeholder leve e DESMONTA o CameraWorkspace/FadigaView →
+  // encerra o rAF/motion/decode-draw daquele feed. Reversível: ao fechar a aberta, volta ao vivo.
+  // Primitiva → amigável ao React.memo (só os tiles cujo `paused` muda re-renderizam).
+  paused?: boolean;
   isFadiga: boolean;
   getFrame: () => FrameSource | null;
   demoMode: boolean;
@@ -75,6 +80,7 @@ type CameraTileProps = {
 export const CameraTile = memo(function CameraTile({
   camera,
   isOpen,
+  paused,
   isFadiga,
   getFrame,
   demoMode,
@@ -91,6 +97,9 @@ export const CameraTile = memo(function CameraTile({
   const st = statusInfo(status);
   const inner = isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
+  ) : paused ? (
+    // 0.2 — outra câmera aberta: placeholder leve; o feed processador fica DESMONTADO (sem rAF).
+    <div className="tile tile-open">em pausa</div>
   ) : isFadiga ? (
     <FadigaView
       key={`fad-${camera.id}`}

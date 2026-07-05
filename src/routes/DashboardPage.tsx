@@ -49,6 +49,12 @@ type FrameEntry = {
   ts: number;
   pending: ArrayBuffer | null;
   decoding: boolean;
+  // ── Telemetria leve (Fase 0.1) — contadores por câmera no holder de frames, p/ MEDIR o "trava".
+  //   recvFps: frames RECEBIDOS por segundo (EMA do intervalo entre chegadas — sem timer extra).
+  //   dropped: frames sobrescritos ANTES de decodificar (pending trocado sem consumo = "último-vence").
+  // Vivem no ref (zero re-render); um HUD/inspeção lê aqui. Não são desenhados por padrão.
+  recvFps: number;
+  dropped: number;
 };
 
 // Largura do decode reduzido para feeds que estão SÓ em tile (a grade exibe ~400px).
@@ -347,14 +353,37 @@ export function DashboardPage() {
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
-        f = { bmp: null, w: 0, h: 0, srcW: 0, ts: 0, pending: null, decoding: false };
+        f = {
+          bmp: null,
+          w: 0,
+          h: 0,
+          srcW: 0,
+          ts: 0,
+          pending: null,
+          decoding: false,
+          recvFps: 0,
+          dropped: 0,
+        };
         framesRef.current.set(p.id, f);
       }
+      // 0.1 — telemetria: um `pending` ainda não consumido sendo sobrescrito = frame DROPADO
+      // (último-vence). Bom termômetro do "trava" (decode/draw não acompanham a chegada).
+      if (f.pending) f.dropped++;
       f.pending = p.buf;
       // Largura NATIVA do payload (webcam envia w/h; RTSP não) — usada só p/ evitar UPSCALE no
       // resize de tile (2.2). f.w/f.h continuam sendo as dimensões do bitmap decodificado.
       if (typeof p.w === "number" && p.w > 0) f.srcW = p.w;
-      f.ts = Date.now();
+      // 0.1 — recvFps por EMA a partir do intervalo desde a última chegada (f.ts anterior). Sem
+      // timer: barato e suficiente p/ ver a cadência REAL de recepção por câmera.
+      const now = Date.now();
+      if (f.ts > 0) {
+        const dt = now - f.ts;
+        if (dt > 0) {
+          const inst = 1000 / dt;
+          f.recvFps = f.recvFps > 0 ? f.recvFps * 0.8 + inst * 0.2 : inst;
+        }
+      }
+      f.ts = now;
       // Só decodifica feeds ATIVOS: feeds fora da página atual não pagam createImageBitmap (CPU/memória).
       if (activeIdsRef.current.has(p.id)) drainDecode(p.id);
     });
@@ -584,9 +613,18 @@ export function DashboardPage() {
 
   // Conjunto ativo = feeds visíveis (página) + câmera aberta. Decodifica os recém-ativos e libera
   // o ImageBitmap dos que saíram (memória); feeds inativos param de ser decodificados (ver `frame`).
+  //
+  // 0.2 — PAUSAR A GRADE QUANDO UMA CÂMERA ESTÁ ABERTA: com `openId` setado, o conjunto ativo
+  // encolhe para SÓ a câmera aberta. Os tiles de fundo (até 5) deixam de ser decodificados aqui E
+  // param rAF/motion/draw (CameraTile vira placeholder leve — prop `paused`). O `watch` reanuncia
+  // só a aberta → o hub para de RELAYAR os frames de vídeo dos ocultos (banda/CPU do relé). O
+  // plano de controle (`analysis-tracks`, broadcast à room, não filtrado por watch) segue chegando.
+  // Reversível: ao fechar (openId=null), este efeito reroda, o conjunto volta à página inteira e o
+  // watch/decoder retomam. O cine-loop e o decode NATIVO da aberta seguem intactos (ela é a ativa).
   useEffect(() => {
-    const active = new Set<string>(pageCameras.map((c) => c.id));
+    const active = new Set<string>();
     if (openId) active.add(openId);
+    else for (const c of pageCameras) active.add(c.id);
     openIdRef.current = openId; // ref lida pelo drainDecode (aberta = decode nativo, sem resize)
     const prev = activeIdsRef.current;
     activeIdsRef.current = active;
@@ -722,6 +760,20 @@ export function DashboardPage() {
   function pickView(v: string) {
     setActiveViewId(v === "__all__" ? null : v);
   }
+
+  // ── 0.6 (ADR-009): PREFERIR O PIPELINE DO HUB por default ──
+  // O hub emite `analysis-status {engine:"hub"}` por câmera analisada; com o MOTOR LIGADO ele
+  // cria estado e analisa TODA câmera relayada (server/analysis/engine.js: onFrame→createState),
+  // logo qualquer "hub" observado significa "motor ativo". Nesse caso o default EFETIVO de uma
+  // câmera ainda sem status explícito passa a ser "hub" (não "local"/coco): evita o flash do
+  // pipeline local (coco-ssd) na janela curta até o snapshot/mudança daquela câmera chegar, e o
+  // CameraWorkspace já suprime o coco quando engine==="hub". FALLBACK preservado: sem NENHUM
+  // "hub" (motor desligado / hub antigo / download do modelo falhou) o default segue "local".
+  const hubEngineActive = useMemo(
+    () => Object.values(analysisEngines).some((e) => e === "hub"),
+    [analysisEngines],
+  );
+  const defaultEngine: "hub" | "local" = hubEngineActive ? "hub" : "local";
 
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
 
@@ -875,12 +927,15 @@ export function DashboardPage() {
                 key={`wrap-${c.id}`}
                 camera={c}
                 isOpen={c.id === openId}
+                // 0.2 — tile de FUNDO (outra câmera aberta) pausa: vira placeholder leve e desmonta
+                // o CameraWorkspace (para rAF/motion/draw). Só a câmera aberta segue processando.
+                paused={openId != null && c.id !== openId}
                 isFadiga={isFadiga(c.id)}
                 getFrame={getterFor(c.id)}
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
-                analysisEngine={analysisEngines[c.id] ?? "local"}
+                analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
                 onOpen={handleOpen}
                 onAlert={handleAlert}
@@ -913,7 +968,7 @@ export function DashboardPage() {
                 mode="full"
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
-                analysisEngine={analysisEngines[open.id] ?? "local"}
+                analysisEngine={analysisEngines[open.id] ?? defaultEngine}
                 // F2: passado também no full por simetria/F3; a decisão da F2 (comentário no
                 // rAF do CameraWorkspace) mantém o pipeline local na câmera aberta — o getter
                 // só é consumido na grade (mode≠full).

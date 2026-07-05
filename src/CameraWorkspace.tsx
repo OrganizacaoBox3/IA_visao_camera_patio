@@ -94,6 +94,7 @@ import {
   drawZoneDraft,
   drawTripwireDraft,
   drawZoneOverlays,
+  drawTelemetryHud,
   RISK_LABEL,
   type ZoneResult,
 } from "./camera/draw";
@@ -134,6 +135,17 @@ const HEAT_COLS = 32,
 // Constantes locais (NÃO editar config.ts — outra frente). Substituem o throttle de tile p/ o pesado.
 const TILE_OBJECT_INTERVAL_MS = 4000; // coco (detecção de pessoas/objetos) na grade — vs C.objectIntervalMs na aberta
 const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · MediaPipe/coco (fadiga) na grade
+
+// ── Fase 0.3 (plano-retrofit-performance) — readback de motion no MODO HUB rebaixado ──
+// No modo hub o MOTOR do hub já produz people/occupied por zona a partir dos frames que ELE
+// tem; o readback LOCAL de luma (getImageData O(pw·ph) + loop, POR FRAME de vídeo ~15fps) é a
+// maior fonte de jank na main-thread e é redundante. Rebaixamos a análise de ATIVIDADE local
+// (luma + máquina de estado) a esta cadência só p/ manter VIVO o estado/alarme de OCIOSIDADE
+// local (o hub na F1 NÃO grava alarmes — ver comentário do bloco `hubActive`): 2fps sobra p/
+// um alarme minuto-escala que confirma transições em ~900ms. O dt dos frames pulados é
+// ACUMULADO e entregue inteiro no frame analisado (tempo real intacto). O modo LOCAL (sem hub)
+// NÃO é afetado — throttle não se aplica. Leitura/objetos/fadiga seguem 100% locais e intactos.
+const HUB_MOTION_INTERVAL_MS = 500;
 
 // ── F1-C (ADR-009): análise no HUB — anti-duplicação de ingest + "hoje" servido ──
 // Cadência do refresh do acumulado "hoje" das linhas quando o MOTOR DO HUB analisa a câmera
@@ -314,6 +326,7 @@ export function CameraWorkspace({
   const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // P2: última inferência PESADA por zona (gate de tile)
   const lastFrameAtRef = useRef(0);
   const gridParityRef = useRef(false); // (3.4) alterna a análise de atividade na GRADE (frame sim, frame não)
+  const lastHubMotionAtRef = useRef(0); // Fase 0.3: último frame com readback de motion no MODO HUB (throttle)
   const activityDtRef = useRef(0); // (3.4) dt acumulado dos frames pulados → entregue inteiro no frame analisado
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
@@ -396,6 +409,10 @@ export function CameraWorkspace({
   const [erase, setErase] = useState(false);
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
+  // Fase 0.1: HUD de telemetria sobre o vídeo (câmera aberta). O toggle mora no estado (UI);
+  // o rAF/drawScene lê o REF (sem re-render por frame — a régua não pode custar frames).
+  const [hud, setHud] = useState(false);
+  const hudRef = useRef(false);
   // Backend do tfjs de detecção (worker): null até o worker reportar (não renderiza até saber).
   const [detBackend, setDetBackend] = useState<string | null>(null);
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
@@ -837,7 +854,16 @@ export function CameraWorkspace({
       // ABERTA (full) analisa todo frame como antes. A luma long-range (2.5, 1×/câmera) preserva o
       // caminho — só passa a ser produzida na cadência que sobra (a dos frames analisados).
       gridParityRef.current = !gridParityRef.current;
-      const analyzeActivity = mode === "full" || gridParityRef.current;
+      let analyzeActivity = mode === "full" || gridParityRef.current;
+      // Fase 0.3: no MODO HUB rebaixa o readback de motion local a HUB_MOTION_INTERVAL_MS (2fps) —
+      // corta o getImageData por-frame (jank) mantendo o estado/alarme de ociosidade local vivo
+      // (ver constante). O dt dos frames pulados segue ACUMULADO (activityDtRef) e entra inteiro
+      // no frame analisado, então idle/tempo real não perdem nada. `analysisEngineRef` é lido antes
+      // do `hubActive` de baixo (mesmo valor; aquele é reusado no resto do tick). Modo local: inerte.
+      if (analysisEngineRef.current === "hub" && analyzeActivity) {
+        if (now - lastHubMotionAtRef.current < HUB_MOTION_INTERVAL_MS) analyzeActivity = false;
+        else lastHubMotionAtRef.current = now;
+      }
       activityDtRef.current += frameDt;
       const activityDt = activityDtRef.current;
       if (analyzeActivity) activityDtRef.current = 0;
@@ -1320,6 +1346,10 @@ export function CameraWorkspace({
           setPresence({ now: tracks.length, peak: peakRef.current, dwell });
         }
       }
+      // Fase 0.1: custo REAL deste tick na main-thread (rolling em FrameMeter.avgProcMs) → HUD.
+      // `now` é o performance.now() do início do trabalho (pós-gate de "frame novo", pós-⏸): mede
+      // motion + inferência-agendada + laço por-zona + drawScene. Régua da câmera aberta (ms/frame).
+      meterRef.current.pushProc(performance.now() - now);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => {
@@ -1403,6 +1433,25 @@ export function CameraWorkspace({
 
     // tripwire em traçado (clique em A, arrasta até B)
     drawTripwireDraft(ctx, twDrawRef.current);
+
+    // Fase 0.1: HUD de telemetria (toggleável) — SÓ na câmera aberta (detailed). Desenhado por
+    // ÚLTIMO (sobre tudo), canto superior direito. `overlayAge` só faz sentido no modo hub
+    // (idade do último payload de track — expõe a caixa congelada a ~1fps); local → null.
+    // `dropped`/`recvFps` lidos DEFENSIVOS do FrameSource (outra frente pode expô-los; podem faltar).
+    if (hudRef.current && detailed) {
+      const eng = analysisEngineRef.current === "hub" ? "hub" : "local";
+      const age =
+        eng === "hub" && hubTracksTsRef.current > 0 ? Date.now() - hubTracksTsRef.current : null;
+      const fx = f as FrameSource & { dropped?: number; recvFps?: number };
+      drawTelemetryHud(ctx, cr, {
+        fps: meterRef.current.fps,
+        msFrame: meterRef.current.avgProcMs,
+        pipeline: eng,
+        overlayAgeMs: age,
+        dropped: typeof fx.dropped === "number" ? fx.dropped : undefined,
+        recvFps: typeof fx.recvFps === "number" ? fx.recvFps : undefined,
+      });
+    }
   }
 
   // Cine-loop / revisão / snapshot / export de clipe → hook ./camera/useCineLoop
@@ -2538,6 +2587,20 @@ export function CameraWorkspace({
           {summary || "sem zonas"}
         </span>
         <span className="kb muted">FPS {perf.fps}</span>
+        {/* Fase 0.1: toggle do HUD de telemetria sobre o vídeo (going-gray: neutro; é ferramenta
+            de medição, não anormalidade). Estado na UI; o rAF lê o ref (sem re-render por frame). */}
+        <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local) e idade do overlay">
+          <Toggle
+            aria-label="HUD de telemetria"
+            pressed={hud}
+            onPressedChange={(v) => {
+              hudRef.current = v;
+              setHud(v);
+            }}
+          >
+            HUD
+          </Toggle>
+        </Tooltip>
         {/* F1-C (ADR-009) — fonte da análise: NEUTRO (going-gray, informativo, não é anormalidade)
             e SÓ no modo hub; local = nada (comportamento atual). F3: no modo hub o worker tfjs
             local nem sobe p/ pessoas (tracks vêm do servidor) — o badge de detecção abaixo só
