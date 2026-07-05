@@ -797,9 +797,11 @@ export function DashboardPage() {
   // automático — sem flag, com fallback automático. Overrides são editados na tela /cameras.
   function transportOf(id: string): "mjpeg" | "webrtc" {
     const t = cfgOf(id).transport;
-    if (t === "mjpeg") return "mjpeg";
-    if (t === "webrtc") return "webrtc";
-    return go2rtcStreams.has(id) ? "webrtc" : "mjpeg"; // "auto": melhor disponível
+    if (t === "mjpeg") return "mjpeg"; // único FORÇA de verdade (nunca WebRTC)
+    // "webrtc" e "auto" PREFEREM WebRTC, mas só quando o go2rtc de fato serve a câmera
+    // (id ∈ streams). go2rtc fora / stream ausente → caem pra MJPEG — evita o tile preso em
+    // "loading" tentando um go2rtc indisponível (um "webrtc" fixo não deve travar o preview).
+    return go2rtcStreams.has(id) ? "webrtc" : "mjpeg";
   }
 
   // Seleção da view ativa (preferência local do operador). "__all__" = "Todas as câmeras".
