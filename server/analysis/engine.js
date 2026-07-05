@@ -14,16 +14,16 @@
 //      continua no front — alarmes de ociosidade estão FORA da F1.)
 //
 // LIGA/DESLIGA (documentado — contrato):
-//   • ANALYSIS_ENABLED=0 → motor DESLIGADO.
-//   • ANALYSIS_ENABLED=1 → motor LIGADO; se o modelo não existe, BAIXA no boot
-//     (HuggingFace, com verificação de tamanho+sha256). Download falhou →
-//     motor desliga com aviso; o hub segue normal.
-//   • ausente (default) → LIGADO se o modelo já existe em server/models/;
-//     ausente+sem modelo → desligado (log explica como ligar). Ou seja: o 1º
-//     boot com ANALYSIS_ENABLED=1 baixa o modelo; dali em diante o default liga.
-//   • FASE 4 — DETECÇÃO ATIVA POR DEFAULT: com o modelo presente o usuário NÃO precisa
-//     ligar nada; o motor sobe sozinho no boot e cobre TODA câmera do relé (exceto as em
-//     modo=fadiga, que rodam no cliente). ANALYSIS_ENABLED=0 é o único desligamento explícito.
+//   • ausente (DEFAULT) → motor LIGADO: se o modelo não existe, BAIXA no boot
+//     (HuggingFace, verificação de tamanho+sha256, escrita atômica, fallback S→N).
+//     Download falhou → motor desliga com aviso; o hub segue normal. O CORAÇÃO do
+//     produto liga e se auto-provisiona sozinho — o cliente não precisa de flag.
+//   • ANALYSIS_ENABLED=0 → motor DESLIGADO (ÚNICO escape hatch — nó sem CPU / só-vídeo).
+//   • ANALYSIS_ENABLED=1 → idêntico ao default (LIGADO + baixa); mantido por
+//     compatibilidade e para tornar a intenção explícita em scripts de deploy.
+//   • DETECÇÃO ATIVA POR DEFAULT: o motor sobe sozinho no boot e cobre TODA câmera do
+//     relé (exceto as em modo=fadiga, que rodam no cliente). "Sem modelo → motor off,
+//     hub segue" continua valendo quando o download não é possível (ex.: air-gap).
 //
 // OVERLAYS SERVIDOS (F2 — ADITIVO): a cada rodada de análise o hub emite
 // `analysis-tracks { cameraId, ts, tracks, zones }` (volatile, room "dashboards")
@@ -141,18 +141,20 @@ const TICK_MS = Math.min(250, Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_M
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
 const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
 
-// ── Auto-máscara de exclusão APRENDIDA (Fase 4 — OPT-IN, OFF por default) ─────
-// ANALYSIS_AUTOMASK: ausente/"off"/"0" (feature OFF — nada aprende, nada suprime, custo zero);
-//   "suggest" (aprende + expõe a sugestão em status() + loga, mas NÃO suprime — transparência
-//    sem risco; caminho RECOMENDADO p/ validar contra a realidade antes de esconder);
+// ── Auto-máscara de exclusão APRENDIDA (Fase 4 — "suggest" por DEFAULT, base segura) ─────
+// ANALYSIS_AUTOMASK: ausente/"suggest"/"sug"/"learn" (DEFAULT — aprende + expõe a sugestão em
+//    status() + loga, mas NÃO suprime nada — transparência sem risco: é a BASE SEGURA por só
+//    OBSERVAR, sem LGPD nem esconder pessoa; caminho RECOMENDADO p/ validar contra a realidade);
+//   "off"/"0"/"false" (feature OFF — nada aprende, nada suprime, custo zero — escape hatch);
 //   "hide"/"1"/"on" (aprende + SUPRIME as células aprendidas + loga — como a zona de exclusão
 //    manual, mas APRENDIDA). Aprende a célula do grid onde há detecção de pessoa PRESENTE
 //   ~100% do tempo E com bbox quase ESTÁTICO por uma janela ≥10min = objeto fixo lido como
 //   pessoa no piso de score (acuracia-modelos.md §2: 47-86% dos FP são poucos objetos fixos).
 //   CONSERVADOR de propósito: pessoa real num posto AINDA varia (pé/tronco oscilam, ela sai
 //   de quadro); objeto fixo não. Por isso o gate é presença altíssima + jitter baixíssimo +
-//   janela longa. Auto-suprimir é o modo ARRISCADO (pode esconder pessoa quase imóvel) → OFF.
-const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "").toLowerCase();
+//   janela longa. Auto-suprimir ("hide") é o modo ARRISCADO (pode esconder pessoa quase imóvel)
+//   → permanece OPT-IN consciente. Só o observar-e-logar ("suggest") é o default.
+const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "suggest").toLowerCase();
 const AUTOMASK_MODE = /^(1|on|hide|true)$/.test(AUTOMASK_RAW)
   ? "hide"
   : /^(suggest|sug|learn)$/.test(AUTOMASK_RAW)
@@ -890,12 +892,12 @@ async function init({ io, cameras }) {
     console.log("[analysis] motor DESLIGADO (ANALYSIS_ENABLED=0)");
     return;
   }
-  const ok = await ensureModel(want === "1");
+  // DEFAULT LIGADO: ausente (ou qualquer valor ≠ "0") → o motor BAIXA o modelo no boot e sobe.
+  // O download é seguro (sha256 + escrita atômica + fallback S→N). Só ANALYSIS_ENABLED=0 desliga.
+  const ok = await ensureModel(want !== "0");
   if (!ok) {
     console.log(
-      want === "1"
-        ? "[analysis] motor desligado (modelo indisponível)"
-        : `[analysis] motor desligado — modelo ausente em ${MODEL_PATH}. Defina ANALYSIS_ENABLED=1 para baixá-lo no boot.`,
+      `[analysis] motor desligado — modelo indisponível em ${MODEL_PATH} (download falhou; sem rede no 1º boot?). ANALYSIS_ENABLED=0 desliga o motor de propósito.`,
     );
     return;
   }

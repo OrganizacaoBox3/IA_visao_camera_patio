@@ -47,6 +47,10 @@ export default async function globalSetup() {
     AUTH_SECRET: "e2e-secret",
     SUPERADMIN_USER: "admin",
     SUPERADMIN_PASSWORD: "admin@box3",
+    // O motor de análise agora LIGA+BAIXA o modelo por default (simplificação de config: o melhor
+    // de base). O e2e testa a UI, não o motor — e o hub isolado nasce SEM modelo, então deixá-lo
+    // ligado dispararia um download de ~40MB no boot e estouraria o timeout do setup. Opt-out aqui.
+    ANALYSIS_ENABLED: "0",
     NODE_PATH: join(ROOT, "node_modules"),
   };
   for (const k of [
