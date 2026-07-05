@@ -14,6 +14,21 @@ const securityHeaders = {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { headers: securityHeaders },
+  server: {
+    headers: securityHeaders,
+    // Proxy de DEV para o go2rtc (Fases 1/3/5): o front usa o default same-origin `/go2rtc`
+    // (config.ts) e o Vite encaminha para o go2rtc :1984 — paridade com o `location /go2rtc/`
+    // do nginx em produção (que também tira o prefixo). `ws: true` = sinalização WebRTC (/api/ws).
+    // O go2rtc sobe pelo hub quando `GO2RTC_ENABLED=1`. Sem isso, o tile WebRTC fica vazio (rollback
+    // = manter a câmera em transport "mjpeg"). Override por VITE_GO2RTC_BASE se o go2rtc não for local.
+    proxy: {
+      "/go2rtc": {
+        target: "http://localhost:1984",
+        changeOrigin: true,
+        ws: true,
+        rewrite: (p) => p.replace(/^\/go2rtc/, ""),
+      },
+    },
+  },
   preview: { headers: securityHeaders },
 });
