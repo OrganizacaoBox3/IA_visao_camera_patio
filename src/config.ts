@@ -248,6 +248,20 @@ export const APP_CONFIG = {
       (import.meta.env as Record<string, string | undefined>).VITE_GO2RTC_BASE ?? "/go2rtc",
   },
 
+  // Nó de webcam (/camera) — publicação de vídeo por WebRTC/WHIP ao go2rtc (Fase 5 do retrofit).
+  // OFF por DEFAULT (VITE_WEBCAM_WHIP != "1"): o nó segue EXATAMENTE no caminho JPEG-por-socket
+  // atual, byte-a-byte. Ligado (VITE_WEBCAM_WHIP=1), o vídeo vai por RTCPeerConnection → go2rtc
+  // (`POST ${go2rtc.baseUrl}/api/webrtc?dst=<id>`) — que o navegador NÃO estrangula em 2º plano,
+  // eliminando a "câmera lenta ao minimizar". O socket segue vivo só como registro/controle.
+  // O consumidor (tile do dashboard) exige camcfg.transport="webrtc" p/ ESSA câmera (Fase 1).
+  webcam: {
+    whip: {
+      enabled: (import.meta.env as Record<string, string | undefined>).VITE_WEBCAM_WHIP === "1",
+      maxBitrateKbps: 1500, // teto de banda sensato p/ vigilância (nitidez × custo em LAN)
+      maxFramerate: 15, // fps do encoder — vigilância não precisa de 30
+    },
+  },
+
   // (Zonas-semente automáticas removidas em jul/2026 — câmera nova abre LIMPA;
   // o usuário desenha as próprias zonas. Ver src/zones.ts.)
 } as const;

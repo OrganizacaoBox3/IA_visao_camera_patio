@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
+import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera/whip";
 import { Tooltip } from "../ui";
+
+// Fase 5 (plano-retrofit-performance.md §Fase 5 + plano-fase1-go2rtc.md): transmite o vídeo do nó
+// por WebRTC/WHIP ao go2rtc em vez do loop JPEG→socket. OFF por default → nada muda (byte-a-byte).
+const WHIP_ENABLED = APP_CONFIG.webcam.whip.enabled;
 
 // Token do nó de câmera: ?key=<CAMERA_TOKEN> (enrolamento de dispositivo) ou, em fallback,
 // a sessão de um humano logado no mesmo navegador. Câmera não exige login humano.
@@ -27,6 +32,7 @@ export function CameraPage() {
 
   const [status, setStatus] = useState<Status>("connecting");
   const [hubConnected, setHubConnected] = useState(false); // estado REAL do socket (transmissão ao hub)
+  const [whipState, setWhipState] = useState<WhipState>("idle"); // estado da publicação WebRTC (Fase 5)
   const [error, setError] = useState("");
   const [profile, setProfile] = useState("");
 
@@ -47,6 +53,7 @@ export function CameraPage() {
     let audioCtx: AudioContext | null = null; // keep-alive de 2º plano (ver ensureKeepAlive)
     let onVisibility: (() => void) | null = null;
     let unlockAudio: (() => void) | null = null; // destrava o AudioContext no 1º gesto (autoplay policy)
+    let whipPublisher: WhipPublisher | null = null; // publicação WebRTC/WHIP (Fase 5; null se OFF)
 
     (async () => {
       try {
@@ -85,6 +92,27 @@ export function CameraPage() {
           );
         }
       });
+
+      // ── Fase 5: caminho WebRTC/WHIP (OFF por default) ──────────────────────────────────────────
+      // Publica o vídeo direto ao go2rtc por RTCPeerConnection (não estrangula em 2º plano → some a
+      // "câmera lenta ao minimizar"). O socket ACIMA segue vivo só como REGISTRO/controle (o hub
+      // sabe que a câmera existe, status/camcfg); NÃO instalamos o loop JPEG nem o keep-alive de
+      // áudio (WebRTC dispensa ambos). O nome do stream = id da câmera (contrato com o consumidor
+      // `/api/ws?src=<id>` do dashboard). Rollback = desligar a flag → volta ao JPEG-socket abaixo.
+      if (WHIP_ENABLED) {
+        whipPublisher = publishWebcamWhip({
+          stream: streamRef.current!,
+          streamName: idRef.current,
+          baseUrl: APP_CONFIG.go2rtc.baseUrl,
+          maxBitrateKbps: APP_CONFIG.webcam.whip.maxBitrateKbps,
+          maxFramerate: APP_CONFIG.webcam.whip.maxFramerate,
+          onState: (s) => {
+            if (alive) setWhipState(s);
+          },
+        });
+        setProfile(`WebRTC · ${APP_CONFIG.webcam.whip.maxFramerate}fps`);
+        return; // NÃO instala o pipeline JPEG-socket (o caminho abaixo é o legado/rollback)
+      }
 
       // Perfil de captura — pode ser elevado pela central (modo leitura = alta resolução).
       let frameWidth: number = APP_CONFIG.net.frameWidth;
@@ -246,25 +274,33 @@ export function CameraPage() {
       if (timer) clearInterval(timer);
       if (rvfcHandle !== null) rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
       audioCtx?.close().catch(() => {});
+      whipPublisher?.stop(); // encerra a publicação WebRTC (no-op se OFF)
       socketRef.current?.disconnect();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, [name]);
 
+  // "Transmitindo": no modo WebRTC/WHIP (Fase 5) o vídeo vai pela conexão WebRTC, então depende dela
+  // (e do socket, que registra a câmera no hub); no modo JPEG-socket (default) depende só do socket.
+  const transmitting = WHIP_ENABLED ? hubConnected && whipState === "connected" : hubConnected;
   return (
     <div className="cam-node">
       <video ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} className="hidden" />
       <div className="cam-node-badge">
         <span
-          className={`dot-status ${status === "on" ? (hubConnected ? "on" : "connecting") : status}`}
+          className={`dot-status ${status === "on" ? (transmitting ? "on" : "connecting") : status}`}
         />
         <b>{name}</b>
         <span className="muted">
           {status === "on"
-            ? hubConnected
-              ? "transmitindo ao hub"
-              : "câmera ok · reconectando ao hub…"
+            ? transmitting
+              ? WHIP_ENABLED
+                ? "transmitindo ao hub (WebRTC)"
+                : "transmitindo ao hub"
+              : WHIP_ENABLED
+                ? "câmera ok · conectando vídeo (WebRTC)…"
+                : "câmera ok · reconectando ao hub…"
             : status === "connecting"
               ? "conectando…"
               : status === "denied"
