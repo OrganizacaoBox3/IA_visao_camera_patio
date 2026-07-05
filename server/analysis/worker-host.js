@@ -29,6 +29,7 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
   let respawns = 0;
   let backoffAttempt = 0;
   let respawnTimer = null;
+  let reloading = false; // true entre reload() e o respawn — respawn IMEDIATO (troca de modelo)
 
   // CPU do worker (amostrada dos process.cpuUsage() que ele manda em cada resposta)
   let cpuSample = null; // { user, system, t }
@@ -52,6 +53,14 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
         st.inflight = 0;
       }
       if (isStopping()) return;
+      // Troca de modelo (autoscale): respawn IMEDIATO com o novo getModelPath() — não é
+      // crash, não paga backoff nem conta como respawn de falha. Gap de ~1 rodada, logado.
+      if (reloading) {
+        reloading = false;
+        console.log("[analysis] worker recarregando (troca de modelo) — respawn imediato");
+        spawnWorker();
+        return;
+      }
       respawns += 1;
       const delay = Math.min(1000 * 2 ** backoffAttempt, 30_000);
       backoffAttempt += 1;
@@ -115,6 +124,27 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
     worker.send(msg);
   }
 
+  /**
+   * Recarrega o modelo: mata o worker atual; o handler de exit respawna IMEDIATO lendo o
+   * getModelPath() ATUAL (que o autoscale já trocou via model.setActiveTier). Sem worker
+   * vivo, apenas sobe um. Idempotente enquanto um reload está em curso.
+   */
+  function reload() {
+    if (!worker) {
+      if (respawnTimer) clearTimeout(respawnTimer); // não deixa o respawn de crash pendente duplicar
+      respawnTimer = null;
+      spawnWorker();
+      return;
+    }
+    if (reloading) return;
+    reloading = true;
+    try {
+      worker.kill();
+    } catch {
+      /* ignore — o exit handler cuida do respawn */
+    }
+  }
+
   /** Métricas p/ status()/logMinute (aditivo — mesmo shape de antes). */
   function stats() {
     return { ready: workerReady, pid: workerPid, respawns, cpuPct };
@@ -132,7 +162,7 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
     }
   }
 
-  return { spawnWorker, ready, send, stats, stop };
+  return { spawnWorker, ready, send, stats, reload, stop };
 }
 
 module.exports = { createWorkerHost };

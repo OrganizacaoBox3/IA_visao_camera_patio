@@ -65,6 +65,7 @@
 "use strict";
 
 const path = require("node:path");
+const os = require("node:os");
 
 const camcfg = require("../camcfg");
 const pgstore = require("../pgstore");
@@ -73,6 +74,7 @@ const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { attributeZone, inExclusionZone } = require("./zones");
 const model = require("./model"); // catálogo/verificação/download do .onnx (fallback S→N)
+const autoscale = require("./autoscale"); // decisão PURA de tier (pick de startup + válvula de runtime)
 const { createWorkerHost } = require("./worker-host"); // ciclo de vida do worker de inferência
 const { createGo2rtcSource } = require("./go2rtc-source"); // pull frame.jpeg (Fase 3)
 const {
@@ -111,6 +113,20 @@ const TICK_MS = Math.min(250, Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_M
 // tiling do front (src/vision/detect.ts tileGrid). Fixo de propósito (YAGNI): um
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
 const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
+
+// ── Auto-dimensionamento do modelo (Onda 5 — autoscale.js) ───────────────────
+// NORTE: melhor tier que o hardware SUSTENTA, ZERO decisão do usuário. `ANALYSIS_MODEL`
+// (n|s|m) deixa de ser escolha e vira PIN opcional (escape hatch p/ ops): se setado, FIXA
+// o tier e DESLIGA o autoscale. Ausente = AUTO (pick de startup + válvula de runtime). O
+// override de path (ANALYSIS_MODEL_PATH — eval/) também desliga o autoscale (tier fora do
+// catálogo). Sem pin, o motor começa no melhor sustentável e só DESCE sob pressão medida.
+const MODEL_PIN = (process.env.ANALYSIS_MODEL || "").toLowerCase();
+const PIN_TIER = autoscale.TIERS.includes(MODEL_PIN) ? MODEL_PIN : null;
+const AUTOSCALE_OFF = !!PIN_TIER || !!process.env.ANALYSIS_MODEL_PATH;
+
+let autoTier = null; // tier ATIVO real (o engine é a autoridade; model.getActiveTier() confirma)
+let autoState = null; // estado de histerese do reducer puro (autoscale.decideRuntime)
+let switchingTier = false; // trava reentrância enquanto uma troca (download+respawn) está em curso
 
 let ctx = null; // { io, cameras } injetado pelo index.js
 let enabled = false;
@@ -424,6 +440,58 @@ function logMinute() {
   );
 }
 
+// ── Auto-dimensionamento: válvula de runtime (downgrade sob pressão medida) ──
+// Roda 1×/janela (autoscale.DEFAULTS.evalMs). Agrega a cadência ALCANÇADA × ALVO das
+// câmeras analisadas (não-fadiga) + o cpuPct do worker → decisão PURA (autoscale). Se a
+// decisão for trocar, recarrega o modelo via model.setActiveTier (ATÔMICO: reverte se o
+// download falhar) + workerHost.reload(). SEGURANÇA: em falha de troca, mantém o tier vivo
+// (nunca cego). switchingTier trava reentrância enquanto o download/respawn não termina.
+async function evaluateAutoscale() {
+  if (!enabled || stopping || AUTOSCALE_OFF || switchingTier) return;
+  let sumAch = 0;
+  let sumTgt = 0;
+  let cams = 0;
+  for (const st of states.values()) {
+    if (st.fadiga) continue; // fadiga roda no cliente — não pesa no worker do hub
+    sumAch += st.rounds.length / 60; // fps REAL da janela (rounds guarda 60s)
+    sumTgt += st.roundMs === ROUND_MS_LINE ? FPS_LINE : FPS; // alvo efetivo da câmera
+    cams += 1;
+  }
+  const sample = {
+    now: Date.now(),
+    tier: autoTier,
+    cpuPct: workerHost.stats().cpuPct,
+    achievedFps: sumAch,
+    targetFps: sumTgt,
+    cameras: cams,
+    cores: os.cpus().length,
+  };
+  const d = autoscale.decideRuntime(autoState, sample);
+  autoState = d.state;
+  if (d.action === "hold") return;
+
+  switchingTier = true;
+  try {
+    const ok = await model.setActiveTier(d.to, true);
+    if (ok) {
+      autoTier = model.getActiveTier() || d.to;
+      autoState.tier = autoTier;
+      workerHost.reload(); // respawn imediato com o novo modelo
+      console.log(`[analysis] autoscale ${d.action.toUpperCase()} ${d.from}→${autoTier}: ${d.reason}`);
+    } else {
+      // Troca falhou (download indisponível) → mantém o tier vivo. O lastSwitchAt já entrou
+      // em cooldown (evita martelar um download que falha). NUNCA fica sem modelo.
+      autoState.tier = autoTier;
+      console.warn(`[analysis] autoscale ${d.action} ${d.from}→${d.to} ABORTADO (modelo indisponível) — mantém ${autoTier}`);
+    }
+  } catch (e) {
+    autoState.tier = autoTier;
+    console.error(`[analysis] autoscale ${d.action} ${d.from}→${d.to} ERRO: ${e.message} — mantém ${autoTier}`);
+  } finally {
+    switchingTier = false;
+  }
+}
+
 // ── API pública (consumida pelo index.js / routes/analysis.js) ───────────────
 
 /** Frame do relé (webcam OU RTSP). Guarda só o MAIS NOVO por câmera (último-vence). */
@@ -527,6 +595,15 @@ function status() {
     targetFps: FPS,
     lineFps: FPS_LINE, // F4 (aditivo): cadência das câmeras com linha/tripwire
     autoMask: { mode: AUTOMASK_MODE }, // F4 (aditivo): modo global da auto-máscara ("off"|"suggest"|"hide")
+    // Onda 5 (aditivo): auto-dimensionamento do modelo — tier ativo, modo e histerese (diagnóstico).
+    autoscale: {
+      mode: AUTOSCALE_OFF ? "pin" : "auto", // "pin"=fixo (ANALYSIS_MODEL/PATH) · "auto"=dimensiona sozinho
+      tier: autoTier || model.getActiveTier(), // n|s|m ativo (null sob override de path)
+      pin: PIN_TIER || (process.env.ANALYSIS_MODEL_PATH ? "path" : null), // por que está fixo, se estiver
+      choked: autoState ? autoState.choked : 0, // janelas afogadas acumuladas (rumo a downgrade)
+      idle: autoState ? autoState.idle : 0, // janelas folgadas acumuladas (rumo a upgrade)
+      lastSwitchAt: autoState ? autoState.lastSwitchAt : 0, // ts da última troca (cooldown)
+    },
     worker: workerHost.stats(),
     // Fonte go2rtc (Fase 3, aditivo): estado do pull p/ diagnóstico.
     go2rtcPull: go2rtcSource.stats(),
@@ -544,6 +621,20 @@ async function init({ io, cameras }) {
     console.log("[analysis] motor DESLIGADO (ANALYSIS_ENABLED=0)");
     return;
   }
+  // PICK DE STARTUP (autoscale): ANTES de baixar, escolhe o melhor tier que o hardware
+  // sustenta. PIN (ANALYSIS_MODEL=n|s|m) fixa o tier; AUTO escolhe pelo orçamento (cores ×
+  // câmeras esperadas). Override de path (eval/) não mexe no catálogo. ensureModel baixa o
+  // tier corrente com o fallback S/M→N do catálogo (nunca fica sem modelo).
+  if (PIN_TIER) {
+    model.setTier(PIN_TIER);
+    console.log(`[analysis] autoscale PIN — tier fixo em ${PIN_TIER.toUpperCase()} (ANALYSIS_MODEL), auto-dimensionamento DESLIGADO`);
+  } else if (!process.env.ANALYSIS_MODEL_PATH) {
+    const cores = os.cpus().length;
+    const cameras = ctx.cameras ? ctx.cameras.size : 0;
+    const pick = autoscale.pickStartupTier({ cores, cameras });
+    model.setTier(pick);
+    console.log(`[analysis] autoscale AUTO — pick de startup ${pick.toUpperCase()} (${cores} cores, ${cameras} câmeras esperadas)`);
+  }
   // DEFAULT LIGADO: ausente (ou qualquer valor ≠ "0") → o motor BAIXA o modelo no boot e sobe.
   // O download é seguro (sha256 + escrita atômica + fallback S→N). Só ANALYSIS_ENABLED=0 desliga.
   const ok = await model.ensureModel(want !== "0");
@@ -554,6 +645,10 @@ async function init({ io, cameras }) {
     return;
   }
   enabled = true;
+  // Tier ATIVO real após o ensure (pode ter caído por fallback S/M→N no download) — é daqui
+  // que a válvula de runtime parte. O reducer nasce sem histerese acumulada.
+  autoTier = model.getActiveTier() || "s";
+  autoState = autoscale.initState(autoTier);
   workerHost.spawnWorker();
   timers.push(setInterval(tick, TICK_MS));
   timers.push(setInterval(flushAtiv, AGG_MS));
@@ -563,9 +658,13 @@ async function init({ io, cameras }) {
   // quando a câmera de linha é puxada. Inerte (no-op) enquanto go2rtc estiver desligado
   // (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
   timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE)));
+  // Válvula de runtime do autoscale: 1×/janela. Inerte (o guard AUTOSCALE_OFF retorna cedo)
+  // quando há PIN/override — mas nem agendamos nesse caso (menos ruído/CPU).
+  if (!AUTOSCALE_OFF) timers.push(setInterval(evaluateAutoscale, autoscale.DEFAULTS.evalMs));
   for (const t of timers) if (t.unref) t.unref();
   console.log(
     `[analysis] motor ATIVO — ${model.getModelSpec().label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
+      ` · tier=${autoTier}(${AUTOSCALE_OFF ? "pin" : "auto"})` +
       `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (worker process, CPU EP)`,
   );
 }

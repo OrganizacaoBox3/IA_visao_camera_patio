@@ -119,6 +119,61 @@ function getModelSpec() {
   return modelSpec;
 }
 
+// getActiveTier(): a KEY ("n"|"s"|"m") do modelSpec ATIVO — usado pelo autoscale p/ saber
+// de onde parte e por status()/diagnóstico. null quando o path foi fixado por override
+// (ANALYSIS_MODEL_PATH — eval/): fora do catálogo, sem tier nominal.
+function getActiveTier() {
+  if (MODEL_OVERRIDE) return null;
+  for (const k of Object.keys(MODELS)) if (MODELS[k] === modelSpec) return k;
+  return null;
+}
+
+// setTier(key): repointa o modelSpec/MODEL_PATH SEM baixar (setter síncrono). Usado no
+// BOOT — pelo pin (ANALYSIS_MODEL=n|s|m) e pelo pick de startup do autoscale — ANTES do
+// ensureModel() (que baixa o tier corrente com fallback S→N do catálogo). No-op sob
+// override de path (eval/ fixa o .onnx). Devolve true se trocou p/ um tier válido.
+function setTier(key) {
+  if (MODEL_OVERRIDE) return false;
+  const spec = MODELS[String(key || "").toLowerCase()];
+  if (!spec) return false;
+  modelSpec = spec;
+  MODEL_PATH = path.join(__dirname, "..", "models", spec.file);
+  return true;
+}
+
+// setActiveTier(key, allowDownload): troca de tier em RUNTIME (autoscale) de forma ATÔMICA.
+// Só assume o novo tier DEPOIS de garanti-lo no disco; se o download falhar, REVERTE p/ o
+// tier anterior (que já estava funcionando). Garantia de SEGURANÇA: o worker nunca passa a
+// apontar p/ um modelo ausente — o motor nunca fica cego por causa do autoscale. Devolve
+// true se o tier ativo virou `key`; false se manteve o anterior (inválido/override/falha).
+async function setActiveTier(key, allowDownload) {
+  if (MODEL_OVERRIDE) return false; // path fixado pelo operador — autoscale não troca
+  const spec = MODELS[String(key || "").toLowerCase()];
+  if (!spec) return false;
+  if (spec === modelSpec) return true; // já é o tier ativo
+  const prevSpec = modelSpec;
+  const prevPath = MODEL_PATH;
+  modelSpec = spec;
+  MODEL_PATH = path.join(__dirname, "..", "models", spec.file);
+  if (modelOk()) return true; // já no disco (baixado num pico anterior) — troca imediata
+  if (!allowDownload) {
+    modelSpec = prevSpec; // não pode baixar → NUNCA fica sem modelo: reverte
+    MODEL_PATH = prevPath;
+    return false;
+  }
+  try {
+    await downloadModel();
+    return true;
+  } catch (e) {
+    console.error(
+      `[analysis] troca de tier p/ ${spec.label} FALHOU: ${e.message} — mantém ${prevSpec.label} (motor segue analisando)`,
+    );
+    modelSpec = prevSpec; // REVERTE: worker continua no modelo que já estava vivo
+    MODEL_PATH = prevPath;
+    return false;
+  }
+}
+
 module.exports = {
   MODELS,
   sha256File,
@@ -127,4 +182,7 @@ module.exports = {
   ensureModel,
   getModelPath,
   getModelSpec,
+  getActiveTier,
+  setTier,
+  setActiveTier,
 };
