@@ -6,18 +6,19 @@
 // (fecha o gap do coração do produto: automask.test.js). O engine só orquestra (chama
 // amObserve por detecção, evaluateAutoMask ao fim da janela) e desenha o status.
 //
-// ANALYSIS_AUTOMASK: ausente/"suggest"/"sug"/"learn" (DEFAULT — aprende + expõe a sugestão em
-//    status() + loga, mas NÃO suprime nada — transparência sem risco: é a BASE SEGURA por só
-//    OBSERVAR, sem LGPD nem esconder pessoa; caminho RECOMENDADO p/ validar contra a realidade);
-//   "off"/"0"/"false" (feature OFF — nada aprende, nada suprime, custo zero — escape hatch);
-//   "hide"/"1"/"on" (aprende + SUPRIME as células aprendidas + loga — como a zona de exclusão
-//    manual, mas APRENDIDA). Aprende a célula do grid onde há detecção de pessoa PRESENTE
-//   ~100% do tempo E com bbox quase ESTÁTICO por uma janela ≥10min = objeto fixo lido como
-//   pessoa no piso de score (acuracia-modelos.md §2: 47-86% dos FP são poucos objetos fixos).
-//   CONSERVADOR de propósito: pessoa real num posto AINDA varia (pé/tronco oscilam, ela sai
-//   de quadro); objeto fixo não. Por isso o gate é presença altíssima + jitter baixíssimo +
-//   janela longa. Auto-suprimir ("hide") é o modo ARRISCADO (pode esconder pessoa quase imóvel)
-//   → permanece OPT-IN consciente. Só o observar-e-logar ("suggest") é o default.
+// ANALYSIS_AUTOMASK — DEFAULT "hide" (decisão de produto: MELHOR qualidade + ZERO interação do
+//   operador — o fantasma de objeto fixo some sozinho, sem máscara manual). Modos:
+//   ausente/"hide"/"1"/"on" (DEFAULT): aprende + SUPRIME as células aprendidas + loga — como a
+//     zona de exclusão manual, mas APRENDIDA. Aprende a célula do grid onde há detecção de pessoa
+//     PRESENTE ~100% do tempo E com bbox quase ESTÁTICO por uma janela ≥10min = objeto fixo lido
+//     como pessoa no piso de score (acuracia-modelos.md §2: 47-86% dos FP são poucos objetos fixos).
+//   "suggest"/"sug"/"learn": aprende + expõe em status() + loga, mas NÃO suprime (observar-e-validar);
+//   "off"/"0"/"false": feature OFF, custo zero (escape hatch).
+//   SEGURANÇA do auto-esconder: gate CONSERVADOR (presença altíssima + jitter baixíssimo + janela
+//   longa) — pessoa real num posto AINDA varia (pé/tronco oscilam, sai de quadro); objeto fixo não.
+//   E a máscara é ADAPTATIVA (reavaliada a cada janela): se a célula passa a ter MOVIMENTO (pessoa
+//   parada que se mexe, ou alguém novo), a supressão CAI sozinha → não fica cego a quem anda.
+//   Tudo é LOGADO e contado (automasked1m em status()) — nada some em silêncio.
 //
 // ENV SPRAWL (R5/A — env sprawl da auto-máscara): grid e janela (AM_COLS/AM_ROWS/AM_WIN_MS/
 // AM_MIN_ROUNDS) e o gate de presença (AM_PRESENT) eram env sem caso de uso medido — agora
@@ -28,7 +29,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "suggest").toLowerCase();
+const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "hide").toLowerCase();
 const AUTOMASK_MODE = /^(1|on|hide|true)$/.test(AUTOMASK_RAW)
   ? "hide"
   : /^(suggest|sug|learn)$/.test(AUTOMASK_RAW)

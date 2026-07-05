@@ -153,8 +153,8 @@ describe("evaluateAutoMask — gate objeto-fixo (presença + jitter + janela)", 
 });
 
 describe("configuração default (env sprawl reduzido — R5/A)", () => {
-  it("modo default é 'suggest' (base segura, só observa) e a feature está ON", () => {
-    expect(AUTOMASK_MODE).toBe("suggest");
+  it("modo default é 'hide' (decisão de produto: auto-esconde o fantasma fixo; zero interação) e ON", () => {
+    expect(AUTOMASK_MODE).toBe("hide");
     expect(AUTOMASK_ON).toBe(true);
   });
   it("grid/janela fixados nos defaults históricos (constantes, não mais env)", () => {
