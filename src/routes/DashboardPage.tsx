@@ -138,6 +138,12 @@ function loadViewPrefs(userId: string): ViewPrefs {
 // Janela de "atividade recente" para o auto-surface (ver activityScore abaixo).
 const AUTOSURFACE_WINDOW_MS = 10 * 60_000;
 
+// Auto-fallback WebRTC→MJPEG (transportOf): quando um tile/full REPORTA que o <video-stream>
+// não estabeleceu vídeo, a câmera fica em cooldown no relé MJPEG por este período. Ao expirar,
+// transportOf volta a TENTAR WebRTC (a fonte pode ter voltado); se falhar de novo, re-marca —
+// retry periódico, sem flicker rápido. Curto o bastante p/ recuperar cedo; longo p/ não piscar.
+const WEBRTC_FAIL_COOLDOWN_MS = 30_000;
+
 export function DashboardPage() {
   const { token, user, logout } = useAuth();
   const socketRef = useRef<Socket | null>(null);
@@ -175,6 +181,16 @@ export function DashboardPage() {
   // serve a câmera → "auto" resolve WebRTC; ausente / Set vazio (go2rtc fora) → "auto" resolve MJPEG.
   // Refrescado no mount + a cada ~5s pelo efeito de descoberta abaixo (GET /go2rtc/api/streams).
   const [go2rtcStreams, setGo2rtcStreams] = useState<Set<string>>(() => new Set());
+  // ── Auto-fallback WebRTC→MJPEG: cooldowns de FALHA de WebRTC por câmera ──────────────────────
+  // O bug: `transportOf` resolve WebRTC quando o go2rtc REGISTRA o stream — não quando ele tem
+  // FRAMES. Fonte caída → stream órfão → o <video-stream> quebra ("mse: unsupported url"). Quando
+  // um tile/full reporta a falha (onWebrtcFail), guardamos aqui id → TIMESTAMP DE EXPIRAÇÃO (ms).
+  // Enquanto agora < expiração, transportOf força MJPEG p/ essa câmera (mesmo com go2rtc listando
+  // o stream). Ref (não state) p/ não re-render por escrita; o re-render vem do tick abaixo, que só
+  // bumpa na TRANSIÇÃO (entrar em cooldown / expirar) — anti-flood. Vazio = comportamento atual.
+  const webrtcFailRef = useRef<Map<string, number>>(new Map());
+  // Contador que força o re-render de `transportOf` quando um cooldown entra/expira (ver acima).
+  const [, setWebrtcFailTick] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   // Modo demo ("Limite curto 10s") OFF por padrão (produção). Liga via env VITE_DEMO_MODE=1 ou toggle;
@@ -501,6 +517,18 @@ export function DashboardPage() {
         if (prev.size === ids.length && ids.every((id) => prev.has(id))) return prev;
         return new Set(ids);
       });
+      // Expira cooldowns de falha de WebRTC vencidos (auto-fallback). Ao remover, força re-render:
+      // transportOf re-resolve e a câmera TORNA A TENTAR WebRTC (a fonte pode ter voltado). Se
+      // falhar de novo, o tile re-reporta e re-entra em cooldown — retry periódico, sem flicker.
+      const now = Date.now();
+      let anyExpired = false;
+      for (const [cid, until] of webrtcFailRef.current) {
+        if (until <= now) {
+          webrtcFailRef.current.delete(cid);
+          anyExpired = true;
+        }
+      }
+      if (anyExpired) setWebrtcFailTick((n) => n + 1);
     }
     void refresh();
     const t = setInterval(refresh, 5000);
@@ -798,6 +826,13 @@ export function DashboardPage() {
   function transportOf(id: string): "mjpeg" | "webrtc" {
     const t = cfgOf(id).transport;
     if (t === "mjpeg") return "mjpeg"; // único FORÇA de verdade (nunca WebRTC)
+    // Auto-fallback: se o WebRTC FALHOU há pouco p/ esta câmera (tile/full reportou via
+    // onWebrtcFail), cai pro relé MJPEG durante o cooldown — MESMO que go2rtcStreams.has(id):
+    // registrado ≠ com frames. É este o miolo do fix (fonte caída deixa o stream órfão e o
+    // <video-stream> quebra). Vale p/ "auto" E p/ o "webrtc" manual: o webrtc factualmente
+    // quebrado usa o fallback e, ao expirar o cooldown, torna a tentar WebRTC (retry).
+    const failUntil = webrtcFailRef.current.get(id);
+    if (failUntil != null && failUntil > Date.now()) return "mjpeg";
     // "webrtc" e "auto" PREFEREM WebRTC, mas só quando o go2rtc de fato serve a câmera
     // (id ∈ streams). go2rtc fora / stream ausente → caem pra MJPEG — evita o tile preso em
     // "loading" tentando um go2rtc indisponível (um "webrtc" fixo não deve travar o preview).
@@ -838,6 +873,19 @@ export function DashboardPage() {
 
   // Abertura de câmera (1.6): callback único e estável; o tile chama com o próprio id.
   const handleOpen = useCallback((id: string) => setOpenId(id), []);
+
+  // Auto-fallback WebRTC→MJPEG (CONTRATO com CameraTile/CameraWorkspace): a câmera aberta ou um
+  // tile chama isto quando o <video-stream> não estabelece vídeo (sem videoWidth em ~7s) ou erra.
+  // Marca a câmera em cooldown (agora + COOLDOWN) e força re-render → transportOf re-resolve p/
+  // MJPEG só naquela câmera. Identidade estável (useCallback []): não quebra o React.memo do tile.
+  const handleWebrtcFail = useCallback((cameraId: string) => {
+    const now = Date.now();
+    const prevUntil = webrtcFailRef.current.get(cameraId);
+    webrtcFailRef.current.set(cameraId, now + WEBRTC_FAIL_COOLDOWN_MS);
+    // Só re-renderiza na TRANSIÇÃO p/ cooldown (câmera ainda não estava em MJPEG por falha). Um
+    // re-report enquanto já em cooldown apenas ESTENDE o prazo, sem re-render — evita flood.
+    if (prevUntil == null || prevUntil <= now) setWebrtcFailTick((n) => n + 1);
+  }, []);
 
   return (
     <div className="page">
@@ -983,6 +1031,8 @@ export function DashboardPage() {
                 analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
                 transport={transportOf(c.id)}
+                // Auto-fallback: o tile avisa quando o <video-stream> WebRTC não estabelece vídeo.
+                onWebrtcFail={handleWebrtcFail}
                 onOpen={handleOpen}
                 onAlert={handleAlert}
               />
@@ -1017,6 +1067,8 @@ export function DashboardPage() {
                 // (<video-stream>); go2rtc fora / stream ausente → MJPEG (relé JPEG, atual). Sem a
                 // prop o full seguia sempre MJPEG. `open` é não-nulo neste ramo → open.id é seguro.
                 transport={transportOf(open.id)}
+                // Auto-fallback: a câmera aberta avisa se o WebRTC não estabelecer vídeo → MJPEG.
+                onWebrtcFail={handleWebrtcFail}
                 demoMode={demoMode}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
                 analysisEngine={analysisEngines[open.id] ?? defaultEngine}

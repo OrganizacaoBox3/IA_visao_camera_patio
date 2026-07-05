@@ -191,6 +191,11 @@ function ensureVideoStreamRegistered(): Promise<unknown> {
 // da câmera aberta) via bucket de tempo no gate de "frame novo" do rAF. O vídeo NÃO depende disto
 // — só o trabalho de análise/desenho, que assim não re-carrega a main-thread no rAF (~60fps).
 const WEBRTC_TICK_MS = 66;
+// Fase 1 (go2rtc): janela p/ o WebRTC da TELA CHEIA estabelecer vídeo. Após pedir o src, damos este
+// prazo p/ o <video> decodificar o 1º quadro (videoWidth>0). Esgotado sem vídeo (fonte caída no
+// go2rtc, sem peer, sem quadro), reportamos a falha 1× → o pai remonta a câmera aberta em MJPEG. ~7s
+// cobre negociação WebRTC + fallback interno (mse/hls/mjpeg) do componente sem punir uma fonte lenta.
+const WEBRTC_FAIL_MS = 7000;
 
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
@@ -318,6 +323,11 @@ type Props = {
   // A mudança é ADITIVA (um branch webrtc); o caminho MJPEG fica INTACTO. Só vale no mode "full"
   // (na grade o webrtc é servido pelo CameraTile/Go2rtcVideoTile, não por este componente).
   transport?: "mjpeg" | "webrtc";
+  // Fase 1 (go2rtc): fallback de transporte da TELA CHEIA. Chamado UMA vez (por câmera/montagem)
+  // quando o WebRTC do fullscreen NÃO estabelece vídeo (fonte caída no go2rtc / sem quadro em
+  // WEBRTC_FAIL_MS). O pai (DashboardPage) usa o id p/ remontar a câmera aberta em MJPEG. NÃO é
+  // chamado em sucesso. Só vale no branch webrtc (mode "full"); inerte no MJPEG. OPCIONAL.
+  onWebrtcFail?: (cameraId: string) => void;
 };
 
 const C = APP_CONFIG.detection;
@@ -335,6 +345,7 @@ export function CameraWorkspace({
   analysisEngine = "local",
   getHubAnalysis,
   transport = "mjpeg",
+  onWebrtcFail,
 }: Props) {
   // Fase 1 (go2rtc): transporte WebRTC ativo? Só no mode "full" (a grade webrtc é do CameraTile).
   // `webrtc` governa o RENDER (camada de vídeo + key do canvas); `webrtcRef` é o espelho lido DENTRO
@@ -519,14 +530,31 @@ export function CameraWorkspace({
   useEffect(() => {
     webrtcRef.current = webrtc;
   }, [webrtc]);
+  // Espelho estável do callback de fallback (lido dentro do efeito assíncrono/timer sem re-armar a
+  // fiação a cada re-render que troca a identidade da prop — mesmo padrão de onAlertRef).
+  const onWebrtcFailRef = useRef(onWebrtcFail);
+  useEffect(() => {
+    onWebrtcFailRef.current = onWebrtcFail;
+  }, [onWebrtcFail]);
   // Registra o custom element e aplica src/mode/media/background IMPERATIVAMENTE via ref (as props
   // do <video-stream> são SETTERS JS, não atributos), APÓS o define — mesmo padrão do CameraTile.
   // mjpeg/ausente → efeito INERTE (nem importa o JS): caminho atual byte-a-byte.
   useEffect(() => {
     if (!webrtc) return;
     let cancelled = false;
+    // Guard: onWebrtcFail dispara NO MÁXIMO 1× por (câmera, montagem). Como o efeito re-arma em
+    // [webrtc, cameraId], a flag reseta ao trocar de câmera/entrar em cena → 1 reporte por tentativa.
+    let reported = false;
+    let failTimer: ReturnType<typeof setTimeout> | null = null;
     const node = videoStreamRef.current; // estável por toda a vida do elemento (captura p/ cleanup)
     const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(cameraId)}`;
+    // Detecção de fonte caída (WebRTC da tela cheia sem vídeo): reporta o id UMA vez → o pai remonta
+    // em MJPEG. `cancelled` impede reporte tardio após desmontar/trocar (o pai já não espera).
+    const failNow = () => {
+      if (reported || cancelled) return;
+      reported = true;
+      onWebrtcFailRef.current?.(cameraId);
+    };
     ensureVideoStreamRegistered()
       .then(() => customElements.whenDefined("video-stream"))
       .then(() => {
@@ -537,12 +565,26 @@ export function CameraWorkspace({
         el.background = false; // solta o stream quando a aba/tela sai de vista
         if (el.video) el.video.controls = false; // sem controles nativos (o palco trata a interação)
         el.src = src;
+        // Reforço: erro nativo do <video> interno derruba pro MJPEG já (não espera o prazo). O timer
+        // continua sendo o mecanismo primário — o <video> pode nem existir/emitir erro numa fonte caída.
+        el.video?.addEventListener("error", failNow);
+        // Timer primário: ao fim de WEBRTC_FAIL_MS, se o <video> não decodificou quadro (videoWidth
+        // 0/undefined) → falha. videoWidth>0 = vídeo estabelecido → NÃO chama. Lê a ref no disparo
+        // (o <video> pode ser criado após este ponto) e é limpo no cleanup abaixo.
+        failTimer = setTimeout(() => {
+          failTimer = null;
+          if (!videoStreamRef.current?.video?.videoWidth) failNow();
+        }, WEBRTC_FAIL_MS);
       })
       .catch(() => {
-        // go2rtc indisponível → sem vídeo; o overlay ainda desenha (canvas transparente sobre o fundo).
+        // go2rtc indisponível (JS não registrou / whenDefined rejeitou) → WebRTC não vai subir: cai
+        // pro MJPEG já, em vez de deixar a tela cheia sem vídeo.
+        failNow();
       });
     return () => {
       cancelled = true;
+      if (failTimer) clearTimeout(failTimer); // limpa o prazo ao desmontar/trocar de câmera
+      node?.video?.removeEventListener("error", failNow);
       try {
         node?.ondisconnect?.(); // solta ws/pc JÁ ao desmontar/trocar (não espera o timeout interno)
       } catch {

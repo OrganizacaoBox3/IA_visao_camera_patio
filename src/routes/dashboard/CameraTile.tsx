@@ -26,22 +26,54 @@ function ensureVideoStreamRegistered(): Promise<unknown> {
 // Wrapper React do <video-stream>. As props do componente são SETTERS JS (não atributos HTML), então
 // aplicamos src/mode/media/background IMPERATIVAMENTE via ref, APÓS o elemento estar definido (evita
 // o bug de "upgrade" em que uma prop setada antes do define vira data-property que sombreia o setter).
+// Janela p/ o WebRTC estabelecer vídeo antes de declarar a fonte caída. Generosa o bastante p/
+// cobrir a negociação ICE/handshake em rede lenta (webrtc→mse→hls fallback interno do componente),
+// curta o bastante p/ o operador não encarar um tile preto: ~7s.
+const WEBRTC_ESTABLISH_MS = 7000;
+
 function Go2rtcVideoTile({
   camId,
   getHubAnalysis,
+  onWebrtcFail,
 }: {
   camId: string;
   // Fase 2: getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
   // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
   getHubAnalysis?: () => HubAnalysis | null;
+  // Detecção de fonte caída (go2rtc sem frames p/ esta câmera): chamado UMA vez com o id quando o
+  // WebRTC não estabelece vídeo dentro da janela. O pai (DashboardPage) cai o tile pra MJPEG.
+  // Ausente → sem fallback; o tile segue tentando WebRTC (comportamento atual).
+  onWebrtcFail?: (cameraId: string) => void;
 }) {
   const ref = useRef<VideoStreamElement | null>(null);
   useEffect(() => {
     let cancelled = false;
+    // Guard de 1×: o pai remonta esta câmera em MJPEG ao receber o fail, mas até o unmount chegar
+    // não podemos disparar de novo (timer + evento de erro podem correr juntos).
+    let fired = false;
+    // Timer da janela de estabelecimento; declarado aqui p/ o cleanup (que roda síncrono, antes do
+    // .then) enxergá-lo por closure e limpá-lo no unmount.
+    let failTimer: ReturnType<typeof setTimeout> | undefined;
     // Captura o nó já no corpo do efeito (React já atribuiu o ref no commit) p/ usar no cleanup
     // sem reler `ref.current` lá — o elemento é estável por toda a vida do componente.
     const node = ref.current;
     const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(camId)}`;
+    // Sucesso: o <video> interno recebeu quadro (dimensões conhecidas) → NÃO é fonte caída. Cancela
+    // o timer p/ nunca reportar falha. `loadeddata`/`resize` cobrem MSE, HLS e WebRTC.
+    let onVideoReady: (() => void) | undefined;
+    let videoEl: HTMLVideoElement | undefined;
+    const clearFailTimer = () => {
+      if (failTimer !== undefined) {
+        clearTimeout(failTimer);
+        failTimer = undefined;
+      }
+    };
+    const reportFail = () => {
+      if (cancelled || fired) return;
+      fired = true;
+      clearFailTimer();
+      onWebrtcFail?.(camId);
+    };
     ensureVideoStreamRegistered()
       .then(() => customElements.whenDefined("video-stream"))
       .then(() => {
@@ -52,13 +84,37 @@ function Go2rtcVideoTile({
         el.media = "video"; // vigilância silenciosa: sem áudio
         el.background = false; // pausa/solta o stream quando fora de tela/aba
         if (el.video) el.video.controls = false; // tile limpo + clique abre a câmera
+        // Detecção robusta de FALHA sem tocar no video-rtc.js: se, ao fim da janela, o <video>
+        // interno não tem quadro (videoWidth === 0), a fonte não estabeleceu → reporta 1×. Se
+        // estabelecer antes disso, `loadeddata` cancela o timer (nunca reporta).
+        videoEl = el.video;
+        if (videoEl) {
+          onVideoReady = () => {
+            if ((videoEl?.videoWidth ?? 0) > 0) clearFailTimer();
+          };
+          videoEl.addEventListener("loadeddata", onVideoReady);
+          videoEl.addEventListener("resize", onVideoReady);
+        }
+        failTimer = setTimeout(() => {
+          failTimer = undefined;
+          if (cancelled || fired) return;
+          // videoWidth > 0 ⇒ vídeo estabeleceu (WebRTC/MSE/HLS); só reporta se seguir zerado.
+          if ((el.video?.videoWidth ?? 0) === 0) reportFail();
+        }, WEBRTC_ESTABLISH_MS);
         el.src = src;
       })
       .catch(() => {
-        // go2rtc indisponível → tile fica vazio; rollback é a flag transport:"mjpeg" (tile atual).
+        // go2rtc indisponível (falha ao registrar/definir o componente) → também é fonte
+        // inalcançável: reporta p/ cair pra MJPEG. Rollback global é a flag transport:"mjpeg".
+        reportFail();
       });
     return () => {
       cancelled = true;
+      clearFailTimer();
+      if (videoEl && onVideoReady) {
+        videoEl.removeEventListener("loadeddata", onVideoReady);
+        videoEl.removeEventListener("resize", onVideoReady);
+      }
       // PAUSA DE FUNDO / desmontagem: solta o stream JÁ (não espera o timeout de 5s do componente).
       try {
         node?.ondisconnect?.();
@@ -66,7 +122,7 @@ function Go2rtcVideoTile({
         /* no-op */
       }
     };
-  }, [camId]);
+  }, [camId, onWebrtcFail]);
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
@@ -140,6 +196,10 @@ type CameraTileProps = {
   // "mjpeg"/ausente → tile atual (canvas + relé socket.io), INALTERADO. OPT-IN por câmera (camcfg),
   // OFF por default. Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
+  // Fonte caída no caminho WebRTC: o tile chama UMA vez com o próprio id quando o <video-stream>
+  // não estabelece vídeo (go2rtc sem frames p/ a câmera). O DashboardPage cai o tile pra MJPEG.
+  // Estável/por id (memo-friendly, como onOpen); ausente → sem fallback (segue tentando WebRTC).
+  onWebrtcFail?: (cameraId: string) => void;
   // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
   // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
   // MESMA função e só re-renderizam quando os próprios dados mudam.
@@ -163,6 +223,7 @@ export const CameraTile = memo(function CameraTile({
   analysisEngine,
   getHubAnalysis,
   transport,
+  onWebrtcFail,
   onOpen,
   onAlert,
 }: CameraTileProps) {
@@ -185,6 +246,7 @@ export const CameraTile = memo(function CameraTile({
         key={`rtc-${camera.id}`}
         camId={camera.id}
         getHubAnalysis={getHubAnalysis}
+        onWebrtcFail={onWebrtcFail}
       />
     </div>
   ) : isFadiga ? (
