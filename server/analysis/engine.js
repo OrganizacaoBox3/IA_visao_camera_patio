@@ -45,6 +45,22 @@
 // câmera RTSP analisada. Webcam segue podendo ser rebaixada p/ SHED_WEBCAM_FPS
 // (2fps ≥ cadência de análise — o motor não perde nada e o nó economiza CPU).
 //
+// FONTE go2rtc (Fase 3 — ADITIVO, OFF por default): além do relé, o motor pode
+// PUXAR frames do go2rtc (GET /api/frame.jpeg?src=<cameraId>) a ~ANALYSIS_FPS e
+// alimentar o MESMO pipeline (mesmo st.latest / tick / worker / ingest / emit).
+// Resolve o caveat da câmera que transmite por WHIP (Fase 5): ela deixa de mandar
+// relé socket → hoje não é analisada; com o pull, volta a ser. QUEM é puxada:
+//   • só quando go2rtc está habilitado (go2rtc.enabled()) — logo, OFF por default;
+//   • câmera que o go2rtc conhece (GET /api/streams) E cujo RELÉ está PARADO
+//     (sem `onFrame` há PULL_STALE_MS) → evita puxar E receber relé (dobraria a
+//     AQUISIÇÃO de frame; a inferência nunca dobra — st.latest é último-vence).
+//   • ANALYSIS_SOURCE=go2rtc força o pull de TODAS as streams do go2rtc (mesmo as
+//     que mandam relé); custo: aquisição redundante nessas — use só se pedir.
+// CONTENÇÃO: o pull respeita a cadência do worker (não puxa se já há frame pronto
+// p/ a próxima rodada) e faz BACKOFF exponencial por câmera se o go2rtc não
+// responde (stream ainda sem produtor / go2rtc reiniciando). LGPD: JPEG puxado é
+// EFÊMERO em memória, alimenta o worker por IPC e nada é gravado (igual ao relé).
+//
 // LGPD/ADR-002: frames continuam EFÊMEROS em memória (hub→worker via IPC);
 // persiste-se SÓ indicadores/metadados, como hoje.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +73,7 @@ const crypto = require("node:crypto");
 
 const camcfg = require("../camcfg");
 const pgstore = require("../pgstore");
+const go2rtc = require("../go2rtc"); // Fase 3: fonte alternativa de frames (pull frame.jpeg)
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { attributeZone, inExclusionZone } = require("./zones");
@@ -113,6 +130,20 @@ const TICK_MS = Math.min(250, Math.max(50, Math.round(ROUND_MS / 4)));
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
 const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
 
+// ── Fonte go2rtc (Fase 3): pull de frame.jpeg p/ câmeras SEM relé (ex.: WHIP) ──
+// ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
+// outro valor → modo "relay-less" (puxa só quem não manda relé). ANALYSIS_GO2RTC_PULL=0
+// desliga o pull mesmo com go2rtc ligado (escape hatch).
+const PULL_FORCE_ALL = String(process.env.ANALYSIS_SOURCE || "").toLowerCase() === "go2rtc";
+const PULL_OPT_OUT = /^(0|false|off|no)$/i.test(String(process.env.ANALYSIS_GO2RTC_PULL || ""));
+// Relé considerado PARADO após isto sem onFrame → câmera vira elegível ao pull. Maior que
+// ROUND_MS p/ um relé só levemente atrasado não disparar pull redundante.
+const PULL_STALE_MS = Math.max(3000, ROUND_MS * 3);
+const PULL_TIMEOUT_MS = Math.max(500, Number(process.env.ANALYSIS_GO2RTC_TIMEOUT_MS) || 2000);
+const STREAMS_REFRESH_MS = Math.max(1000, Number(process.env.ANALYSIS_GO2RTC_STREAMS_MS) || 4000);
+const PULL_BACKOFF_BASE_MS = 2000;
+const PULL_BACKOFF_MAX_MS = 30_000;
+
 let ctx = null; // { io, cameras } injetado pelo index.js
 let enabled = false;
 let stopping = false;
@@ -128,6 +159,14 @@ let seq = 0;
 /** cameraId → estado por câmera (tracker/counter/zonas/fila/métricas) */
 const states = new Map();
 const timers = [];
+
+// ── Fonte go2rtc: descoberta de streams + estado de pull por câmera ──────────
+let go2rtcStreams = new Set(); // ids que o go2rtc conhece agora (cache, refrescado @STREAMS_REFRESH_MS)
+let streamsAt = 0; // epoch ms da última TENTATIVA de refresh
+let streamsInflight = false; // um GET /api/streams em voo
+let streamsFails = 0; // refreshes seguidos falhos (limpa o cache após alguns)
+/** cameraId → { inflight, nextAt, fails } — controle de pull/backoff por câmera */
+const pulls = new Map();
 
 // CPU do worker (amostrada dos process.cpuUsage() que ele manda em cada resposta)
 let cpuSample = null; // { user, system, t }
@@ -294,6 +333,8 @@ function createState(id) {
     inflight: 0,
     lastSentAt: 0,
     lastFrameAt: Date.now(),
+    lastRelayAt: 0, // último frame vindo do RELÉ (só onFrame) — base da decisão de pull
+    source: "relay", // origem do último frame: "relay" | "go2rtc" (aditivo no status)
     errors: 0,
     tracker: createByteTracker({ highScore: HIGH_SCORE, iouThreshold: 0.25, ttlMs: TTL_MS }),
     counter: createCounter(camcfg.getTripwires(id), {
@@ -479,8 +520,95 @@ function prune() {
   for (const [id, st] of states) {
     if (now - st.lastFrameAt > PRUNE_MS) {
       states.delete(id);
+      pulls.delete(id);
       emitAnalysisStatus(id, null);
     }
+  }
+}
+
+// ── Fonte go2rtc (Fase 3): descoberta + pull de frame.jpeg (alimenta st.latest) ──
+/** Pull ativo? Só com o motor ligado, go2rtc habilitado e sem opt-out. OFF por default (go2rtc é OFF). */
+function pullActive() {
+  return enabled && !stopping && !PULL_OPT_OUT && go2rtc.enabled();
+}
+
+/** Frame PUXADO do go2rtc: mesmo destino do relé (st.latest, último-vence). NÃO mexe em lastRelayAt. */
+function ingestPulled(cameraId, buf) {
+  if (!enabled || stopping) return;
+  const id = String(cameraId);
+  const st = states.get(id) || createState(id);
+  const now = Date.now();
+  st.lastFrameAt = now;
+  st.source = "go2rtc";
+  st.latest = { buf, ts: now };
+}
+
+/** GET /api/streams → conjunto de ids que o go2rtc conhece (RTSP do yaml + WHIP dinâmicos). */
+async function refreshStreams() {
+  if (streamsInflight) return;
+  const now = Date.now();
+  if (now - streamsAt < STREAMS_REFRESH_MS) return;
+  streamsInflight = true;
+  streamsAt = now;
+  const { host, port } = go2rtc.apiTarget();
+  try {
+    const res = await fetch(`http://${host}:${port}/api/streams`, { signal: AbortSignal.timeout(PULL_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    go2rtcStreams = new Set(data && typeof data === "object" ? Object.keys(data) : []);
+    streamsFails = 0;
+  } catch {
+    // go2rtc fora/subindo: mantém o cache por algumas tentativas, depois esvazia (para de puxar fantasmas)
+    streamsFails += 1;
+    if (streamsFails >= 3) go2rtcStreams = new Set();
+  } finally {
+    streamsInflight = false;
+  }
+}
+
+/** Puxa 1 frame.jpeg do go2rtc p/ a câmera e alimenta o pipeline. Backoff por câmera em falha. */
+async function pullFrame(id, ps) {
+  ps.inflight = true;
+  const { host, port } = go2rtc.apiTarget();
+  try {
+    const res = await fetch(`http://${host}:${port}/api/frame.jpeg?src=${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(PULL_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ab = await res.arrayBuffer();
+    if (!ab.byteLength) throw new Error("frame vazio");
+    ps.fails = 0;
+    ps.nextAt = 0;
+    ingestPulled(id, Buffer.from(ab)); // JPEG efêmero → worker por IPC → nada gravado (LGPD)
+  } catch (e) {
+    ps.fails += 1;
+    const delay = Math.min(PULL_BACKOFF_BASE_MS * 2 ** (ps.fails - 1), PULL_BACKOFF_MAX_MS);
+    ps.nextAt = Date.now() + delay; // stream ainda sem produtor / go2rtc reiniciando → espaça as tentativas
+    if (ps.fails <= 2 || ps.fails % 20 === 0)
+      console.warn(`[analysis:${id}] pull go2rtc falhou (${ps.fails}): ${e && e.message ? e.message : e}`);
+  } finally {
+    ps.inflight = false;
+  }
+}
+
+/** Ronda de pull (@ROUND_MS): descobre streams e puxa as câmeras elegíveis (relay-less OU força). */
+function pullTick() {
+  if (!pullActive()) return;
+  void refreshStreams(); // debounced internamente (@STREAMS_REFRESH_MS)
+  if (!go2rtcStreams.size) return;
+  const now = Date.now();
+  for (const id of go2rtcStreams) {
+    const st = states.get(id);
+    // ANTI-DOBRA: no modo relay-less, câmera com relé FRESCO não é puxada (já recebe frame de graça).
+    // Em ANALYSIS_SOURCE=go2rtc força-se o pull de todas (custo de aquisição redundante assumido).
+    if (!PULL_FORCE_ALL && st && now - st.lastRelayAt < PULL_STALE_MS) continue;
+    // CADÊNCIA/CONTENÇÃO: se já há frame pronto p/ a próxima rodada, não acumula (o worker consome
+    // a ~ROUND_MS via tick — pull mais rápido só sobrescreveria st.latest e gastaria rede à toa).
+    if (st && st.latest) continue;
+    let ps = pulls.get(id);
+    if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0 }));
+    if (ps.inflight || now < ps.nextAt) continue; // um pull por câmera em voo; respeita o backoff
+    void pullFrame(id, ps);
   }
 }
 
@@ -489,7 +617,8 @@ function logMinute() {
   const parts = [];
   for (const [id, st] of states) {
     const fps = Math.round((st.rounds.length / 60) * 100) / 100;
-    parts.push(`${id}${st.longRange ? "[LR]" : ""}: ${fps}fps ${st.lastMs}ms`);
+    const src = st.source === "go2rtc" ? "[g2r]" : "";
+    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms`);
   }
   console.log(
     `[analysis] worker ${workerReady ? "ok" : "fora"} pid=${workerPid} cpu~${cpuPct}% · ${parts.join(" · ")}`,
@@ -503,8 +632,11 @@ function onFrame(cameraId, buf, ts) {
   if (!enabled || stopping || !cameraId || !buf) return;
   const id = String(cameraId);
   const st = states.get(id) || createState(id);
-  st.lastFrameAt = Date.now();
-  st.latest = { buf, ts: ts || st.lastFrameAt };
+  const now = Date.now();
+  st.lastFrameAt = now;
+  st.lastRelayAt = now; // relé ativo → em modo "relay-less" esta câmera não é puxada do go2rtc
+  st.source = "relay";
+  st.latest = { buf, ts: ts || now };
 }
 
 /** Mudança de camcfg (teed pelo index.js a partir do evento "camcfg-updated"). */
@@ -551,6 +683,7 @@ function status() {
       dets1m,
       excluded1m, // aditivo: dets de pessoa suprimidas por zona de exclusão em 60s
       longRange: st.longRange, // F3 (aditivo): true = rodada com tiling 2×2 no worker
+      source: st.source, // aditivo: origem do último frame ("relay" | "go2rtc")
     };
   }
   return {
@@ -558,6 +691,8 @@ function status() {
     model: path.basename(MODEL_PATH),
     targetFps: FPS,
     worker: { ready: workerReady, pid: workerPid, respawns, cpuPct },
+    // Fonte go2rtc (Fase 3, aditivo): estado do pull p/ diagnóstico.
+    go2rtcPull: { active: pullActive(), mode: PULL_FORCE_ALL ? "all" : "relay-less", streams: go2rtcStreams.size },
     perCamera,
   };
 }
@@ -587,6 +722,9 @@ async function init({ io, cameras }) {
   timers.push(setInterval(flushAtiv, AGG_MS));
   timers.push(setInterval(prune, 60_000));
   timers.push(setInterval(logMinute, 60_000));
+  // Fonte go2rtc (Fase 3): ronda de pull @ROUND_MS. Inerte (no-op) enquanto go2rtc estiver
+  // desligado (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
+  timers.push(setInterval(pullTick, ROUND_MS));
   for (const t of timers) if (t.unref) t.unref();
   console.log(`[analysis] motor ATIVO — ${modelSpec.label} no hub @${FPS}fps/câmera (worker process, CPU EP)`);
 }
