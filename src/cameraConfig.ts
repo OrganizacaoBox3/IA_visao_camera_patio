@@ -33,7 +33,13 @@ export type CameraCfg = {
 const DEFAULT: CameraCfg = {
   modo: "atividade",
   pontoLeitura: APP_CONFIG.reading.defaultPonto,
-  capture: "alta",
+  // MELHOR QUALIDADE COMO BASE (norte "zero escolha"): a câmera NOVA nasce em "maxima" (1920,
+  // JPEG 0.92 — ver reading.capturePresets). O operador não precisa subir resolução câmera-a-câmera;
+  // a melhor imagem já vem por default. Só afeta o caminho MJPEG/leitura+webcam-relé; o WebRTC
+  // codec-copy do RTSP já entrega o nativo (a melhor imagem lá é automática, sem preset). Tradeoff
+  // honesto: "maxima" pede ~6fps (vs 8 em "alta") p/ caber os pixels a mais — nitidez > cadência
+  // numa captura de vigilância. Escape hatch p/ cena com banda/CPU restrita: baixar p/ "alta"/"media".
+  capture: "maxima",
   selectedClasses: [...OBJECT_KEYS],
   longRange: false,
   transport: "auto",
@@ -57,7 +63,12 @@ export function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCf
       typeof c.pontoLeitura === "string" && c.pontoLeitura.trim()
         ? c.pontoLeitura
         : DEFAULT.pontoLeitura,
-    capture: c.capture === "media" || c.capture === "maxima" ? c.capture : "alta",
+    // Valor salvo VÁLIDO é preservado (o operador pode ter baixado p/ "media"/"alta" numa cena
+    // restrita); ausente/inválido cai no DEFAULT — hoje "maxima" (melhor imagem sem escolha).
+    capture:
+      c.capture === "media" || c.capture === "alta" || c.capture === "maxima"
+        ? c.capture
+        : DEFAULT.capture,
     selectedClasses: sel.length ? sel : [...OBJECT_KEYS],
     longRange: c.longRange === true, // opt-in; qualquer coisa != true (inclusive ausente) → false
     // Retrocompat: overrides antigos ("mjpeg"/"webrtc") são PRESERVADOS; ausente/inválido → "auto"

@@ -235,9 +235,13 @@ export const APP_CONFIG = {
     // super-compressão só piorava a qualidade sem ganho real → revertida p/ valores mais nítidos.
     // Trade-off: +decode/+banda por frame, aceitável em LAN. O modo LEITURA continua sobrepondo com
     // alta resolução própria (reading.capturePresets) via evento `capture` — não é afetado por aqui.
+    // MJPEG é o FALLBACK (o caminho fluido é o WebRTC): não precisa do máximo absoluto, mas NÍTIDO.
+    // Equilíbrio nitidez×custo declarado: 1280px mantido de propósito — o gargalo real é CPU/decode na
+    // main-thread (não a banda; rede é LAN), e subir a largura encareceria o decode sem ganho visível
+    // no tile. Quem precisa do máximo absoluto usa o WebRTC (nativo) ou o preset "maxima" da leitura.
     frameWidth: 1280, // largura do frame enviado (era 960) — mais nitidez p/ tile/full; leitura usa preset próprio
     frameFps: 12, // frames/s — mantido (não é o gargalo; 12 dá fluidez sem saturar a main-thread)
-    jpegQuality: 0.85, // qualidade do JPEG (era 0.75) — menos artefato de re-encode da webcam já comprimida
+    jpegQuality: 0.9, // qualidade do JPEG (0.75→0.85→0.9): sem super-compressão; menos artefato de re-encode
   },
 
   // Gateway de vídeo go2rtc (Fase 1 do retrofit-performance / plano-fase1-go2rtc.md). OPT-IN por
@@ -268,8 +272,14 @@ export const APP_CONFIG = {
       // "attempt": tenta WHIP por default; só "0" desliga (escape hatch). Consumido em CameraPage.
       enabled: env("VITE_WEBCAM_WHIP") !== "0",
       probeTimeoutMs: 6000, // janela do probe: sem WHIP estabelecido até aqui → cai p/ JPEG (auto)
-      maxBitrateKbps: 1500, // teto de banda sensato p/ vigilância (nitidez × custo em LAN)
-      maxFramerate: 15, // fps do encoder — vigilância não precisa de 30
+      // MELHOR QUALIDADE COMO BASE (norte "zero escolha"): o WebRTC/WHIP NÃO é estrangulado como o
+      // MJPEG (é o caminho fluido), então dá p/ pedir o IDEAL do device — 1080p30 (whip.ts pede
+      // 1920×1080@30 por constraint `ideal`; o device entrega o melhor que suporta, com fallback
+      // automático se recusar). Tradeoff honesto: ~5 Mbps por webcam publicada (vs 1.5) e mais CPU
+      // de encode no nó — aceitável em LAN, que é o alvo. Bitrate coerente com 1080p30 (H.264/VP8
+      // a ~4–6 Mbps é nítido sem estourar). Escape hatch p/ link fraco: reduzir estes tetos.
+      maxBitrateKbps: 5000, // teto de banda coerente com 1080p30 (era 1500 p/ 720p15)
+      maxFramerate: 30, // fps do encoder — captura fluida (era 15); device com menos cai sozinho
     },
   },
 

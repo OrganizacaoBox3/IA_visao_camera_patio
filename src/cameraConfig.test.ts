@@ -12,7 +12,7 @@ describe("normalizeCfg — defaults e saneamento", () => {
     expect(d).toEqual({
       modo: "atividade",
       pontoLeitura: APP_CONFIG.reading.defaultPonto,
-      capture: "alta",
+      capture: "maxima",
       selectedClasses: [...OBJECT_KEYS],
       longRange: false,
       transport: "auto",
@@ -27,10 +27,10 @@ describe("normalizeCfg — defaults e saneamento", () => {
     expect(normalizeCfg({ modo: "coisa" as never }).modo).toBe("atividade");
   });
 
-  it("capture: aceita media/maxima; qualquer outro vira 'alta'", () => {
+  it("capture: aceita media/alta/maxima; ausente/inválido vira 'maxima' (melhor por default)", () => {
     expect(normalizeCfg({ capture: "media" }).capture).toBe("media");
     expect(normalizeCfg({ capture: "maxima" }).capture).toBe("maxima");
-    expect(normalizeCfg({ capture: "ultra" as never }).capture).toBe("alta");
+    expect(normalizeCfg({ capture: "ultra" as never }).capture).toBe("maxima");
   });
 
   it("selectedClasses: filtra chaves desconhecidas; vazio após filtrar → todas", () => {

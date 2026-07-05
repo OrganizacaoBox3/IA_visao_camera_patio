@@ -36,9 +36,9 @@ export interface WhipOptions {
   streamName: string;
   /** Base do go2rtc (APP_CONFIG.go2rtc.baseUrl), ex.: "/go2rtc" (same-origin) ou "http://host:1984". */
   baseUrl: string;
-  /** Teto de banda do encoder (kbps). Default 1500. */
+  /** Teto de banda do encoder (kbps). Default 5000 (coerente com 1080p30 — o WebRTC não é estrangulado). */
   maxBitrateKbps?: number;
-  /** Teto de fps do encoder. Default 15. */
+  /** Teto de fps do encoder. Default 30 (captura fluida; device com menos cai sozinho). */
   maxFramerate?: number;
   /** ICE servers (STUN/TURN). Vazio por default — em LAN não é preciso (go2rtc dá candidates host). */
   iceServers?: RTCIceServer[];
@@ -58,8 +58,8 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
     stream,
     streamName,
     baseUrl,
-    maxBitrateKbps = 1500,
-    maxFramerate = 15,
+    maxBitrateKbps = 5000,
+    maxFramerate = 30,
     iceServers = [],
     onState,
   } = opts;
@@ -123,11 +123,14 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
       return; // sem vídeo não há o que publicar
     }
 
-    // Baixa resolução/fps na fonte (best-effort) p/ conter banda; ignora se o device recusar.
+    // MELHOR imagem como base: pede o IDEAL do device (1080p @ maxFramerate) por constraint `ideal`
+    // — o navegador entrega a maior resolução/fps que a webcam suporta e aproxima quando não bate
+    // exato (NÃO é `exact`, então nunca falha por não ter o valor). `frameRate.max` limita o teto de
+    // fps p/ o encoder (banda). Best-effort: se o device recusar a constraint, segue com o track cru.
     try {
       await track.applyConstraints({
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
         frameRate: { ideal: maxFramerate, max: maxFramerate },
       });
     } catch {

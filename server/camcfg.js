@@ -118,7 +118,7 @@ function cleanCamConfig(c) {
   return {
     modo: ZONE_MODES.has(c.modo) ? c.modo : "atividade",
     pontoLeitura: str(c.pontoLeitura),
-    capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "alta",
+    capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "maxima",
     // Transporte de vídeo (Fase 1/go2rtc): default "mjpeg" (comportamento atual/rollback).
     // Só "webrtc" muda o tile p/ <video-stream> servido pelo go2rtc — feature-flag por câmera.
     transport: TRANSPORTS.has(c.transport) ? c.transport : "auto",
