@@ -139,8 +139,12 @@ function loadSources() {
   return [];
 }
 
-function redact(url) {
-  return String(url).replace(/\/\/([^@/]+)@/, "//***@");
+// Redige credenciais embutidas em URL (`//user:pass@host`). GLOBAL (todas as ocorrências) e
+// aplicável a texto livre (log do ffmpeg), não só à URL — a userinfo pode aparecer em qualquer
+// posição de uma linha de stderr. Segurança (R1): tudo que vira `lastError` é BROADCAST a todos
+// os painéis via `camera-status`; nenhuma senha pode escapar por aí.
+function redact(s) {
+  return String(s).replace(/\/\/[^/@\s]+@/g, "//***@");
 }
 
 /** Extrai JPEGs completos (FFD8..FFD9) do buffer; devolve o resto (parcial). */
@@ -240,15 +244,17 @@ function spawnFfmpeg(st) {
       st.lastError = "ffmpeg não encontrado (defina FFMPEG_PATH)";
       setState(st, "error");
     } else {
-      st.lastError = e.message;
-      console.error(`[rtsp:${st.id}] erro:`, e.message);
+      st.lastError = redact(e.message);
+      console.error(`[rtsp:${st.id}] erro:`, redact(e.message));
     }
   });
   proc.stderr.on("data", (d) => {
     // Com -loglevel error o stderr só traz erros reais (raro). Guardamos a ÚLTIMA linha
     // para diagnosticar a queda no "close" — antes era drenado e descartado (morte cega).
+    // R1 (segurança): REDIGIMOS a linha AQUI, na fonte — assim `lastStderr` já nasce sem
+    // credencial e todo consumidor (lastError broadcast, logs, msg de "desistiu") herda seguro.
     const line = String(d).trim().split(/\r?\n/).pop();
-    if (line) st.lastStderr = line;
+    if (line) st.lastStderr = redact(line);
   });
   proc.stdout.on("data", (chunk) => {
     if (st.stopped || st.idle) return; // descarta resíduo de um proc morrendo (idle/remoção)
@@ -500,6 +506,7 @@ module.exports = {
   setAnalysisViewer,
   statuses,
   loadSources,
+  redact, // exposto p/ teste (R1): é o controle de segurança que impede credencial no camera-status
   FFMPEG_BIN,
   resolveFfmpegBin,
 };

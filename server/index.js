@@ -16,6 +16,10 @@ const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
+// Helpers HTTP/auth (json/bearer/requireAuth/requireSuper/requireConfigurer) e shed por audiência
+// extraídos deste arquivo (Onda C do retrofit): index.js é composição/bootstrap.
+const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
+const { createShed } = require("./shed");
 
 // Grupos de rotas HTTP (corpos dos handlers). Cada módulo expõe handle(req,res,ctx) e
 // devolve true quando tratou a requisição (resposta enviada), senão false → o dispatch segue.
@@ -35,53 +39,35 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 
 // API HTTP do hub (login etc.). socket.io anexa a este server e intercepta /socket.io/;
 // as demais rotas caem aqui. Em produção o nginx faz proxy de /api/ e /socket.io/ → hub.
+// R2: a Promise SEMPRE resolve/rejeita — nunca fica pendurada (antes, o `destroy()` no overflow
+// travava o handler p/ sempre). Overflow → rejeita (marcado `.tooLarge` p/ o dispatch responder
+// 413); `close` sem `end` (conexão abortada) → resolve com o que chegou; `error` → rejeita.
+// NÃO destruímos o socket no overflow: removemos só o listener de `data` (para de acumular — sem
+// crescimento de memória; o TCP faz backpressure) para que o dispatch AINDA consiga enviar a
+// resposta 413 pelo mesmo socket. Destruir aqui derrubaria a conexão antes da resposta.
 function readBody(req, limit = 10_000) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let b = "";
-    req.on("data", (c) => {
+    let done = false;
+    const settle = (fn, arg) => {
+      if (done) return;
+      done = true;
+      req.removeListener("data", onData);
+      fn(arg);
+    };
+    const onData = (c) => {
       b += c;
-      if (b.length > limit) req.destroy();
-    });
-    req.on("end", () => resolve(b));
+      if (b.length > limit) {
+        const err = new Error("corpo excede o limite");
+        err.tooLarge = true;
+        settle(reject, err);
+      }
+    };
+    req.on("data", onData);
+    req.on("end", () => settle(resolve, b));
+    req.on("close", () => settle(resolve, b));
+    req.on("error", (e) => settle(reject, e));
   });
-}
-function json(res, code, obj) {
-  res.writeHead(code, { "content-type": "application/json" });
-  res.end(JSON.stringify(obj));
-}
-function bearer(req) {
-  const h = req.headers["authorization"] || "";
-  return h.startsWith("Bearer ") ? h.slice(7) : "";
-}
-// devolve o usuário autenticado (qualquer papel), ou responde 401 e devolve null
-function requireAuth(req, res) {
-  const u = users.verifyToken(bearer(req));
-  if (!u) {
-    json(res, 401, { error: "não autenticado" });
-    return null;
-  }
-  return u;
-}
-// devolve o superadmin autenticado, ou responde 401/403 e devolve null
-function requireSuper(req, res) {
-  const u = requireAuth(req, res);
-  if (!u) return null;
-  if (u.papel !== "superadmin") {
-    json(res, 403, { error: "acesso restrito ao superadmin" });
-    return null;
-  }
-  return u;
-}
-// RBAC Setup × Live (Onda C item 12): devolve o usuário que PODE configurar (superadmin OU
-// engenheiro), ou responde 401/403. Usado pelos endpoints de saúde de alarmes (shelve/unshelve).
-function requireConfigurer(req, res) {
-  const u = requireAuth(req, res);
-  if (!u) return null;
-  if (!users.canConfigure(u.papel)) {
-    json(res, 403, { error: "acesso restrito à equipe de configuração" });
-    return null;
-  }
-  return u;
 }
 
 const httpServer = createServer(async (req, res) => {
@@ -115,8 +101,19 @@ const httpServer = createServer(async (req, res) => {
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
     if (await routeAnalysis.handle(req, res, ctx)) return;
-  } catch {
-    return json(res, 400, { error: "requisição inválida" });
+  } catch (err) {
+    // R3: distingue erro do CLIENTE (corpo grande/malformado → 4xx) de erro INTERNO (bug → 500),
+    // em vez de 400 cego p/ tudo. E LOGA — antes, um defeito de server virava 400 silencioso.
+    if (err && err.tooLarge) {
+      console.warn(`[http] corpo grande demais: ${req.method} ${req.url}`);
+      return json(res, 413, { error: "corpo grande demais" });
+    }
+    if (err instanceof SyntaxError) {
+      // JSON.parse malformado no corpo — erro do cliente.
+      return json(res, 400, { error: "requisição inválida" });
+    }
+    console.error(`[http] erro ao processar ${req.method} ${req.url}:`, err && err.stack ? err.stack : err);
+    return json(res, 500, { error: "erro interno" });
   }
 
   res.writeHead(404);
@@ -183,73 +180,10 @@ const broadcast = () => {
 // `dash-legacy`, recebendo TODOS os frames (comportamento atual preservado). Só o evento `frame`
 // é filtrado por room — `cameras`/`camera-status`/`alarm-*`/`camcfg-updated` seguem em "dashboards".
 //
-// ESPECTADOR de uma câmera = socket em `cam:<id>` OU em `dash-legacy`. Sem espectador por
-// SHED_IDLE_MS (debounce — paginar não derruba stream), a câmera é REBAIXADA: RTSP entra em
-// "idle" (ffmpeg morto, sem contar como erro/reconexão) e webcam recebe `capture { fps: baixo }`.
-// Ao ganhar espectador, religa IMEDIATAMENTE (sweepShed roda no `watch`/conexão além do timer).
-const SHED_IDLE_MS = Number(process.env.SHED_IDLE_MS ?? 60_000);
-const SHED_SWEEP_MS = Number(process.env.SHED_SWEEP_MS ?? 5_000);
-const SHED_WEBCAM_FPS = Number(process.env.SHED_WEBCAM_FPS ?? 2);
-// fps default do nó webcam (espelha APP_CONFIG.net.frameFps em src/config.ts): o hub não conhece
-// o default do nó, então restaura com este valor quando NÃO há um set-capture manual guardado.
-const WEBCAM_DEFAULT_FPS = Number(process.env.WEBCAM_DEFAULT_FPS ?? 12);
-
-/** id -> último perfil pedido via `set-capture` (não deixar o shed sobrescrever o operador) */
-const lastCaptureCfg = new Map();
-/** id -> epoch ms de quando ficou SEM espectador (debounce do shed) */
-const idleSince = new Map();
-/** ids de webcam atualmente rebaixadas para fps baixo */
-const shedWebcams = new Set();
-
-function viewersOf(id) {
-  const rooms = io.sockets.adapter.rooms;
-  return (rooms.get(`cam:${id}`)?.size ?? 0) + (rooms.get("dash-legacy")?.size ?? 0);
-}
-
-function shedCamera(cam) {
-  if (cam.kind === "rtsp") {
-    rtsp.idleSource(cam.id); // idempotente: no-op se já idle/parada
-    return;
-  }
-  if (shedWebcams.has(cam.id)) return;
-  const target = socketById.get(cam.id);
-  if (!target) return;
-  shedWebcams.add(cam.id);
-  target.emit("capture", { fps: SHED_WEBCAM_FPS });
-  console.log(`[shed] ${cam.id} sem espectador — webcam rebaixada p/ ${SHED_WEBCAM_FPS}fps`);
-}
-
-function restoreCamera(cam) {
-  if (cam.kind === "rtsp") {
-    rtsp.wakeSource(cam.id); // idempotente: no-op se não está idle
-    return;
-  }
-  if (!shedWebcams.has(cam.id)) return;
-  shedWebcams.delete(cam.id);
-  const target = socketById.get(cam.id);
-  if (!target) return;
-  const manual = lastCaptureCfg.get(cam.id);
-  target.emit("capture", manual ?? { fps: WEBCAM_DEFAULT_FPS });
-  console.log(`[shed] ${cam.id} ganhou espectador — perfil de captura restaurado`);
-}
-
-function sweepShed() {
-  const now = Date.now();
-  for (const cam of cameras.values()) {
-    if (viewersOf(cam.id) > 0) {
-      idleSince.delete(cam.id);
-      restoreCamera(cam);
-    } else if (!idleSince.has(cam.id)) {
-      idleSince.set(cam.id, now);
-    } else if (now - idleSince.get(cam.id) >= SHED_IDLE_MS) {
-      shedCamera(cam);
-    }
-  }
-  // poda estado de câmeras que saíram da lista
-  for (const id of idleSince.keys()) if (!cameras.has(id)) idleSince.delete(id);
-  for (const id of shedWebcams) if (!cameras.has(id)) shedWebcams.delete(id);
-}
-setInterval(sweepShed, SHED_SWEEP_MS);
+// A LÓGICA de rebaixamento/religamento por audiência vive em ./shed.js (extraída na Onda C do
+// retrofit). Aqui só instanciamos com as dependências e chamamos a API pública (sweepShed/
+// setLastCapture/onCameraConnected) nos pontos do fluxo de socket abaixo.
+const shed = createShed({ io, cameras, socketById, rtsp });
 
 io.on("connection", (socket) => {
   const role = socket.handshake.query.role;
@@ -260,7 +194,7 @@ io.on("connection", (socket) => {
     cameras.set(id, { id, label });
     socketById.set(id, socket);
     socket.data.cameraId = id;
-    shedWebcams.delete(id); // nó (re)conectou no perfil default — estado de shed anterior não vale mais
+    shed.onCameraConnected(id); // nó (re)conectou no perfil default — estado de shed anterior não vale mais
     io.to("dashboards").emit("cameras", cameraList());
     io.to("dashboards").emit("camera-status", { id, state: "online", label, kind: "browser" });
     console.log(`[camera+] ${label} (${id}) · total=${cameras.size}`);
@@ -289,7 +223,7 @@ io.on("connection", (socket) => {
     // Retrocompat (2.1): todo dashboard começa na room LEGADA (recebe TODOS os frames, como hoje).
     // Um dashboard novo emite `watch` e migra para rooms por câmera; um antigo segue recebendo tudo.
     socket.join("dash-legacy");
-    sweepShed(); // espectador legado chegou — religa imediatamente câmeras que estavam em shed
+    shed.sweepShed(); // espectador legado chegou — religa imediatamente câmeras que estavam em shed
     socket.emit("cameras", cameraList());
     // Estado inicial por câmera p/ este dashboard (RTSP: do ingestor; navegador: já conectadas = online).
     for (const s of rtsp.statuses()) socket.emit("camera-status", s);
@@ -320,7 +254,7 @@ io.on("connection", (socket) => {
         if (room.startsWith("cam:") && !want.has(room)) socket.leave(room);
       }
       for (const room of want) socket.join(room);
-      sweepShed(); // religa NA HORA câmeras que ganharam espectador (o debounce só vale p/ shed)
+      shed.sweepShed(); // religa NA HORA câmeras que ganharam espectador (o debounce só vale p/ shed)
     });
 
     // Central define o perfil de captura por câmera (ex.: leitura = alta resolução).
@@ -329,7 +263,7 @@ io.on("connection", (socket) => {
       if (!cfg || !cfg.id) return;
       // Guarda o último perfil pedido pelo operador: o shed (2.1) restaura ESTE perfil ao religar,
       // não o default — o rebaixamento automático nunca sobrescreve uma intenção manual.
-      lastCaptureCfg.set(String(cfg.id), { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
+      shed.setLastCapture(cfg.id, { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
       const target = socketById.get(String(cfg.id));
       if (target) target.emit("capture", { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
     });

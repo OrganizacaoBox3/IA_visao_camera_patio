@@ -151,17 +151,33 @@ function saveFile() {
   }
 }
 // Views: substitui a lista inteira (delete-all + reinsert mantendo a ordem via `ord`).
+// R4: TRANSAÇÃO numa única conexão do pool — o delete-all + N inserts é atômico. Se um insert
+// falhar, ROLLBACK preserva as views anteriores (antes, uma falha parcial zerava a lista global).
 async function persistViews() {
   if (!usingPg) return saveFile();
-  await db.query("delete from app_views");
-  for (let i = 0; i < views.length; i++) {
-    const v = views[i];
-    await db.query("insert into app_views (id,name,cameras,ord) values ($1,$2,$3,$4)", [
-      v.id,
-      v.name,
-      JSON.stringify(v.cameraIds),
-      i,
-    ]);
+  const client = await db.getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("delete from app_views");
+    for (let i = 0; i < views.length; i++) {
+      const v = views[i];
+      await client.query("insert into app_views (id,name,cameras,ord) values ($1,$2,$3,$4)", [
+        v.id,
+        v.name,
+        JSON.stringify(v.cameraIds),
+        i,
+      ]);
+    }
+    await client.query("commit");
+  } catch (e) {
+    try {
+      await client.query("rollback");
+    } catch {
+      /* rollback best-effort: a conexão pode já estar quebrada */
+    }
+    throw e;
+  } finally {
+    client.release();
   }
 }
 // Tripwires: substitui as linhas de UMA câmera (upsert; remove a linha se ficou vazia).
