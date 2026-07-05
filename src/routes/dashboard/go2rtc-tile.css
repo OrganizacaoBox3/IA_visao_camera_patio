@@ -1,0 +1,16 @@
+/* Tile de vídeo via WebRTC (go2rtc) — Fase 1. Só entra quando a câmera tem transport:"webrtc".
+   O <video-stream> é um <video> nativo: preenche a viewport do tile (mesma caixa do canvas MJPEG).
+   Overlay de caixas é Fase 2 (canvas transparente por cima); aqui é só o vídeo fluido. */
+.rtc-vp video-stream {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.rtc-vp video-stream video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #05080c;
+}

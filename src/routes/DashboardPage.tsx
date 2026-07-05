@@ -748,6 +748,12 @@ export function DashboardPage() {
   function isFadiga(id: string): boolean {
     return cfgOf(id).modo === "fadiga";
   }
+  // Fase 1 (go2rtc): transporte de vídeo por câmera. A flag `transport` vive no camcfg (contrato
+  // com a frente do servidor; aditivo). Leitura DEFENSIVA (cast) para não depender do schema ainda
+  // em evolução: qualquer valor != "webrtc" (inclusive ausente) → "mjpeg" = tile atual, OFF por default.
+  function transportOf(id: string): "mjpeg" | "webrtc" {
+    return (cfgOf(id) as { transport?: unknown }).transport === "webrtc" ? "webrtc" : "mjpeg";
+  }
   function setKind(id: string, fadiga: boolean) {
     setCfgs((prev) => {
       const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" };
@@ -937,6 +943,7 @@ export function DashboardPage() {
                 status={statuses[c.id]}
                 analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
+                transport={transportOf(c.id)}
                 onOpen={handleOpen}
                 onAlert={handleAlert}
               />

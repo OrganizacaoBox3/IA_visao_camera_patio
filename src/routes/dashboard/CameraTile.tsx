@@ -1,10 +1,69 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
+import { APP_CONFIG } from "../../config";
+import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import { Tooltip } from "../../ui";
 import { type Camera, type CameraStatus } from "./types";
+import "./go2rtc-tile.css";
+
+// ── Fase 1 (plano-fase1-go2rtc.md): transporte de vídeo via WebRTC do go2rtc ────────────────────
+// OPT-IN por câmera (camcfg `transport:"webrtc"`; default "mjpeg" = tile atual, byte-a-byte). Quando
+// ligado, o tile exibe o vídeo por `<video-stream>` (WebRTC/MSE/HLS/MJPEG auto-negociado, decode por
+// HW fora da main-thread) em vez do canvas alimentado pelo relé socket.io. Overlay de caixas é Fase 2.
+//
+// Registro do custom element: `video-stream.js` é vendorizado (self-host, sem CDN) e importado
+// DINAMICAMENTE 1× — só quando o 1º tile WebRTC monta (câmeras em "mjpeg" nunca carregam o JS).
+let videoStreamModule: Promise<unknown> | null = null;
+function ensureVideoStreamRegistered(): Promise<unknown> {
+  if (!videoStreamModule) videoStreamModule = import("../../vendor/go2rtc/video-stream.js");
+  return videoStreamModule;
+}
+
+// Wrapper React do <video-stream>. As props do componente são SETTERS JS (não atributos HTML), então
+// aplicamos src/mode/media/background IMPERATIVAMENTE via ref, APÓS o elemento estar definido (evita
+// o bug de "upgrade" em que uma prop setada antes do define vira data-property que sombreia o setter).
+function Go2rtcVideoTile({ camId }: { camId: string }) {
+  const ref = useRef<VideoStreamElement | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Captura o nó já no corpo do efeito (React já atribuiu o ref no commit) p/ usar no cleanup
+    // sem reler `ref.current` lá — o elemento é estável por toda a vida do componente.
+    const node = ref.current;
+    const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(camId)}`;
+    ensureVideoStreamRegistered()
+      .then(() => customElements.whenDefined("video-stream"))
+      .then(() => {
+        if (cancelled || !node) return;
+        const el = node;
+        // Ordem importa: config ANTES de `src` (o setter de src dispara a conexão).
+        el.mode = "webrtc,mse,hls,mjpeg";
+        el.media = "video"; // vigilância silenciosa: sem áudio
+        el.background = false; // pausa/solta o stream quando fora de tela/aba
+        if (el.video) el.video.controls = false; // tile limpo + clique abre a câmera
+        el.src = src;
+      })
+      .catch(() => {
+        // go2rtc indisponível → tile fica vazio; rollback é a flag transport:"mjpeg" (tile atual).
+      });
+    return () => {
+      cancelled = true;
+      // PAUSA DE FUNDO / desmontagem: solta o stream JÁ (não espera o timeout de 5s do componente).
+      try {
+        node?.ondisconnect?.();
+      } catch {
+        /* no-op */
+      }
+    };
+  }, [camId]);
+  return (
+    <div className="tile-vp rtc-vp">
+      <video-stream ref={ref} />
+    </div>
+  );
+}
 
 // Estado de conexão por câmera (contrato A4). Sem evento `camera-status` → assume "online".
 // "Going gray" (Onda A): base neutra/cinza; cor saturada SÓ para anormalidade. Mapa de tokens
@@ -66,6 +125,10 @@ type CameraTileProps = {
   // `analysis-tracks` do hub; o CameraWorkspace desenha esses tracks na grade em vez de
   // rodar inferência local. OPCIONAL/retrocompatível (ausente → pipeline local).
   getHubAnalysis?: () => HubAnalysis | null;
+  // Fase 1 (go2rtc): transporte de vídeo do tile. "webrtc" → exibe via <video-stream> (go2rtc);
+  // "mjpeg"/ausente → tile atual (canvas + relé socket.io), INALTERADO. OPT-IN por câmera (camcfg),
+  // OFF por default. Primitiva → amigável ao React.memo abaixo.
+  transport?: "mjpeg" | "webrtc";
   // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
   // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
   // MESMA função e só re-renderizam quando os próprios dados mudam.
@@ -88,6 +151,7 @@ export const CameraTile = memo(function CameraTile({
   status,
   analysisEngine,
   getHubAnalysis,
+  transport,
   onOpen,
   onAlert,
 }: CameraTileProps) {
@@ -99,7 +163,14 @@ export const CameraTile = memo(function CameraTile({
     <div className="tile tile-open">aberta no painel</div>
   ) : paused ? (
     // 0.2 — outra câmera aberta: placeholder leve; o feed processador fica DESMONTADO (sem rAF).
+    // No caminho WebRTC isto também DESMONTA o <video-stream> → solta o stream (pausa de fundo).
     <div className="tile tile-open">em pausa</div>
+  ) : transport === "webrtc" ? (
+    // Fase 1: vídeo fluido via go2rtc. Só entra com a flag ligada; substitui o canvas MJPEG. Sem
+    // inferência local aqui (o overlay de caixas do hub é Fase 2). Clique abre a câmera, como nos demais.
+    <div className="tile" onClick={openSelf}>
+      <Go2rtcVideoTile key={`rtc-${camera.id}`} camId={camera.id} />
+    </div>
   ) : isFadiga ? (
     <FadigaView
       key={`fad-${camera.id}`}

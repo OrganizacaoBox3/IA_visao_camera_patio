@@ -237,6 +237,17 @@ export const APP_CONFIG = {
     jpegQuality: 0.85, // qualidade do JPEG (era 0.75) — menos artefato de re-encode da webcam já comprimida
   },
 
+  // Gateway de vídeo go2rtc (Fase 1 do retrofit-performance / plano-fase1-go2rtc.md). OPT-IN por
+  // câmera via camcfg `transport:"webrtc"` (default "mjpeg" = tile atual, inalterado). Servido
+  // SAME-ORIGIN sob `/go2rtc/` (reverse-proxy → :1984), como já fazemos com `/socket.io/` e `/api/`;
+  // o nome do stream = id da câmera. O <video-stream> assina o WS de sinalização em
+  // `${baseUrl}/api/ws?src=<cameraId>` (o setter http→ws do componente cuida do protocolo).
+  // Override por VITE_GO2RTC_BASE (ex.: dev apontando direto p/ `http://<host>:1984`).
+  go2rtc: {
+    baseUrl:
+      (import.meta.env as Record<string, string | undefined>).VITE_GO2RTC_BASE ?? "/go2rtc",
+  },
+
   // (Zonas-semente automáticas removidas em jul/2026 — câmera nova abre LIMPA;
   // o usuário desenha as próprias zonas. Ver src/zones.ts.)
 } as const;
