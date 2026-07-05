@@ -102,8 +102,8 @@ Legenda categoria: **(D)** deployment · **(Q)** qualidade (alvo) · **(T)** tun
 | Var                         | Arquivo:linha        | Default | Controla                                          | Cat |
 | --------------------------- | -------------------- | ------- | ------------------------------------------------- | --- |
 | **`ANALYSIS_ENABLED`**      | `engine.js:888`      | (auto)  | `0`=off; `1`=liga **e baixa o modelo no boot**; ausente=roda **só se o modelo já existe** | **Q** |
-| **`ANALYSIS_MODEL`**        | `engine.js:116`      | `s`     | `n`\|`s`\|`m` — tamanho/recall do modelo           | **Q** |
-| **`ANALYSIS_AUTOMASK`**     | `automask.js`        | **suggest** | `off`\|`suggest`\|`hide` — defesa a FP de objeto fixo (Onda 1: default→suggest) | **Q**/T |
+| **`ANALYSIS_MODEL`**        | `autoscale.js`       | **auto** | AUTO-dimensiona n/s/m por CPU (Onda 3); env vira PIN opcional de ops | ~~Q~~→D |
+| **`ANALYSIS_AUTOMASK`**     | `automask.js`        | **hide** | auto-esconde o FP de objeto fixo (decisão de produto: zero interação); off/suggest = opt-in | ~~Q~~→T |
 | `ANALYSIS_SOURCE`           | `engine.js:173`      | (relay-less) | `go2rtc`=puxa todas as streams do gateway     | Q/T |
 | `ANALYSIS_GO2RTC_PULL`      | `engine.js:174`      | on      | opt-out do pull mesmo com go2rtc ligado           | T   |
 | `ANALYSIS_MODEL_PATH`       | `engine.js:115`, `worker.js:53` | catálogo | fixa o `.onnx` (usado pelo `eval/`)     | T/D |
