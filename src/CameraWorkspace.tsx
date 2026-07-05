@@ -88,11 +88,13 @@ import {
   drawTelemetryHud,
   RISK_LABEL,
   type ZoneResult,
+  type TrackBox,
 } from "./camera/draw";
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import { useTelemetry } from "./camera/useTelemetry";
 import { useWebrtcTransport } from "./camera/useWebrtcTransport";
-import { useHubAnalysis, applyHubAnalysis, easeHubTracks, HUB_EASE_FACTOR } from "./camera/useHubAnalysis";
+import { useHubAnalysis, applyHubAnalysis, HUB_TRACKS_STALE_MS } from "./camera/useHubAnalysis";
+import { TrackInterpolator, toDisplayTracks } from "./camera/interpolate";
 import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
 import { MODE_TONE } from "./camera/tabs/tone";
 import { ZonasTab } from "./camera/tabs/ZonasTab";
@@ -446,10 +448,12 @@ export function CameraWorkspace({
     hubZonesRef,
     hubTracksTsRef,
     hubFirstSeenRef,
-    hubEaseRef,
     hubFlowRef,
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
+  // Interpolador DISPLAY-ONLY das caixas do hub na CÂMERA FOCADA (o MESMO puro da grade —
+  // camera/interpolate.ts). 1 instância por workspace; lido/ingerido no drawScene (modo hub).
+  const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
 
   // ── Tripwires (linhas de contagem) ── hook dedicado (./camera/useTripwires).
   // Estado/refs/editor + ciclo de vida (load/migração/sync ADR-006 + fiação do counter).
@@ -1343,15 +1347,24 @@ export function CameraWorkspace({
     // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
     if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
 
-    // ── SUAVIZAÇÃO DISPLAY-ONLY das caixas do hub (deslize em vez de salto) ─────────────────────
-    // No modo HUB os tracks chegam em cadência baixa (~1fps; ~6fps focado) e a bbox CRUA SALTA entre
-    // payloads. easeHubTracks desliza a bbox EXIBIDA até o alvo (bbox exata) por id — SÓ p/ DESENHO.
-    // A LÓGICA (contagem/exclusão/tripwire/ocupação) JÁ RODOU acima sobre `tracksRef` EXATO; aqui só
-    // muda o que se VÊ. Modo LOCAL (coco-ssd, fallback ~3fps) NÃO suaviza: usa o track cru, como hoje.
+    // ── SUAVIZAÇÃO DISPLAY-ONLY das caixas do hub (interpolação por velocidade + fade) ───────────
+    // No modo HUB os tracks chegam em cadência baixa (~1fps; ~6fps focado) e a bbox CRUA congela+SALTA
+    // entre payloads. UNIFICADO com a grade: reusa o MESMO TrackInterpolator puro (camera/interpolate.ts)
+    // — ingere o payload (dedupe por ts, igual ao TrackOverlay) e AMOSTRA a bbox no tempo real; a caixa
+    // acompanha a pessoa e quem some faz FADE (opacity → drawTracks), não congela. A LÓGICA (contagem/
+    // exclusão/tripwire/ocupação) JÁ RODOU acima sobre `tracksRef` EXATO; aqui só muda o que se VÊ:
+    // toDisplayTracks monta o shape de desenho a partir do sample() + firstSeen (do hubFirstSeenRef,
+    // mantido pelo applyHubAnalysis). Modo LOCAL (coco-ssd) NÃO interpola: usa o track cru, como hoje.
     const hubEngine = analysisEngineRef.current === "hub";
-    const displayTracks = hubEngine
-      ? easeHubTracks(tracksRef.current, hubEaseRef.current, HUB_EASE_FACTOR)
-      : tracksRef.current;
+    let displayTracks: ReadonlyArray<TrackBox> = tracksRef.current;
+    if (hubEngine) {
+      const nowMs = performance.now();
+      const hd = getHubAnalysisRef.current?.() ?? null;
+      // Ingere só payload FRESCO (mesmo limiar do applyHubAnalysis/TrackOverlay): payload velho não
+      // ancora keyframe em dado morto — as caixas vivas fazem fade e somem.
+      if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) hubInterpRef.current.ingest(hd, nowMs);
+      displayTracks = toDisplayTracks(hubInterpRef.current.sample(nowMs), hubFirstSeenRef.current, nowMs);
+    }
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)

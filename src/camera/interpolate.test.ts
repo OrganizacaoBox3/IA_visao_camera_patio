@@ -6,15 +6,19 @@ import { describe, it, expect } from "vitest";
 import {
   lerpBbox,
   TrackInterpolator,
+  toDisplayTracks,
   DEFAULT_INTERP,
   type Snapshot,
   type Bbox,
 } from "./interpolate";
 
 const box = (x: number, y: number, w = 0.1, h = 0.2): Bbox => [x, y, w, h];
-const snap = (ts: number, tracks: Array<{ id: number; bbox: Bbox }>): Snapshot => ({
+const snap = (
+  ts: number,
+  tracks: Array<{ id: number; bbox: Bbox; score?: number }>,
+): Snapshot => ({
   ts,
-  tracks: tracks.map((t) => ({ id: t.id, bbox: t.bbox, zone: null })),
+  tracks: tracks.map((t) => ({ id: t.id, bbox: t.bbox, zone: null, score: t.score })),
 });
 
 describe("lerpBbox", () => {
@@ -57,6 +61,17 @@ describe("TrackInterpolator — interpolação linear por id", () => {
     it0.ingest(snap(2, [{ id: 1, bbox: box(0.9, 0) }]), 1500); // MESMO ts → ignorado
     // segue interpolando A→B (x≈0.1 no meio), não A→(0.9)
     expect(it0.sample(500)[0].bbox[0]).toBeCloseTo(0.1, 6);
+  });
+
+  it("passthrough de score: sample devolve o score do ÚLTIMO keyframe (undefined se ausente)", () => {
+    const withScore = new TrackInterpolator(cfg);
+    withScore.ingest(snap(1, [{ id: 4, bbox: box(0, 0), score: 0.9 }]), 0);
+    withScore.ingest(snap(2, [{ id: 4, bbox: box(0.2, 0), score: 0.4 }]), 1000); // score novo
+    expect(withScore.sample(500)[0].score).toBe(0.4); // sempre o do último keyframe, não interpolado
+
+    const noScore = new TrackInterpolator(cfg);
+    noScore.ingest(snap(1, [{ id: 4, bbox: box(0, 0) }]), 0); // hub antigo → sem score
+    expect(noScore.sample(0)[0].score).toBeUndefined();
   });
 
   it("id recém-visto (1 keyframe só) fica estático — nada a interpolar", () => {
@@ -107,5 +122,28 @@ describe("TrackInterpolator — fade + expiração", () => {
     // idade 2000 < expire) continua.
     const later = it0.sample(3000);
     expect(later.map((d) => d.id)).toEqual([1]);
+  });
+});
+
+describe("toDisplayTracks — ponte sample() → drawTracks da câmera focada", () => {
+  it("monta o shape de desenho: score default 1, firstSeen do lookup, foot e opacity", () => {
+    const drawn = [
+      { id: 1, bbox: [0.2, 0.3, 0.1, 0.4] as [number, number, number, number], zone: "Z", opacity: 0.6, ageMs: 0, score: 0.8 },
+      { id: 2, bbox: [0, 0, 0.2, 0.2] as [number, number, number, number], zone: null, opacity: 1, ageMs: 0 }, // sem score
+    ];
+    const firstSeen = new Map<number, number>([[1, 111]]); // id 2 ausente → fallback now
+    const out = toDisplayTracks(drawn, firstSeen, 999);
+
+    expect(out[0]).toEqual({
+      id: 1,
+      bbox: [0.2, 0.3, 0.1, 0.4],
+      zone: "Z",
+      score: 0.8,
+      firstSeen: 111,
+      opacity: 0.6,
+      foot: { x: 0.2 + 0.1 / 2, y: 0.3 + 0.4 },
+    });
+    expect(out[1].score).toBe(1); // sem score no sample → 1 (nunca atenua)
+    expect(out[1].firstSeen).toBe(999); // id fora do mapa (fade) → fallback now
   });
 });

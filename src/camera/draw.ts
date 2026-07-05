@@ -240,6 +240,9 @@ export type TrackBox = {
   bbox: [number, number, number, number];
   firstSeen: number;
   zone: string | null;
+  // Opacidade do FADE (interpolate.ts): caixa sumindo desenha esmaecida. OPCIONAL/retrocompatível:
+  // ausente → 1 (opaca). Só a câmera focada (interpolador) a passa; os demais chamadores omitem.
+  opacity?: number;
 };
 export function drawTracks(
   ctx: CanvasRenderingContext2D,
@@ -253,7 +256,9 @@ export function drawTracks(
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
   const personFg = cssVar("--state-info-fg", "#bae6fd");
   for (const t of tracks) {
-    ctx.globalAlpha = t.score < conf ? 0.3 : 1;
+    // Atenuação do slider de confiança (score<conf) × opacidade do fade (caixa sumindo). O fade
+    // é opcional (default 1) → o full agora mostra a caixa esmaecer ao expirar, como a grade.
+    ctx.globalAlpha = (t.score < conf ? 0.3 : 1) * (t.opacity ?? 1);
     const x = cr.x + t.bbox[0] * cr.w,
       y = cr.y + t.bbox[1] * cr.h,
       w = t.bbox[2] * cr.w,

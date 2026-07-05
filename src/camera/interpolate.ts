@@ -18,6 +18,9 @@ export type InterpTrack = {
   id: number;
   bbox: Bbox;
   zone: string | null;
+  /** score real da detecção 0..1 (passthrough p/ o desenho: a CÂMERA FOCADA atenua pelo slider de
+   *  confiança; a GRADE ignora). Ausente = hub antigo → sample devolve undefined (consumidor trata 1). */
+  score?: number;
 };
 
 /** Um payload do hub (contrato `analysis-tracks`, só o que interessa aqui). */
@@ -33,6 +36,7 @@ export type DrawnTrack = {
   zone: string | null;
   opacity: number; // 0..1 (1 = presente; <1 = sumindo)
   ageMs: number; // ms desde o último payload que citou este id
+  score?: number; // score do ÚLTIMO keyframe (passthrough); undefined = payload sem score
 };
 
 export type InterpConfig = {
@@ -71,7 +75,7 @@ export function lerpBbox(a: Bbox, b: Bbox, t: number): [number, number, number, 
   ];
 }
 
-type Keyframe = { bbox: Bbox; zone: string | null; t: number };
+type Keyframe = { bbox: Bbox; zone: string | null; score?: number; t: number };
 type Entry = { prev: Keyframe | null; last: Keyframe };
 
 // Estado por id: 2 keyframes (o penúltimo e o último payload que citaram o id). A velocidade
@@ -95,7 +99,7 @@ export class TrackInterpolator {
     if (snap.ts === this.lastTs) return;
     this.lastTs = snap.ts;
     for (const tr of snap.tracks) {
-      const kf: Keyframe = { bbox: tr.bbox, zone: tr.zone, t: recvT };
+      const kf: Keyframe = { bbox: tr.bbox, zone: tr.zone, score: tr.score, t: recvT };
       const e = this.entries.get(tr.id);
       if (e) {
         e.prev = e.last;
@@ -120,7 +124,14 @@ export class TrackInterpolator {
         ageMs <= c.fadeStartMs
           ? 1
           : Math.max(0, 1 - (ageMs - c.fadeStartMs) / (c.expireMs - c.fadeStartMs));
-      out.push({ id, bbox: this.boxAt(e, now - c.delayMs), zone: e.last.zone, opacity, ageMs });
+      out.push({
+        id,
+        bbox: this.boxAt(e, now - c.delayMs),
+        zone: e.last.zone,
+        score: e.last.score,
+        opacity,
+        ageMs,
+      });
     }
     return out;
   }
@@ -144,4 +155,44 @@ export class TrackInterpolator {
     const alpha = Math.min(maxAlpha, (renderT - e.prev.t) / interval);
     return lerpBbox(e.prev.bbox, e.last.bbox, alpha);
   }
+}
+
+// ── Ponte sample() → drawTracks da CÂMERA FOCADA ────────────────────────────────────────────────
+// A grade desenha o DrawnTrack direto (bbox+opacity+id). A câmera focada reusa drawTracks/draw.ts, que
+// pede o shape TrackBox (id/score/bbox/firstSeen/zone) + opacity. Aqui montamos esse shape a partir do
+// sample(): score do passthrough (default 1), firstSeen via lookup no mapa mantido pelo applyHubAnalysis,
+// foot = bottom-center do bbox (paridade com Track; não usado no desenho) e opacity do fade. PURO/testável.
+
+/** Track pronto p/ o drawTracks da câmera focada: sample() do interpolador + firstSeen (externo). */
+export type DisplayTrack = {
+  id: number;
+  bbox: [number, number, number, number];
+  zone: string | null;
+  score: number;
+  firstSeen: number;
+  opacity: number;
+  foot: { x: number; y: number };
+};
+
+export function toDisplayTracks(
+  drawn: readonly DrawnTrack[],
+  firstSeen: ReadonlyMap<number, number>,
+  now: number,
+): DisplayTrack[] {
+  const out: DisplayTrack[] = [];
+  for (const d of drawn) {
+    out.push({
+      id: d.id,
+      bbox: d.bbox,
+      zone: d.zone,
+      // hub antigo (sample sem score) → 1: nunca atenuado pelo slider, como antes.
+      score: d.score ?? 1,
+      // permanência POR ID (mantida pelo applyHubAnalysis entre payloads). Id em fade já saiu do
+      // mapa → cai no `now` (a caixa está sumindo; a duração no rótulo é irrelevante).
+      firstSeen: firstSeen.get(d.id) ?? now,
+      opacity: d.opacity,
+      foot: { x: d.bbox[0] + d.bbox[2] / 2, y: d.bbox[1] + d.bbox[3] },
+    });
+  }
+  return out;
 }
