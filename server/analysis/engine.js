@@ -100,6 +100,16 @@ const ROUND_MS = Math.round(1000 / FPS);
 // ANALYSIS_FPS_LINE (default 2) nunca abaixo do ANALYSIS_FPS nem acima de 4fps.
 const FPS_LINE = Math.min(4, Math.max(FPS, Number(process.env.ANALYSIS_FPS_LINE) || 2));
 const ROUND_MS_LINE = Math.round(1000 / FPS_LINE);
+// Cadência de FOCO (onda Flow-Focus): a câmera ABERTA em tela cheia pelo operador (contrato
+// socket `analysis-focus`, união entre dashboards) recebe MAIS cadência que as demais — com o
+// pool de workers há folga p/ dedicar fps à câmera que está sendo OLHADA. PRECEDÊNCIA sobre a
+// linha: focada usa FPS_FOCUS mesmo que também tenha tripwire (foco > linha > normal). Nunca
+// ABAIXO do normal (clamp piso = FPS); teto 8fps p/ uma única câmera não afogar o pool.
+// ANALYSIS_FPS_FOCUS default 6, clamp [FPS, 8].
+const FPS_FOCUS = Math.min(8, Math.max(FPS, Number(process.env.ANALYSIS_FPS_FOCUS) || 6));
+const ROUND_MS_FOCUS = Math.round(1000 / FPS_FOCUS);
+// Os três round-ms num objeto p/ o cálculo PURO da cadência efetiva (pickRoundMs).
+const ROUNDS = { normal: ROUND_MS, line: ROUND_MS_LINE, focus: ROUND_MS_FOCUS };
 // Ponto de operação do spike §8: nascimento/1ª passada em ~0.35; o worker devolve ≥0.25,
 // que alimenta a 2ª passada do ByteTrack (score baixo SUSTENTA track, não nasce).
 const HIGH_SCORE = Number(process.env.ANALYSIS_HIGH_SCORE ?? 0.35);
@@ -107,8 +117,11 @@ const AGG_MS = Math.max(1000, Number(process.env.ANALYSIS_AGG_MS ?? 3000));
 // TTL escala com a cadência (a 1fps, o 1500ms do front mataria o track numa rodada perdida).
 const TTL_MS = Math.max(1500, Math.round(ROUND_MS * 3.5));
 const PRUNE_MS = 5 * 60_000; // câmera sem frame há tanto tempo sai do estado/status
-// Resolução do tick baseada na cadência MAIS RÁPIDA (linha) p/ o dispatch honrar 2fps.
-const TICK_MS = Math.min(250, Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_MS_LINE) / 4)));
+// Resolução do tick baseada na cadência MAIS RÁPIDA (foco > linha) p/ o dispatch honrar o boost.
+const TICK_MS = Math.min(
+  250,
+  Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_MS_LINE, ROUND_MS_FOCUS) / 4)),
+);
 // Grid do perfil "Longo alcance/Panorâmica" (F3): 2×2 com overlap 0.1 — espelha o
 // tiling do front (src/vision/detect.ts tileGrid). Fixo de propósito (YAGNI): um
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
@@ -137,6 +150,16 @@ let seq = 0;
 /** cameraId → estado por câmera (tracker/counter/zonas/fila/métricas) */
 const states = new Map();
 const timers = [];
+
+// ── Foco do operador (contrato socket `analysis-focus` — ADITIVO) ────────────
+// socketId → cameraId que AQUELE dashboard tem aberto em tela cheia (id null = sem foco).
+// A câmera FOCADA = UNIÃO entre todos os sockets (vários dashboards podem olhar câmeras
+// diferentes). Ao desconectar um socket, sua contribuição some da união. Uma câmera na
+// união é analisada a FPS_FOCUS (precedência sobre a linha). GUARDA (documentada): se MUITOS
+// dashboards focarem câmeras distintas, o pool satura — a entrega REAL cai graciosamente
+// (dispatchReady coalesce por câmera; nenhum throttle inventado). Nunca-cego/LGPD intactos.
+const focusBySocket = new Map(); // socketId → cameraId | null
+const focusedCams = new Set(); // união atual dos ids focados (recomputada a cada mudança)
 
 const shiftOf = (hour) => (hour >= 6 && hour < 14 ? "Manhã" : hour >= 14 && hour < 22 ? "Tarde" : "Noite");
 
@@ -194,6 +217,56 @@ function isFadiga(cameraId) {
   return modoOf(cameraId) === "fadiga";
 }
 
+// ── Cadência efetiva + união de foco (PURO/testável) ─────────────────────────
+// Cadência efetiva de UMA câmera por PRECEDÊNCIA: FOCO > LINHA > normal. Focada (aberta em
+// tela cheia por ≥1 dashboard) amostra a FPS_FOCUS mesmo que também tenha tripwire.
+// Parametrizada nos round-ms (não lê os env do módulo) → determinística e testável.
+function pickRoundMs({ focused, hasLine }, rounds) {
+  if (focused) return rounds.focus;
+  if (hasLine) return rounds.line;
+  return rounds.normal;
+}
+
+// União dos ids focados entre TODOS os sockets. Registro socketId→cameraId; entradas com
+// id null/"" (socket sem foco) são ignoradas. Devolve um Set de cameraIds (string). PURO.
+function focusUnion(registry) {
+  const set = new Set();
+  for (const id of registry.values()) if (id != null && id !== "") set.add(String(id));
+  return set;
+}
+
+// cadência efetiva → fps efetivo (reflete o boost de foco no targetFps do status/autoscale).
+function targetFpsOf(st) {
+  if (st.fadiga) return 0;
+  if (st.roundMs === ROUND_MS_FOCUS) return FPS_FOCUS;
+  if (st.roundMs === ROUND_MS_LINE) return FPS_LINE;
+  return FPS;
+}
+
+// (Re)aplica a cadência efetiva ao estado de UMA câmera (foco > linha > normal).
+function applyRoundMs(st) {
+  st.roundMs = pickRoundMs(
+    { focused: focusedCams.has(st.id), hasLine: camcfg.getTripwires(st.id).length > 0 },
+    ROUNDS,
+  );
+}
+
+// Recomputa a UNIÃO a partir do registro por socket e reajusta a cadência SÓ das câmeras que
+// entraram/saíram do foco (as demais não mudam). Uma câmera focada sem estado ainda (sem frame)
+// não faz nada aqui — createState lê focusedCams.has(id) quando materializar.
+function recomputeFocus() {
+  const next = focusUnion(focusBySocket);
+  const changed = new Set();
+  for (const id of next) if (!focusedCams.has(id)) changed.add(id);
+  for (const id of focusedCams) if (!next.has(id)) changed.add(id);
+  focusedCams.clear();
+  for (const id of next) focusedCams.add(id);
+  for (const id of changed) {
+    const st = states.get(id);
+    if (st) applyRoundMs(st);
+  }
+}
+
 function createState(id) {
   const st = {
     id,
@@ -217,7 +290,12 @@ function createState(id) {
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
     longRange: longRangeOf(id), // F3: true → pedido ao worker leva tiles 2×2 (LR_TILES)
     fadiga: isFadiga(id), // F4: câmera modo=fadiga NÃO é analisada no hub (roda no cliente)
-    roundMs: camcfg.getTripwires(id).length ? ROUND_MS_LINE : ROUND_MS, // F4: câmera com linha amostra mais rápido
+    // Cadência efetiva: FOCO > LINHA > normal. Se o operador já focou esta câmera antes do
+    // 1º frame, ela nasce a FPS_FOCUS; senão com linha @FPS_LINE; senão @FPS (último-vence).
+    roundMs: pickRoundMs(
+      { focused: focusedCams.has(id), hasLine: camcfg.getTripwires(id).length > 0 },
+      ROUNDS,
+    ),
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // F4: aprendizado de hotspots fixos (opt-in)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
@@ -459,7 +537,7 @@ async function evaluateAutoscale() {
   for (const st of states.values()) {
     if (st.fadiga) continue; // fadiga roda no cliente — não pesa no worker do hub
     sumAch += st.rounds.length / 60; // fps REAL da janela (rounds guarda 60s)
-    sumTgt += st.roundMs === ROUND_MS_LINE ? FPS_LINE : FPS; // alvo efetivo da câmera
+    sumTgt += targetFpsOf(st); // alvo efetivo da câmera (foco > linha > normal)
     cams += 1;
   }
   const w = workerHost.stats();
@@ -520,8 +598,8 @@ function onCamcfgUpdated(p) {
   if (!st) return;
   if (p.kind === "tripwires") {
     st.counter.setTripwires(camcfg.getTripwires(st.id)); // preserva contadores por id
-    // F4: ganhou/perdeu linha → recalcula a cadência (câmera com linha amostra a ≥2fps).
-    st.roundMs = camcfg.getTripwires(st.id).length ? ROUND_MS_LINE : ROUND_MS;
+    // F4: ganhou/perdeu linha → recalcula a cadência (foco > linha > normal; foco tem precedência).
+    applyRoundMs(st);
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
     st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
@@ -550,6 +628,24 @@ function snapshotTo(socket) {
   for (const [id, st] of states) socket.emit("analysis-status", { cameraId: id, engine: st.fadiga ? null : "hub" });
 }
 
+/**
+ * Contrato socket `analysis-focus` (cliente→hub, ADITIVO): registra a câmera que ESTE socket
+ * tem aberta em tela cheia. `cameraId` null/"" = o dashboard liberou o foco. A câmera focada =
+ * UNIÃO entre todos os sockets; recomputa e reajusta a cadência das câmeras que mudaram.
+ */
+function setFocus(socketId, cameraId) {
+  if (!socketId) return;
+  const key = String(socketId);
+  if (cameraId == null || cameraId === "") focusBySocket.delete(key);
+  else focusBySocket.set(key, String(cameraId));
+  recomputeFocus();
+}
+
+/** Socket desconectou: remove a contribuição dele à união de foco e reavalia (nunca deixa foco órfão). */
+function clearFocus(socketId) {
+  if (socketId && focusBySocket.delete(String(socketId))) recomputeFocus();
+}
+
 /** GET /api/analysis/status — métricas por câmera (aditivo). */
 function status() {
   const perCamera = {};
@@ -564,7 +660,8 @@ function status() {
     }
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
-      targetFps: st.fadiga ? 0 : st.roundMs === ROUND_MS_LINE ? FPS_LINE : FPS, // F4 (aditivo): cadência efetiva
+      targetFps: targetFpsOf(st), // cadência efetiva (foco > linha > normal); 0 se fadiga
+      focused: focusedCams.has(id), // Flow-Focus (aditivo): câmera aberta em tela cheia por ≥1 dashboard
       queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
       lastMs: st.lastMs,
       dets1m,
@@ -601,6 +698,8 @@ function status() {
     model: path.basename(model.getModelPath()),
     targetFps: FPS,
     lineFps: FPS_LINE, // F4 (aditivo): cadência das câmeras com linha/tripwire
+    focusFps: FPS_FOCUS, // Flow-Focus (aditivo): cadência da câmera em foco (tela cheia)
+    focused: [...focusedCams], // Flow-Focus (aditivo): ids das câmeras focadas (união entre dashboards)
     autoMask: { mode: AUTOMASK_MODE }, // F4 (aditivo): modo global da auto-máscara ("off"|"suggest"|"hide")
     // Onda 5 (aditivo): auto-dimensionamento do modelo — tier ativo, modo e histerese (diagnóstico).
     autoscale: {
@@ -668,13 +767,13 @@ async function init({ io, cameras }) {
   // Fonte go2rtc (Fase 3): ronda de pull na cadência MAIS RÁPIDA (linha) p/ alimentar 2fps
   // quando a câmera de linha é puxada. Inerte (no-op) enquanto go2rtc estiver desligado
   // (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
-  timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE)));
+  timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE, ROUND_MS_FOCUS)));
   // Válvula de runtime do autoscale: 1×/janela. Inerte (o guard AUTOSCALE_OFF retorna cedo)
   // quando há PIN/override — mas nem agendamos nesse caso (menos ruído/CPU).
   if (!AUTOSCALE_OFF) timers.push(setInterval(evaluateAutoscale, autoscale.DEFAULTS.evalMs));
   for (const t of timers) if (t.unref) t.unref();
   console.log(
-    `[analysis] motor ATIVO — ${model.getModelSpec().label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
+    `[analysis] motor ATIVO — ${model.getModelSpec().label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps, foco @${FPS_FOCUS}fps)` +
       ` · tier=${autoTier}(${AUTOSCALE_OFF ? "pin" : "auto"})` +
       `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (pool de ${poolSize} worker(s), CPU EP)`,
   );
@@ -686,7 +785,22 @@ function stop() {
   enabled = false;
   for (const t of timers) clearInterval(t);
   timers.length = 0;
+  focusBySocket.clear();
+  focusedCams.clear();
   workerHost.stop();
 }
 
-module.exports = { init, onFrame, onCamcfgUpdated, isAnalyzing, snapshotTo, status, stop };
+module.exports = {
+  init,
+  onFrame,
+  onCamcfgUpdated,
+  isAnalyzing,
+  snapshotTo,
+  setFocus,
+  clearFocus,
+  status,
+  stop,
+  // Puros (exportados p/ teste — sem estado; não fazem parte do contrato de runtime):
+  pickRoundMs,
+  focusUnion,
+};

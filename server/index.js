@@ -257,6 +257,21 @@ io.on("connection", (socket) => {
       shed.sweepShed(); // religa NA HORA câmeras que ganharam espectador (o debounce só vale p/ shed)
     });
 
+    // Foco do operador (contrato ADITIVO `analysis-focus`): o dashboard anuncia qual câmera
+    // está aberta em TELA CHEIA — o motor dedica MAIS cadência (FPS_FOCUS) a ela. `{ id }` foca;
+    // `{ id: null }` libera. A câmera focada = UNIÃO entre todos os dashboards (por socket); no
+    // disconnect abaixo a contribuição deste socket some. Não toca em watch/frame/analysis-*.
+    socket.on("analysis-focus", (p) => {
+      const id = p && p.id != null && p.id !== "" ? String(p.id) : null;
+      socket.data.focusId = id;
+      analysis.setFocus(socket.id, id);
+    });
+
+    // Dashboard saiu: remove sua contribuição à união de foco (evita foco órfão prendendo o boost).
+    socket.on("disconnect", () => {
+      analysis.clearFocus(socket.id);
+    });
+
     // Central define o perfil de captura por câmera (ex.: leitura = alta resolução).
     // payload: { id, width, quality, fps }
     socket.on("set-capture", (cfg) => {
