@@ -1,92 +1,191 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// worker-host.js — Ciclo de vida do worker de inferência (spawn/respawn + CPU).
+// worker-host.js — POOL de workers de inferência (spawn/respawn POR-WORKER + CPU
+// + roteamento por menor-carga). Destrava o throughput do hub: o binding do
+// onnxruntime-node SERIALIZA inferências DENTRO de um processo (spike §6), então
+// 1 worker satura ~1-2 cores e deixa o resto da máquina ocioso. N processos
+// escalam quase linear (spike §7: 4 processos ≈ 9,9 fps vs 1 ≈ 2 fps).
 //
-// Extraído de engine.js (R5/retrofit): a "supervisão do processo filho" (fork, respawn
-// com backoff, roteamento de mensagens, amostragem de CPU) é uma responsabilidade própria.
-// Fábrica createWorkerHost(deps): o engine injeta o Map `states`, o getModelPath (o path
-// pode mudar por fallback), o callback onDets (=processDets) e o predicado isStopping.
-// Comportamento byte-a-byte do original — só a fronteira mudou.
+// STATELESS POR FRAME: o worker (worker.js) só faz inferência — decode→session.run→
+// postprocess, sem estado por câmera (o TRACKING/ByteTrack/counting/zones vive no
+// ENGINE, por câmera). Logo QUALQUER worker processa QUALQUER frame → roteamento por
+// MENOR-CARGA (fila mais curta), sem assignment sticky. O engine já garante ≤1 job
+// em voo por câmera (st.busy), então nunca há 2 frames da mesma câmera concorrendo
+// nem risco de reordenação; a resposta carrega cameraId+id e o engine reassembla.
 //
-// worker.js = D-FINE / onnxruntime-node em PROCESSO SEPARADO (spike §6). Buffers de JPEG
-// viajam como binário (serialization:"advanced"), sem base64.
+// CUSTO: cada worker carrega SUA cópia do .onnx em RAM (~190-240 MB RSS/worker,
+// spike §7). N cópias do modelo é o preço do paralelismo real no Node — aceitável
+// p/ os tiers S/N num hub de escritório (8C/16T comporta o pool + relé/ffmpeg).
+//
+// NUNCA-CEGO POR-WORKER: respawn é INDIVIDUAL (um cai → só ele volta, com backoff);
+// enquanto ≥1 worker vive, o motor segue analisando. No exit de um worker, SÓ as
+// câmeras cujo job em voo estava NELE são liberadas (as dos outros seguem).
+//
+// worker.js = D-FINE / onnxruntime-node em PROCESSO SEPARADO (spike §6). Buffers de
+// JPEG viajam como binário (serialization:"advanced"), sem base64. O worker.js NÃO
+// muda — só passa a ter N instâncias.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
 const { fork } = require("node:child_process");
 const path = require("node:path");
 
+// ── Lógica PURA (testável, determinística) ───────────────────────────────────
+
+/**
+ * Número de workers do pool. `pin` (env ANALYSIS_WORKERS) FIXA o N; ausente/invalido =
+ * AUTO: min(floor(cores/2), câmeras), piso 1.
+ *
+ * CAVEAT (documentado): no boot as câmeras ainda NÃO registraram (elas conectam via
+ * socket DEPOIS do listen), então `cameras` costuma ser 0 nesse instante. Clampar a
+ * 0/1 crioparia o pool — por isso o clamp por câmeras SÓ vale quando há contagem (>0);
+ * com 0 (desconhecido no boot) dimensiona por cores. O clamp evita superprovisionar
+ * workers acima do nº de câmeras quando esse número é conhecido.
+ *
+ * @param {{cores?:number, cameras?:number, pin?:string|number}} p
+ * @returns {number} N ≥ 1
+ */
+function resolveWorkerCount({ cores, cameras, pin } = {}) {
+  const p = Number(pin);
+  if (Number.isInteger(p) && p >= 1) return p; // ANALYSIS_WORKERS = pin explícito de ops
+  const byCore = Math.max(1, Math.floor((Number(cores) || 1) / 2));
+  const cam = Number(cameras) || 0;
+  const n = cam > 0 ? Math.min(byCore, cam) : byCore;
+  return Math.max(1, n);
+}
+
+/**
+ * ROTEAMENTO PURO — escolhe o worker PRONTO de MENOR carga (fila mais curta),
+ * com round-robin no EMPATE (varre a partir de `rr`). Devolve o índice escolhido,
+ * ou -1 se nenhum worker está pronto.
+ *
+ * @param {Array<{ready:boolean, load:number}>} workers
+ * @param {number} rr  ponteiro round-robin (o caller avança p/ (idx+1)%N após usar)
+ * @returns {number} índice do worker escolhido, ou -1
+ */
+function pickWorker(workers, rr = 0) {
+  const n = workers.length;
+  if (!n) return -1;
+  const start = ((rr % n) + n) % n; // normaliza rr (defensivo)
+  let best = -1;
+  let bestLoad = Infinity;
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n; // varre a partir de rr → empates saem em round-robin
+    const w = workers[i];
+    if (!w || !w.ready) continue;
+    if (w.load < bestLoad) {
+      bestLoad = w.load;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * COALESCÊNCIA/≤1-EM-VOO POR CÂMERA (guarda de despacho, PURA). A câmera despacha
+ * neste tick só se: não é fadiga (roda no cliente), não tem job em voo (busy), tem
+ * frame novo (latest, último-vence) e respeitou a cadência (roundMs). Isso preserva
+ * "só o frame MAIS NOVO de cada câmera importa" e "≤1 job em voo por câmera".
+ *
+ * @param {object} st              estado por câmera do engine
+ * @param {number} now            Date.now()
+ * @param {number} defaultRoundMs cadência base (quando st.roundMs não está setado)
+ */
+function dispatchReady(st, now, defaultRoundMs) {
+  if (!st || st.fadiga) return false;
+  if (st.busy || !st.latest) return false;
+  if (now - st.lastSentAt < (st.roundMs || defaultRoundMs)) return false;
+  return true;
+}
+
+// ── Pool (efeitos colaterais: fork/kill/IPC) ─────────────────────────────────
+
 /**
  * @param {object} deps
- * @param {Map} deps.states                câmeraId → estado (para reset no exit e lookup na resposta)
- * @param {() => string} deps.getModelPath caminho ATUAL do modelo (pode ter mudado por fallback S→N)
+ * @param {Map} deps.states                câmeraId → estado (reset no exit + lookup na resposta)
+ * @param {() => string} deps.getModelPath caminho ATUAL do modelo (pode mudar por fallback/tier)
  * @param {(st, dets, now) => void} deps.onDets  pipeline por rodada (=processDets do engine)
- * @param {() => boolean} deps.isStopping  true quando o engine está encerrando (não respawna)
+ * @param {() => boolean} deps.isStopping  true quando o engine encerra (não respawna)
+ * @param {() => number} deps.getSize      nº de workers a subir (resolvido no spawn — env/cores/câmeras)
  */
-function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
-  let worker = null;
-  let workerReady = false;
-  let workerPid = 0;
-  let respawns = 0;
-  let backoffAttempt = 0;
-  let respawnTimer = null;
-  let reloading = false; // true entre reload() e o respawn — respawn IMEDIATO (troca de modelo)
+function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize }) {
+  const workers = []; // registros por worker, índice estável (0..N-1)
+  let rr = 0; // ponteiro round-robin do roteamento
 
-  // CPU do worker (amostrada dos process.cpuUsage() que ele manda em cada resposta)
-  let cpuSample = null; // { user, system, t }
-  let cpuPct = 0;
+  function makeWorker(id) {
+    return {
+      id,
+      proc: null,
+      ready: false,
+      pid: 0,
+      respawns: 0,
+      backoffAttempt: 0,
+      respawnTimer: null,
+      reloading: false, // troca de modelo em curso → respawn imediato (não paga backoff)
+      cpuSample: null, // { user, system, t }
+      cpuPct: 0,
+      inflight: new Map(), // jobId → cameraId (jobs em voo NESTE worker — carga + never-blind)
+    };
+  }
 
-  // ── Worker: spawn + respawn com backoff ──────────────────────────────────────
-  function spawnWorker() {
-    workerReady = false;
-    worker = fork(path.join(__dirname, "worker.js"), [], {
+  function spawnOne(w) {
+    w.ready = false;
+    w.proc = fork(path.join(__dirname, "worker.js"), [], {
       serialization: "advanced", // Buffers de JPEG viajam como binário, sem base64
       env: { ...process.env, ANALYSIS_MODEL_PATH: getModelPath() },
     });
-    workerPid = worker.pid;
-    worker.on("message", onWorkerMessage);
-    worker.on("exit", (code, signal) => {
-      workerReady = false;
-      worker = null;
-      // pedidos em voo morreram com o processo: libera os slots p/ a próxima rodada
-      for (const st of states.values()) {
+    w.pid = w.proc.pid;
+    w.proc.on("message", (msg) => onWorkerMessage(w, msg));
+    w.proc.on("exit", (code, signal) => onWorkerExit(w, code, signal));
+  }
+
+  function onWorkerExit(w, code, signal) {
+    w.ready = false;
+    w.proc = null;
+    // NUNCA-CEGO POR-WORKER: libera SÓ as câmeras cujo job em voo estava NESTE worker
+    // (as dos outros workers seguem). Sem isso a câmera ficaria busy p/ sempre.
+    for (const [jobId, cameraId] of w.inflight) {
+      const st = states.get(cameraId);
+      if (st && st.inflight === jobId) {
         st.busy = false;
         st.inflight = 0;
       }
-      if (isStopping()) return;
-      // Troca de modelo (autoscale): respawn IMEDIATO com o novo getModelPath() — não é
-      // crash, não paga backoff nem conta como respawn de falha. Gap de ~1 rodada, logado.
-      if (reloading) {
-        reloading = false;
-        console.log("[analysis] worker recarregando (troca de modelo) — respawn imediato");
-        spawnWorker();
-        return;
-      }
-      respawns += 1;
-      const delay = Math.min(1000 * 2 ** backoffAttempt, 30_000);
-      backoffAttempt += 1;
-      console.warn(
-        `[analysis] worker morreu (code=${code} signal=${signal}) — respawn em ${delay}ms (tentativa ${backoffAttempt})`,
-      );
-      respawnTimer = setTimeout(spawnWorker, delay);
-      if (respawnTimer.unref) respawnTimer.unref();
-    });
+    }
+    w.inflight.clear();
+    if (isStopping()) return;
+    // Troca de modelo (autoscale): respawn IMEDIATO com o novo getModelPath() — não é
+    // crash, não paga backoff nem conta como respawn de falha. Gap de ~1 rodada, logado.
+    if (w.reloading) {
+      w.reloading = false;
+      console.log(`[analysis] worker#${w.id} recarregando (troca de modelo) — respawn imediato`);
+      spawnOne(w);
+      return;
+    }
+    w.respawns += 1;
+    const delay = Math.min(1000 * 2 ** w.backoffAttempt, 30_000);
+    w.backoffAttempt += 1;
+    console.warn(
+      `[analysis] worker#${w.id} morreu (code=${code} signal=${signal}) — respawn em ${delay}ms (tentativa ${w.backoffAttempt})`,
+    );
+    w.respawnTimer = setTimeout(() => spawnOne(w), delay);
+    if (w.respawnTimer.unref) w.respawnTimer.unref();
   }
 
-  function onWorkerMessage(msg) {
+  function onWorkerMessage(w, msg) {
     if (!msg) return;
     if (msg.type === "ready") {
-      workerReady = true;
-      backoffAttempt = 0; // subiu limpo — zera o backoff
-      if (msg.cpu) cpuSample = { ...msg.cpu, t: Date.now() };
-      console.log(`[analysis] worker pronto (pid=${workerPid}, modelo=${msg.model})`);
+      w.ready = true;
+      w.backoffAttempt = 0; // subiu limpo — zera o backoff
+      if (msg.cpu) w.cpuSample = { ...msg.cpu, t: Date.now() };
+      console.log(`[analysis] worker#${w.id} pronto (pid=${w.pid}, modelo=${msg.model})`);
       return;
     }
     if (msg.type === "fatal") {
-      console.error(`[analysis] worker FATAL: ${msg.error}`);
+      console.error(`[analysis] worker#${w.id} FATAL: ${msg.error}`);
       return; // o handler de exit cuida do respawn
     }
+    if (msg.cpu) sampleCpu(w, msg.cpu);
+    w.inflight.delete(msg.id); // job respondeu → sai da carga deste worker
     const st = states.get(msg.cameraId);
-    if (msg.cpu) sampleCpu(msg.cpu);
     if (!st || st.inflight !== msg.id) return; // resposta órfã (respawn/prune) — ignora
     st.busy = false;
     st.inflight = 0;
@@ -101,63 +200,106 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
     onDets(st, Array.isArray(msg.dets) ? msg.dets : [], Date.now());
   }
 
-  function sampleCpu(cpu) {
+  // CPU por worker (amostrada dos process.cpuUsage() de cada resposta). O agregado
+  // (soma dos N) sai em stats().cpuPct = total de cores usados pelo pool.
+  function sampleCpu(w, cpu) {
     const t = Date.now();
-    if (!cpuSample) {
-      cpuSample = { user: cpu.user, system: cpu.system, t };
+    if (!w.cpuSample) {
+      w.cpuSample = { user: cpu.user, system: cpu.system, t };
       return;
     }
-    const dt = t - cpuSample.t;
+    const dt = t - w.cpuSample.t;
     if (dt < 5000) return; // janela mínima p/ % estável
-    const dcpuMs = (cpu.user + cpu.system - cpuSample.user - cpuSample.system) / 1000;
-    cpuPct = Math.round((dcpuMs / dt) * 1000) / 10; // % de UM core
-    cpuSample = { user: cpu.user, system: cpu.system, t };
+    const dcpuMs = (cpu.user + cpu.system - w.cpuSample.user - w.cpuSample.system) / 1000;
+    w.cpuPct = Math.round((dcpuMs / dt) * 1000) / 10; // % de UM core
+    w.cpuSample = { user: cpu.user, system: cpu.system, t };
   }
 
-  /** Pronto p/ receber um `detect`? (workerReady E processo vivo — usado pelo tick.) */
+  /** Sobe o pool (N = getSize() resolvido agora — env/cores/câmeras). */
+  function spawnWorker() {
+    const size = Math.max(1, getSize ? getSize() : 1);
+    for (let i = 0; i < size; i++) {
+      const w = makeWorker(i);
+      workers.push(w);
+      spawnOne(w);
+    }
+    console.log(`[analysis] pool de ${size} worker(s) de inferência iniciando`);
+  }
+
+  /** Pronto p/ despachar? (≥1 worker pronto E vivo — usado pelo tick.) */
   function ready() {
-    return workerReady && !!worker;
-  }
-
-  /** Envia um pedido ao worker. Lança se o send do IPC falhar (o tick trata). */
-  function send(msg) {
-    worker.send(msg);
+    return workers.some((w) => w.ready && !!w.proc);
   }
 
   /**
-   * Recarrega o modelo: mata o worker atual; o handler de exit respawna IMEDIATO lendo o
-   * getModelPath() ATUAL (que o autoscale já trocou via model.setActiveTier). Sem worker
-   * vivo, apenas sobe um. Idempotente enquanto um reload está em curso.
+   * Roteia um pedido ao worker PRONTO de MENOR carga (round-robin no empate) e
+   * registra o job em voo (carga). Lança se NENHUM worker está pronto ou se o send
+   * do IPC falhar (o tick trata: reseta st.busy). NÃO registra inflight em falha.
+   */
+  function send(msg) {
+    const snap = workers.map((w) => ({ ready: w.ready && !!w.proc, load: w.inflight.size }));
+    const i = pickWorker(snap, rr);
+    if (i < 0) throw new Error("nenhum worker pronto");
+    rr = (i + 1) % workers.length;
+    workers[i].proc.send(msg); // pode lançar (canal fechado) → propaga sem marcar inflight
+    workers[i].inflight.set(msg.id, msg.cameraId);
+  }
+
+  /**
+   * Recarrega o modelo em TODOS os workers (troca de tier do autoscale). Cada um: se
+   * vivo, marca reloading + mata (o exit respawna imediato lendo o getModelPath() ATUAL);
+   * se já caído (backoff), cancela o timer e sobe agora. Idempotente por worker.
    */
   function reload() {
-    if (!worker) {
-      if (respawnTimer) clearTimeout(respawnTimer); // não deixa o respawn de crash pendente duplicar
-      respawnTimer = null;
-      spawnWorker();
-      return;
-    }
-    if (reloading) return;
-    reloading = true;
-    try {
-      worker.kill();
-    } catch {
-      /* ignore — o exit handler cuida do respawn */
-    }
-  }
-
-  /** Métricas p/ status()/logMinute (aditivo — mesmo shape de antes). */
-  function stats() {
-    return { ready: workerReady, pid: workerPid, respawns, cpuPct };
-  }
-
-  /** Encerra a supervisão: cancela respawn pendente e mata o worker. */
-  function stop() {
-    if (respawnTimer) clearTimeout(respawnTimer);
-    if (worker) {
+    for (const w of workers) {
+      if (!w.proc) {
+        if (w.respawnTimer) clearTimeout(w.respawnTimer);
+        w.respawnTimer = null;
+        spawnOne(w);
+        continue;
+      }
+      if (w.reloading) continue;
+      w.reloading = true;
       try {
-        worker.kill();
+        w.proc.kill();
       } catch {
-        /* ignore */
+        /* ignore — o exit handler cuida do respawn */
+      }
+    }
+  }
+
+  /** Métricas agregadas + por worker (aditivo). cpuPct = SOMA (total de cores usados). */
+  function stats() {
+    const per = workers.map((w) => ({
+      id: w.id,
+      ready: w.ready && !!w.proc,
+      pid: w.pid,
+      cpuPct: w.cpuPct,
+      respawns: w.respawns,
+      load: w.inflight.size,
+    }));
+    const readyCount = per.reduce((a, w) => a + (w.ready ? 1 : 0), 0);
+    return {
+      ready: readyCount > 0, // ≥1 worker pronto (truthiness p/ logMinute/status)
+      size: workers.length,
+      readyCount,
+      cpuPct: per.reduce((a, w) => a + w.cpuPct, 0), // agregado: total de cores usados pelo pool
+      respawns: per.reduce((a, w) => a + w.respawns, 0),
+      pids: per.map((w) => w.pid),
+      workers: per,
+    };
+  }
+
+  /** Encerra a supervisão: cancela respawns pendentes e mata todos os workers. */
+  function stop() {
+    for (const w of workers) {
+      if (w.respawnTimer) clearTimeout(w.respawnTimer);
+      if (w.proc) {
+        try {
+          w.proc.kill();
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
@@ -165,4 +307,4 @@ function createWorkerHost({ states, getModelPath, onDets, isStopping }) {
   return { spawnWorker, ready, send, stats, reload, stop };
 }
 
-module.exports = { createWorkerHost };
+module.exports = { createWorkerPool, pickWorker, resolveWorkerCount, dispatchReady };

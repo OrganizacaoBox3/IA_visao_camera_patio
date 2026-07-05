@@ -163,6 +163,69 @@ describe("decideRuntime — UPGRADE conservador", () => {
   });
 });
 
+describe("autoscale CIENTE DO POOL — capacidade ≈ N workers × por-worker", () => {
+  // THREADS_PER_WORKER=2 (default): cores_efetivos = min(cores, workers×2).
+  it("budgetTier: 1 worker NÃO superestima (cap por min(cores, 2))", () => {
+    // 8 cores mas 1 worker só usa ~2 cores → 30 câmeras não cabem em S (7×2=14) → PISO N.
+    expect(budgetTier({ cores: 8, cameras: 30, workers: 1 })).toBe("n");
+  });
+
+  it("budgetTier: o POOL destrava o tier maior nas MESMAS câmeras", () => {
+    // 4 workers → cores_efetivos = min(8, 8) = 8 → 30 câmeras cabem em M (4×8=32).
+    expect(budgetTier({ cores: 8, cameras: 30, workers: 4 })).toBe("m");
+    // 2 workers → efetivos min(8,4)=4 → M 4×4=16<30, S 7×4=28<30, N 17×4=68 → "n"? não: S=28<30 → n.
+    expect(budgetTier({ cores: 8, cameras: 30, workers: 2 })).toBe("n");
+    expect(budgetTier({ cores: 8, cameras: 20, workers: 2 })).toBe("s"); // efetivos 4: S 28≥20 → s
+  });
+
+  it("budgetTier sem `workers` mantém o comportamento pré-pool (cores × cap)", () => {
+    expect(budgetTier({ cores: 8, cameras: 30 })).toBe("m"); // efetivos = 8 cores → M 32≥30
+    expect(budgetTier({ cores: 8, cameras: 40 })).toBe("s"); // M 32<40, S 56≥40 → s
+  });
+
+  it("pickStartupTier com pool grande escolhe tier melhor que com 1 worker", () => {
+    expect(pickStartupTier({ cores: 8, cameras: 24, workers: 1 })).toBe("n"); // 1 worker afogaria em S/M
+    expect(pickStartupTier({ cores: 8, cameras: 24, workers: 4 })).toBe("m"); // pool sustenta M
+  });
+
+  it("decideRuntime NÃO rebaixa quando o pool tem folga de CPU (teto escala por N)", () => {
+    // 4 workers a ~1 core cada = 400% agregado, MAS o teto de 'afogado' escala: 150×4=600.
+    // 400 < 600 → não é afogado, mesmo com fps atrás → HOLD (não mascara o teto rebaixando).
+    let st = initState("m");
+    let d;
+    for (let i = 0; i < CFG.downWindows + 1; i++) {
+      d = decideRuntime(st, { now: at(i), tier: "m", cpuPct: 400, achievedFps: 4, targetFps: 8, cameras: 12, cores: 8, workers: 4 }, CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("hold");
+    expect(st.choked).toBe(0);
+  });
+
+  it("decideRuntime AINDA rebaixa quando o pool está de fato afogado (CPU acima do teto escalado)", () => {
+    // 4 workers, agregado 650% > 600 (teto 150×4) E fps 4/8=0,5 ≤ 0,6 → afogado de verdade.
+    let st = initState("m");
+    let d;
+    for (let i = 0; i < CFG.downWindows; i++) {
+      d = decideRuntime(st, { now: at(i), tier: "m", cpuPct: 650, achievedFps: 4, targetFps: 8, cameras: 12, cores: 8, workers: 4 }, CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("downgrade");
+    expect(d.to).toBe("s");
+  });
+
+  it("upgrade usa o orçamento do POOL (folga sobe de tier quando o pool comporta)", () => {
+    // n→s: pool de 4 workers, 24 câmeras, folga sustentada. Orçamento (efetivos 8) comporta S.
+    let st = initState("n");
+    let d;
+    for (let i = 0; i < CFG.upWindows; i++) {
+      d = decideRuntime(st, { now: at(i), tier: "n", cpuPct: 100, achievedFps: 24, targetFps: 24, cameras: 24, cores: 8, workers: 4 }, CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("upgrade");
+    expect(d.to).toBe("s");
+  });
+});
+
 describe("decideRuntime — cooldown e sem-carga", () => {
   it("dentro do cooldown pós-troca → hold e zera contadores", () => {
     const st = { tier: "s", choked: 2, idle: 0, lastSwitchAt: 5000 };

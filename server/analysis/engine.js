@@ -75,7 +75,7 @@ const { createCounter } = require("./counting");
 const { attributeZone, inExclusionZone } = require("./zones");
 const model = require("./model"); // catálogo/verificação/download do .onnx (fallback S→N)
 const autoscale = require("./autoscale"); // decisão PURA de tier (pick de startup + válvula de runtime)
-const { createWorkerHost } = require("./worker-host"); // ciclo de vida do worker de inferência
+const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host"); // POOL de workers de inferência
 const { createGo2rtcSource } = require("./go2rtc-source"); // pull frame.jpeg (Fase 3)
 const {
   createAutoMask,
@@ -131,6 +131,7 @@ let switchingTier = false; // trava reentrância enquanto uma troca (download+re
 let ctx = null; // { io, cameras } injetado pelo index.js
 let enabled = false;
 let stopping = false;
+let poolSize = 1; // nº de workers do pool (resolvido no init — env ANALYSIS_WORKERS / cores / câmeras)
 
 let seq = 0;
 /** cameraId → estado por câmera (tracker/counter/zonas/fila/métricas) */
@@ -140,13 +141,16 @@ const timers = [];
 const shiftOf = (hour) => (hour >= 6 && hour < 14 ? "Manhã" : hour >= 14 && hour < 22 ? "Tarde" : "Noite");
 
 // ── Módulos extraídos, fiados com as dependências do engine ──────────────────
-// worker-host: injeta o Map states (reset no exit + roteamento), o path ATUAL do modelo
-// (pode mudar por fallback), o pipeline por rodada (processDets) e o predicado de parada.
-const workerHost = createWorkerHost({
+// worker-host (POOL): injeta o Map states (reset no exit + roteamento), o path ATUAL do
+// modelo (pode mudar por fallback), o pipeline por rodada (processDets), o predicado de
+// parada e getSize (nº de workers, resolvido no spawn). O pool roteia por MENOR-CARGA e
+// respawna POR-WORKER (nunca-cego enquanto ≥1 vive).
+const workerHost = createWorkerPool({
   states,
   getModelPath: model.getModelPath,
   onDets: processDets,
   isStopping: () => stopping,
+  getSize: () => poolSize,
 });
 // go2rtc-source: injeta go2rtc, o Map states, o createState (materializa a câmera puxada),
 // o predicado "motor rodando" e ROUND_MS (base do PULL_STALE_MS).
@@ -386,11 +390,11 @@ function tick() {
   if (!workerHost.ready()) return;
   const now = Date.now();
   for (const st of states.values()) {
-    // F4: câmera modo=fadiga não é analisada no hub (roda no cliente) — nada de inferência,
-    // tracks ou ingest de PESSOA nela. Este é o único choke point (pega relé E pull go2rtc).
-    if (st.fadiga) continue;
-    // F4: câmera com linha amostra @ROUND_MS_LINE (≥2fps); sem linha, @ROUND_MS (1fps).
-    if (st.busy || !st.latest || now - st.lastSentAt < (st.roundMs || ROUND_MS)) continue;
+    // Guarda de despacho PURA (worker-host.dispatchReady): fadiga (roda no cliente),
+    // coalescência (≤1 job em voo por câmera via busy), último-vence (latest) e cadência
+    // (F4: câmera com linha @ROUND_MS_LINE ≥2fps; sem linha @ROUND_MS 1fps). Único choke
+    // point — pega relé E pull go2rtc. O roteamento ao worker de menor carga é do pool.send.
+    if (!dispatchReady(st, now, ROUND_MS)) continue;
     const frame = st.latest;
     st.latest = null;
     st.busy = true;
@@ -435,8 +439,9 @@ function logMinute() {
     parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms`);
   }
   const w = workerHost.stats();
+  const perW = w.workers.map((x) => `#${x.id}${x.ready ? "" : "!"}:${x.cpuPct}%`).join(" ");
   console.log(
-    `[analysis] worker ${w.ready ? "ok" : "fora"} pid=${w.pid} cpu~${w.cpuPct}% · ${parts.join(" · ")}`,
+    `[analysis] pool ${w.readyCount}/${w.size} cpu~${w.cpuPct}% (${perW}) · ${parts.join(" · ")}`,
   );
 }
 
@@ -457,14 +462,16 @@ async function evaluateAutoscale() {
     sumTgt += st.roundMs === ROUND_MS_LINE ? FPS_LINE : FPS; // alvo efetivo da câmera
     cams += 1;
   }
+  const w = workerHost.stats();
   const sample = {
     now: Date.now(),
     tier: autoTier,
-    cpuPct: workerHost.stats().cpuPct,
+    cpuPct: w.cpuPct, // agregado do pool (soma dos N) — decideRuntime escala o teto por workers
     achievedFps: sumAch,
     targetFps: sumTgt,
     cameras: cams,
     cores: os.cpus().length,
+    workers: w.size, // capacidade REAL do pool: throughput/orçamento ≈ N × por-worker
   };
   const d = autoscale.decideRuntime(autoState, sample);
   autoState = d.state;
@@ -621,19 +628,23 @@ async function init({ io, cameras }) {
     console.log("[analysis] motor DESLIGADO (ANALYSIS_ENABLED=0)");
     return;
   }
+  // POOL: nº de workers (env ANALYSIS_WORKERS fixa; ausente = min(floor(cores/2), câmeras),
+  // piso 1). Resolvido AQUI e lido pelo pool no spawn (getSize). O pick de startup e a válvula
+  // de runtime do autoscale usam esse N como capacidade REAL (throughput ≈ N × por-worker).
+  const cores = os.cpus().length;
+  const camCount = ctx.cameras ? ctx.cameras.size : 0;
+  poolSize = resolveWorkerCount({ cores, cameras: camCount, pin: process.env.ANALYSIS_WORKERS });
   // PICK DE STARTUP (autoscale): ANTES de baixar, escolhe o melhor tier que o hardware
-  // sustenta. PIN (ANALYSIS_MODEL=n|s|m) fixa o tier; AUTO escolhe pelo orçamento (cores ×
-  // câmeras esperadas). Override de path (eval/) não mexe no catálogo. ensureModel baixa o
-  // tier corrente com o fallback S/M→N do catálogo (nunca fica sem modelo).
+  // sustenta. PIN (ANALYSIS_MODEL=n|s|m) fixa o tier; AUTO escolhe pelo orçamento (workers ×
+  // cap/worker × câmeras esperadas). Override de path (eval/) não mexe no catálogo. ensureModel
+  // baixa o tier corrente com o fallback S/M→N do catálogo (nunca fica sem modelo).
   if (PIN_TIER) {
     model.setTier(PIN_TIER);
     console.log(`[analysis] autoscale PIN — tier fixo em ${PIN_TIER.toUpperCase()} (ANALYSIS_MODEL), auto-dimensionamento DESLIGADO`);
   } else if (!process.env.ANALYSIS_MODEL_PATH) {
-    const cores = os.cpus().length;
-    const cameras = ctx.cameras ? ctx.cameras.size : 0;
-    const pick = autoscale.pickStartupTier({ cores, cameras });
+    const pick = autoscale.pickStartupTier({ cores, cameras: camCount, workers: poolSize });
     model.setTier(pick);
-    console.log(`[analysis] autoscale AUTO — pick de startup ${pick.toUpperCase()} (${cores} cores, ${cameras} câmeras esperadas)`);
+    console.log(`[analysis] autoscale AUTO — pick de startup ${pick.toUpperCase()} (${cores} cores, ${poolSize} workers, ${camCount} câmeras esperadas)`);
   }
   // DEFAULT LIGADO: ausente (ou qualquer valor ≠ "0") → o motor BAIXA o modelo no boot e sobe.
   // O download é seguro (sha256 + escrita atômica + fallback S→N). Só ANALYSIS_ENABLED=0 desliga.
@@ -665,7 +676,7 @@ async function init({ io, cameras }) {
   console.log(
     `[analysis] motor ATIVO — ${model.getModelSpec().label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
       ` · tier=${autoTier}(${AUTOSCALE_OFF ? "pin" : "auto"})` +
-      `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (worker process, CPU EP)`,
+      `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (pool de ${poolSize} worker(s), CPU EP)`,
   );
 }
 

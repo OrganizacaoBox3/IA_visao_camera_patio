@@ -33,6 +33,14 @@ const TIERS = ["n", "s", "m"];
 // startup + teto de upgrade). A verdade de runtime é a cadência/CPU medidas.
 const CAP_PER_CORE = { n: 17, s: 7, m: 4 };
 
+// CIÊNCIA DO POOL (spike §6/§7): o binding do onnxruntime SERIALIZA inferências DENTRO de
+// um processo — 1 worker satura ~intraOpNumThreads cores e o resto da máquina fica ocioso;
+// N processos escalam quase linear (4 proc ≈ 9,9 fps vs 1 ≈ 2 fps). Logo a capacidade do
+// hub NÃO é `cores × cap/core` (isso superestimava 1 worker e fazia o autoscale REBAIXAR p/
+// mascarar o teto), e sim `cores_EFETIVOS × cap/core`, onde cores_efetivos = min(cores,
+// workers × threads/worker). Cada worker usa ~2 threads intra-op (worker.js INTRA_THREADS).
+const THREADS_PER_WORKER = Math.max(1, Number(process.env.ANALYSIS_INTRA_THREADS) || 2);
+
 const DEFAULTS = {
   evalMs: 30_000, // tamanho da janela de avaliação (o engine chama 1×/janela)
   downWindows: 3, // janelas consecutivas AFOGADAS → desce um tier (≈90s @30s/janela)
@@ -53,15 +61,20 @@ function clampTier(i) {
 }
 
 /**
- * Maior tier cujo ORÇAMENTO (cores × cap/core) comporta as câmeras, com `headroom` de
- * folga exigida. Best-first; cai p/ o PISO "n" se nada couber (nunca devolve sem tier).
+ * Maior tier cujo ORÇAMENTO comporta as câmeras, com `headroom` de folga exigida.
+ * Best-first; cai p/ o PISO "n" se nada couber (nunca devolve sem tier).
+ *
+ * Capacidade = cores_EFETIVOS × cap/core, com cores_efetivos = min(cores, workers ×
+ * threads/worker) — reflete o POOL (spike §6/§7). Sem `workers` (compat: callers antigos)
+ * assume cores_efetivos = cores (comportamento pré-pool).
  */
-function budgetTier({ cores, cameras }, headroom = 1) {
+function budgetTier({ cores, cameras, workers }, headroom = 1) {
   const cam = Math.max(1, cameras || 0);
   const c = Math.max(1, cores || 1);
+  const eff = workers ? Math.min(c, Math.max(1, workers) * THREADS_PER_WORKER) : c;
   for (let i = TIERS.length - 1; i >= 0; i--) {
     const t = TIERS[i];
-    if (cam * headroom <= c * CAP_PER_CORE[t]) return t;
+    if (cam * headroom <= eff * CAP_PER_CORE[t]) return t;
   }
   return "n";
 }
@@ -71,9 +84,9 @@ function budgetTier({ cores, cameras }, headroom = 1) {
  * (startupHeadroom) porque ainda NÃO há medição real — o runtime confirma/corrige.
  * Sem câmeras conhecidas ainda, `cameras` baixo → tende ao melhor (M/S).
  */
-function pickStartupTier({ cores, cameras }, cfg = {}) {
+function pickStartupTier({ cores, cameras, workers }, cfg = {}) {
   const c = { ...DEFAULTS, ...cfg };
-  return budgetTier({ cores, cameras }, c.startupHeadroom);
+  return budgetTier({ cores, cameras, workers }, c.startupHeadroom);
 }
 
 /** Estado inicial da histerese (o engine guarda e repassa a cada janela). */
@@ -119,8 +132,13 @@ function decideRuntime(state, sample, cfg = {}) {
 
   const fpsRatio = sample.achievedFps / sample.targetFps;
   const idx = tierIndex(tier);
-  const chokedNow = fpsRatio <= c.downFpsRatio && sample.cpuPct >= c.downCpuPct;
-  const idleNow = fpsRatio >= c.upFpsRatio && sample.cpuPct <= c.upCpuPct;
+  // cpuPct é AGREGADO do pool (soma dos N workers). Os limiares downCpuPct/upCpuPct são
+  // POR-WORKER (1,5 core afogado / 0,6 core folgado), então escalam por workers — senão um
+  // pool saudável de N workers pareceria sempre "afogado" e o autoscale rebaixaria de graça.
+  // Sem `workers` (compat): escala 1 (comportamento pré-pool).
+  const cpuScale = Math.max(1, sample.workers || 1);
+  const chokedNow = fpsRatio <= c.downFpsRatio && sample.cpuPct >= c.downCpuPct * cpuScale;
+  const idleNow = fpsRatio >= c.upFpsRatio && sample.cpuPct <= c.upCpuPct * cpuScale;
 
   // ── DOWNGRADE: afogado (atrás na cadência E CPU alta) por downWindows consecutivas.
   // Só desce se há p/ onde (idx>0) — no PISO N não há downgrade (nunca cego).
@@ -143,7 +161,7 @@ function decideRuntime(state, sample, cfg = {}) {
   // ── UPGRADE (conservador): folga sustentada por upWindows E o orçamento comporta o
   // tier maior (sem headroom extra — já há medição real de folga a sustentar).
   if (idleNow && idx < TIERS.length - 1) {
-    const budget = budgetTier({ cores: sample.cores, cameras: sample.cameras }, 1);
+    const budget = budgetTier({ cores: sample.cores, cameras: sample.cameras, workers: sample.workers }, 1);
     if (tierIndex(budget) > idx) {
       s.idle += 1;
       s.choked = 0;
