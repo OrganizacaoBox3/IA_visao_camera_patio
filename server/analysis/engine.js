@@ -1,6 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // engine.js — MOTOR DE ANÁLISE NO HUB (F1 do plano-analise-server-side, ADR-009).
 //
+// ORQUESTRAÇÃO. As responsabilidades próprias foram extraídas (R5/retrofit) para 4 módulos
+// vizinhos — este arquivo só as fia (wire) e mantém o pipeline por rodada + a API pública:
+//   • model.js        — catálogo N/S/M + verificação sha256 + download/fallback.
+//   • worker-host.js  — ciclo de vida do worker de inferência (spawn/respawn + CPU).
+//   • automask.js     — auto-máscara aprendida (Welford). PURO/determinístico (testado).
+//   • go2rtc-source.js— fonte alternativa de frames (pull frame.jpeg) + estado de pull.
+//
 // Consome os frames que o hub JÁ possui (relé webcam + RTSP), amostra
 // @ANALYSIS_FPS (default 1fps, último-vence) e envia ao worker de inferência
 // (worker.js, D-FINE-N / onnxruntime-node em PROCESSO SEPARADO — spike §6).
@@ -48,31 +55,16 @@
 // câmera RTSP analisada. Webcam segue podendo ser rebaixada p/ SHED_WEBCAM_FPS
 // (2fps ≥ cadência de análise — o motor não perde nada e o nó economiza CPU).
 //
-// FONTE go2rtc (Fase 3 — ADITIVO, OFF por default): além do relé, o motor pode
-// PUXAR frames do go2rtc (GET /api/frame.jpeg?src=<cameraId>) a ~ANALYSIS_FPS e
-// alimentar o MESMO pipeline (mesmo st.latest / tick / worker / ingest / emit).
-// Resolve o caveat da câmera que transmite por WHIP (Fase 5): ela deixa de mandar
-// relé socket → hoje não é analisada; com o pull, volta a ser. QUEM é puxada:
-//   • só quando go2rtc está habilitado (go2rtc.enabled()) — logo, OFF por default;
-//   • câmera que o go2rtc conhece (GET /api/streams) E cujo RELÉ está PARADO
-//     (sem `onFrame` há PULL_STALE_MS) → evita puxar E receber relé (dobraria a
-//     AQUISIÇÃO de frame; a inferência nunca dobra — st.latest é último-vence).
-//   • ANALYSIS_SOURCE=go2rtc força o pull de TODAS as streams do go2rtc (mesmo as
-//     que mandam relé); custo: aquisição redundante nessas — use só se pedir.
-// CONTENÇÃO: o pull respeita a cadência do worker (não puxa se já há frame pronto
-// p/ a próxima rodada) e faz BACKOFF exponencial por câmera se o go2rtc não
-// responde (stream ainda sem produtor / go2rtc reiniciando). LGPD: JPEG puxado é
-// EFÊMERO em memória, alimenta o worker por IPC e nada é gravado (igual ao relé).
+// FONTE go2rtc (Fase 3 — ADITIVO, OFF por default): além do relé, o motor pode PUXAR
+// frames do go2rtc (ver go2rtc-source.js). Alimenta o MESMO pipeline (mesmo st.latest /
+// tick / worker / ingest / emit). LGPD: JPEG puxado é EFÊMERO em memória (igual ao relé).
 //
 // LGPD/ADR-002: frames continuam EFÊMEROS em memória (hub→worker via IPC);
 // persiste-se SÓ indicadores/metadados, como hoje.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-const { fork } = require("node:child_process");
-const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 
 const camcfg = require("../camcfg");
 const pgstore = require("../pgstore");
@@ -80,42 +72,21 @@ const go2rtc = require("../go2rtc"); // Fase 3: fonte alternativa de frames (pul
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { attributeZone, inExclusionZone } = require("./zones");
-
-// ── Modelo: catálogo N/S/M (D-FINE, MESMA arquitetura → drop-in — eval/MODELS.md) ──
-// Resolução por env ANALYSIS_MODEL = n|s|m (default "s"). O default de PRODUÇÃO é o
-// D-FINE-S obj2coco: no fixture/full-set (eval/MODELS.md) o recall de pessoa média/pequena
-// ~DOBRA vs o N — exatamente o gargalo que travava a contagem de linha
-// (analises/acuracia-modelos.md §3) — a ~2.4× o CPU (~0.9 câmera/core @1fps no S vs ~2.2 no
-// N; ~7 vs ~17 câmeras/core). CPU-bound? ANALYSIS_MODEL=n volta ao nano (recall menor, mais
-// câmeras/core). Todos onnx-community/*-ONNX, Apache-2.0, fp32; baixados no boot com sha256.
-const MODELS = {
-  n: {
-    file: "dfine_n_coco.onnx",
-    url: "https://huggingface.co/onnx-community/dfine_n_coco-ONNX/resolve/main/onnx/model.onnx",
-    sha256: "0f684f409618ee8a822410e754a29caa817d1aa16283ce89cad936d0a48e2f35",
-    bytes: 15_258_358, // 14,55 MB
-    label: "D-FINE-N coco",
-  },
-  s: {
-    file: "dfine_s_obj2coco.onnx",
-    url: "https://huggingface.co/onnx-community/dfine_s_obj2coco-ONNX/resolve/main/onnx/model.onnx",
-    sha256: "b9e2e76610053aeeac3b2f1f685d8f9a1182a93a338f624b6c8cb7fb390cb532",
-    bytes: 41_535_197, // 39,6 MB
-    label: "D-FINE-S obj2coco",
-  },
-  m: {
-    file: "dfine_m_obj2coco.onnx",
-    url: "https://huggingface.co/onnx-community/dfine_m_obj2coco-ONNX/resolve/main/onnx/model.onnx",
-    sha256: "347f2faba93248c2e7500c9e604317fb391706c58a04802dd908573376dc1323",
-    bytes: 78_624_257, // 75,0 MB
-    label: "D-FINE-M obj2coco",
-  },
-};
-// ANALYSIS_MODEL_PATH fixa o arquivo explicitamente (usado pelo eval/): sem catálogo/fallback.
-const MODEL_OVERRIDE = process.env.ANALYSIS_MODEL_PATH || "";
-const MODEL_KEY = (process.env.ANALYSIS_MODEL || "s").toLowerCase();
-let modelSpec = MODELS[MODEL_KEY] || MODELS.s; // default de produção: S
-let MODEL_PATH = MODEL_OVERRIDE || path.join(__dirname, "..", "models", modelSpec.file);
+const model = require("./model"); // catálogo/verificação/download do .onnx (fallback S→N)
+const { createWorkerHost } = require("./worker-host"); // ciclo de vida do worker de inferência
+const { createGo2rtcSource } = require("./go2rtc-source"); // pull frame.jpeg (Fase 3)
+const {
+  createAutoMask,
+  amCell,
+  amObserve,
+  evaluateAutoMask,
+  AM_COLS,
+  AM_ROWS,
+  AM_WIN_MS,
+  AM_MIN_ROUNDS,
+  AUTOMASK_MODE,
+  AUTOMASK_ON,
+} = require("./automask"); // Fase 4: hotspots fixos aprendidos (Welford)
 
 // ── Parâmetros de operação (defaults espelham APP_CONFIG.people.track do front) ──
 const FPS = Math.min(4, Math.max(0.2, Number(process.env.ANALYSIS_FPS) || 1));
@@ -141,208 +112,35 @@ const TICK_MS = Math.min(250, Math.max(50, Math.round(Math.min(ROUND_MS, ROUND_M
 // grid maior quadruplicaria de novo o custo sem caso de uso medido.
 const LR_TILES = { cols: 2, rows: 2, overlap: 0.1 };
 
-// ── Auto-máscara de exclusão APRENDIDA (Fase 4 — "suggest" por DEFAULT, base segura) ─────
-// ANALYSIS_AUTOMASK: ausente/"suggest"/"sug"/"learn" (DEFAULT — aprende + expõe a sugestão em
-//    status() + loga, mas NÃO suprime nada — transparência sem risco: é a BASE SEGURA por só
-//    OBSERVAR, sem LGPD nem esconder pessoa; caminho RECOMENDADO p/ validar contra a realidade);
-//   "off"/"0"/"false" (feature OFF — nada aprende, nada suprime, custo zero — escape hatch);
-//   "hide"/"1"/"on" (aprende + SUPRIME as células aprendidas + loga — como a zona de exclusão
-//    manual, mas APRENDIDA). Aprende a célula do grid onde há detecção de pessoa PRESENTE
-//   ~100% do tempo E com bbox quase ESTÁTICO por uma janela ≥10min = objeto fixo lido como
-//   pessoa no piso de score (acuracia-modelos.md §2: 47-86% dos FP são poucos objetos fixos).
-//   CONSERVADOR de propósito: pessoa real num posto AINDA varia (pé/tronco oscilam, ela sai
-//   de quadro); objeto fixo não. Por isso o gate é presença altíssima + jitter baixíssimo +
-//   janela longa. Auto-suprimir ("hide") é o modo ARRISCADO (pode esconder pessoa quase imóvel)
-//   → permanece OPT-IN consciente. Só o observar-e-logar ("suggest") é o default.
-const AUTOMASK_RAW = String(process.env.ANALYSIS_AUTOMASK || "suggest").toLowerCase();
-const AUTOMASK_MODE = /^(1|on|hide|true)$/.test(AUTOMASK_RAW)
-  ? "hide"
-  : /^(suggest|sug|learn)$/.test(AUTOMASK_RAW)
-    ? "suggest"
-    : "off";
-const AUTOMASK_ON = AUTOMASK_MODE !== "off";
-const AM_COLS = Math.max(4, Math.min(64, Number(process.env.ANALYSIS_AUTOMASK_COLS) || 24));
-const AM_ROWS = Math.max(4, Math.min(64, Number(process.env.ANALYSIS_AUTOMASK_ROWS) || 18));
-const AM_WIN_MS = Math.max(60_000, Number(process.env.ANALYSIS_AUTOMASK_WIN_MS) || 600_000); // janela ≥10min
-const AM_PRESENT = Math.min(1, Math.max(0.5, Number(process.env.ANALYSIS_AUTOMASK_PRESENT) || 0.97));
-const AM_JITTER = Math.max(0.001, Number(process.env.ANALYSIS_AUTOMASK_JITTER) || 0.02); // std norm máx p/ "fixo"
-const AM_MIN_ROUNDS = Math.max(30, Number(process.env.ANALYSIS_AUTOMASK_MIN_ROUNDS) || 120);
-
-// ── Fonte go2rtc (Fase 3): pull de frame.jpeg p/ câmeras SEM relé (ex.: WHIP) ──
-// ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
-// outro valor → modo "relay-less" (puxa só quem não manda relé). ANALYSIS_GO2RTC_PULL=0
-// desliga o pull mesmo com go2rtc ligado (escape hatch).
-const PULL_FORCE_ALL = String(process.env.ANALYSIS_SOURCE || "").toLowerCase() === "go2rtc";
-const PULL_OPT_OUT = /^(0|false|off|no)$/i.test(String(process.env.ANALYSIS_GO2RTC_PULL || ""));
-// Relé considerado PARADO após isto sem onFrame → câmera vira elegível ao pull. Maior que
-// ROUND_MS p/ um relé só levemente atrasado não disparar pull redundante.
-const PULL_STALE_MS = Math.max(3000, ROUND_MS * 3);
-const PULL_TIMEOUT_MS = Math.max(500, Number(process.env.ANALYSIS_GO2RTC_TIMEOUT_MS) || 2000);
-const STREAMS_REFRESH_MS = Math.max(1000, Number(process.env.ANALYSIS_GO2RTC_STREAMS_MS) || 4000);
-const PULL_BACKOFF_BASE_MS = 2000;
-const PULL_BACKOFF_MAX_MS = 30_000;
-
 let ctx = null; // { io, cameras } injetado pelo index.js
 let enabled = false;
 let stopping = false;
-
-let worker = null;
-let workerReady = false;
-let workerPid = 0;
-let respawns = 0;
-let backoffAttempt = 0;
-let respawnTimer = null;
 
 let seq = 0;
 /** cameraId → estado por câmera (tracker/counter/zonas/fila/métricas) */
 const states = new Map();
 const timers = [];
 
-// ── Fonte go2rtc: descoberta de streams + estado de pull por câmera ──────────
-let go2rtcStreams = new Set(); // ids que o go2rtc conhece agora (cache, refrescado @STREAMS_REFRESH_MS)
-let streamsAt = 0; // epoch ms da última TENTATIVA de refresh
-let streamsInflight = false; // um GET /api/streams em voo
-let streamsFails = 0; // refreshes seguidos falhos (limpa o cache após alguns)
-/** cameraId → { inflight, nextAt, fails } — controle de pull/backoff por câmera */
-const pulls = new Map();
-
-// CPU do worker (amostrada dos process.cpuUsage() que ele manda em cada resposta)
-let cpuSample = null; // { user, system, t }
-let cpuPct = 0;
-
 const shiftOf = (hour) => (hour >= 6 && hour < 14 ? "Manhã" : hour >= 14 && hour < 22 ? "Tarde" : "Noite");
 
-// ── Modelo: verificação + download com sha256 ────────────────────────────────
-function sha256File(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-function modelOk() {
-  try {
-    const st = fs.statSync(MODEL_PATH);
-    if (MODEL_OVERRIDE) return st.size > 0; // path fixado pelo operador → confia (não força sha do catálogo)
-    if (st.size !== modelSpec.bytes) return false;
-    return sha256File(MODEL_PATH) === modelSpec.sha256;
-  } catch {
-    return false;
-  }
-}
-
-async function downloadModel() {
-  console.log(`[analysis] baixando modelo ${modelSpec.label} (${(modelSpec.bytes / 1e6).toFixed(1)} MB) de ${modelSpec.url} …`);
-  const res = await fetch(modelSpec.url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} ao baixar o modelo`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length !== modelSpec.bytes)
-    throw new Error(`tamanho inesperado: ${buf.length} bytes (esperado ${modelSpec.bytes})`);
-  const sha = crypto.createHash("sha256").update(buf).digest("hex");
-  if (sha !== modelSpec.sha256) throw new Error(`sha256 divergente: ${sha} (esperado ${modelSpec.sha256})`);
-  fs.mkdirSync(path.dirname(MODEL_PATH), { recursive: true });
-  fs.writeFileSync(MODEL_PATH + ".tmp", buf); // escrita atômica: nunca deixa modelo truncado
-  fs.renameSync(MODEL_PATH + ".tmp", MODEL_PATH);
-  console.log(`[analysis] modelo salvo em ${MODEL_PATH} (sha256 ok)`);
-}
-
-async function ensureModel(allowDownload) {
-  if (modelOk()) return true;
-  if (fs.existsSync(MODEL_PATH))
-    console.warn("[analysis] modelo existente com tamanho/sha divergente — será rebaixado");
-  if (!allowDownload) return false;
-  try {
-    await downloadModel();
-    return true;
-  } catch (e) {
-    console.error(`[analysis] download de ${modelSpec.label} FALHOU: ${e.message}`);
-    // Fallback: modelo grande (S/M) indisponível e SEM path fixado → cai p/ o N (recall
-    // menor, mas o hub SEGUE analisando). Ajuste ANALYSIS_MODEL=n p/ evitar este caminho.
-    if (!MODEL_OVERRIDE && modelSpec !== MODELS.n) {
-      modelSpec = MODELS.n;
-      MODEL_PATH = path.join(__dirname, "..", "models", modelSpec.file);
-      console.warn(`[analysis] fallback → ${modelSpec.label} (recall menor que o default S)`);
-      if (modelOk()) return true;
-      try {
-        await downloadModel();
-        return true;
-      } catch (e2) {
-        console.error(`[analysis] fallback ${modelSpec.label} também FALHOU: ${e2.message} — motor DESLIGADO (hub segue normal)`);
-        return false;
-      }
-    }
-    console.error("[analysis] motor de análise DESLIGADO (hub segue normal)");
-    return false;
-  }
-}
-
-// ── Worker: spawn + respawn com backoff ──────────────────────────────────────
-function spawnWorker() {
-  workerReady = false;
-  worker = fork(path.join(__dirname, "worker.js"), [], {
-    serialization: "advanced", // Buffers de JPEG viajam como binário, sem base64
-    env: { ...process.env, ANALYSIS_MODEL_PATH: MODEL_PATH },
-  });
-  workerPid = worker.pid;
-  worker.on("message", onWorkerMessage);
-  worker.on("exit", (code, signal) => {
-    workerReady = false;
-    worker = null;
-    // pedidos em voo morreram com o processo: libera os slots p/ a próxima rodada
-    for (const st of states.values()) {
-      st.busy = false;
-      st.inflight = 0;
-    }
-    if (stopping) return;
-    respawns += 1;
-    const delay = Math.min(1000 * 2 ** backoffAttempt, 30_000);
-    backoffAttempt += 1;
-    console.warn(
-      `[analysis] worker morreu (code=${code} signal=${signal}) — respawn em ${delay}ms (tentativa ${backoffAttempt})`,
-    );
-    respawnTimer = setTimeout(spawnWorker, delay);
-    if (respawnTimer.unref) respawnTimer.unref();
-  });
-}
-
-function onWorkerMessage(msg) {
-  if (!msg) return;
-  if (msg.type === "ready") {
-    workerReady = true;
-    backoffAttempt = 0; // subiu limpo — zera o backoff
-    if (msg.cpu) cpuSample = { ...msg.cpu, t: Date.now() };
-    console.log(`[analysis] worker pronto (pid=${workerPid}, modelo=${msg.model})`);
-    return;
-  }
-  if (msg.type === "fatal") {
-    console.error(`[analysis] worker FATAL: ${msg.error}`);
-    return; // o handler de exit cuida do respawn
-  }
-  const st = states.get(msg.cameraId);
-  if (msg.cpu) sampleCpu(msg.cpu);
-  if (!st || st.inflight !== msg.id) return; // resposta órfã (respawn/prune) — ignora
-  st.busy = false;
-  st.inflight = 0;
-  if (msg.dropped) return; // substituído na fila do worker (último-vence)
-  if (msg.error) {
-    st.errors += 1;
-    if (st.errors <= 3 || st.errors % 50 === 0)
-      console.warn(`[analysis:${st.id}] falha no frame: ${msg.error}`);
-    return;
-  }
-  st.lastMs = msg.inferMs || 0;
-  processDets(st, Array.isArray(msg.dets) ? msg.dets : [], Date.now());
-}
-
-function sampleCpu(cpu) {
-  const t = Date.now();
-  if (!cpuSample) {
-    cpuSample = { user: cpu.user, system: cpu.system, t };
-    return;
-  }
-  const dt = t - cpuSample.t;
-  if (dt < 5000) return; // janela mínima p/ % estável
-  const dcpuMs = (cpu.user + cpu.system - cpuSample.user - cpuSample.system) / 1000;
-  cpuPct = Math.round((dcpuMs / dt) * 1000) / 10; // % de UM core
-  cpuSample = { user: cpu.user, system: cpu.system, t };
-}
+// ── Módulos extraídos, fiados com as dependências do engine ──────────────────
+// worker-host: injeta o Map states (reset no exit + roteamento), o path ATUAL do modelo
+// (pode mudar por fallback), o pipeline por rodada (processDets) e o predicado de parada.
+const workerHost = createWorkerHost({
+  states,
+  getModelPath: model.getModelPath,
+  onDets: processDets,
+  isStopping: () => stopping,
+});
+// go2rtc-source: injeta go2rtc, o Map states, o createState (materializa a câmera puxada),
+// o predicado "motor rodando" e ROUND_MS (base do PULL_STALE_MS).
+const go2rtcSource = createGo2rtcSource({
+  go2rtc,
+  states,
+  createState,
+  running: () => enabled && !stopping,
+  roundMs: ROUND_MS,
+});
 
 // ── Estado por câmera ────────────────────────────────────────────────────────
 function ativZonesOf(cameraId) {
@@ -374,68 +172,6 @@ function modoOf(cameraId) {
 }
 function isFadiga(cameraId) {
   return modoOf(cameraId) === "fadiga";
-}
-
-// ── Auto-máscara: estado por câmera + observação/avaliação (Fase 4) ──────────
-function createAutoMask() {
-  // cells: cellIndex → { present, n, mean:[fx,fy,w,h], m2:[...] } (Welford p/ variância).
-  return { rounds: 0, windowStart: Date.now(), cells: new Map(), suppressed: new Set(), suggestions: [] };
-}
-/** célula do grid AM p/ um ponto NORMALIZADO (o PÉ da detecção — igual à zona de exclusão). */
-function amCell(fx, fy) {
-  const c = Math.min(AM_COLS - 1, Math.max(0, Math.floor(fx * AM_COLS)));
-  const r = Math.min(AM_ROWS - 1, Math.max(0, Math.floor(fy * AM_ROWS)));
-  return r * AM_COLS + c;
-}
-/** acumula uma observação (pé + tamanho do bbox) na célula; marca presença desta rodada. */
-function amObserve(am, cell, vals, roundCells) {
-  roundCells.add(cell);
-  let c = am.cells.get(cell);
-  if (!c) am.cells.set(cell, (c = { present: 0, n: 0, mean: [0, 0, 0, 0], m2: [0, 0, 0, 0] }));
-  c.n += 1;
-  for (let k = 0; k < 4; k++) {
-    const delta = vals[k] - c.mean[k];
-    c.mean[k] += delta / c.n;
-    c.m2[k] += delta * (vals[k] - c.mean[k]);
-  }
-}
-/** Fim da janela: reavalia quais células são objeto fixo, loga transições, reinicia a janela. */
-function evaluateAutoMask(st, now) {
-  const am = st.autoMask;
-  const prev = am.suppressed;
-  const next = new Set();
-  const suggestions = [];
-  for (const [cell, c] of am.cells) {
-    if (c.n < AM_MIN_ROUNDS) continue; // pouca amostra → não decide
-    const presentPct = c.present / am.rounds;
-    if (presentPct < AM_PRESENT) continue; // não está presente ~100% do tempo → não é objeto fixo
-    const std0 = Math.sqrt(c.m2[0] / c.n);
-    const std1 = Math.sqrt(c.m2[1] / c.n);
-    const std2 = Math.sqrt(c.m2[2] / c.n);
-    const std3 = Math.sqrt(c.m2[3] / c.n);
-    const jitter = Math.max(std0, std1, std2, std3);
-    if (jitter > AM_JITTER) continue; // ainda VARIA (pé/tamanho oscilam) → provável pessoa real
-    next.add(cell);
-    suggestions.push({ cell, presentPct, jitter });
-  }
-  for (const cell of next) {
-    if (prev.has(cell)) continue; // já conhecida — só loga a novidade
-    const col = cell % AM_COLS;
-    const row = Math.floor(cell / AM_COLS);
-    const c = am.cells.get(cell);
-    console.log(
-      `[analysis:${st.id}] auto-máscara ${AUTOMASK_MODE === "hide" ? "SUPRIMINDO" : "SUGESTÃO"} ` +
-        `célula (${col},${row}) ~${Math.round(((col + 0.5) / AM_COLS) * 100)}%,${Math.round(((row + 0.5) / AM_ROWS) * 100)}% ` +
-        `— presente ${Math.round((c.present / am.rounds) * 100)}% da janela (${Math.round(AM_WIN_MS / 60000)}min), objeto fixo provável`,
-    );
-  }
-  am.suppressed = next;
-  am.suggestions = suggestions;
-  // reinicia a janela: re-aprende do zero → objeto que SOME deixa de ser reaprendido e a
-  // supressão cai na próxima avaliação (adaptativo, com atraso de até uma janela).
-  am.cells = new Map();
-  am.rounds = 0;
-  am.windowStart = now;
 }
 
 function createState(id) {
@@ -631,7 +367,7 @@ function flushAtiv() {
 
 // ── Amostragem: tick escolhe o último frame por câmera e manda ao worker ─────
 function tick() {
-  if (!workerReady || !worker) return;
+  if (!workerHost.ready()) return;
   const now = Date.now();
   for (const st of states.values()) {
     // F4: câmera modo=fadiga não é analisada no hub (roda no cliente) — nada de inferência,
@@ -648,7 +384,7 @@ function tick() {
       // cópia no envio: o buf do relé pode ser view de um buffer maior (RTSP) — a cópia
       // acontece só 1×/rodada (não por frame do relé) e serializa enxuto no IPC.
       // F3: câmera longRange leva `tiles` — o worker recorta/reprojeta/funde (4× inferência).
-      worker.send({
+      workerHost.send({
         type: "detect",
         id: st.inflight,
         cameraId: st.id,
@@ -667,96 +403,11 @@ function prune() {
   for (const [id, st] of states) {
     if (now - st.lastFrameAt > PRUNE_MS) {
       states.delete(id);
-      pulls.delete(id);
+      go2rtcSource.dropPull(id);
       emitAnalysisStatus(id, null);
     }
   }
-}
-
-// ── Fonte go2rtc (Fase 3): descoberta + pull de frame.jpeg (alimenta st.latest) ──
-/** Pull ativo? Só com o motor ligado, go2rtc habilitado e sem opt-out. OFF por default (go2rtc é OFF). */
-function pullActive() {
-  return enabled && !stopping && !PULL_OPT_OUT && go2rtc.enabled();
-}
-
-/** Frame PUXADO do go2rtc: mesmo destino do relé (st.latest, último-vence). NÃO mexe em lastRelayAt. */
-function ingestPulled(cameraId, buf) {
-  if (!enabled || stopping) return;
-  const id = String(cameraId);
-  const st = states.get(id) || createState(id);
-  const now = Date.now();
-  st.lastFrameAt = now;
-  st.source = "go2rtc";
-  st.latest = { buf, ts: now };
-}
-
-/** GET /api/streams → conjunto de ids que o go2rtc conhece (RTSP do yaml + WHIP dinâmicos). */
-async function refreshStreams() {
-  if (streamsInflight) return;
-  const now = Date.now();
-  if (now - streamsAt < STREAMS_REFRESH_MS) return;
-  streamsInflight = true;
-  streamsAt = now;
-  const { host, port } = go2rtc.apiTarget();
-  try {
-    const res = await fetch(`http://${host}:${port}/api/streams`, { signal: AbortSignal.timeout(PULL_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    go2rtcStreams = new Set(data && typeof data === "object" ? Object.keys(data) : []);
-    streamsFails = 0;
-  } catch {
-    // go2rtc fora/subindo: mantém o cache por algumas tentativas, depois esvazia (para de puxar fantasmas)
-    streamsFails += 1;
-    if (streamsFails >= 3) go2rtcStreams = new Set();
-  } finally {
-    streamsInflight = false;
-  }
-}
-
-/** Puxa 1 frame.jpeg do go2rtc p/ a câmera e alimenta o pipeline. Backoff por câmera em falha. */
-async function pullFrame(id, ps) {
-  ps.inflight = true;
-  const { host, port } = go2rtc.apiTarget();
-  try {
-    const res = await fetch(`http://${host}:${port}/api/frame.jpeg?src=${encodeURIComponent(id)}`, {
-      signal: AbortSignal.timeout(PULL_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const ab = await res.arrayBuffer();
-    if (!ab.byteLength) throw new Error("frame vazio");
-    ps.fails = 0;
-    ps.nextAt = 0;
-    ingestPulled(id, Buffer.from(ab)); // JPEG efêmero → worker por IPC → nada gravado (LGPD)
-  } catch (e) {
-    ps.fails += 1;
-    const delay = Math.min(PULL_BACKOFF_BASE_MS * 2 ** (ps.fails - 1), PULL_BACKOFF_MAX_MS);
-    ps.nextAt = Date.now() + delay; // stream ainda sem produtor / go2rtc reiniciando → espaça as tentativas
-    if (ps.fails <= 2 || ps.fails % 20 === 0)
-      console.warn(`[analysis:${id}] pull go2rtc falhou (${ps.fails}): ${e && e.message ? e.message : e}`);
-  } finally {
-    ps.inflight = false;
-  }
-}
-
-/** Ronda de pull (@ROUND_MS): descobre streams e puxa as câmeras elegíveis (relay-less OU força). */
-function pullTick() {
-  if (!pullActive()) return;
-  void refreshStreams(); // debounced internamente (@STREAMS_REFRESH_MS)
-  if (!go2rtcStreams.size) return;
-  const now = Date.now();
-  for (const id of go2rtcStreams) {
-    const st = states.get(id);
-    // ANTI-DOBRA: no modo relay-less, câmera com relé FRESCO não é puxada (já recebe frame de graça).
-    // Em ANALYSIS_SOURCE=go2rtc força-se o pull de todas (custo de aquisição redundante assumido).
-    if (!PULL_FORCE_ALL && st && now - st.lastRelayAt < PULL_STALE_MS) continue;
-    // CADÊNCIA/CONTENÇÃO: se já há frame pronto p/ a próxima rodada, não acumula (o worker consome
-    // a ~ROUND_MS via tick — pull mais rápido só sobrescreveria st.latest e gastaria rede à toa).
-    if (st && st.latest) continue;
-    let ps = pulls.get(id);
-    if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0 }));
-    if (ps.inflight || now < ps.nextAt) continue; // um pull por câmera em voo; respeita o backoff
-    void pullFrame(id, ps);
-  }
+  go2rtcSource.prunePulls(now); // R5: poda entradas de pull órfãs (stream que só falha / sumiu)
 }
 
 function logMinute() {
@@ -767,8 +418,9 @@ function logMinute() {
     const src = st.source === "go2rtc" ? "[g2r]" : "";
     parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms`);
   }
+  const w = workerHost.stats();
   console.log(
-    `[analysis] worker ${workerReady ? "ok" : "fora"} pid=${workerPid} cpu~${cpuPct}% · ${parts.join(" · ")}`,
+    `[analysis] worker ${w.ready ? "ok" : "fora"} pid=${w.pid} cpu~${w.cpuPct}% · ${parts.join(" · ")}`,
   );
 }
 
@@ -871,13 +523,13 @@ function status() {
   }
   return {
     enabled,
-    model: path.basename(MODEL_PATH),
+    model: path.basename(model.getModelPath()),
     targetFps: FPS,
     lineFps: FPS_LINE, // F4 (aditivo): cadência das câmeras com linha/tripwire
     autoMask: { mode: AUTOMASK_MODE }, // F4 (aditivo): modo global da auto-máscara ("off"|"suggest"|"hide")
-    worker: { ready: workerReady, pid: workerPid, respawns, cpuPct },
+    worker: workerHost.stats(),
     // Fonte go2rtc (Fase 3, aditivo): estado do pull p/ diagnóstico.
-    go2rtcPull: { active: pullActive(), mode: PULL_FORCE_ALL ? "all" : "relay-less", streams: go2rtcStreams.size },
+    go2rtcPull: go2rtcSource.stats(),
     perCamera,
   };
 }
@@ -894,15 +546,15 @@ async function init({ io, cameras }) {
   }
   // DEFAULT LIGADO: ausente (ou qualquer valor ≠ "0") → o motor BAIXA o modelo no boot e sobe.
   // O download é seguro (sha256 + escrita atômica + fallback S→N). Só ANALYSIS_ENABLED=0 desliga.
-  const ok = await ensureModel(want !== "0");
+  const ok = await model.ensureModel(want !== "0");
   if (!ok) {
     console.log(
-      `[analysis] motor desligado — modelo indisponível em ${MODEL_PATH} (download falhou; sem rede no 1º boot?). ANALYSIS_ENABLED=0 desliga o motor de propósito.`,
+      `[analysis] motor desligado — modelo indisponível em ${model.getModelPath()} (download falhou; sem rede no 1º boot?). ANALYSIS_ENABLED=0 desliga o motor de propósito.`,
     );
     return;
   }
   enabled = true;
-  spawnWorker();
+  workerHost.spawnWorker();
   timers.push(setInterval(tick, TICK_MS));
   timers.push(setInterval(flushAtiv, AGG_MS));
   timers.push(setInterval(prune, 60_000));
@@ -910,10 +562,10 @@ async function init({ io, cameras }) {
   // Fonte go2rtc (Fase 3): ronda de pull na cadência MAIS RÁPIDA (linha) p/ alimentar 2fps
   // quando a câmera de linha é puxada. Inerte (no-op) enquanto go2rtc estiver desligado
   // (pullActive()=false) — logo, OFF por default sem custo além de um guard por tick.
-  timers.push(setInterval(pullTick, Math.min(ROUND_MS, ROUND_MS_LINE)));
+  timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE)));
   for (const t of timers) if (t.unref) t.unref();
   console.log(
-    `[analysis] motor ATIVO — ${modelSpec.label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
+    `[analysis] motor ATIVO — ${model.getModelSpec().label} no hub @${FPS}fps/câmera (linha @${FPS_LINE}fps)` +
       `${AUTOMASK_ON ? ` · auto-máscara=${AUTOMASK_MODE}` : ""} (worker process, CPU EP)`,
   );
 }
@@ -922,16 +574,9 @@ async function init({ io, cameras }) {
 function stop() {
   stopping = true;
   enabled = false;
-  if (respawnTimer) clearTimeout(respawnTimer);
   for (const t of timers) clearInterval(t);
   timers.length = 0;
-  if (worker) {
-    try {
-      worker.kill();
-    } catch {
-      /* ignore */
-    }
-  }
+  workerHost.stop();
 }
 
 module.exports = { init, onFrame, onCamcfgUpdated, isAnalyzing, snapshotTo, status, stop };
