@@ -49,6 +49,12 @@ server/data-hist.json.tmp
 # Modelo ONNX do motor de análise (baixado no boot com verificação de sha — ver server/analysis/README.md)
 server/models/
 
+# go2rtc: yaml GERADO a partir das câmeras (contém URLs RTSP com credenciais) — nunca versionar.
+# O default fica FORA do repo (dir do binário); estes patterns são trava de segurança extra.
+go2rtc*.yaml
+*.gen.yaml
+server/go2rtc.yaml
+
 # Bancada de acurácia (eval/): dados pesados COCO + resultados de execução NÃO são versionados.
 # São versionados: os scripts, o manifest.json, o thresholds.json e o FIXTURE commitável
 # (eval/fixture/ ~5MB — sensor de regressão npm run eval).

@@ -25,6 +25,9 @@ const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && 
 // modo aqui, cleanZone rebaixaria a zona de exclusão p/ "atividade" ao persistir (calibração).
 const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao"]);
 const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
+// Transporte de vídeo do tile (Fase 1/go2rtc): "mjpeg" (relé socket.io atual, default/rollback)
+// ou "webrtc" (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
+const TRANSPORTS = new Set(["mjpeg", "webrtc"]);
 const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
 const clamp01 = (v, d) => {
   const n = num(v, d);
@@ -116,6 +119,9 @@ function cleanCamConfig(c) {
     modo: ZONE_MODES.has(c.modo) ? c.modo : "atividade",
     pontoLeitura: str(c.pontoLeitura),
     capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "alta",
+    // Transporte de vídeo (Fase 1/go2rtc): default "mjpeg" (comportamento atual/rollback).
+    // Só "webrtc" muda o tile p/ <video-stream> servido pelo go2rtc — feature-flag por câmera.
+    transport: TRANSPORTS.has(c.transport) ? c.transport : "mjpeg",
     selectedClasses: strList(c.selectedClasses),
     // Perfil "Longo alcance/Panorâmica" (CameraCfg.longRange): o front persiste e o
     // MOTOR de análise lê p/ ligar o tiling 2×2 (F3/ADR-009). Sem esta linha o flag

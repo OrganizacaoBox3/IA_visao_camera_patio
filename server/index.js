@@ -3,6 +3,7 @@
 const { createServer } = require("node:http");
 const { Server } = require("socket.io");
 const rtsp = require("./rtsp");
+const go2rtc = require("./go2rtc");
 const cameraStore = require("./cameras");
 const alerts = require("./alerts");
 const users = require("./users");
@@ -92,6 +93,13 @@ const httpServer = createServer(async (req, res) => {
     return res.end();
   }
 
+  // Fase 1 (go2rtc): reverse-proxy same-origin /go2rtc/* -> 127.0.0.1:1984 (WebRTC/MSE/HLS/MJPEG).
+  // Antes do dispatch de rotas: o front fala /go2rtc/api/... na MESMA origem (CSP quase intacto).
+  // Inerte quando o flag/binário estão ausentes (proxyRequest responde 503 — o front usa MJPEG).
+  if (req.url && (req.url === "/go2rtc" || req.url.startsWith("/go2rtc/"))) {
+    return go2rtc.proxyRequest(req, res);
+  }
+
   // Contexto passado aos grupos de rotas: helpers de resposta/auth + io (p/ emitir aos painéis).
   // io = ioAnalysis (tee): mesmo io de sempre, mas o motor de análise observa os emits que
   // consome (ex.: "camcfg-updated" recarrega zonas/tripwires no engine) — contrato intacto.
@@ -115,6 +123,13 @@ const httpServer = createServer(async (req, res) => {
   res.end();
 });
 const io = new Server(httpServer, { cors: { origin: "*" }, maxHttpBufferSize: 8e6 });
+
+// Fase 1 (go2rtc): proxy do upgrade WebSocket da SINALIZAÇÃO WebRTC (/go2rtc/api/ws).
+// Coexiste com o socket.io: só tratamos /go2rtc/* — os upgrades de /socket.io/ seguem para o
+// engine.io (que ignora paths que não são dele). Inerte quando o flag/binário estão ausentes.
+httpServer.on("upgrade", (req, socket, head) => {
+  if (req.url && req.url.startsWith("/go2rtc/")) go2rtc.proxyUpgrade(req, socket, head);
+});
 
 // ── Motor de análise no hub (F1/ADR-009) — tee de observação sobre o io ─────────────────────
 // O engine consome coisas que já trafegam pelo io SEM mudar nenhum contrato: frames do relé
@@ -154,7 +169,13 @@ const cameras = new Map();
 /** id -> socket da câmera (p/ enviar config de captura direcionada) */
 const socketById = new Map();
 const cameraList = () => [...cameras.values()];
-const broadcast = () => io.to("dashboards").emit("cameras", cameraList());
+const broadcast = () => {
+  io.to("dashboards").emit("cameras", cameraList());
+  // Fase 1 (go2rtc): a lista de câmeras mudou → regenera o go2rtc.yaml (debounced, no-op se OFF).
+  // broadcast() é chamado por rtsp.addSource/removeSource/restartSource (CRUD via routes/cameras),
+  // então qualquer alteração de câmera IP re-sincroniza os streams do go2rtc sem hook extra.
+  go2rtc.sync();
+};
 
 // ── 2.1 — Assinatura por câmera (rooms) + shed de câmeras sem espectador ─────────────────────
 // Contrato ADITIVO: dashboard NOVO emite `watch { ids }` (conjunto COMPLETO do que quer receber)
@@ -372,6 +393,22 @@ io.on("connection", (socket) => {
         : "[whatsapp] desligado (defina WHATSAPP_ENABLED=1 para ligar)",
     );
     whatsapp.init();
+    // Fase 1 (go2rtc): supervisor do sidecar de vídeo WebRTC. DESLIGADO por default —
+    // só sobe com GO2RTC_ENABLED=1 + GO2RTC_BIN presente. getSources espelha o que o rtsp.js
+    // ingere: fontes LEGADAS (rtsp.sources.json/env, ids rtsp-N) + DINÂMICAS (cameras.json).
+    // O NOME de cada stream = ID da câmera (contrato com o front: /go2rtc/api/ws?src=<id>).
+    go2rtc.init({
+      getSources: () => {
+        const legacy = rtsp
+          .loadSources()
+          .map((s, i) => ({ id: `rtsp-${i + 1}`, url: s.url }));
+        const dynamic = cameraStore
+          .all()
+          .filter((c) => c && c.url && c.enabled !== false)
+          .map((c) => ({ id: c.id, url: c.url }));
+        return [...legacy, ...dynamic];
+      },
+    });
     // Câmeras IP/RTSP (via ffmpeg → frames JPEG), tratadas como câmeras comuns.
     // Legadas: rtsp.sources.json/env (retrocompat). Dinâmicas: cameras.json (CRUD em runtime).
     // io = ioAnalysis (tee): o motor de análise observa os frames JPEG que o rtsp.js emite
