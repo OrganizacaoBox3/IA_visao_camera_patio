@@ -4,8 +4,10 @@
 // WebRTC ao navegador. Este módulo NÃO substitui o relé MJPEG do rtsp.js — os dois vivem em
 // paralelo (rollback). O front escolhe o transporte por câmera (camcfg.transport).
 //
-// DESLIGADO POR DEFAULT (invariante do incremento): sem GO2RTC_ENABLED=1 OU sem GO2RTC_BIN
-// existente, este módulo é INERTE — nada é gerado, nenhum processo sobe, o hub segue idêntico.
+// AUTO-ON POR PRESENÇA (Onda 2): o binário go2rtc é EMPACOTADO no release em <root>/bin/ (baixado
+// no BUILD por scripts/fetch-go2rtc.mjs, NUNCA versionado). Se o binário existe, o sidecar LIGA
+// sozinho — o cliente não seta flag nenhuma. GO2RTC_ENABLED=0 é o escape hatch (força off); binário
+// ausente = off silencioso (nada gera, nenhum processo sobe, o hub segue idêntico no MJPEG).
 //
 // Responsabilidades:
 //  (a) GERAR um go2rtc.yaml a partir das câmeras atuais — o NOME de cada stream é o ID da câmera
@@ -23,9 +25,16 @@ const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
 
-// ── Configuração por ambiente (tudo com default seguro; OFF por ausência) ────────────────────
-const ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.GO2RTC_ENABLED || ""));
-const BIN = String(process.env.GO2RTC_BIN || "").trim();
+// ── Configuração por ambiente (default seguro; AUTO-ON pela PRESENÇA do binário empacotado) ────
+// GO2RTC_ENABLED=0 (ou false/off/no) = escape hatch que FORÇA off. Ausente/qualquer-outro valor =
+// deixa a presença do binário decidir (binário presente ⇒ ligado automático).
+const DISABLED = /^(0|false|off|no)$/i.test(String(process.env.GO2RTC_ENABLED || ""));
+// Binário: default EMPACOTADO em <root>/bin/go2rtc[.exe] por plataforma (vem no release, NÃO é
+// baixado em runtime). GO2RTC_BIN sobrescreve p/ um binário próprio/air-gapped (escape hatch).
+const ROOT = path.join(__dirname, "..");
+const PACKAGED_BIN = path.join(ROOT, "bin", process.platform === "win32" ? "go2rtc.exe" : "go2rtc");
+const BIN_OVERRIDE = String(process.env.GO2RTC_BIN || "").trim();
+const BIN = BIN_OVERRIDE || PACKAGED_BIN;
 const API_HOST = "127.0.0.1"; // proxy same-origin: go2rtc só escuta local; nginx/hub expõem /go2rtc/
 const API_PORT = Number(process.env.GO2RTC_API_PORT ?? 1984);
 const RTSP_PORT = Number(process.env.GO2RTC_RTSP_PORT ?? 8554);
@@ -35,10 +44,9 @@ const WEBRTC_CANDIDATES = String(process.env.GO2RTC_WEBRTC_CANDIDATES || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-// YAML gerado: por default ao LADO do binário (fora do repo). Nunca versionar (pode ter credenciais).
+// YAML gerado: por default ao LADO do binário (em bin/, gitignored). Nunca versionar (pode ter credenciais).
 const YAML_PATH =
-  String(process.env.GO2RTC_YAML || "").trim() ||
-  (BIN ? path.join(path.dirname(BIN), "go2rtc.gen.yaml") : path.join(__dirname, "go2rtc.gen.yaml"));
+  String(process.env.GO2RTC_YAML || "").trim() || path.join(path.dirname(BIN), "go2rtc.gen.yaml");
 
 // Reconexão do processo: backoff exponencial com teto (espelha a doutrina do rtsp.js).
 const BASE_DELAY = Number(process.env.GO2RTC_RESTART_BASE_MS ?? 2000);
@@ -59,9 +67,9 @@ let started = false; // init() já rodou
 function binExists() {
   return Boolean(BIN) && fs.existsSync(BIN);
 }
-/** O feature-flag está ligado E o binário existe? (proxy e supervisor só agem se sim.) */
+/** Ligado = NÃO desligado pelo escape hatch E o binário existe (presença ⇒ auto-on). */
 function enabled() {
-  return ENABLED && binExists();
+  return !DISABLED && binExists();
 }
 /** Helper p/ o proxy saber a base do go2rtc. */
 function apiTarget() {
@@ -290,16 +298,19 @@ function init(opts) {
   if (started) return;
   started = true;
   getSources = opts && typeof opts.getSources === "function" ? opts.getSources : null;
-  if (!ENABLED) {
-    console.log("[go2rtc] desligado (defina GO2RTC_ENABLED=1 para ligar) — hub segue no MJPEG");
+  if (DISABLED) {
+    console.log("[go2rtc] desligado por GO2RTC_ENABLED=0 (escape hatch) — hub segue no MJPEG");
     return;
   }
   if (!binExists()) {
-    console.warn(
-      `[go2rtc] GO2RTC_ENABLED=1 mas binário ausente (GO2RTC_BIN=${BIN || "não definido"}) — supervisor inerte, hub segue no MJPEG`,
+    console.log(
+      `[go2rtc] binário ausente (${BIN}) — sidecar off, hub segue no MJPEG. Empacote com: node scripts/fetch-go2rtc.mjs`,
     );
     return;
   }
+  console.log(
+    `[go2rtc] binário presente (${BIN}) [${BIN_OVERRIDE ? "GO2RTC_BIN" : "empacotado"}] — ligando sidecar automaticamente`,
+  );
   // Encerramento limpo: não deixar o go2rtc órfão quando o hub cai.
   const onExit = () => stop();
   process.once("exit", onExit);

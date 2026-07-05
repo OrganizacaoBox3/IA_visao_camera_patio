@@ -52,6 +52,10 @@ server/models/
 # Scratchpad de trabalho/POC — NUNCA versionar (o scratchpad real fica fora do repo, em temp).
 scratchpad/
 
+# Binário go2rtc EMPACOTADO no release (baixado no build por scripts/fetch-go2rtc.mjs).
+# Binário NUNCA versionado no git — vem no artefato de release, não no repo.
+bin/
+
 # go2rtc: yaml GERADO a partir das câmeras (contém URLs RTSP com credenciais) — nunca versionar.
 # O default fica FORA do repo (dir do binário); estes patterns são trava de segurança extra.
 go2rtc*.yaml
