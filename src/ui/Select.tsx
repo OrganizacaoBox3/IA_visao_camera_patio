@@ -1,7 +1,6 @@
 import * as RSelect from "@radix-ui/react-select";
 import { forwardRef, type ReactNode, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 export type SelectOption = { value: string; label: ReactNode };
 

@@ -1,7 +1,6 @@
 import * as RTabs from "@radix-ui/react-tabs";
 import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 /* Tailwind v4 (tokens mapeados no @theme — ADR-008). Replica EXATO os antigos
    `.ui-tabs/.ui-tablist/.ui-tab/.ui-tabpanel` do ui.css. Sem preflight: `border-0` +

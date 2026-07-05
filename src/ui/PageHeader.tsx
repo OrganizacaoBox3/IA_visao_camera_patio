@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 // Cabeçalho de página padrão: título como <h1> (hierarquia de leitura correta) + ações à direita.
 // Estilo migrado de .page-head/.page-head-titles/.page-title/.page-sub/.spacer (index.css + ui.css)

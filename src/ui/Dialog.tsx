@@ -1,8 +1,7 @@
 import * as RDialog from "@radix-ui/react-dialog";
 import { forwardRef, type ReactNode, type ElementRef } from "react";
 import { IconButton } from "./Button";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 // Tailwind v4 (tokens mapeados no @theme; não-mapeados = arbitrary var(--...)).
 // Keyframes ui-fade/ui-pop continuam no ui.css e são referenciados via animate-[...];

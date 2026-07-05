@@ -5,8 +5,7 @@ import {
   type ReactNode,
 } from "react";
 import * as Label from "@radix-ui/react-label";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 // Base compartilhada por Input e Textarea (tokens mapeados no @theme).
 // Replica .ui-input/.ui-textarea: fonte/tamanho/cor, superfície panel-2, borda,

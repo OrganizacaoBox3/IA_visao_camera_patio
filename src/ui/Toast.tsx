@@ -1,8 +1,6 @@
 import * as RToast from "@radix-ui/react-toast";
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-
-// Tailwind v4 (tokens do @theme; keyframe ui-toast-in permanece em ui.css → animate-[...]).
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 export type ToastTone = "default" | "alert" | "ok";
 type Item = { id: number; msg: string; tone: ToastTone };

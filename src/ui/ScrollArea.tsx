@@ -1,7 +1,6 @@
 import * as RScrollArea from "@radix-ui/react-scroll-area";
 import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 /* Tailwind v4 (tokens mapeados no @theme — ADR-008). Replica EXATO os antigos
    `.ui-scroll/.ui-scroll-vp/.ui-scrollbar/.ui-scroll-thumb/.ui-scroll-corner` do ui.css:

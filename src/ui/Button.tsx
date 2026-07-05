@@ -1,5 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type Ref } from "react";
 import { Slot } from "@radix-ui/react-slot";
+import { cx } from "./cx";
 
 type Variant = "default" | "primary" | "danger" | "ghost";
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -9,8 +10,6 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   block?: boolean;
   asChild?: boolean;
 };
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
 // Tailwind v4 (tokens mapeados no @theme; hex literais = valores que NÃO são tokens no going-gray).
 // Estrutura por grupos SEM propriedade duplicada entre grupos (Tailwind resolve conflito por ordem

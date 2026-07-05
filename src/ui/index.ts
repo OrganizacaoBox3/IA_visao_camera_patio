@@ -18,9 +18,9 @@ export {
   Alert,
   EmptyState,
   KpiCard,
-  SectionTitle,
   type Tone,
 } from "./misc";
+export { SectionTitle } from "./SectionTitle";
 export { PageHeader } from "./PageHeader";
 // ── Wrappers Radix adicionados na Fase 0 ──
 export { Tabs, TabsContent, type TabItem } from "./Tabs";

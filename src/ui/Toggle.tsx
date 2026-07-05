@@ -1,8 +1,7 @@
 import * as RToggle from "@radix-ui/react-toggle";
 import * as RToggleGroup from "@radix-ui/react-toggle-group";
 import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 /* Tailwind (tokens mapeados no @theme). Replica EXATO o antigo `.ui-toggle`:
    base panel + text-dim, on = estado `info` (going-gray), foco = duplo anel (--ui-focus). */

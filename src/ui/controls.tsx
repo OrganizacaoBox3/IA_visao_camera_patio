@@ -3,8 +3,7 @@ import * as RCheckbox from "@radix-ui/react-checkbox";
 import * as RSlider from "@radix-ui/react-slider";
 import * as Label from "@radix-ui/react-label";
 import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 type SwitchProps = {
   checked: boolean;

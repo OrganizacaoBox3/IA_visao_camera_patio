@@ -18,8 +18,7 @@ import {
   DIALOG_TITLE_CLS,
   DIALOG_BODY_CLS,
 } from "./Dialog";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 // Tailwind v4 — reaproveita a casca do Dialog; só a largura muda (ex-.ui-alertdialog: 440px).
 // O nome `ui-alertdialog` permanece enquanto o ui.css viver: `.ui-dialog{width:...}` (unlayered,

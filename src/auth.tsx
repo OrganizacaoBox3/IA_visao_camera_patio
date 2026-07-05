@@ -20,6 +20,17 @@ export function canConfigurePapel(papel: Papel): boolean {
   return papel === "superadmin" || papel === "engenheiro";
 }
 
+// Não mascarar falha de infra como "senha errada": distingue credencial inválida (401 —
+// único status que o /api/login emite p/ recusa) de indisponibilidade (429/≥500, tipicamente
+// do proxy/hub fora do ar). Replica a INTENÇÃO do friendlyStatus de api.ts sem importá-lo
+// (api.ts é contrato de outra frente; F7 poderá exportar friendlyStatus e unificar).
+function loginErrorFor(status: number): string {
+  if (status === 401 || status === 403) return "Usuário ou senha inválidos.";
+  if (status === 429) return "Muitas tentativas. Aguarde um instante e tente de novo.";
+  if (status >= 500) return "Servidor indisponível no momento. Tente novamente em instantes.";
+  return "Não foi possível entrar. Tente novamente.";
+}
+
 function readSession(): Session | null {
   try {
     const s = localStorage.getItem(KEY);
@@ -109,7 +120,7 @@ function LoginScreen({
         body: JSON.stringify({ usuario: usuario.trim(), senha }),
       });
       if (!res.ok) {
-        setErr("Usuário ou senha inválidos.");
+        setErr(loginErrorFor(res.status));
         setBusy(false);
         return;
       }

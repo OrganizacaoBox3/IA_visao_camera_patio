@@ -1,9 +1,9 @@
 import { type ReactNode, type CSSProperties } from "react";
+import { cx } from "./cx";
 
 // Tailwind v4 (tokens mapeados no @theme; hex/token-não-mapeado = arbitrary value var(--...)).
 // Composição por grupos SEM propriedade duplicada entre grupos → uma classe por propriedade
 // (Tailwind resolve conflito por ordem de geração, não pela ordem no className).
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
 export type Tone = "ok" | "warn" | "alert" | "info";
 
@@ -137,29 +137,5 @@ export function KpiCard({
       </div>
       <div className="text-label uppercase tracking-[0.3px] text-text-muted">{label}</div>
     </div>
-  );
-}
-
-// ── SectionTitle ───────────────────────────────────────────
-// Título de seção padrão da casa: h2 SEMÂNTICO com o visual do antigo h3 de
-// painel (.panel h3/.side h3): label 11px uppercase, tracking 0.12em,
-// text-muted, margem inferior 12px (funde as margens divergentes 8/12→12).
-// As frentes A2–A5 substituem os h3 crus por este átomo.
-export function SectionTitle({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <h2
-      className={cx(
-        "m-0 mb-3 text-label font-bold uppercase tracking-[0.12em] text-text-muted",
-        className,
-      )}
-    >
-      {children}
-    </h2>
   );
 }

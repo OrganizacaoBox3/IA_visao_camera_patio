@@ -1,7 +1,6 @@
 import * as RDropdown from "@radix-ui/react-dropdown-menu";
 import { forwardRef, type ReactNode, type ComponentPropsWithoutRef, type ElementRef } from "react";
-
-const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
+import { cx } from "./cx";
 
 // Estilo migrado de .ui-menu* (ui.css) para utilities Tailwind (tokens @theme). Visual idêntico.
 const menuContentCls = cx(
