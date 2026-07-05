@@ -1,6 +1,7 @@
-/* Câmeras — tela /cameras (CamerasPage + cameras/IpCamerasSection).
-   O form de câmera IP (.cam-ip-*) veio do antigo Dialog da home (dashboard/IpCameraDialog),
-   agora dentro do Dialog aberto pela própria tela. */
+/* Câmeras — tela /cameras (CamerasPage + cameras/IpCamerasSection = CamerasList).
+   CamerasList é a listagem UNIFICADA (registro IP ∪ conectadas): uma linha por câmera com
+   identidade + status + ajustes inline + Editar/Remover. O form de câmera IP (.cam-ip-*) veio do
+   antigo Dialog da home (dashboard/IpCameraDialog), agora dentro do Dialog aberto pela própria tela. */
 
 /* Corpo da página: seções empilhadas (mesmo ritmo de .users-body/.ah-body).
    SEM max-width: app de operação usa a tela inteira (padrão das demais telas);
@@ -62,12 +63,28 @@
   gap: var(--sp-2);
 }
 
-/* ── "Ajustes desta câmera" (papel + vídeo no painel por câmera) ──
+/* ── Ajustes inline por câmera (papel + vídeo no painel) na linha unificada ──
    Reusa a linha neutra .cam-row; os dois Selects ficam à direita, empilhando no mobile. */
 .cam-set-controls {
   display: grid;
   gap: var(--sp-2);
   min-width: 220px;
+}
+/* Dica quando a câmera está offline (ajustes desabilitados) — ocupa a largura do grid. */
+.cam-adjust-hint {
+  font-size: 11px;
+}
+
+/* Status de conexão (online/offline). Going-gray: online = neutro (operação normal);
+   offline = âmbar (atenção — cadastro parado ou fora do ar). */
+.cam-status {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--state-neutral-fg);
+}
+.cam-status[data-online="0"] {
+  color: var(--state-warn-fg);
 }
 .cam-set-note {
   margin: var(--sp-3) 0 0;
