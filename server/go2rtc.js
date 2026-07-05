@@ -86,6 +86,11 @@ function generateYaml(sources) {
   lines.push("# LGPD: sem módulo de gravação (record) — go2rtc só relaya/remuxa, frames efêmeros.");
   lines.push("api:");
   lines.push(`  listen: ${q(`:${API_PORT}`)}`);
+  // origin "*" libera o handshake WebSocket (/api/ws) cross-origin — OBRIGATÓRIO atrás do
+  // reverse-proxy /go2rtc/: o browser envia Origin = origem do app (≠ go2rtc 127.0.0.1:1984), e
+  // sem isto o go2rtc responde 403 no upgrade → o tile WebRTC fica VAZIO. go2rtc só escuta local,
+  // então "*" não expõe nada além do que o proxy já intermedia. (Confirmado por teste Playwright.)
+  lines.push(`  origin: ${q("*")}`);
   lines.push("rtsp:");
   lines.push(`  listen: ${q(`:${RTSP_PORT}`)}`);
   lines.push("webrtc:");
