@@ -169,6 +169,17 @@ verificando tamanho + **sha256** (escrita atômica). Default `s` = `dfine_s_obj2
 ou aponte `ANALYSIS_MODEL_PATH`. Falha de download do S/M cai para o **N** com aviso; sem modelo
 algum, o motor desliga e o hub segue relaiando normal.
 
+**Binário go2rtc (não versionado — `bin/`, gitignored — Onda 2).** O gateway de vídeo WebRTC é
+**empacotado no release**, não baixado em runtime. Na build (Windows), `node scripts/fetch-go2rtc.mjs
+--platform linux-amd64` baixa o binário **Linux** (sha conferido, marca `+x`) para `bin/go2rtc`; ele
+sobe no upload junto com `dist/`/`server/` (WinSCP/scp) e **não vai no git**. Em runtime o hub liga o
+sidecar **sozinho ao encontrar `bin/go2rtc[.exe]`** — **sem `GO2RTC_ENABLED`/`GO2RTC_BIN`**. WebRTC vira
+o transporte automático dos tiles; **fallback MJPEG** por câmera se o gateway não subir. Escape hatch:
+`GO2RTC_ENABLED=0`. Proxy same-origin `/go2rtc/` → `127.0.0.1:1984` (nginx, §4.1); media na **8555
+TCP+UDP** na LAN; `api.origin` já vai no YAML gerado (`server/go2rtc.js`). O YAML gerado **não** tem
+módulo `record:` (LGPD/ADR-002 — frames efêmeros) e é escrito ao lado do binário (em `bin/`, gitignored).
+Runbook: `docs/deploy-atualizacao-2026-07.md §11`.
+
 ### 3.3 Onde definir em produção
 
 As envs do hub são definidas no **systemd unit** (`deploy/visao-hub.service:21-48`). Várias já
@@ -190,6 +201,10 @@ Cenário: VPS **compartilhada** onde 80/443 já são de um nginx existente. O ar
    (`deploy/nginx-visao.conf:51-62`): `proxy_read_timeout 600s` (conexões wss longas) e
    `proxy_buffering off`.
 3. **Proxy `/api/` → `127.0.0.1:8091`** (login/gestão — `deploy/nginx-visao.conf:65-71`).
+3b. **Proxy `/go2rtc/` → `127.0.0.1:1984`** com upgrade WebSocket (Onda 2) — vídeo WebRTC same-origin
+   (barra final no `proxy_pass` remove o prefixo). Media na **8555 TCP+UDP** alcançável na LAN. Bloco
+   pronto em `docs/deploy-atualizacao-2026-07.md §11.2` / `docs/deploy-digitalocean.md §5.1`. Same-origin
+   → o CSP não muda.
 4. **Headers de segurança** (`deploy/nginx-visao.conf:43-47`) que espelham o `vite.config.ts`:
    CSP, Permissions-Policy (`camera=(self)`), X-Content-Type-Options, Referrer-Policy e HSTS.
    Todos com `always` para valer inclusive em respostas de erro.
@@ -261,6 +276,9 @@ escolhida por estar livre. Etapas resumidas:
 - **Histórico em fallback JSON** — `server/data-hist.json` (+ `.tmp`) — só indicadores agregados (`:46-47`).
 - **Modelo ONNX do motor de análise** — `server/models/` (baixado no boot com verificação de sha,
   ~15–79 MB conforme N/S/M — ver `server/analysis/README.md`) (`:49-51`).
+- **Binário go2rtc** — `bin/` (`bin/go2rtc[.exe]`, empacotado no release via `scripts/fetch-go2rtc.mjs`;
+  artefato de deploy, **não versionado** — Onda 2). O `go2rtc.gen.yaml` gerado fica ao lado do binário
+  (em `bin/`, gitignored — pode conter credenciais RTSP; `:55-59`).
 - **Bancada de acurácia** — `eval/data/`, `eval/last-results.json`, `eval/model-comparison.json`
   (dados pesados COCO + resultados de execução; o `eval/fixture/` commitável ~5 MB fica versionado).
 

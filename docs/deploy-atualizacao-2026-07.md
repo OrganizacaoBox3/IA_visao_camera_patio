@@ -14,6 +14,7 @@
 | **Histórico persistido no HUB** (Postgres, com fallback JSON `server/data-hist.json`) | Configure Postgres em produção (ou aceite o JSON single-file). `schema.sql` é idempotente. |
 | **Envs novas do systemd**: `ANALYSIS_ENABLED`, `ANALYSIS_MODEL`, `ANALYSIS_FPS`, `ANALYSIS_MODEL_PATH` | Editar `deploy/visao-hub.service` no servidor. |
 | **Front**: bundle −50%, tela `/cameras` nova, menu Lucide, tokens Tailwind | Transparente — é só o novo `dist/`. |
+| **go2rtc EMPACOTADO no release** (Onda 2): vídeo WebRTC fluido; binário **Linux** vai no `bin/` do upload | +1 processo (sidecar) que o hub liga **sozinho** ao ver `bin/go2rtc` — **sem flag**. Abrir a porta media **8555 TCP+UDP** na LAN e o `location /go2rtc/` no nginx (§11). |
 
 ## 2. Pré-voo (antes de tocar produção)
 
@@ -48,6 +49,18 @@ npm run verify   # lint + typecheck + build + 210 testes — TEM que passar (gat
 ```
 Isso gera `dist/` novo. Opcional: `npm run eval` (confere que o modelo não regrediu).
 
+### 4.1 Empacotar o go2rtc (vídeo WebRTC) no release — Onda 2
+
+Antes de subir, baixe o binário **Linux** do go2rtc para `bin/`. A build é Windows, **mas o servidor é
+Linux** — pegue o binário do SO do **servidor**, não o `.exe`:
+```powershell
+node scripts/fetch-go2rtc.mjs --platform linux-amd64
+```
+O script baixa `go2rtc_linux_amd64` (verificação de sha), grava em `bin/go2rtc` e já marca `+x`. O
+binário **NÃO vai no git** (gitignored) — é artefato de release: sobe junto no WinSCP (passo 5). Sem ele,
+o hub simplesmente segue no MJPEG (fallback). Rode `--platform win64` só se quiser testar WebRTC local
+no Windows (esse `bin/go2rtc.exe` **não** sobe para o servidor).
+
 ## 5. Upload via WinSCP
 
 Conecte no servidor. Suba para uma pasta temporária (ex.: `/tmp/visao-up/`) **estas pastas/arquivos**:
@@ -56,6 +69,7 @@ Conecte no servidor. Suba para uma pasta temporária (ex.: `/tmp/visao-up/`) **e
 - `dist/` (front novo)
 - `server/` (inclui `server/analysis/` — o motor — e `server/schema.sql`)
 - `package.json` e `package-lock.json`
+- `bin/` (binário **Linux** do go2rtc, do passo 4.1 — só o `go2rtc`, **nunca** o `.exe` do Windows)
 - `deploy/` (só se mudou; o systemd/nginx base são os mesmos)
 
 **NÃO SOBE (importante):**
@@ -67,10 +81,11 @@ Conecte no servidor. Suba para uma pasta temporária (ex.: `/tmp/visao-up/`) **e
 Depois, no SSH:
 ```bash
 # posiciona (preserva os *.json de runtime existentes: copie SÓ o que subiu, sem apagar o resto)
-sudo cp -r /tmp/visao-up/dist /tmp/visao-up/server /tmp/visao-up/package.json /tmp/visao-up/package-lock.json /var/www/visao-patio/
+sudo cp -r /tmp/visao-up/dist /tmp/visao-up/server /tmp/visao-up/bin /tmp/visao-up/package.json /tmp/visao-up/package-lock.json /var/www/visao-patio/
 sudo cp -r /tmp/visao-up/deploy /var/www/visao-patio/ 2>/dev/null || true
 cd /var/www/visao-patio
 sudo npm install --omit=dev        # baixa os prebuilds Linux de onnxruntime-node + sharp (1-3 min)
+sudo chmod +x bin/go2rtc           # garante +x (o WinSCP pode perder a permissão na transferência)
 sudo chown -R visao:visao /var/www/visao-patio
 ```
 > Se o `npm install` tentar COMPILAR (sem prebuilt p/ a arquitetura) e falhar, instale o toolchain:
@@ -107,6 +122,11 @@ Environment=PGPASSWORD=<SENHA_NOVA>   # ROTACIONAR
 Envs avançadas de tuning do motor (`ANALYSIS_FPS`, `ANALYSIS_HIGH_SCORE`, `ANALYSIS_SCORE_MIN`,
 `ANALYSIS_INTRA_THREADS`, `ANALYSIS_NMS_IOU`, `DATA_HIST_RETENTION_DAYS`) têm defaults sensatos —
 ver `server/analysis/README.md`. Só mexa se o dimensionamento pedir.
+
+> **go2rtc não precisa de env (Onda 2).** `GO2RTC_ENABLED`/`GO2RTC_BIN` **saíram** do caminho comum:
+> o hub liga o sidecar sozinho ao encontrar `bin/go2rtc` (§11). Único escape hatch:
+> `Environment=GO2RTC_ENABLED=0` para desligar de vez. `GO2RTC_WEBRTC_CANDIDATES` só se for servir
+> WebRTC **fora da LAN** (§11.2).
 
 Se for usar Postgres, crie o schema uma vez (idempotente):
 ```bash
@@ -149,3 +169,56 @@ Rollback "leve" (só desligar o motor, manter o resto): `ANALYSIS_ENABLED=0` no 
 - [ ] Definir os hotspots de falso positivo (grade/placa/janela) com **zona de Exclusão** por câmera
       (Central → abrir câmera → ✎ Zona → Modo: Exclusão) — ver manual.
 - [ ] Se o servidor for pequeno: revisar `ANALYSIS_MODEL` (n/s) conforme o nº de câmeras (~7/núcleo no S).
+
+## 11. go2rtc — vídeo WebRTC empacotado (Onda 2 da simplificação)
+
+Esta release **empacota** o gateway go2rtc no deploy (**não baixa em runtime**) e o hub o liga
+**sozinho** — sem `GO2RTC_ENABLED`/`GO2RTC_BIN`. WebRTC vira o transporte automático dos tiles, com
+**fallback MJPEG** por câmera quando o gateway não sobe. O binário Linux entra pelo passo 4.1 (empacotar)
+e sobe no `bin/` (passo 5).
+
+### 11.1 Como o hub liga (sem flag)
+
+- O hub procura `bin/go2rtc` (Linux) / `bin/go2rtc.exe` (Windows) na raiz da app. **Achou → sobe o
+  sidecar sozinho**: gera o `go2rtc.gen.yaml` a partir das câmeras atuais (o `id` da câmera vira o nome
+  do stream), supervisiona com restart/backoff e faz o proxy same-origin `/go2rtc/`.
+- **Não achou o binário — ou o processo/porta falha → o hub segue no MJPEG** por câmera. Nenhuma
+  intervenção; nada quebra.
+- **Escape hatch:** `Environment=GO2RTC_ENABLED=0` no systemd desliga de vez (raro — nó só-vídeo/sem WebRTC).
+- **Nenhuma env é necessária** no caminho comum. Portas default: API `1984` (só loopback), RTSP `8554`,
+  media WebRTC `8555`. O `api.origin` já vai no YAML gerado (libera o handshake WS atrás do proxy).
+- **LGPD/ADR-002:** o YAML gerado **não** tem módulo `record:` — go2rtc só relaya/remuxa, frames seguem
+  efêmeros. O YAML pode conter credenciais RTSP → é escrito ao lado do binário (em `bin/`, gitignored).
+
+### 11.2 nginx — expor `/go2rtc/` (same-origin) + porta media
+
+Adicione ao server block (`deploy/nginx-visao.conf`), ao lado de `/socket.io/` e `/api/`:
+```nginx
+location /go2rtc/ {
+    proxy_pass http://127.0.0.1:1984/;        # barra final: remove o prefixo /go2rtc/
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;             # sinalização WebRTC (/api/ws)
+    proxy_set_header Connection $connection_upgrade;    # reusa o map já usado por /socket.io/
+    proxy_set_header Host $host;
+    proxy_read_timeout 600s;
+    proxy_buffering off;
+}
+```
+`sudo nginx -t && sudo systemctl reload nginx`. Como já é same-origin (`wss:`/`blob:`/`'self'` no CSP),
+**o CSP não muda**.
+
+**Porta media 8555 (TCP+UDP)** precisa ser alcançável na **LAN do CD** — é por onde trafega o vídeo
+WebRTC (ICE/DTLS/SRTP, fora do CSP). Em LAN direta, basta não bloquear no firewall do host:
+```bash
+sudo ufw allow 8555/tcp && sudo ufw allow 8555/udp   # se usar ufw; senão libere no firewall do host
+```
+Acesso de **fora da LAN** exige anunciar os candidatos:
+`Environment=GO2RTC_WEBRTC_CANDIDATES=IP_PUBLICO:8555,stun:8555` — **não** é necessário para operação
+intra-LAN.
+
+### 11.3 Validação
+
+- [ ] Log do hub no boot mostra `[go2rtc] iniciado (pid …)` (e **não** "desligado").
+- [ ] `curl -sS http://127.0.0.1:1984/api/streams` no servidor lista as câmeras (gateway no ar).
+- [ ] No dashboard, um tile abre em **WebRTC** (fluido, sem "trava-e-pula"); DevTools sem erro de CSP.
+- [ ] Renomeie `bin/go2rtc` e `restart` do hub → os tiles voltam a **MJPEG** sozinhos (prova do fallback).

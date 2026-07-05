@@ -8,7 +8,7 @@
 
 Inteligência operacional por câmeras para o CD da Grendene. A **análise de indicadores roda no HUB**
 (pessoas/atividade/fluxo — motor **D-FINE-S** em worker process, `server/analysis/`, 24/7 sem espectador; configurável por `ANALYSIS_MODEL=n|s|m` — N mais leve, S/M mais recall; ADR-009);
-o **navegador é espelho** (vídeo + overlays servidos via `analysis-tracks`) e roda os **modos
+o **navegador é espelho** (vídeo por **WebRTC** quando o gateway **go2rtc** está no ar — binário **empacotado no release** e auto-ligado pela **presença** de `bin/go2rtc[.exe]`, sem flag; **fallback MJPEG** automático por câmera; overlays servidos via `analysis-tracks`) e roda os **modos
 especializados** no cliente (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). O **hub Node** (`server/`)
 segue relé de frames via Socket.IO + persistência (Postgres com fallback JSON) + notificações
 (WhatsApp/Baileys, Andon). Nós de câmera (`/camera`, webcam) e RTSP (ffmpeg → JPEG) viram câmeras comuns
