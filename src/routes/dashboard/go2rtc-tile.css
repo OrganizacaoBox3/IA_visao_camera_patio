@@ -14,3 +14,15 @@
   object-fit: contain;
   background: #05080c;
 }
+
+/* Fase 2: overlay de caixas do hub (interpoladas) — <canvas> transparente exatamente sobre o
+   vídeo. pointer-events:none → o clique atravessa e abre a câmera (como no tile sem overlay). */
+.rtc-vp .rtc-overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}

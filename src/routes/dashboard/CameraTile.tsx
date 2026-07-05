@@ -6,6 +6,7 @@ import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import { Tooltip } from "../../ui";
+import { TrackOverlay } from "./TrackOverlay";
 import { type Camera, type CameraStatus } from "./types";
 import "./go2rtc-tile.css";
 
@@ -25,7 +26,15 @@ function ensureVideoStreamRegistered(): Promise<unknown> {
 // Wrapper React do <video-stream>. As props do componente são SETTERS JS (não atributos HTML), então
 // aplicamos src/mode/media/background IMPERATIVAMENTE via ref, APÓS o elemento estar definido (evita
 // o bug de "upgrade" em que uma prop setada antes do define vira data-property que sombreia o setter).
-function Go2rtcVideoTile({ camId }: { camId: string }) {
+function Go2rtcVideoTile({
+  camId,
+  getHubAnalysis,
+}: {
+  camId: string;
+  // Fase 2: getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
+  // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
+  getHubAnalysis?: () => HubAnalysis | null;
+}) {
   const ref = useRef<VideoStreamElement | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +70,8 @@ function Go2rtcVideoTile({ camId }: { camId: string }) {
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
+      {/* Fase 2: caixas do hub interpoladas, num <canvas> transparente exatamente sobre o vídeo. */}
+      <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} />
     </div>
   );
 }
@@ -167,9 +178,14 @@ export const CameraTile = memo(function CameraTile({
     <div className="tile tile-open">em pausa</div>
   ) : transport === "webrtc" ? (
     // Fase 1: vídeo fluido via go2rtc. Só entra com a flag ligada; substitui o canvas MJPEG. Sem
-    // inferência local aqui (o overlay de caixas do hub é Fase 2). Clique abre a câmera, como nos demais.
+    // inferência local aqui; as caixas do hub vêm interpoladas por cima (TrackOverlay, Fase 2).
+    // Clique abre a câmera, como nos demais.
     <div className="tile" onClick={openSelf}>
-      <Go2rtcVideoTile key={`rtc-${camera.id}`} camId={camera.id} />
+      <Go2rtcVideoTile
+        key={`rtc-${camera.id}`}
+        camId={camera.id}
+        getHubAnalysis={getHubAnalysis}
+      />
     </div>
   ) : isFadiga ? (
     <FadigaView
