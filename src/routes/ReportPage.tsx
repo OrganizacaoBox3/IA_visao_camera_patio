@@ -7,7 +7,6 @@ import {
   evolution,
   insights,
   fmtMin,
-  shiftOf,
   readingWindows,
   readingKpis,
   readingHeatmap,
@@ -71,7 +70,20 @@ import {
   type FlowDataset,
 } from "../report/store";
 import { getDataStatus, type DataPersistence } from "../api";
-import { buildCSV, downloadCSVFile, dateStamp, alarmSection, type CsvSection } from "../report/csv";
+import {
+  buildCSV,
+  downloadCSVFile,
+  dateStamp,
+  metaSection,
+  resumoSection,
+  atividadeSections,
+  leituraSections,
+  objetosSections,
+  fadigaSections,
+  alarmesSections,
+  type CsvSection,
+} from "./report/csv";
+import { filterByWindow, byShift } from "./report/aggregate";
 import {
   Button,
   IconButton,
@@ -83,7 +95,7 @@ import {
   AlertDialog,
 } from "../ui";
 import "../report/alarms.css";
-import { SHIFTS, type RepTab } from "./report/chrome";
+import { type RepTab } from "./report/chrome";
 import { AtividadePanel } from "./report/AtividadePanel";
 import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel, classLabel } from "./report/ObjetosPanel";
@@ -106,7 +118,6 @@ const PERIOD_LABEL: Record<Period, string> = {
   "7d": "Últimos 7 dias",
   "30d": "Últimos 30 dias",
 };
-const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
 const EMPTY_DS: Dataset = { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() };
 const EMPTY_RDS: ReadingDataset = {
   days: 0,
@@ -231,17 +242,10 @@ export function ReportPage() {
   const hm = useMemo(() => heatmap(aCur, areasForHeat), [aCur, area]); // eslint-disable-line react-hooks/exhaustive-deps
   const rank = useMemo(() => ranking(aCur, dataset.areas), [aCur, dataset.areas]);
   const evo = useMemo(() => evolution(dataset, fA, 14), [dataset, fA]);
-  const evt = useMemo(() => {
-    const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
-    return allEvents
-      .filter(
-        (e) =>
-          e.ts >= lo &&
-          (shift === "Todos" || shiftOf(new Date(e.ts).getHours()) === shift) &&
-          (area === "Todas" || e.area === area),
-      )
-      .slice(0, 80);
-  }, [allEvents, period, shift, area]);
+  const evt = useMemo(
+    () => filterByWindow(allEvents, period, shift, (e) => area === "Todas" || e.area === area).slice(0, 80),
+    [allEvents, period, shift, area],
+  );
   const tips = useMemo(() => insights(aCur, k), [aCur, k]);
   const byAtiv = useMemo(() => {
     const m = new Map<string, { idleMin: number; alerts: number }>();
@@ -258,11 +262,7 @@ export function ReportPage() {
       .sort((a, b) => b.idleMin - a.idleMin);
     return { rows, max: Math.max(1, ...rows.map((r) => r.idleMin)) };
   }, [aCur]);
-  const byShiftA = useMemo(() => {
-    const m: Record<Shift, number> = { Manhã: 0, Tarde: 0, Noite: 0 };
-    for (const c of aCur) m[shiftOf(c.hour)] += c.idleMin;
-    return { m, max: Math.max(1, ...Object.values(m)) };
-  }, [aCur]);
+  const byShiftA = useMemo(() => byShift(aCur, (c) => c.idleMin), [aCur]);
   // ── Fluxo de pessoas (plano 1.3) — dentro da história de Atividade. Respeita período/turno;
   // o filtro de ÁREA não se aplica (buckets são câmera×linha, sem área — documentado no painel).
   const flowCur = useMemo(
@@ -297,23 +297,16 @@ export function ReportPage() {
     [rCur, rdataset.cameraLabels],
   );
   const revo = useMemo(() => readingEvolution(rdataset, fR, 14), [rdataset, fR]);
-  const revt = useMemo(() => {
-    const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
-    return rEvents
-      .filter(
-        (e) =>
-          e.ts >= lo &&
-          (shift === "Todos" || shiftOf(new Date(e.ts).getHours()) === shift) &&
-          (ponto === "Todos" || e.ponto === ponto),
-      )
-      .slice(0, 120);
-  }, [rEvents, period, shift, ponto]);
+  const revt = useMemo(
+    () =>
+      filterByWindow(rEvents, period, shift, (e) => ponto === "Todos" || e.ponto === ponto).slice(
+        0,
+        120,
+      ),
+    [rEvents, period, shift, ponto],
+  );
   const rtips = useMemo(() => readingInsights(rk), [rk]);
-  const byShiftR = useMemo(() => {
-    const m: Record<Shift, number> = { Manhã: 0, Tarde: 0, Noite: 0 };
-    for (const c of rCur) m[shiftOf(c.hour)] += c.boxes;
-    return { m, max: Math.max(1, ...Object.values(m)) };
-  }, [rCur]);
+  const byShiftR = useMemo(() => byShift(rCur, (c) => c.boxes), [rCur]);
 
   // ── Objetos ──
   const odataset = ods ?? EMPTY_ODS;
@@ -328,17 +321,14 @@ export function ReportPage() {
   const orank = useMemo(() => objectRanking(oCur, odataset.setores), [oCur, odataset.setores]);
   const obyClass = useMemo(() => objectByClass(oCur, odataset.classes), [oCur, odataset.classes]);
   const oevo = useMemo(() => objectEvolution(odataset, fO, 14), [odataset, fO]);
-  const oevt = useMemo(() => {
-    const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
-    return oEvents
-      .filter(
-        (e) =>
-          e.ts >= lo &&
-          (shift === "Todos" || shiftOf(new Date(e.ts).getHours()) === shift) &&
-          (setor === "Todos" || e.setor === setor),
-      )
-      .slice(0, 120);
-  }, [oEvents, period, shift, setor]);
+  const oevt = useMemo(
+    () =>
+      filterByWindow(oEvents, period, shift, (e) => setor === "Todos" || e.setor === setor).slice(
+        0,
+        120,
+      ),
+    [oEvents, period, shift, setor],
+  );
   const oLoads = useMemo(() => oevt.filter((e) => e.type === "carregamento").length, [oevt]);
   const otips = useMemo(() => objectInsights(ok, oLoads), [ok, oLoads]);
   const presSetores = setor === "Todos" ? odataset.setores : [setor];
@@ -350,17 +340,14 @@ export function ReportPage() {
   const fk = useMemo(() => fadigaKpis(fCur), [fCur]);
   const fhm = useMemo(() => fadigaHeatmap(fCur), [fCur]);
   const fevo = useMemo(() => fadigaEvolution(fdataset, fF, 14), [fdataset, fF]);
-  const fevt = useMemo(() => {
-    const lo = Date.now() - PERIOD_DAYS[period] * 86_400_000;
-    return fEvents
-      .filter(
-        (e) =>
-          e.ts >= lo &&
-          (shift === "Todos" || shiftOf(new Date(e.ts).getHours()) === shift) &&
-          (posto === "Todos" || e.posto === posto),
-      )
-      .slice(0, 120);
-  }, [fEvents, period, shift, posto]);
+  const fevt = useMemo(
+    () =>
+      filterByWindow(fEvents, period, shift, (e) => posto === "Todos" || e.posto === posto).slice(
+        0,
+        120,
+      ),
+    [fEvents, period, shift, posto],
+  );
   const fOccFadiga = useMemo(() => fevt.filter((e) => e.type === "fadiga").length, [fevt]);
   const fOccCelular = useMemo(() => fevt.filter((e) => e.type === "celular").length, [fevt]);
   const fBocejos = useMemo(() => fevt.filter((e) => e.type === "bocejo").length, [fevt]);
@@ -468,208 +455,62 @@ export function ReportPage() {
             : area;
 
   // CSV "rico": metadados + indicadores + detalhamento + eventos, num arquivo só (auto-descritivo).
+  // Orquestração pura: os builders por modo vivem em ./report/csv.ts (seções reutilizáveis).
   function downloadCSV() {
     const now = new Date();
     const sections: CsvSection[] = [
-      {
-        title: "RELATÓRIO OPERACIONAL — VISÃO DE PÁTIO",
-        rows: [
-          ["Dimensão", MODE_LABEL[mode]],
-          ["Período", PERIOD_LABEL[period]],
-          ["Turno", shift === "Todos" ? "Todos" : shift],
-          ["Filtro", filtroLabel],
-          ["Gerado em", now.toLocaleString("pt-BR")],
-          ["Privacidade", "Indicadores agregados, sem imagens (LGPD)"],
-        ],
-      },
+      metaSection({
+        modeLabel: MODE_LABEL[mode],
+        periodLabel: PERIOD_LABEL[period],
+        shift: shift === "Todos" ? "Todos" : shift,
+        filtroLabel,
+        now,
+      }),
     ];
 
     if (isResumo) {
-      sections.push({
-        title: "INDICADORES CONSOLIDADOS",
-        headers: ["Dimensão", "Indicador", "Valor"],
-        rows: [
-          ["Atividade", "Tempo ativo (%)", k.activePct],
-          ["Atividade", "Tempo parado", fmtMin(k.idleMin)],
-          ["Atividade", "Alertas", k.alerts],
-          ["Atividade", "Área mais parada", k.topArea],
-          ["Operador", "Tempo em alerta (%)", fk.alertPct],
-          ["Operador", "Ocorrências de fadiga", fOccFadiga],
-          ["Operador", "Ocorrências de celular", fOccCelular],
-          ["Leitura", "Caixas lidas", rk.boxes],
-          ["Leitura", "Taxa de leitura (%)", rk.ratePct],
-          ["Leitura", "No-reads", rk.noReads],
-          ["Leitura", "Ponto de maior volume", rk.topPonto],
-          ["Objetos", "Objetos médios", ok.avgCount],
-          ["Objetos", "Pico simultâneo", ok.peak],
-          ["Objetos", "Predominante", classLabel(ok.topClasse)],
-        ],
-      });
+      sections.push(resumoSection({ k, fk, fOccFadiga, fOccCelular, rk, ok }));
     } else if (mode === "atividade") {
-      sections.push({
-        title: "INDICADORES",
-        headers: ["Indicador", "Valor"],
-        rows: [
-          ["Tempo parado", fmtMin(k.idleMin)],
-          ["Alertas", k.alerts],
-          ["Tempo ativo (%)", k.activePct],
-          ["Pico de pessoas", kPeople],
-          ["Área mais parada", k.topArea],
-          ["Horário crítico", `${String(k.peakHour).padStart(2, "0")}h`],
-        ],
-      });
-      sections.push({
-        title: "POR ÁREA",
-        headers: ["Área", "Tempo parado", "Alertas"],
-        rows: rank.rows.map((r) => [r.area, fmtMin(r.idleMin), r.alerts]),
-      });
-      sections.push({
-        title: "POR ATIVIDADE",
-        headers: ["Atividade", "Tempo parado", "Alertas"],
-        rows: byAtiv.rows.map((r) => [r.atividade, fmtMin(r.idleMin), r.alerts]),
-      });
-      sections.push({
-        title: "POR TURNO",
-        headers: ["Turno", "Tempo parado"],
-        rows: SHIFTS.map((s) => [s, fmtMin(byShiftA.m[s])]),
-      });
-      // Fluxo de pessoas (plano 1.3): só quando o hub expõe o kind "flow" (hub antigo → omite).
-      // Recorte período/turno; o filtro de área NÃO se aplica ao fluxo (câmera×linha, sem área).
-      if (flowDs) {
-        sections.push({
-          title: "FLUXO DE PESSOAS (linhas de contagem)",
-          headers: ["Indicador", "Valor"],
-          rows: [
-            ["Entradas", flowK.in],
-            ["Saídas", flowK.out],
-            ["Saldo (entradas − saídas)", flowK.in - flowK.out],
-            ["Linhas com cruzamento", flowK.lines],
-          ],
-        });
-        sections.push({
-          title: "FLUXO POR LINHA",
-          headers: ["Câmera", "Linha (id)", "Entradas", "Saídas"],
-          rows: flowLines.rows.map((r) => [r.cameraLabel || r.cameraId, r.tripwireId, r.in, r.out]),
-        });
-      }
-      sections.push({
-        title: `EVENTOS (${evt.length})`,
-        headers: ["Data/hora", "Área", "Câmera", "Duração (min)", "Turno"],
-        rows: evt.map((r) => [
-          new Date(r.ts).toLocaleString("pt-BR"),
-          r.area,
-          r.camera,
-          r.durationMin,
-          r.shift,
-        ]),
-      });
+      // Fluxo (plano 1.3): só quando o hub expõe o kind "flow" (hub antigo → omite). Recorte
+      // período/turno; o filtro de área NÃO se aplica ao fluxo (câmera×linha, sem área).
+      sections.push(
+        ...atividadeSections({
+          k,
+          peoplePeak: kPeople,
+          rankRows: rank.rows,
+          byAtivRows: byAtiv.rows,
+          byShiftA: byShiftA.m,
+          flow: flowDs ? { k: flowK, lineRows: flowLines.rows } : null,
+          evt,
+        }),
+      );
     } else if (isReading) {
-      sections.push({
-        title: "INDICADORES",
-        headers: ["Indicador", "Valor"],
-        rows: [
-          ["Caixas lidas", rk.boxes],
-          ["Taxa de leitura (%)", rk.ratePct],
-          ["No-reads", rk.noReads],
-          ["Ponto de maior volume", rk.topPonto],
-          ["Horário de pico", `${String(rk.peakHour).padStart(2, "0")}h`],
-        ],
-      });
-      sections.push({
-        title: "POR PONTO",
-        headers: ["Ponto", "Caixas", "Taxa (%)", "No-reads"],
-        rows: rrank.rows.map((r) => [r.ponto, r.boxes, r.ratePct, r.noReads]),
-      });
-      sections.push({
-        title: "POR CÂMERA",
-        headers: ["Câmera", "Leituras"],
-        rows: byCam.rows.map((r) => [r.camera, r.reads]),
-      });
-      sections.push({
-        title: "POR TURNO",
-        headers: ["Turno", "Caixas"],
-        rows: SHIFTS.map((s) => [s, byShiftR.m[s]]),
-      });
-      sections.push({
-        title: `LEITURAS (${revt.length})`,
-        headers: ["Data/hora", "Ponto", "Código", "Câmeras", "Turno"],
-        rows: revt.map((r) => [
-          new Date(r.ts).toLocaleString("pt-BR"),
-          r.ponto,
-          r.code,
-          r.cameras,
-          r.shift,
-        ]),
-      });
+      sections.push(
+        ...leituraSections({
+          rk,
+          rrankRows: rrank.rows,
+          byCamRows: byCam.rows,
+          byShiftR: byShiftR.m,
+          revt,
+        }),
+      );
     } else if (isObjects) {
-      sections.push({
-        title: "INDICADORES",
-        headers: ["Indicador", "Valor"],
-        rows: [
-          ["Objetos médios em cena", ok.avgCount],
-          ["Pico simultâneo", ok.peak],
-          ["Predominante", classLabel(ok.topClasse)],
-          ["Presença predominante (%)", ok.presenceTopPct],
-          ["Carregamentos", oLoads],
-        ],
-      });
-      sections.push({
-        title: "PRESENÇA SETOR × CLASSE (% do tempo)",
-        headers: ["Setor", ...odataset.classes.map(classLabel)],
-        rows: presSetores.map((s) => [s, ...odataset.classes.map((cl) => opres[s]?.[cl] ?? 0)]),
-      });
-      sections.push({
-        title: "POR SETOR",
-        headers: ["Setor", "Média", "Pico"],
-        rows: orank.rows.map((r) => [r.setor, r.avg, r.peak]),
-      });
-      sections.push({
-        title: "POR CLASSE",
-        headers: ["Classe", "Média"],
-        rows: obyClass.rows.map((r) => [classLabel(r.classe), r.avg]),
-      });
-      sections.push({
-        title: `EVENTOS (${oevt.length})`,
-        headers: ["Data/hora", "Tipo", "Setor", "Classe", "Turno"],
-        rows: oevt.map((r) => [
-          new Date(r.ts).toLocaleString("pt-BR"),
-          r.type,
-          r.setor,
-          classLabel(r.classe),
-          r.shift,
-        ]),
-      });
+      sections.push(
+        ...objetosSections({
+          ok,
+          oLoads,
+          classes: odataset.classes,
+          presSetores,
+          opres,
+          orankRows: orank.rows,
+          obyClassRows: obyClass.rows,
+          oevt,
+        }),
+      );
     } else if (isFadiga) {
-      sections.push({
-        title: "INDICADORES",
-        headers: ["Indicador", "Valor"],
-        rows: [
-          ["Tempo em alerta (%)", fk.alertPct],
-          ["Ocorrências de fadiga", fOccFadiga],
-          ["Ocorrências de celular", fOccCelular],
-          ["Bocejos", fBocejos],
-          ["Horário crítico", `${String(fk.peakHour).padStart(2, "0")}h`],
-        ],
-      });
-      sections.push({
-        title: `OCORRÊNCIAS (${fevt.length})`,
-        headers: ["Data/hora", "Posto", "Tipo", "Turno"],
-        rows: fevt.map((r) => [new Date(r.ts).toLocaleString("pt-BR"), r.posto, r.type, r.shift]),
-      });
+      sections.push(...fadigaSections({ fk, fOccFadiga, fOccCelular, fBocejos, fevt }));
     } else if (isAlarmes) {
-      sections.push({
-        title: "INDICADORES",
-        headers: ["Indicador", "Valor"],
-        rows: [
-          ["Total de alarmes", ak.total],
-          ["Críticos", ak.critical],
-          ["Alta", ak.high],
-          ["Informativos", ak.advisory],
-          ["Em aberto (novos)", ak.news],
-        ],
-      });
-      // Reusa o builder de csv.ts (metadados, sem imagens) com a lista já filtrada na tela.
-      sections.push(alarmSection(alarmsView));
+      sections.push(...alarmesSections({ ak, alarmsView }));
     }
 
     downloadCSVFile(`relatorio_${mode}_${period}_${dateStamp(now)}.csv`, buildCSV(sections));
@@ -937,7 +778,9 @@ export function ReportPage() {
                     <span>parado</span>
                   </div>
                   <div className="rc-k">
-                    <b style={{ color: k.alerts ? "var(--alert)" : undefined }}>{k.alerts}</b>
+                    <b style={{ color: k.alerts ? "var(--state-critical)" : undefined }}>
+                      {k.alerts}
+                    </b>
                     <span>alertas</span>
                   </div>
                 </div>
@@ -954,12 +797,13 @@ export function ReportPage() {
                   <div className="rc-k">
                     <b
                       style={{
+                        // going-gray: ≤2% é o normal → sem cor; saturada só no risco.
                         color:
                           fk.alertPct <= 2
-                            ? "var(--ok)"
+                            ? undefined
                             : fk.alertPct <= 10
-                              ? "var(--idle)"
-                              : "var(--alert)",
+                              ? "var(--state-warn)"
+                              : "var(--state-critical)",
                       }}
                     >
                       {fk.alertPct}%
@@ -967,11 +811,15 @@ export function ReportPage() {
                     <span>em alerta</span>
                   </div>
                   <div className="rc-k">
-                    <b style={{ color: fOccFadiga ? "var(--idle)" : undefined }}>{fOccFadiga}</b>
+                    <b style={{ color: fOccFadiga ? "var(--state-warn)" : undefined }}>
+                      {fOccFadiga}
+                    </b>
                     <span>fadiga</span>
                   </div>
                   <div className="rc-k">
-                    <b style={{ color: fOccCelular ? "var(--idle)" : undefined }}>{fOccCelular}</b>
+                    <b style={{ color: fOccCelular ? "var(--state-warn)" : undefined }}>
+                      {fOccCelular}
+                    </b>
                     <span>celular</span>
                   </div>
                 </div>
@@ -992,12 +840,13 @@ export function ReportPage() {
                   <div className="rc-k">
                     <b
                       style={{
+                        // going-gray: taxa boa (≥95%) é o normal → sem cor; saturada só no degradado.
                         color:
                           rk.ratePct >= 95
-                            ? "var(--ok)"
+                            ? undefined
                             : rk.ratePct >= 80
-                              ? "var(--idle)"
-                              : "var(--alert)",
+                              ? "var(--state-warn)"
+                              : "var(--state-critical)",
                       }}
                     >
                       {rk.ratePct}%
@@ -1005,7 +854,9 @@ export function ReportPage() {
                     <span>taxa</span>
                   </div>
                   <div className="rc-k">
-                    <b style={{ color: rk.noReads ? "var(--alert)" : undefined }}>{rk.noReads}</b>
+                    <b style={{ color: rk.noReads ? "var(--state-critical)" : undefined }}>
+                      {rk.noReads}
+                    </b>
                     <span>no-reads</span>
                   </div>
                 </div>
@@ -1026,7 +877,7 @@ export function ReportPage() {
                     <span>pico</span>
                   </div>
                   <div className="rc-k">
-                    <b style={{ color: oLoads ? "var(--idle)" : undefined }}>{oLoads}</b>
+                    <b style={{ color: oLoads ? "var(--state-warn)" : undefined }}>{oLoads}</b>
                     <span>carregam.</span>
                   </div>
                 </div>

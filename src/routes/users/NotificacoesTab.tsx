@@ -7,6 +7,7 @@ import {
   CheckboxRow,
   ScrollArea,
   useToast,
+  SectionTitle,
 } from "../../ui";
 import {
   waTest,
@@ -30,11 +31,6 @@ const TIPO_LABEL: Record<string, string> = {
 };
 
 type NovoDest = { nome: string; numero: string; somenteCriticos: boolean };
-
-// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
-// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
-const H2_SEC =
-  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
 
 type Props = {
   wa: WaStatus | null;
@@ -171,12 +167,12 @@ export function NotificacoesTab({
   return (
     <>
       <section className="panel shrink-0">
-        <h2 className={H2_SEC}>
+        <SectionTitle>
           WhatsApp (andon){" "}
           {wa && (
             <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />
           )}
-        </h2>
+        </SectionTitle>
         {!wa || !wa.enabled ? (
           <p className="muted">
             Desligado. Defina <code>WHATSAPP_ENABLED=1</code> no hub (systemd) e pareie aqui. Use um
@@ -216,7 +212,7 @@ export function NotificacoesTab({
 
       {notif && (
         <section className="panel shrink-0">
-          <h2 className={H2_SEC}>Mensagens & alertas</h2>
+          <SectionTitle>Mensagens & alertas</SectionTitle>
           <p className="muted">
             Defina o que cada notificação envia. Vale para todos os destinatários.
           </p>
@@ -301,7 +297,7 @@ export function NotificacoesTab({
 
       {/* Lista de destinatários cresce com a viewport (flex-fill; sem max-h fixo). */}
       <section className="panel flex flex-1 flex-col">
-        <h2 className={H2_SEC}>Destinatários do WhatsApp ({dests.length})</h2>
+        <SectionTitle>Destinatários do WhatsApp ({dests.length})</SectionTitle>
         <p className="meta-text muted">
           Números avulsos que recebem os alertas (além dos usuários que cadastram o próprio número
           em "Meu perfil"). Você é responsável pelo consentimento (LGPD).

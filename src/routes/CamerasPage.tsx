@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { PageHeader, EmptyState } from "../ui";
+import { PageHeader, EmptyState, SectionTitle } from "../ui";
 import { getCameraEnroll } from "../api";
 import { IpCamerasSection } from "./cameras/IpCamerasSection";
 import { LocalNodeSection } from "./cameras/LocalNodeSection";
@@ -18,11 +18,6 @@ import "./cameras.css";
 //     o link de inscrição (token) só ao superadmin (`canEnroll`).
 //   • Ajustes desta câmera: papel (área × fadiga) e vídeo no painel (MJPEG × WebRTC) por câmera
 //     CONECTADA (CameraSettingsSection) — o antigo modal "⚙ Câmeras", agora incorporado aqui.
-
-// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
-// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
-const H2_SEC =
-  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
 
 export function CamerasPage() {
   const { isSuper } = useAuth();
@@ -48,7 +43,7 @@ export function CamerasPage() {
           <IpCamerasSection />
         ) : (
           <section className="panel" aria-label="Câmeras IP / RTSP">
-            <h2 className={H2_SEC}>Câmeras IP / RTSP</h2>
+            <SectionTitle>Câmeras IP / RTSP</SectionTitle>
             <EmptyState>
               O cadastro de câmeras IP/RTSP é restrito ao administrador (superadmin).
             </EmptyState>

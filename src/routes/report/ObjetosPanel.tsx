@@ -70,7 +70,7 @@ export function ObjetosPanel({
         <Kpi
           value={oLoads}
           label="carregamentos"
-          valueStyle={{ color: oLoads ? "var(--idle)" : undefined }}
+          valueStyle={{ color: oLoads ? "var(--state-warn)" : undefined }}
         />
       </KpiRow>
       <Insight label="💡 Objetos" tips={otips} />

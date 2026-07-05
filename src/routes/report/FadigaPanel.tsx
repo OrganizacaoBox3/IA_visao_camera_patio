@@ -50,19 +50,24 @@ export function FadigaPanel({
           value={`${fk.alertPct}%`}
           label="tempo em alerta"
           valueStyle={{
+            // going-gray: operação saudável (≤2%) é o normal → sem cor; saturada só no risco.
             color:
-              fk.alertPct <= 2 ? "var(--ok)" : fk.alertPct <= 10 ? "var(--idle)" : "var(--alert)",
+              fk.alertPct <= 2
+                ? undefined
+                : fk.alertPct <= 10
+                  ? "var(--state-warn)"
+                  : "var(--state-critical)",
           }}
         />
         <Kpi
           value={fOccFadiga}
           label="ocorrências de fadiga"
-          valueStyle={{ color: fOccFadiga ? "var(--idle)" : undefined }}
+          valueStyle={{ color: fOccFadiga ? "var(--state-warn)" : undefined }}
         />
         <Kpi
           value={fOccCelular}
           label="ocorrências de celular"
-          valueStyle={{ color: fOccCelular ? "var(--idle)" : undefined }}
+          valueStyle={{ color: fOccCelular ? "var(--state-warn)" : undefined }}
         />
         <Kpi value={fBocejos} label="bocejos" />
         <Kpi value={`${String(fk.peakHour).padStart(2, "0")}h`} label="horário crítico" />

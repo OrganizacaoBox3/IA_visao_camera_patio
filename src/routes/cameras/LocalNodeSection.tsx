@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Button, Input, useToast } from "../../ui";
+import { Button, Input, useToast, SectionTitle } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
 
 // Seção "Câmera local (webcam / nó)" — fonte ÚNICA da UI de nó local: abrir o nó neste
@@ -9,11 +9,6 @@ import { copyToClipboard } from "../../ui/clipboard";
 //
 // O token (CAMERA_TOKEN) é buscado pelo PAI (page-level) e chega por prop: /cameras faz o
 // próprio fetch; a aba Usuários recebe do UsersPage. Aqui só derivamos a URL e copiamos.
-
-// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
-// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
-const H2_SEC =
-  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
 
 type Props = {
   // Token de enrolamento do hub (CAMERA_TOKEN). null = sem token configurado.
@@ -50,7 +45,7 @@ export function LocalNodeSection({ camToken, canEnroll = true, compact = false }
       className={compact ? "panel max-w-[640px]" : "panel"}
       aria-label="Câmera local (webcam / nó)"
     >
-      <h2 className={H2_SEC}>Câmera local (webcam / nó)</h2>
+      <SectionTitle>Câmera local (webcam / nó)</SectionTitle>
 
       {!compact && (
         <>

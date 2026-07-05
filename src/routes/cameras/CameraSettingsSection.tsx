@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../../config";
 import { useAuth } from "../../auth";
-import { Select } from "../../ui";
+import { Select, SectionTitle } from "../../ui";
 import { getCameraCfg, setCameraCfg, type CameraCfg } from "../../cameraConfig";
 import { type Camera } from "../dashboard/types";
 
@@ -20,11 +20,6 @@ import { type Camera } from "../dashboard/types";
 // `watch({ ids: [] })` no connect: sai da room legada e NÃO recebe `frame` (zero relé de vídeo
 // nesta tela). Câmera que não está conectada não aparece aqui (o camcfg dela é aplicado quando
 // ela reconecta e entra na grade).
-
-// Título de seção: h2 semântico com o visual do `.panel h3` (padrão da casa).
-// TODO(A1): trocar por <SectionTitle> de src/ui quando o átomo existir.
-const H2_SEC =
-  "m-0 mb-3 font-bold uppercase tracking-[0.12em] text-text-muted text-[length:var(--fs-label,11px)]";
 
 export function CameraSettingsSection() {
   const { token } = useAuth();
@@ -85,7 +80,7 @@ export function CameraSettingsSection() {
 
   return (
     <section className="panel" aria-label="Ajustes por câmera">
-      <h2 className={H2_SEC}>Ajustes desta câmera</h2>
+      <SectionTitle>Ajustes desta câmera</SectionTitle>
       <p className="muted cam-sec-hint">
         Papel e vídeo no painel de cada câmera <b>conectada</b> (IP/RTSP ou nó local).{" "}
         <b>Câmera de área</b> (padrão): vista geral do setor — abra a câmera na Central e desenhe

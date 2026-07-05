@@ -73,14 +73,19 @@ export function LeituraPanel({
           value={`${rk.ratePct}%`}
           label="taxa de leitura"
           valueStyle={{
+            // going-gray: taxa boa (≥95%) é o estado normal → sem cor; saturada só p/ o degradado.
             color:
-              rk.ratePct >= 95 ? "var(--ok)" : rk.ratePct >= 80 ? "var(--idle)" : "var(--alert)",
+              rk.ratePct >= 95
+                ? undefined
+                : rk.ratePct >= 80
+                  ? "var(--state-warn)"
+                  : "var(--state-critical)",
           }}
         />
         <Kpi
           value={rk.noReads.toLocaleString("pt-BR")}
           label="no-reads"
-          valueStyle={{ color: rk.noReads > 0 ? "var(--alert)" : undefined }}
+          valueStyle={{ color: rk.noReads > 0 ? "var(--state-critical)" : undefined }}
         />
         <Kpi value={rk.topPonto} label="ponto de maior volume" />
         <Kpi value={`${String(rk.peakHour).padStart(2, "0")}h`} label="horário de pico" />
