@@ -46,6 +46,7 @@ export function CameraPage() {
     let rvfcVideo: HTMLVideoElement | null = null; // elemento onde o rVFC foi registrado (p/ cancelar no cleanup)
     let audioCtx: AudioContext | null = null; // keep-alive de 2º plano (ver ensureKeepAlive)
     let onVisibility: (() => void) | null = null;
+    let unlockAudio: (() => void) | null = null; // destrava o AudioContext no 1º gesto (autoplay policy)
 
     (async () => {
       try {
@@ -192,6 +193,14 @@ export function CameraPage() {
         rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
       } else startTimer(); // sem rVFC: timer é o único caminho
 
+      // Inicia o keep-alive JÁ (não só ao minimizar): o AudioContext precisa estar RODANDO antes
+      // de a aba ficar oculta — criá-lo no visibilitychange nasce suspenso (sem gesto) e não isenta.
+      // Se a política de autoplay o deixar suspenso, destrava no 1º gesto do usuário na página.
+      ensureKeepAlive();
+      unlockAudio = () => ensureKeepAlive();
+      window.addEventListener("pointerdown", unlockAudio);
+      window.addEventListener("keydown", unlockAudio);
+
       // Alterna rVFC↔timer pela visibilidade e liga o keep-alive quando a aba/janela some de vista.
       onVisibility = () => {
         if (document.hidden) {
@@ -230,6 +239,10 @@ export function CameraPage() {
     return () => {
       alive = false;
       if (onVisibility) document.removeEventListener("visibilitychange", onVisibility);
+      if (unlockAudio) {
+        window.removeEventListener("pointerdown", unlockAudio);
+        window.removeEventListener("keydown", unlockAudio);
+      }
       if (timer) clearInterval(timer);
       if (rvfcHandle !== null) rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
       audioCtx?.close().catch(() => {});
