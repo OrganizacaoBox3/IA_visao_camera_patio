@@ -26,6 +26,12 @@ describe("PRECISION — defaults calibrados (mudança exige eval antes/depois �
     expect(PRECISION.tracker.ttlProbeMarginMs).toBe(2000);
   });
 
+  it("tracker anti-rastro/salto: raio 0.12 / gap máx 2.5s / 1 rodada de graça antes de LOST", () => {
+    expect(PRECISION.tracker.reassocDist).toBe(0.12);
+    expect(PRECISION.tracker.reassocMaxGapMs).toBe(2500);
+    expect(PRECISION.tracker.lostAfterMisses).toBe(1);
+  });
+
   it("counter: espelho de APP_CONFIG.people.track do front (0.01/0.35/800/2)", () => {
     expect(PRECISION.counter).toEqual({
       minMove: 0.01,

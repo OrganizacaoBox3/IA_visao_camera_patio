@@ -81,9 +81,22 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     while (st.rounds.length && st.rounds[0] < cutoff) st.rounds.shift();
     while (st.detsLog.length && st.detsLog[0].t < cutoff) st.detsLog.shift();
 
+    // POLÍTICA LOST (bytetrack.js): update() devolve só os tracks EMITÍVEIS —
+    // track sem match há >1 rodada fica INTERNO (sem rastro no overlay, sem
+    // ocupação, sem contagem) até re-associar (mesmo id) ou morrer pelo TTL.
     const tracks = st.tracker.update(persons, now, highScore);
+    // Métrica de RE-ASSOCIAÇÃO (2º estágio): delta do acumulado → detsLog.r →
+    // tracker.reassoc1m no status (sensor do salto recuperado SEM id novo).
+    if (typeof st.tracker.stats === "function") {
+      const tot = st.tracker.stats().reassociations;
+      st.detsLog[st.detsLog.length - 1].r = tot - (st.reassocSeen || 0);
+      st.reassocSeen = tot;
+    }
 
-    // Tripwires → eventos de cruzamento → ingest "flow"/"cross".
+    // Tripwires → eventos de cruzamento → ingest "flow"/"cross". DECISÃO: LOST não
+    // alimenta o counter (posição congelada não gera cruzamento e não refresca o
+    // last-pos) — a travessia sobrevive pela RE-ASSOCIAÇÃO (mesmo id) + last-pos
+    // que o counter guarda por TTL próprio (mesmo TTL do tracker — engine.js).
     const crossings = st.counter.update(
       tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy, foot: t.foot })),
       now,

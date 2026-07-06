@@ -212,6 +212,11 @@ function createState(id) {
       iouThreshold: PRECISION.tracker.iouThreshold,
       birthIouThreshold: PRECISION.tracker.birthIouThreshold,
       ttlMs: TTL_MS,
+      // Anti-rastro/salto (precision.js knobs 20-22): re-associação 2º estágio +
+      // política LOST (track sem match some da emissão mas vive interno até o TTL).
+      reassocDist: PRECISION.tracker.reassocDist,
+      reassocMaxGapMs: PRECISION.tracker.reassocMaxGapMs,
+      lostAfterMisses: PRECISION.tracker.lostAfterMisses,
     }),
     counter: createCounter(camcfg.getTripwires(id), {
       minMove: PRECISION.counter.minMove,
@@ -241,7 +246,8 @@ function createState(id) {
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
-    detsLog: [], // { t, n } pessoas por rodada (p/ dets1m)
+    detsLog: [], // { t, n, x, a, r } pessoas/exclusões/re-associações por rodada (p/ *1m)
+    reassocSeen: 0, // acumulado de re-associações já lançado no detsLog (delta por rodada — pipeline)
     lastMs: 0,
   };
   st.motionIgnore = buildMotionIgnore(st.zonesExcl); // hotspots do gate (reuso das zonas de exclusão)

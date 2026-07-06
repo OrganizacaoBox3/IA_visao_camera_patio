@@ -142,4 +142,18 @@ describe("buildStatus — agregação por câmera", () => {
     expect(s.perCamera.cam1).not.toHaveProperty("autoMask");
     expect(s.perCamera.cam1).not.toHaveProperty("automasked1m");
   });
+
+  it("câmera COM tracker.stats expõe tracker { reassoc1m, reassocTotal, lost }; sem, não (aditivo)", () => {
+    const st = fakeSt({
+      detsLog: [
+        { t: 95_000, n: 1, x: 0, a: 0, r: 2 }, // rodada com 2 re-associações (salto recuperado)
+        { t: 96_000, n: 1, x: 0, a: 0 }, // rodada sem o campo (retrocompatível)
+      ],
+      tracker: { stats: () => ({ reassociations: 7, lost: 1 }) },
+    });
+    const s = buildStatus(snapWith(new Map([["cam1", st]])));
+    expect(s.perCamera.cam1.tracker).toEqual({ reassoc1m: 2, reassocTotal: 7, lost: 1 });
+    const s2 = buildStatus(snapWith(new Map([["cam2", fakeSt()]])));
+    expect(s2.perCamera.cam2).not.toHaveProperty("tracker");
+  });
 });

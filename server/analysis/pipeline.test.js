@@ -16,7 +16,16 @@ const { createAutoMask, amCell } = require("./automask");
 function makeSt(over = {}) {
   return {
     id: "cam1",
-    tracker: createByteTracker({ highScore: 0.35, iouThreshold: 0.25, birthIouThreshold: 0.55, ttlMs: 8000 }),
+    tracker: createByteTracker({
+      highScore: 0.35,
+      iouThreshold: 0.25,
+      birthIouThreshold: 0.55,
+      ttlMs: 8000,
+      // anti-rastro/salto — espelho do engine (precision.js 20-22)
+      reassocDist: 0.12,
+      reassocMaxGapMs: 2500,
+      lostAfterMisses: 1,
+    }),
     counter: createCounter(over.tripwires || [], {
       minMove: 0.01,
       ttl: 8000,
@@ -137,6 +146,37 @@ describe("processRound — tracking (nascimento pelo highScore)", () => {
     expect(emittedTracks(0)).toEqual([]);
     pipeline.processRound(st, [person(0.7, 0.8, 0.4)], 2000); // 0.4 ≥ 0.35 → nasce
     expect(emittedTracks(1)).toHaveLength(1);
+  });
+});
+
+describe("processRound — política LOST (anti-rastro na emissão)", () => {
+  const zone = { id: "z1", label: "Doca", x: 0, y: 0, w: 1, h: 1 };
+
+  it("track sem match há 2 rodadas SOME do analysis-tracks e da zona (rastro morre em ≤1 rodada)", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    pipeline.processRound(st, [], 2000); // 1ª sem match: graça — oclusão de 1 rodada não pisca
+    expect(emittedTracks(1)).toHaveLength(1);
+    pipeline.processRound(st, [], 3000); // 2ª sem match: LOST → fora do payload E da ocupação
+    expect(emittedTracks(2)).toEqual([]);
+    expect(deps.emitTracks.mock.calls[2][0].zones).toEqual([
+      { id: "z1", label: "Doca", people: 0, occupied: false },
+    ]);
+    expect(st.window.zones.get("z1")).toMatchObject({ active: 2, peak: 1 }); // rodada LOST não conta presença
+  });
+
+  it("re-associação devolve o MESMO id ao payload (salto moderado não vira track novo) e registra a métrica", () => {
+    const st = makeSt();
+    pipeline.processRound(st, [person(0.2, 0.8)], 0);
+    pipeline.processRound(st, [person(0.25, 0.8)], 500); // v = 1e-4/ms
+    const id = emittedTracks(1)[0].id;
+    pipeline.processRound(st, [], 1000);
+    pipeline.processRound(st, [], 1500); // LOST → payload vazio (sem rastro)
+    expect(emittedTracks(3)).toEqual([]);
+    pipeline.processRound(st, [person(0.3, 0.8)], 2500); // volta aquém do previsto, dentro do raio
+    expect(emittedTracks(4)).toHaveLength(1);
+    expect(emittedTracks(4)[0].id).toBe(id); // identidade sobreviveu ao salto
+    expect(st.detsLog[st.detsLog.length - 1].r).toBe(1); // delta de re-associação → reassoc1m
   });
 });
 

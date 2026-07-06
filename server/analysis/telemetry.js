@@ -28,10 +28,12 @@ function buildStatus(snap) {
     let dets1m = 0;
     let excluded1m = 0;
     let automasked1m = 0;
+    let reassoc1m = 0;
     for (const d of st.detsLog) {
       dets1m += d.n;
       excluded1m += d.x || 0;
       automasked1m += d.a || 0;
+      reassoc1m += d.r || 0;
     }
     const cutoff = now - 60_000;
     while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
@@ -57,6 +59,16 @@ function buildStatus(snap) {
     if (st.autoMask) {
       perCamera[id].automasked1m = automasked1m; // dets suprimidas pela auto-máscara em 60s
       perCamera[id].autoMask = automask.statusOf(st.autoMask);
+    }
+    // Tracker anti-rastro (precision.js 20-22): sensores da política de emissão.
+    // Condicional (aditivo): só quando o estado carrega um tracker com stats().
+    if (st.tracker && typeof st.tracker.stats === "function") {
+      const tk = st.tracker.stats();
+      perCamera[id].tracker = {
+        reassoc1m, // saltos recuperados SEM id novo nos últimos 60s (2º estágio)
+        reassocTotal: tk.reassociations, // idem, desde o boot
+        lost: tk.lost, // tracks vivos INTERNOS mas ocultos do payload agora
+      };
     }
   }
   return {

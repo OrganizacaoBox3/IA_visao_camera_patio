@@ -80,10 +80,38 @@ const PRECISION = Object.freeze({
     //    NÃO nasce (evita 1 pessoa virar 2 por até ttlMs — bug de campo).
     //    0.55 conservador. SENSOR: bytetrack.test.js.
     birthIouThreshold: 0.55,
-    // 9-11. Derivação do TTL — ver trackTtlMs() abaixo (nunca-cego: acoplado ao probe).
+    // 9-11. Derivação do TTL — ver trackTtlMs() abaixo (nunca-cego: acoplado ao
+    //    probe). É também o TTL INTERNO dos tracks LOST (janela máxima em que a
+    //    re-associação ainda devolve o MESMO id — knob 22).
     ttlFloorMs: 1500,
     ttlRoundFactor: 3.5,
     ttlProbeMarginMs: 2000,
+    // 20. RE-ASSOCIAÇÃO (2º estágio) — FOLGA do raio, normalizada. Det alta sem par
+    //     por IoU re-casa com track sem par se dist(centro da det, centro PREVISTO)
+    //     ≤ folga + |v|·gap. POR QUÊ: fonte flaky/gate/probe criam GAPS entre
+    //     rodadas analisadas; a predição erra mais que o bbox, o IoU zera e a MESMA
+    //     pessoa virava id novo a cada salto. Baixar perde re-identificação no
+    //     salto; subir arrisca herdar id de vizinho (mitigado: par inequívoco +
+    //     tamanho compatível + só score alto). 0 desliga o estágio.
+    //     SENSOR: bytetrack.test.js (salto moderado/extremo/ambíguo) + eval:counting
+    //     + status().perCamera[id].tracker.reassoc1m em campo.
+    reassocDist: 0.12,
+    // 21. Gap MÁXIMO (ms) desde o último match p/ tentar o 2º estágio. Além disso a
+    //     extrapolação |v|·gap não é confiável → id novo (aceito — salto extremo/
+    //     oclusão longa). ~2.5s cobre fonte flaky e rodada perdida; o PROBE de 6s
+    //     em cena estática re-casa por IoU (pessoa parada → predição parada) e não
+    //     depende deste gate. SENSOR: bytetrack.test.js + tracker.reassoc1m.
+    reassocMaxGapMs: 2500,
+    // 22. POLÍTICA LOST (anti-rastro): rodadas ANALISADAS sem match antes do track
+    //     sair da EMISSÃO (analysis-tracks/ocupação/contagem). Segue vivo INTERNO
+    //     até o TTL (9-11) p/ o 2º estágio devolver o MESMO id. 1 = uma rodada de
+    //     graça SÓ p/ OCLUSÃO (miss de 1 rodada não pisca overlay/zona — recall a
+    //     2fps é intermitente); em rodada de REALOCAÇÃO (nascimento/re-associação)
+    //     a graça é suprimida — 1 pessoa que saltou nunca vira 2 tracks emitidos
+    //     (bytetrack.js). 0 faria o overlay piscar a cada miss; subir recria o
+    //     rastro. SENSOR: pipeline.test.js (payload sem lost) + eval:counting
+    //     (salto extremo/oclusão longa) + status().tracker.lost.
+    lostAfterMisses: 1,
   }),
 
   // ── Contador de linha (consumidor: engine.js → createCounter) ───────────────
