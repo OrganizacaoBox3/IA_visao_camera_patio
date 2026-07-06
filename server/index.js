@@ -179,8 +179,38 @@ const broadcast = () => {
 // instância com dependências). Contrato de rooms: só o evento `frame` é filtrado por room
 // (`cam:<id>`/`dash-legacy`) — `cameras`/`camera-status`/`alarm-*`/`camcfg-updated` seguem
 // na room "dashboards".
-// analysisViewer: câmera analisada conta como espectador (ADR-009) — o shed nunca a rebaixa.
-const shed = createShed({ io, cameras, socketById, rtsp, analysisViewer: analysis.isAnalyzing });
+// analysisViewer: câmera analisada conta como espectador (ADR-009) — nunca vai a idle; sem
+// audiência HUMANA ela desce ao MODO VIGÍLIA (fps dinâmico = piso 2× a cadência da análise,
+// perf-round3 frente 1) e volta ao fps cheio quando chega espectador ou foco.
+// effectiveFps: cadência efetiva do motor por câmera — usa o getter do engine quando existir
+// (frente P1); enquanto não existe, fallback local que ESPELHA os envs/clamps do engine
+// (FPS_LINE p/ câmera com tripwire, FPS normal p/ as demais — engine.js).
+const SHED_ANALYSIS_FPS = Math.min(4, Math.max(0.2, Number(process.env.ANALYSIS_FPS) || 1));
+const SHED_ANALYSIS_FPS_LINE = Math.min(
+  4,
+  Math.max(SHED_ANALYSIS_FPS, Number(process.env.ANALYSIS_FPS_LINE) || 2),
+);
+const effectiveFpsOf = (id) =>
+  typeof analysis.effectiveFps === "function"
+    ? analysis.effectiveFps(id)
+    : camcfg.getTripwires(id).length > 0
+      ? SHED_ANALYSIS_FPS_LINE
+      : SHED_ANALYSIS_FPS;
+// isFocused: câmera em TELA CHEIA em algum dashboard (socket.data.focusId — sockets/dashboard.js).
+// Foco segura/retoma o fps cheio mesmo sem contagem de room (cinto e suspensório do "subir").
+const isFocusedOf = (id) => {
+  for (const s of io.of("/").sockets.values()) if (s.data && s.data.focusId === String(id)) return true;
+  return false;
+};
+const shed = createShed({
+  io,
+  cameras,
+  socketById,
+  rtsp,
+  analysisViewer: analysis.isAnalyzing,
+  effectiveFps: effectiveFpsOf,
+  isFocused: isFocusedOf,
+});
 
 // Contexto da camada socket: io = TEE de análise — o frame de webcam entra no motor pelo
 // MESMO caminho do RTSP (1 caminho só); os demais eventos passam intactos. O pipeline de

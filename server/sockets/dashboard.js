@@ -50,6 +50,9 @@ function attach(socket, { io, cameras, cameraList, socketById, shed, analysis, r
     const id = p && p.id != null && p.id !== "" ? String(p.id) : null;
     socket.data.focusId = id;
     analysis.setFocus(socket.id, id);
+    // Foco conta como audiência no shed (fps dinâmico): câmera focada sobe ao fps cheio
+    // NA HORA (a saída do foco desce pelo debounce normal do sweep — subir é imediato).
+    if (id) shed.sweepShed();
   });
 
   // Dashboard saiu: remove sua contribuição à união de foco (evita foco órfão prendendo o boost).

@@ -184,6 +184,15 @@ function inputArgs(st) {
   return args;
 }
 
+// Modo de ingestão (telemetria — campo ADITIVO no camera-status/statuses):
+//  "full"  = fps configurado (tem espectador humano, foco, ou o piso não compensa);
+//  "vigil" = fps reduzido ao PISO da análise (sem espectador; motor segue alimentado);
+//  "idle"  = ffmpeg pausado pelo shed (sem espectador E sem análise).
+function modeOf(st) {
+  if (st.idle) return "idle";
+  return st.vigilFps != null ? "vigil" : "full";
+}
+
 function emitStatus(st) {
   if (!ctx) return;
   ctx.io.to("dashboards").emit("camera-status", {
@@ -193,6 +202,7 @@ function emitStatus(st) {
     lastError: st.lastError || null,
     label: st.label,
     kind: "rtsp",
+    mode: modeOf(st),
   });
 }
 
@@ -225,7 +235,10 @@ function spawnFfmpeg(st) {
     ...inputArgs(st),
     "-an",
     "-vf",
-    `fps=${st.cfg.fps},scale=${st.cfg.width}:-2`,
+    // fps DINÂMICO (perf-round3 frente 1): em vigília o filtro sai reduzido ao piso da
+    // análise (−25/−35% do CPU do ffmpeg, medido). O decode do stream nativo não cai com
+    // `-vf fps` — p/ cortar o decode a alavanca é o SUB-STREAM da câmera (config, não código).
+    `fps=${st.vigilFps ?? st.cfg.fps},scale=${st.cfg.width}:-2`,
     "-f",
     "mjpeg",
     "-q:v",
@@ -258,6 +271,7 @@ function spawnFfmpeg(st) {
   });
   proc.stdout.on("data", (chunk) => {
     if (st.stopped || st.idle) return; // descarta resíduo de um proc morrendo (idle/remoção)
+    if (st.proc !== proc) return; // resíduo de um proc trocado por respawn (vigília⇄full)
     st.buf = Buffer.concat([st.buf, chunk]);
     st.buf = drainFrames(st.buf, (jpeg) => {
       st.lastFrameAt = Date.now();
@@ -356,6 +370,7 @@ function addSource(src) {
     proc: null,
     stopped: false,
     idle: false, // shed: pausada por falta de espectador (≠ stopped: religável via wakeSource)
+    vigilFps: null, // shed: fps do MODO VIGÍLIA (piso da análise); null = fps configurado (full)
     buf: Buffer.alloc(0),
     attempt: 0,
     lastFrameAt: 0,
@@ -413,16 +428,39 @@ function restartSource(src) {
 
 // ── Shed por audiência — chamado pelo shed.js, que conta espectadores por room ──────────────
 
+// Re-spawn INTENCIONAL (troca de fps vigília⇄full): mata o proc atual sem acionar a
+// reconexão com backoff — st.proc é trocado ANTES do kill, então o "close" do proc antigo
+// cai no guard `st.proc !== proc` e vira no-op. O spawn novo sai imediato.
+function respawn(st) {
+  const old = st.proc;
+  st.proc = null; // o "close" do proc antigo não mexe mais no estado
+  if (st.reconnectTimer) {
+    clearTimeout(st.reconnectTimer);
+    st.reconnectTimer = null;
+  }
+  st.buf = Buffer.alloc(0);
+  st.attempt = 0;
+  if (old) {
+    try {
+      old.kill("SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
+  spawnFfmpeg(st);
+}
+
 /** Pausa uma fonte SEM espectador: mata o ffmpeg e congela a reconexão, SEM contar como erro
  *  (attempt não incrementa; estado vira "idle" via camera-status p/ transparência). Idempotente. */
 function idleSource(id) {
   const st = streams.get(String(id));
   if (!st || st.stopped || st.idle) return false;
   // Análise conta como espectador (ADR-009): motor ativo → stream fica vivo p/ ele.
-  // Defesa em profundidade: o guard primário mora no shed (shedCamera); este cobre
-  // qualquer chamador futuro de idleSource.
+  // NUNCA-CEGO: o shed rebaixa câmera analisada a VIGÍLIA (vigilSource — piso ≥2× a
+  // cadência da análise), nunca a idle; este guard cobre qualquer chamador futuro.
   if (analysisViewer && analysisViewer(String(id))) return false;
   st.idle = true;
+  st.vigilFps = null; // idle apaga a vigília: um wake futuro volta direto ao fps configurado
   if (st.reconnectTimer) {
     clearTimeout(st.reconnectTimer);
     st.reconnectTimer = null;
@@ -442,18 +480,53 @@ function idleSource(id) {
   return true;
 }
 
-/** Religa uma fonte pausada pelo shed (ganhou espectador): spawn imediato, backoff zerado. Idempotente. */
+/** MODO VIGÍLIA (fps dinâmico, perf-round3 frente 1): re-spawna o ffmpeg com `-vf fps=`
+ *  reduzido ao PISO da análise (decidido no shed — decideRtspFps). A análise segue
+ *  alimentada (nunca-cego); só some o excedente que ninguém consome (−25/−35% de CPU).
+ *  Idempotente por fps: chamar de novo com o MESMO piso é no-op; piso novo re-spawna. */
+function vigilSource(id, fps) {
+  const st = streams.get(String(id));
+  if (!st || st.stopped || st.idle) return false;
+  const f = Number(fps);
+  if (!Number.isFinite(f) || f <= 0) return false;
+  if (f >= st.cfg.fps) return false; // piso ≥ configurado: reduzir não ganha nada — segue full
+  if (st.vigilFps === f) return false; // já em vigília neste piso
+  st.vigilFps = f;
+  respawn(st);
+  console.log(`[rtsp:${st.id}] vigília @${f}fps — sem espectador (análise segura o piso)`);
+  emitStatus(st); // telemetria: modo "vigil" visível já na transição, sem esperar o timer
+  return true;
+}
+
+/** Religa uma fonte rebaixada pelo shed (ganhou espectador/foco): de "idle" → spawn imediato
+ *  com backoff zerado; de "vigília" → re-spawn no fps CONFIGURADO. Idempotente. */
 function wakeSource(id) {
   const st = streams.get(String(id));
-  if (!st || st.stopped || !st.idle) return false;
-  st.idle = false;
-  st.frameCount = 0;
-  st.fpsWindowStart = Date.now();
-  st.lastFrameAt = 0;
-  setState(st, "connecting");
-  console.log(`[rtsp:${st.id}] religando — ganhou espectador`);
-  spawnFfmpeg(st);
-  return true;
+  if (!st || st.stopped) return false;
+  if (st.idle) {
+    st.idle = false;
+    st.frameCount = 0;
+    st.fpsWindowStart = Date.now();
+    st.lastFrameAt = 0;
+    setState(st, "connecting");
+    console.log(`[rtsp:${st.id}] religando — ganhou espectador`);
+    spawnFfmpeg(st);
+    return true;
+  }
+  if (st.vigilFps != null) {
+    st.vigilFps = null;
+    respawn(st);
+    console.log(`[rtsp:${st.id}] full @${st.cfg.fps}fps — ganhou espectador/foco`);
+    emitStatus(st);
+    return true;
+  }
+  return false;
+}
+
+/** fps CONFIGURADO da fonte (cadastro/env) — insumo da decisão de fps dinâmico no shed. */
+function captureFps(id) {
+  const st = streams.get(String(id));
+  return st ? st.cfg.fps : null;
 }
 
 /** Snapshot do status de todas as fontes RTSP (para enviar a um dashboard que acabou de conectar). */
@@ -465,6 +538,7 @@ function statuses() {
     lastError: st.lastError || null,
     label: st.label,
     kind: "rtsp",
+    mode: modeOf(st),
   }));
 }
 
@@ -505,6 +579,8 @@ module.exports = {
   restartSource,
   idleSource,
   wakeSource,
+  vigilSource,
+  captureFps,
   setAnalysisViewer,
   statuses,
   loadSources,
