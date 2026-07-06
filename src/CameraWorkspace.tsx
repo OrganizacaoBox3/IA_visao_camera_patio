@@ -1,4 +1,23 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  ArrowLeftRight,
+  Brush,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Eraser,
+  ImageDown,
+  Lock,
+  Pause,
+  PenLine,
+  Play,
+  Snowflake,
+  Timer,
+  TriangleAlert,
+  Users,
+  X,
+} from "lucide-react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
 import { fmtDuration } from "./format";
@@ -1475,7 +1494,9 @@ export function CameraWorkspace({
             <span className="muted">pintando “{paintZone.label}”</span>
           ) : (
             <>
-              <span className="muted">{zones.length} zona(s)</span>
+              <span className="muted">
+                {zones.length} {zones.length === 1 ? "zona" : "zonas"}
+              </span>
               {activePresetDef && (
                 <Tooltip
                   content={`Preset ativo: ${activePresetDef.label} — ${activePresetDef.description}${presetDirty ? " (ajustado manualmente nesta sessão)" : ""}`}
@@ -1491,7 +1512,9 @@ export function CameraWorkspace({
               {!canConfigure && (
                 <Tooltip content="Edição de configuração requer perfil de engenharia">
                   <span>
-                    <Badge tone="info">🔒 Somente leitura</Badge>
+                    <Badge tone="info">
+                      <Lock size={12} strokeWidth={1.75} aria-hidden /> Somente leitura
+                    </Badge>
                   </span>
                 </Tooltip>
               )}
@@ -1502,14 +1525,14 @@ export function CameraWorkspace({
         {paintZone ? (
           <>
             <IconButton label="Pincel (pintar)" active={!erase} onClick={() => setErase(false)}>
-              🖌
+              <Brush size={18} strokeWidth={1.75} aria-hidden />
             </IconButton>
             <IconButton
               label="Borracha (Alt/botão-direito também apagam)"
               active={erase}
               onClick={() => setErase(true)}
             >
-              🧽
+              <Eraser size={18} strokeWidth={1.75} aria-hidden />
             </IconButton>
             <Select
               value={String(brush)}
@@ -1519,19 +1542,35 @@ export function CameraWorkspace({
             />
             <Button onClick={clearActive}>Limpar</Button>
             <Button active onClick={() => setPaintZoneId(null)}>
-              ✓ Concluir
+              <Check size={16} strokeWidth={1.75} aria-hidden /> Concluir
             </Button>
           </>
         ) : (
           <>
             <Tooltip content="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">
               <Toggle pressed={review} onPressedChange={(v) => (v ? enterReview() : exitReview())}>
-                {review ? "▶ Ao vivo" : "❄ Congelar"}
+                {review ? (
+                  <>
+                    <Play size={16} strokeWidth={1.75} aria-hidden /> Ao vivo
+                  </>
+                ) : (
+                  <>
+                    <Snowflake size={16} strokeWidth={1.75} aria-hidden /> Congelar
+                  </>
+                )}
               </Toggle>
             </Tooltip>
             <Tooltip content="Congela o frame e rotula quem está em cena">
               <Toggle pressed={paused} disabled={review} onPressedChange={(v) => setPaused(v)}>
-                {paused ? "▶ Retomar" : "⏸ Pausar"}
+                {paused ? (
+                  <>
+                    <Play size={16} strokeWidth={1.75} aria-hidden /> Retomar
+                  </>
+                ) : (
+                  <>
+                    <Pause size={16} strokeWidth={1.75} aria-hidden /> Pausar
+                  </>
+                )}
               </Toggle>
             </Tooltip>
             <Tooltip
@@ -1541,12 +1580,19 @@ export function CameraWorkspace({
                   : "Requer perfil de engenharia"
               }
             >
+              {/* Nome acessível "Zona" (o e2e clica getByRole button name "Zona", exact). */}
               <Toggle
                 pressed={drawMode}
                 disabled={review || !canConfigure}
                 onPressedChange={() => toggleDrawMode()}
               >
-                {drawMode ? "Desenhando…" : "✎ Zona"}
+                {drawMode ? (
+                  "Desenhando…"
+                ) : (
+                  <>
+                    <PenLine size={16} strokeWidth={1.75} aria-hidden /> Zona
+                  </>
+                )}
               </Toggle>
             </Tooltip>
             <Tooltip
@@ -1561,11 +1607,17 @@ export function CameraWorkspace({
                 disabled={review || !canConfigure}
                 onPressedChange={() => toggleTripwireMode()}
               >
-                {tripwireMode ? "Traçando…" : "⇄ Linha"}
+                {tripwireMode ? (
+                  "Traçando…"
+                ) : (
+                  <>
+                    <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden /> Linha
+                  </>
+                )}
               </Toggle>
             </Tooltip>
             <IconButton label="Fechar" onClick={onClose}>
-              ✕
+              <X size={18} strokeWidth={1.75} aria-hidden />
             </IconButton>
           </>
         )}
@@ -1604,7 +1656,7 @@ export function CameraWorkspace({
               </div>
               <div className="cine-bar">
                 <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>
-                  ‹
+                  <ChevronLeft size={18} strokeWidth={1.75} aria-hidden />
                 </IconButton>
                 <Tooltip content={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}>
                   <Toggle
@@ -1612,11 +1664,15 @@ export function CameraWorkspace({
                     pressed={cinePlaying}
                     onPressedChange={(v) => setCinePlaying(v)}
                   >
-                    {cinePlaying ? "⏸" : "▶"}
+                    {cinePlaying ? (
+                      <Pause size={16} strokeWidth={1.75} aria-hidden />
+                    ) : (
+                      <Play size={16} strokeWidth={1.75} aria-hidden />
+                    )}
                   </Toggle>
                 </Tooltip>
                 <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>
-                  ›
+                  <ChevronRight size={18} strokeWidth={1.75} aria-hidden />
                 </IconButton>
                 <div className="cine-slider">
                   <Slider
@@ -1642,16 +1698,17 @@ export function CameraWorkspace({
                 <span className="cine-spacer" />
                 <Tooltip content="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">
                   <Button onClick={downloadSnapshot} disabled={clipState === "working"}>
-                    ⤓ Snapshot
+                    <ImageDown size={16} strokeWidth={1.75} aria-hidden /> Snapshot
                   </Button>
                 </Tooltip>
                 <Tooltip content="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar.">
                   <Button onClick={exportClip} disabled={clipState === "working"}>
-                    {clipState === "working" ? `Gravando… ${clipPct}%` : "⤓ Exportar clipe"}
+                    <Download size={16} strokeWidth={1.75} aria-hidden />
+                    {clipState === "working" ? `Gravando… ${clipPct}%` : "Exportar clipe"}
                   </Button>
                 </Tooltip>
                 <Button active onClick={exitReview}>
-                  ▶ Ao vivo
+                  <Play size={16} strokeWidth={1.75} aria-hidden /> Ao vivo
                 </Button>
               </div>
             </>
@@ -1672,8 +1729,9 @@ export function CameraWorkspace({
               setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")
             }
             ariaLabel="Aba do painel"
-            // Contagens em chip compacto (.dt-n, cine.css) p/ as 5 abas caberem em 1 linha.
-            // Nome acessível continua "Zonas N" / "Linhas N" (o {" "} preserva o espaço).
+            // Contagens em chip compacto (.dt-n, cine.css) p/ as 5 abas caberem em 1 linha —
+            // triggers distribuem por flex + rótulos curtos (fix #14: "Presença"→"Pessoas";
+            // valores internos INTACTOS). Nome acessível continua "Zonas N" / "Linhas N".
             items={[
               {
                 value: "zonas",
@@ -1693,7 +1751,7 @@ export function CameraWorkspace({
               },
               { value: "camadas", label: "Camadas" },
               { value: "timeline", label: "Timeline" },
-              { value: "presenca", label: "Presença" },
+              { value: "presenca", label: "Pessoas" },
             ]}
           >
             <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
@@ -1760,10 +1818,11 @@ export function CameraWorkspace({
 
       <div className="cam-kpibar">
         <span className="kb">
-          ◉ <b>{presence.now}</b> pessoas
+          <Users size={14} strokeWidth={1.75} aria-hidden /> <b>{presence.now}</b> pessoas
         </span>
         <span className="kb">
-          ⏱ <b>{fmtDuration(presence.dwell)}</b> permanência
+          <Timer size={14} strokeWidth={1.75} aria-hidden /> <b>{fmtDuration(presence.dwell)}</b>{" "}
+          permanência
         </span>
         <span className="kb muted">pico {presence.peak}</span>
         <span
@@ -1800,7 +1859,7 @@ export function CameraWorkspace({
           (detBackend === "cpu" ? (
             <Tooltip content="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)">
               <span className="kb" style={{ color: "var(--state-warn-fg, #facc15)" }}>
-                detecção: CPU ⚠
+                detecção: CPU <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
               </span>
             </Tooltip>
           ) : (
@@ -1810,7 +1869,11 @@ export function CameraWorkspace({
               </span>
             </Tooltip>
           ))}
-        {paused && <span className="kb muted">⏸ inspecionando</span>}
+        {paused && (
+          <span className="kb muted">
+            <Pause size={14} strokeWidth={1.75} aria-hidden /> inspecionando
+          </span>
+        )}
       </div>
 
       <ConfigZonaDialog

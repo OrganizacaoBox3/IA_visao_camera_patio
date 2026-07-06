@@ -207,14 +207,7 @@ body {
   color: var(--text-muted);
   font-size: 11px;
 }
-.privacy {
-  font-size: 11px;
-  color: var(--state-ok);
-  border: 1px solid var(--state-ok-border);
-  background: var(--state-ok-bg);
-  padding: 3px 8px;
-  border-radius: 999px;
-}
+/* (.privacy removida — órfã: a pílula do Relatório migrou p/ .rep-privacy, report/report.css.) */
 .spacer {
   flex: 1;
 }
@@ -780,9 +773,7 @@ label.file input {
   max-height: none;
   overflow: visible;
 }
-.insight {
-  padding: var(--sp-2) var(--sp-3);
-}
+/* (.insight removida — órfã: a faixa migrou p/ .rep-insight, report/report.css.) */
 .rep-lens {
   color: var(--text-dim);
   font-size: 12px;
@@ -998,24 +989,7 @@ label.file input {
   font-family: var(--mono);
 }
 
-/* Insight */
-.insight {
-  background: var(--state-ok-bg);
-  border: 1px solid var(--state-ok-border);
-  border-radius: 10px;
-  padding: var(--sp-3) var(--sp-4);
-}
-.insight b {
-  color: var(--state-ok);
-}
-.insight ul {
-  margin: 8px 0 0;
-  padding-left: var(--sp-4);
-  color: var(--text);
-}
-.insight li {
-  margin: 4px 0;
-}
+/* (Bloco .insight removido — órfão: consumidores usam .rep-insight, report/report.css.) */
 .rep-foot {
   color: var(--text-muted);
   font-size: 10px;
@@ -1094,7 +1068,6 @@ label.file input {
   }
 
   .panel,
-  .insight,
   .rep-resumo {
     border-color: #ccc;
     background: #fff;
@@ -1655,6 +1628,10 @@ button.rail-item {
   color: var(--text);
   font-family: var(--mono);
 }
+/* Ícones Lucide inline da KPI-bar (pessoas/permanência/pausa/alerta) alinham à linha de texto. */
+.cam-kpibar .kb > svg {
+  vertical-align: -2px;
+}
 .cam-drawer {
   position: absolute;
   top: 0;
@@ -1922,6 +1899,12 @@ button.rail-item {
   inset: 0;
   z-index: 10;
   background: #05080c;
+}
+/* Fix #2 (header duplo): com a câmera aberta, o header da Central some — UM header por
+   contexto (o .cam-head do workspace); no mobile devolve ~100px ao vídeo. Só CSS: o overlay
+   segue dentro de .dash-body (a grade continua montada/gravando por baixo — ADR-007 intacta). */
+.page:has(.cam-overlay) > .page-head {
+  display: none;
 }
 
 /* ── Modo LEITURA (código de barras) ───────────────────── */

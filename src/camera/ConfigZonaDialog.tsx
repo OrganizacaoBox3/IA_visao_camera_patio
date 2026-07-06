@@ -206,7 +206,7 @@ export function ConfigZonaDialog({
               {z.modo === "exclusao" && (
                 <p className="empty-note">
                   Área de máscara: toda pessoa cujo pé cair aqui é ignorada (não conta, não rastreia,
-                  não aparece). Sem parâmetros — pinte a área (🖌) sobre a fonte fixa de falso
+                  não aparece). Sem parâmetros — use “Pintar área” sobre a fonte fixa de falso
                   positivo.
                 </p>
               )}

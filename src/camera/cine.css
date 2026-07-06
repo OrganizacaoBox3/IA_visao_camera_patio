@@ -97,17 +97,26 @@
   flex: 1;
   min-height: 0;
 }
-/* Abas SEMPRE em 1 linha (A5): triggers compactos + contagem em chip (.dt-n).
-   Se ainda faltar largura (drawer 280px no tablet), a tablist rola horizontal
-   discretamente — Radix mantém as setas/roving focus trazendo a aba à vista. */
+/* Abas SEMPRE em 1 linha e SEM corte (#14): 5 triggers distribuem a largura por flex
+   (rótulos curtos: Zonas/Linhas/Camadas/Timeline/Pessoas) + contagem em chip (.dt-n).
+   font 12px compacta o conjunto p/ caber até no drawer de 280px (tablet); o overflow-x
+   fica como válvula de segurança (Radix traz a aba focada à vista). */
 .cam-drawer .drawer-tabs .ui-tablist {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: thin;
+  gap: 0;
 }
 .cam-drawer .drawer-tabs .ui-tablist button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
   padding-left: var(--sp-1);
   padding-right: var(--sp-1);
+  font-size: 12px;
 }
 .cam-drawer .drawer-tabs .dt-n {
   font-style: normal;
@@ -158,6 +167,19 @@
 /* nota curta ao pé de uma zona (fadiga/exclusão) */
 .cam-drawer .zone-note {
   margin: 4px 0 0;
+}
+/* Ferramentas da zona/linha viraram ícones Lucide (Onda B): centraliza o svg no botão .del
+   (o glifo de texto dispensava isto; o ícone precisa de flex p/ alinhar). */
+.cam-drawer .zone .del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* chip "celular: sim/não" da fadiga — ícone + texto alinhados */
+.cam-drawer .ws-phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Aba "Linhas": barra de ações (nova linha / zerar). */

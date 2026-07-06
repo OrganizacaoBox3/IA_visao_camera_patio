@@ -1,11 +1,12 @@
 // Aba "Zonas" do drawer da câmera — lista de zonas (cada uma com seu modo de IA + telemetria)
 // e a legenda do overlay. Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace.
+import { Brush, Settings2, Smartphone, X } from "lucide-react";
 import { APP_CONFIG } from "../../config";
 import { fmtDuration } from "../../format";
 import { sensitivityFactor } from "../../processors/atividade";
 import { objClass } from "../../objects/catalog";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
-import { Badge, Tooltip } from "../../ui";
+import { Badge, HelpTip, Tooltip } from "../../ui";
 import { MetricCell } from "../../components/Sparkline";
 import { RISK_LABEL, stateVar, type ZoneResult } from "../draw";
 import {
@@ -52,17 +53,30 @@ export function ZonasTab({
   return (
     <>
       {zonesLoading && <p className="empty-note">Carregando zonas…</p>}
+      {/* Prosa >1 linha vira HelpTip (regra de ouro): a tela mostra 1 linha; o resto mora no "?". */}
       {!zonesLoading && zones.length > 0 && canConfigure && (
         <p className="empty-note">
-          Cada zona roda um modo de IA na sua área (Atividade, Leitura, Objetos ou Fadiga). Para
-          trocar: ⚙ na zona → <b>Modo</b>.
+          Cada zona roda um modo de IA na sua área.{" "}
+          <HelpTip label="Ajuda das zonas">
+            Modos: Atividade, Leitura, Objetos, Fadiga ou Exclusão. Para trocar, use “Configurar
+            zona” → Modo.
+          </HelpTip>
         </p>
       )}
+      {/* Texto load-bearing do e2e (drawZone, app.spec.ts): /Use “Zona” para desenhar/. */}
       {!zonesLoading && zones.length === 0 && (
         <p className="empty-note">
-          {canConfigure
-            ? "Use “✎ Zona” para desenhar uma área sobre o vídeo; depois ⚙ na zona → Modo (Atividade, Leitura, Objetos ou Fadiga)."
-            : "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."}
+          {canConfigure ? (
+            <>
+              Use “Zona” para desenhar uma área sobre o vídeo.{" "}
+              <HelpTip label="Ajuda das zonas">
+                Depois, em cada zona, “Configurar zona” → Modo define a IA (Atividade, Leitura,
+                Objetos ou Fadiga).
+              </HelpTip>
+            </>
+          ) : (
+            "Nenhuma zona configurada. A edição de zonas requer perfil de engenharia."
+          )}
         </p>
       )}
       {zones.map((z) => {
@@ -93,7 +107,7 @@ export function ZonasTab({
                     aria-label="Configurar zona"
                     onClick={() => canConfigure && setCfgZoneId(z.id)}
                   >
-                    ⚙
+                    <Settings2 size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </Tooltip>
                 <Tooltip
@@ -111,7 +125,7 @@ export function ZonasTab({
                       canConfigure && (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))
                     }
                   >
-                    🖌
+                    <Brush size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </Tooltip>
                 <Tooltip content={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"}>
@@ -121,7 +135,7 @@ export function ZonasTab({
                     aria-label="Remover zona"
                     onClick={() => canConfigure && removeZone(z.id)}
                   >
-                    ✕
+                    <X size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </Tooltip>
               </span>
@@ -228,7 +242,7 @@ export function ZonasTab({
               <>
                 <div className="ws-counts">
                   {z.selectedClasses.length === 0 && (
-                    <span className="muted">nenhuma classe — abra ⚙</span>
+                    <span className="muted">nenhuma classe — use “Configurar zona”</span>
                   )}
                   {z.selectedClasses.map((k) => {
                     const o = objClass(k);
@@ -263,7 +277,10 @@ export function ZonasTab({
                   {r?.modo === "fadiga" && r.faceState === "ready" ? (
                     <>
                       <Badge tone={RISK_TONE[r.risk]}>{RISK_LABEL[r.risk]}</Badge>
-                      <span className="muted">📱 {r.phone ? "sim" : "não"}</span>
+                      <span className="muted ws-phone">
+                        <Smartphone size={12} strokeWidth={1.75} aria-hidden /> celular:{" "}
+                        {r.phone ? "sim" : "não"}
+                      </span>
                     </>
                   ) : (
                     <span className="muted">
@@ -289,15 +306,22 @@ export function ZonasTab({
                   />
                 )}
                 <p className="empty-note zone-note">
-                  Monitora 1 operador na ROI da zona (recorte). Som/calibração na câmera dedicada.
+                  Monitora 1 operador na área da zona.{" "}
+                  <HelpTip label="Ajuda da fadiga">
+                    A análise roda só no recorte desta zona. Som e calibração ficam na câmera
+                    dedicada (tipo Operador/fadiga).
+                  </HelpTip>
                 </p>
               </>
             )}
 
             {z.modo === "exclusao" && (
               <p className="empty-note zone-note">
-                Máscara de supressão: pessoas com o pé nesta área são ignoradas (não contam, não
-                rastreiam). Sem indicador.
+                Pessoas nesta área são ignoradas.{" "}
+                <HelpTip label="Ajuda da exclusão">
+                  Máscara de supressão: quem está com o pé na área não conta nem é rastreado. A
+                  zona não gera indicador.
+                </HelpTip>
               </p>
             )}
           </div>

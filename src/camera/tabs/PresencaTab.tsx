@@ -1,6 +1,7 @@
-// Aba "Presença" do drawer da câmera — KPIs de pessoas em cena (agora/pico/permanência).
-// Componente puro: recebe o snapshot já resolvido pelo CameraWorkspace.
+// Aba "Pessoas" (valor interno "presenca") do drawer da câmera — KPIs de pessoas em cena
+// (agora/pico/permanência). Componente puro: recebe o snapshot já resolvido pelo CameraWorkspace.
 import { fmtDuration } from "../../format";
+import { HelpTip } from "../../ui";
 
 export function PresencaTab({
   presence,
@@ -26,8 +27,12 @@ export function PresencaTab({
         </div>
       </div>
       <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-        Pessoas recebem ID efêmero (sem identidade); reseta por sessão.
-        {paused ? " ⏸ Pausado: rótulos com tempo em cena." : ""}
+        IDs efêmeros, sem identidade.{" "}
+        <HelpTip label="Ajuda da presença">
+          Cada pessoa em cena recebe um número anônimo só para contagem e permanência — nada é
+          reconhecido nem persistido; os números zeram por sessão.
+        </HelpTip>
+        {paused ? " Pausado: rótulos mostram o tempo em cena." : ""}
       </p>
     </>
   );

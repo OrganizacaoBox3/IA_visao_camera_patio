@@ -8,6 +8,7 @@ export { Switch, Checkbox, CheckboxRow, Slider } from "./controls";
 export { ToggleRow } from "./ToggleRow";
 export { SegmentedControl, type SegOption } from "./SegmentedControl";
 export { Tooltip, TooltipProvider } from "./Tooltip";
+export { HelpTip } from "./HelpTip";
 export { Dialog } from "./Dialog";
 export { ToastProvider, useToast, type ToastTone } from "./Toast";
 // KPI: o átomo da casa é o Kpi/KpiRow de routes/report/KpiRow.tsx (o antigo KpiCard daqui

@@ -18,13 +18,14 @@ async function connectCamera(context: BrowserContext, dashboard: Page) {
 }
 
 // MUDANÇA DE PRODUTO (2026-07): a câmera nova abre LIMPA — sem zonas-semente. Os testes de
-// config de zona agora DESENHAM a própria zona primeiro: "✎ Zona" + drag real no .cam-stage
-// (mesmo padrão dos specs de diagnóstico). Espera o estado vazio da aba Zonas (garante que a
-// carga assíncrona terminou E prova o novo comportamento) e retry no drag (o onUp descarta o
-// traço se o 1º frame ainda não chegou ao palco).
+// config de zona agora DESENHAM a própria zona primeiro: botão "Zona" (PenLine + label desde a
+// Onda B da simplificação; o glifo "✎" saiu) + drag real no .cam-stage (mesmo padrão dos specs
+// de diagnóstico). Espera o estado vazio da aba Zonas (garante que a carga assíncrona terminou
+// E prova o novo comportamento) e retry no drag (o onUp descarta o traço se o 1º frame ainda
+// não chegou ao palco).
 async function drawZone(page: Page) {
-  await expect(page.getByText(/Use “✎ Zona” para desenhar/)).toBeVisible();
-  await page.getByRole("button", { name: "✎ Zona" }).click();
+  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+  await page.getByRole("button", { name: "Zona", exact: true }).click();
   const stage = page.locator(".cam-stage");
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
   // 8 tentativas (era 5): sob carga (probe WHIP do nó + fetch /go2rtc/api/streams) o 1º frame

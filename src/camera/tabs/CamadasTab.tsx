@@ -1,7 +1,18 @@
 // Aba "Camadas" do drawer da câmera — preset ativo, toggles de overlay, slider de confiança
 // e perfil de detecção (longo alcance). Componente puro: recebe estado/handlers já resolvidos.
 import { type Dispatch, type SetStateAction } from "react";
-import { Badge, Button, Tooltip, ToggleRow, Field, Slider, Switch, type Tone } from "../../ui";
+import { RotateCcw } from "lucide-react";
+import {
+  Badge,
+  Button,
+  HelpTip,
+  Tooltip,
+  ToggleRow,
+  Field,
+  Slider,
+  Switch,
+  type Tone,
+} from "../../ui";
 import { type ModeKey, type ModePreset, type OverlayLayers } from "../../config";
 
 type Props = {
@@ -54,7 +65,7 @@ export function CamadasTab({
             <div className="mt-sp2">
               <Tooltip content="Restaura camadas e confiança do preset deste modo.">
                 <Button size="sm" onClick={() => applyPreset(activePreset)}>
-                  ↺ Reaplicar preset
+                  <RotateCcw size={14} strokeWidth={1.75} aria-hidden /> Reaplicar preset
                 </Button>
               </Tooltip>
             </div>
@@ -95,27 +106,32 @@ export function CamadasTab({
           </div>
         </Field>
       </div>
+      {/* Jargão de código (APP_CONFIG/MODE_PRESETS) NUNCA renderiza (#7); detalhe vira "?". */}
       <p className="empty-note mt-sp2">
-        Camadas e confiança seguem o preset do modo ativo; ajustes manuais valem só nesta sessão e
-        sobrepõem o preset (padrões em APP_CONFIG.overlay / MODE_PRESETS). Heatmap acumula a
-        presença de pessoas.
+        Ajustes de camadas e confiança valem só nesta sessão.{" "}
+        <HelpTip label="Ajuda das camadas">
+          Cada modo aplica um preset de camadas e confiança; ajustes manuais sobrepõem o preset até
+          fechar a câmera. O heatmap acumula a presença de pessoas.
+        </HelpTip>
       </p>
 
       {/* Perfil de detecção da CÂMERA (persiste no backend) — só engenharia edita. */}
       {canConfigure && (
         <div className="lr-card">
           <div className="lr-head">
-            <span>Longo alcance / Panorâmica</span>
+            <span>
+              Longo alcance / Panorâmica{" "}
+              <HelpTip label="Ajuda do longo alcance">
+                Para câmeras panorâmicas ou de longo alcance (ex.: rua vista de cima): detecta
+                objetos pequenos/distantes com mais tiles e limiares menores; usa mais CPU.
+              </HelpTip>
+            </span>
             <Switch
               checked={longRange}
               onCheckedChange={onLongRangeChange}
               ariaLabel="Longo alcance / Panorâmica"
             />
           </div>
-          <p className="empty-note lr-note">
-            Para câmeras panorâmicas/de longo alcance (ex.: rua vista de cima): detecta objetos
-            pequenos/distantes com mais tiles e limiares menores; usa mais CPU.
-          </p>
         </div>
       )}
     </>

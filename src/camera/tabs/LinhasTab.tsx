@@ -1,6 +1,7 @@
 // Aba "Linhas" do drawer da câmera — linhas de contagem (tripwires) + contadores in/out "hoje".
 // Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace (edição via hook useTripwires).
-import { Button, Tooltip, Badge } from "../../ui";
+import { ArrowLeftRight, RotateCcw, X } from "lucide-react";
+import { Button, HelpTip, Tooltip, Badge } from "../../ui";
 import { type Tripwire, type TripwireCounts } from "../../vision/counting";
 
 type Props = {
@@ -43,20 +44,39 @@ export function LinhasTab({
           }
         >
           <Button size="sm" active={tripwireMode} disabled={!canConfigure} onClick={toggleTripwireMode}>
-            {tripwireMode ? "Traçando…" : "⇄ Nova linha"}
+            {tripwireMode ? (
+              "Traçando…"
+            ) : (
+              <>
+                <ArrowLeftRight size={14} strokeWidth={1.75} aria-hidden /> Nova linha
+              </>
+            )}
           </Button>
         </Tooltip>
         <Tooltip content="Zera SÓ a contagem desta sessão (geometria mantida). O acumulado do dia, salvo no servidor, permanece.">
           <Button size="sm" onClick={resetCounts}>
-            ↺ Zerar contagem
+            <RotateCcw size={14} strokeWidth={1.75} aria-hidden /> Zerar contagem
           </Button>
         </Tooltip>
+        {/* Mecânica da contagem sai da superfície (regra de ouro) e mora no "?" da barra. */}
+        <HelpTip label="Como funciona a contagem">
+          A contagem reusa o rastreio de pessoas em cena (requer uma zona de Atividade ativa).
+          Contadores da sessão zeram ao fechar; o acumulado do dia fica salvo no servidor.
+        </HelpTip>
       </div>
       {tripwires.length === 0 && (
         <p className="empty-note">
-          {canConfigure
-            ? "Use “⇄ Nova linha” e arraste sobre o vídeo (A→B). Cruzar da esquerda→direita da seta conta como Entrada; o sentido oposto, Saída."
-            : "Nenhuma linha de contagem configurada. A edição requer perfil de engenharia."}
+          {canConfigure ? (
+            <>
+              Use “Nova linha” e arraste sobre o vídeo (A→B).{" "}
+              <HelpTip label="Ajuda das linhas">
+                Cruzar no sentido da seta conta como Entrada; o sentido oposto, como Saída. Dá para
+                inverter a direção na ferramenta da linha.
+              </HelpTip>
+            </>
+          ) : (
+            "Nenhuma linha de contagem configurada. A edição requer perfil de engenharia."
+          )}
         </p>
       )}
       {tripwires.map((w, i) => {
@@ -96,7 +116,7 @@ export function LinhasTab({
                     aria-label="Inverter direção"
                     onClick={() => canConfigure && invertTripwire(w.id)}
                   >
-                    ⇄
+                    <ArrowLeftRight size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </Tooltip>
                 <Tooltip content={canConfigure ? "Remover linha" : "Remover requer perfil de engenharia"}>
@@ -106,7 +126,7 @@ export function LinhasTab({
                     aria-label="Remover linha"
                     onClick={() => canConfigure && removeTripwire(w.id)}
                   >
-                    ✕
+                    <X size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </Tooltip>
               </span>
@@ -132,14 +152,8 @@ export function LinhasTab({
           </div>
         );
       })}
-      {/* Nota mecânica só quando HÁ linhas (explica os contadores); vazia, a instrução
-          de cima basta — estado vazio compacto, sem empurrar conteúdo. */}
-      {tripwires.length > 0 && (
-        <p className="empty-note" style={{ marginTop: "var(--sp-2)" }}>
-          A contagem reusa o rastreio de pessoas já em cena (sem inferência extra) — depende de ao
-          menos uma zona de Atividade ativa p/ detectar pessoas. Contadores são por sessão.
-        </p>
-      )}
+      {/* Nota mecânica dos contadores migrou p/ o HelpTip da barra de ações (regra de ouro:
+          prosa >1 linha não mora na superfície). */}
     </>
   );
 }
