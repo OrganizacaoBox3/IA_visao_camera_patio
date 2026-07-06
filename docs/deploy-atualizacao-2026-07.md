@@ -244,3 +244,22 @@ no comportamento e os escape hatches novos:
 - [ ] Tier: se o boot escolher M num box pequeno, em ~90s de carga o log mostra `latency-bound 3×` e desce p/ S sozinho.
 - [ ] `status().motionGate.skipped1m` > 0 com câmeras estáticas; câmera com gente NÃO pula.
 - [ ] Bancada determinística (opcional, recomendado): MediaMTX na porta **8556** + loop CFTV — ver `analises/plano-teste-camera-real.md` (tier 2, seção HOMOLOG).
+
+### 12.1 Câmeras reais: use o SUB-STREAM como URL de ingest (−60% de CPU do ffmpeg, MEDIDO)
+
+Ganho de **configuração, zero código** (perf round 3, frente 1 — `analises/perf-round3/frente1-ingest-relay.md`
+§4/§7): apontar o ingest do hub para o **sub-stream** da câmera em vez do main-stream corta
+**−60% do CPU do ffmpeg por câmera** (0,208→0,083 cores na bancada; o decode, ~70-75% do custo do
+ingest, cai 3-5×). Em câmera real (main 1080p/4MP com bitrate alto) o ganho tende a ser MAIOR.
+Com N câmeras, é a maior alavanca do baseline contínuo do servidor.
+
+URLs típicas (cadastre em /cameras a variante sub quando a câmera/NVR oferecer):
+- Intelbras: `rtsp://user:pass@NVR:554/cam/realmonitor?channel=N&subtype=1` (`subtype=1` = sub-stream)
+- Hikvision: `rtsp://user:pass@NVR:554/Streaming/Channels/N02` (`N02` = sub-stream do canal N)
+
+**Pré-requisito honesto (antes de generalizar):** o frame do ingest é exatamente **o que o motor vê**
+— o eixo nº 1 de precisão. Então (a) configure o sub-stream da câmera para **≥ ~720p** (muitos vêm
+de fábrica em 640×360; o D-FINE precisa de ~720p para não perder a pessoa distante) e (b) **valide o
+recall de pessoa** comparando main vs sub nas câmeras do CD por alguns turnos — a precisão do
+sub-stream **não foi medida** na rodada 3. Se o recall cair, volte aquela câmera para o main-stream
+(a URL é por câmera; o WebRTC/go2rtc de visualização segue independente).

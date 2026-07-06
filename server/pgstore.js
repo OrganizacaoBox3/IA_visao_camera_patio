@@ -5,8 +5,9 @@
 // FALLBACK JSON (padrão da casa, espelha events.js): sem Postgres — ou com PG
 // falhando — o ingest agrega EM MEMÓRIA por bucket (hora×chave, mesma chave do
 // schema.sql) e persiste em server/data-hist.json com escrita atômica
-// (tmp+rename) e flush com debounce. Os objetos guardados têm EXATAMENTE a
-// forma camelCase dos SELECTs abaixo, então o front não distingue PG de JSON.
+// (tmp+rename) e flush write-behind com intervalo ADAPTATIVO (ver bloco do
+// flush). Os objetos guardados têm EXATAMENTE a forma camelCase dos SELECTs
+// abaixo, então o front não distingue PG de JSON.
 // LGPD: só indicadores agregados/metadados — nunca imagens/frames.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -20,7 +21,7 @@ const FILE = path.join(__dirname, "data-hist.json");
 const KINDS = ["ativ", "read", "obj", "fad", "flow"];
 const RETENTION_DAYS = Math.max(1, Number(process.env.DATA_HIST_RETENTION_DAYS ?? 30));
 const DAY_MS = 86_400_000;
-const FLUSH_MS = 2_000;
+const FLUSH_MS = 2_000; // degrau BASE do flush adaptativo (ver flushIntervalMs abaixo)
 
 const emptyStore = () => ({
   buckets: { ativ: {}, read: {}, obj: {}, fad: {}, flow: {} }, // id → bucket (upsert em memória)
@@ -65,26 +66,93 @@ function warnPgDown(e) {
   console.error("[data] Postgres falhou — histórico segue em fallback JSON:", e.message);
 }
 
+// ── Flush do fallback JSON: write-behind assíncrono + intervalo adaptativo ───
+// Custo MEDIDO do flush completo (stringify+write+rename do histórico INTEIRO), perf round 3,
+// frente 3, achado h (analises/perf-round3/frente3-hub-hotloops.md):
+//   29 ms @1k · 78 ms @10k · 566 ms @50k eventos — e antes era tudo SÍNCRONO a cada ≤2s.
+// Duas defesas: (a) write+rename saem do event loop via fs.promises, com no máximo 1 write em
+// voo (o stringify continua síncrono no loop — amortizado por b); (b) o intervalo entre flushes
+// CRESCE com o histórico (flushIntervalMs abaixo). Formato do arquivo INALTERADO (retrocompat).
+// TRADE-OFF DECLARADO: a janela de perda em queda abrupta cresce junto (até ~30s de ingest com
+// histórico grande; antes ≤2s). Aceitável porque produção usa Postgres — o fallback JSON é
+// homolog/dev — e o shutdown limpo grava um write final síncrono (flushFinalSync).
+
+// Intervalo adaptativo (puro, exportado p/ teste). Degraus calibrados pelo custo medido acima:
+// 2s até 5k eventos (flush ~29 ms) · 10s até 50k (~78-566 ms) · 30s acima (>566 ms).
+function flushIntervalMs(eventCount) {
+  if (eventCount <= 5_000) return FLUSH_MS; // 2s
+  if (eventCount <= 50_000) return 10_000;
+  return 30_000;
+}
+function totalEvents() {
+  let n = 0;
+  for (const k of KINDS) n += mem.events[k].length;
+  return n;
+}
+
+let writing = false; // guard: no máximo 1 write assíncrono em voo
+let dirtyWhileWriting = false; // flush pedido durante o write em voo → reagenda no finally
+
 // Escrita ATÔMICA (tmp+rename): nunca deixa data-hist.json truncado no disco.
-function flushNow() {
+async function flushNow() {
   if (flushTimer) {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+  if (writing) {
+    dirtyWhileWriting = true; // o finally do write em voo reagenda
+    return;
+  }
+  writing = true;
   prune();
+  const json = JSON.stringify(mem); // síncrono no loop — amortizado pelo intervalo adaptativo
   try {
-    fs.writeFileSync(FILE + ".tmp", JSON.stringify(mem));
-    fs.renameSync(FILE + ".tmp", FILE);
+    await fs.promises.writeFile(FILE + ".tmp", json);
+    await fs.promises.rename(FILE + ".tmp", FILE);
   } catch (e) {
     console.error("[data] falha ao salvar data-hist.json:", e.message);
+  } finally {
+    writing = false;
+    if (dirtyWhileWriting) {
+      dirtyWhileWriting = false;
+      scheduleFlush();
+    }
   }
 }
-// Debounce ~2s: o ingest chega a cada amostra; agrupamos escritas em disco.
+// Debounce adaptativo: o ingest chega a cada amostra; agrupamos escritas em disco.
 function scheduleFlush() {
+  if (writing) {
+    dirtyWhileWriting = true;
+    return;
+  }
   if (flushTimer) return;
-  flushTimer = setTimeout(flushNow, FLUSH_MS);
+  flushTimer = setTimeout(flushNow, flushIntervalMs(totalEvents()));
   if (flushTimer.unref) flushTimer.unref();
 }
+
+// Write FINAL no shutdown — síncrono (único lugar onde bloquear o loop é aceitável: o processo
+// está morrendo). Sem ele, o write-behind perderia o último intervalo pendente. Usa um tmp
+// PRÓPRIO (.final.tmp) p/ não colidir com um write assíncrono abandonado em voo no mesmo path.
+// No-op sem flush pendente (inclusive no caminho Postgres — handlers são inofensivos lá).
+function flushFinalSync() {
+  if (!flushTimer && !writing && !dirtyWhileWriting) return;
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  try {
+    prune();
+    fs.writeFileSync(FILE + ".final.tmp", JSON.stringify(mem));
+    fs.renameSync(FILE + ".final.tmp", FILE);
+  } catch (e) {
+    console.error("[data] falha no write final de data-hist.json:", e.message);
+  }
+}
+process.once("exit", flushFinalSync);
+// Garante que o "exit" acima rode também em SIGINT/SIGTERM sem outro handler no processo
+// (com go2rtc ligado, o handler dele já chama process.exit — mesmo padrão de go2rtc.js).
+process.once("SIGINT", () => process.exit(0));
+process.once("SIGTERM", () => process.exit(0));
 
 // ── FALLBACK JSON: agregação por bucket (mesma semântica dos UPSERTs SQL) ────
 const J_INGEST = {
@@ -529,13 +597,20 @@ async function status() {
 }
 
 async function clear() {
-  // Fallback JSON: zera memória e grava já (ação explícita — sem debounce).
+  // Fallback JSON: zera memória e grava já (ação explícita — sem debounce adaptativo).
   mem = emptyStore();
-  flushNow();
+  await flushNow();
   if (!db.configured()) return;
   await db.query(
     `truncate ativ_buckets, ativ_events, read_buckets, read_events, obj_buckets, obj_events, fad_buckets, fad_events, flow_buckets, flow_events`,
   );
 }
 
-module.exports = { ingest, buckets, events, status, clear };
+module.exports = {
+  ingest,
+  buckets,
+  events,
+  status,
+  clear,
+  flushIntervalMs, // exportado p/ teste/unit (puro: nº de eventos → intervalo de flush)
+};

@@ -95,8 +95,16 @@ parte dos browsers) → colar a URL em /cameras.
   que motivou este plano) e Mibo iM3/iM4 (RTSP não-oficial, linha consumer).
 
 **Formatos de URL p/ quando conectarem as câmeras REAIS do CD (via NVR):**
-- Intelbras: `rtsp://user:pass@NVR:554/cam/realmonitor?channel=N&subtype=0`
+- Intelbras: `rtsp://user:pass@NVR:554/cam/realmonitor?channel=N&subtype=0` (`subtype=1` = sub-stream)
 - Hikvision: `rtsp://user:pass@NVR:554/Streaming/Channels/N01` (N=canal; N02=sub-stream)
+
+> **Recomendação MEDIDA (perf round 3, frente 1 — `analises/perf-round3/frente1-ingest-relay.md`):**
+> quando a câmera/NVR oferece sub-stream, use-o como URL de **ingest** — corta **−60% do CPU do
+> ffmpeg por câmera** (0,208→0,083 cores; decode 3-5× menor), zero código; em câmera real o ganho
+> tende a ser maior. **Pré-requisito honesto:** o frame do ingest é o que o MOTOR vê — configure o
+> sub-stream para **≥ ~720p** (o default de fábrica costuma ser 640×360, abaixo do piso do D-FINE
+> p/ pessoa distante) e **valide o recall** main vs sub antes de generalizar (a precisão do
+> sub-stream não foi medida na rodada 3). Se o recall cair, volte a câmera pro main-stream.
 
 ---
 

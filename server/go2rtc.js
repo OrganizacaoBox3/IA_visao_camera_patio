@@ -66,8 +66,20 @@ let getSources = null; // callback do hub: () => [{ id, url }]
 let lastYaml = ""; // conteúdo já escrito — evita restart sem mudança real
 let started = false; // init() já rodou
 
+// CACHE do stat (perf round 3, frente 3, achado g): `enabled()` roda ~6×/s no event loop (pullTick
+// do analysis/go2rtc-source) e cada `fs.existsSync` custou 0,57 ms/chamada ≈ 5-9% do CPU do hub só
+// em stat repetido. O binário não aparece/some em runtime (trocar exige restart); TTL de 60s cobre
+// o caso raro sem stat síncrono no hot path.
+const BIN_EXISTS_TTL_MS = 60_000;
+let binExistsVal = false;
+let binExistsAt = 0; // 0 = nunca checado → 1ª chamada faz o stat
 function binExists() {
-  return Boolean(BIN) && fs.existsSync(BIN);
+  const now = Date.now();
+  if (now - binExistsAt > BIN_EXISTS_TTL_MS) {
+    binExistsVal = Boolean(BIN) && fs.existsSync(BIN);
+    binExistsAt = now;
+  }
+  return binExistsVal;
 }
 /** Ligado = NÃO desligado pelo escape hatch E o binário existe (presença ⇒ auto-on). */
 function enabled() {
