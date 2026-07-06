@@ -1,6 +1,7 @@
 // Estado vazio do Relatório (sem histórico para o modo atual): dá o CAMINHO exato de ativação
-// (Central → zona → ⚙ Configurar zona → Modo) e, com a persistência confirmada pelo hub, afirma
-// que é falta de dados no período (não banco ausente) — vazio honesto.
+// (Central, desenhar zona com a ferramenta Zona, "Configurar zona", escolher o Modo) e, com a
+// persistência confirmada pelo hub, afirma que é falta de dados no período (não banco ausente)
+// — vazio honesto. Prosa em linguagem de produto, sem glifo de ícone (acabamento da simplificação).
 import type { DataPersistence } from "../../api";
 import type { Mode } from "./labels";
 
@@ -29,13 +30,13 @@ export function EmptyHistory({
       <p>
         {mode === "leitura" ? (
           <>
-            Na Central, abra a câmera → desenhe uma zona sobre a etiqueta/esteira (✎ Zona) → ⚙
-            Configurar zona → <b>Modo: Leitura</b>.
+            Na Central, abra a câmera, desenhe uma zona sobre a etiqueta/esteira com a ferramenta{" "}
+            <b>Zona</b> e, em <b>Configurar zona</b>, escolha o <b>Modo: Leitura</b>.
           </>
         ) : mode === "objetos" ? (
           <>
-            Na Central, abra a câmera → desenhe uma zona sobre a área (✎ Zona) → ⚙ Configurar zona →{" "}
-            <b>Modo: Objetos</b> e escolha as classes.
+            Na Central, abra a câmera, desenhe uma zona sobre a área com a ferramenta <b>Zona</b>{" "}
+            e, em <b>Configurar zona</b>, escolha o <b>Modo: Objetos</b> e as classes.
           </>
         ) : mode === "fadiga" ? (
           <>
@@ -44,8 +45,9 @@ export function EmptyHistory({
           </>
         ) : (
           <>
-            Na Central, abra a câmera → desenhe uma zona sobre a área de trabalho (✎ Zona) — o modo{" "}
-            <b>Atividade</b> é o padrão. Deixe a Central rodando para acumular indicadores.
+            Na Central, abra a câmera e desenhe uma zona sobre a área de trabalho com a ferramenta{" "}
+            <b>Zona</b> — o modo <b>Atividade</b> é o padrão. Deixe a Central rodando para acumular
+            indicadores.
           </>
         )}
       </p>

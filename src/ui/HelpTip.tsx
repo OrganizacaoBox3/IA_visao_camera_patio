@@ -5,9 +5,8 @@ import { Tooltip } from "./Tooltip";
 // "?" de ajuda — degrau 3 da hierarquia de ajuda da casa (label → placeholder → tooltip "?" →
 // nunca parágrafo permanente no meio da UI). Gatilho = botão real (focável; o Radix abre no
 // foco → acessível por teclado; aria-label estável).
-// CANÔNICO (Onda B da simplificação): este é o átomo do barrel. As duas cópias legadas
-// (routes/cameras/HelpTip.tsx e o padrão equivalente em routes/users) migram para cá em onda
-// própria — não importar de lá.
+// CANÔNICO: este é o átomo do barrel — único HelpTip do app (as cópias legadas de
+// routes/cameras e routes/users foram migradas para cá no acabamento da simplificação).
 export function HelpTip({ label = "Ajuda", children }: { label?: string; children: ReactNode }) {
   return (
     <Tooltip content={children}>

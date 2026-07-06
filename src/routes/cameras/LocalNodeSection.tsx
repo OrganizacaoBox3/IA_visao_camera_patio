@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
-import { Button, Input, FieldLabel, useToast, SectionTitle } from "../../ui";
+import { Button, Input, FieldLabel, HelpTip, useToast, SectionTitle } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
-import { HelpTip } from "./HelpTip";
 
 // Seção "Câmera local (webcam / nó)" — fonte ÚNICA da UI de nó local: abrir o nó neste
 // dispositivo + copiar o link de inscrição (token do hub). Consumida pela tela /cameras

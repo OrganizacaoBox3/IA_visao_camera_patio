@@ -17,11 +17,11 @@ import {
   Alert,
   EmptyState,
   Tooltip,
+  HelpTip,
   useToast,
   SectionTitle,
 } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
-import { HelpTip } from "./HelpTip";
 import { setCameraCfg, type CameraCfg } from "../../cameraConfig";
 import { useCamCfgs } from "../useCamCfgs";
 import { type Camera } from "../dashboard/types";

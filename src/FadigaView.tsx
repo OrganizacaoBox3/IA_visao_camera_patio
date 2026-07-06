@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { RotateCcw, Smartphone } from "lucide-react";
 import { APP_CONFIG } from "./config";
 import { type FrameSource } from "./frame";
 import { drawFadigaScene } from "./fadiga/draw";
@@ -273,7 +274,16 @@ export function FadigaView({
             <canvas ref={canvasRef} />
             <div className="tile-badges">
               <span className={`tb ${status.cls}`}>● {status.txt}</span>
-              {phone && <span className="tb ALERTA">📱</span>}
+              {phone && (
+                <span className="tb ALERTA inline-flex items-center">
+                  <Smartphone
+                    size={16}
+                    strokeWidth={1.75}
+                    role="img"
+                    aria-label="Celular detectado"
+                  />
+                </span>
+              )}
             </div>
           </div>
           <div className="tile-foot">
@@ -444,7 +454,7 @@ export function FadigaView({
                 </Tooltip>
               ))}
               <Button onClick={() => setThresholds({ ...FADIGA_DEFAULT_THRESHOLDS })}>
-                ↺ Restaurar padrão
+                <RotateCcw size={16} strokeWidth={1.75} aria-hidden /> Restaurar padrão
               </Button>
             </div>
           </ScrollArea>
@@ -462,7 +472,8 @@ export function FadigaView({
           MAR <b>{mar == null ? "--" : mar.toFixed(2)}</b>
         </span>
         <span className="kb">
-          📱 <b>{phone ? "sim" : "não"}</b>
+          <Smartphone size={16} strokeWidth={1.75} role="img" aria-label="Celular" />{" "}
+          <b>{phone ? "sim" : "não"}</b>
         </span>
         <span className="kb">
           {muted ? "🔇" : "🔊"}
