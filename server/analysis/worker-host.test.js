@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { pickWorker, resolveWorkerCount, dispatchReady } = require("./worker-host");
+const { pickWorker, resolveWorkerCount, dispatchReady, staggerPhaseMs } = require("./worker-host");
 
 describe("pickWorker — roteamento por MENOR carga + round-robin no empate", () => {
   const ready = (load) => ({ ready: true, load });
@@ -88,12 +88,19 @@ describe("resolveWorkerCount — N automático (env pin / cores / câmeras)", ()
   });
 });
 
-describe("dispatchReady — coalescência / ≤1 job em voo por câmera", () => {
-  const base = () => ({ fadiga: false, busy: false, latest: { buf: {} }, lastSentAt: 0, roundMs: 1000 });
+describe("dispatchReady — coalescência/≤1-em-voo + cadência por SLOT ABSOLUTO (fase áurea)", () => {
+  const base = () => ({
+    fadiga: false,
+    busy: false,
+    latest: { buf: {} },
+    lastSentAt: 0,
+    staggerIndex: 0,
+    roundMs: 1000,
+  });
   const now = 100_000;
 
-  it("pronta: não-fadiga, livre, com frame novo e cadência cumprida → despacha", () => {
-    expect(dispatchReady(base(), now, 1000)).toBe(true);
+  it("pronta: não-fadiga, livre, frame novo e slot novo do grid próprio → despacha", () => {
+    expect(dispatchReady(base(), now, 1000)).toBe(true); // slot 100 > slot 0
   });
 
   it("busy (job em voo) → NÃO despacha (garante ≤1 por câmera)", () => {
@@ -104,19 +111,192 @@ describe("dispatchReady — coalescência / ≤1 job em voo por câmera", () => 
     expect(dispatchReady({ ...base(), latest: null }, now, 1000)).toBe(false);
   });
 
-  it("dentro da cadência (roundMs não cumprido) → NÃO despacha", () => {
-    const st = { ...base(), lastSentAt: now - 500, roundMs: 1000 }; // só 500ms desde o último
-    expect(dispatchReady(st, now, 1000)).toBe(false);
-  });
-
   it("câmera fadiga (roda no cliente) → NUNCA despacha no hub", () => {
     expect(dispatchReady({ ...base(), fadiga: true }, now, 1000)).toBe(false);
   });
 
+  it("MESMO slot → NÃO despacha; slot novo → despacha (a régua é o grid, não o tempo relativo)", () => {
+    const st = { ...base(), lastSentAt: 100_100 };
+    expect(dispatchReady(st, 100_900, 1000)).toBe(false); // ambos dentro do slot [100_000, 101_000)
+    expect(dispatchReady(st, 101_000, 1000)).toBe(true); // slot novo começou
+  });
+
+  it("dispatch atrasado NÃO desloca o grid (auto-corretivo — mata o estado absorvente)", () => {
+    // Despachou TARDE dentro do slot (tick com jitter): o próximo slot continua em
+    // 101_000, não em lastSentAt+roundMs=101_900 (a regra relativa re-alinhava aqui).
+    const st = { ...base(), lastSentAt: 100_900 };
+    expect(dispatchReady(st, 101_050, 1000)).toBe(true);
+  });
+
+  it("fase áurea desloca o grid da câmera (staggerIndex 1 → fase 618ms)", () => {
+    const st = { ...base(), staggerIndex: 1, lastSentAt: 100_700 }; // slot próprio [100_618, 101_618)
+    expect(dispatchReady(st, 101_500, 1000)).toBe(false); // ainda no mesmo slot DELA
+    expect(dispatchReady(st, 101_650, 1000)).toBe(true); // 101_618 passou → slot novo
+  });
+
   it("usa st.roundMs (câmera com linha @2fps) e cai no default quando ausente", () => {
-    const linha = { ...base(), roundMs: 500, lastSentAt: now - 600 }; // 600ms ≥ 500 → ok
-    expect(dispatchReady(linha, now, 1000)).toBe(true);
-    const semRound = { ...base(), roundMs: 0, lastSentAt: now - 600 }; // cai no default 1000: 600<1000
-    expect(dispatchReady(semRound, now, 1000)).toBe(false);
+    const linha = { ...base(), roundMs: 500, lastSentAt: 100_100 };
+    expect(dispatchReady(linha, 100_600, 1000)).toBe(true); // grid de 500: slot 201 > 200
+    const semRound = { ...base(), roundMs: 0, lastSentAt: 100_100 }; // default 1000: mesmo slot
+    expect(dispatchReady(semRound, 100_600, 1000)).toBe(false);
+  });
+
+  it("estado sem staggerIndex (legado) → fase 0, grid em múltiplos de roundMs", () => {
+    const st = { ...base(), staggerIndex: undefined, lastSentAt: 100_100 };
+    expect(dispatchReady(st, 100_900, 1000)).toBe(false);
+    expect(dispatchReady(st, 101_000, 1000)).toBe(true);
+  });
+});
+
+describe("staggerPhaseMs — fase áurea por índice (espalhamento livre de colisão)", () => {
+  // Menor distância CIRCULAR entre fases vizinhas dentro do round (inclui o wrap).
+  function minCircularGap(phases, roundMs) {
+    const s = [...phases].sort((a, b) => a - b);
+    let min = Infinity;
+    for (let i = 0; i < s.length; i++) {
+      const gap = i === s.length - 1 ? s[0] + roundMs - s[i] : s[i + 1] - s[i];
+      min = Math.min(min, gap);
+    }
+    return min;
+  }
+
+  it("é determinística e fica em [0, roundMs)", () => {
+    for (let i = 0; i < 40; i++) {
+      const ph = staggerPhaseMs(i, 1000);
+      expect(ph).toBe(staggerPhaseMs(i, 1000));
+      expect(ph).toBeGreaterThanOrEqual(0);
+      expect(ph).toBeLessThan(1000);
+    }
+  });
+
+  it("3 câmeras @1000ms (regime da bancada): fases 0/618/236 — mín distância 236ms, na ordem do pulso de inferência (~240ms tier N)", () => {
+    const phases = [0, 1, 2].map((i) => staggerPhaseMs(i, 1000));
+    expect(phases).toEqual([0, 618, 236]);
+    expect(minCircularGap(phases, 1000)).toBe(236); // frente2: fila p95 259→2ms com esse espalhamento
+  });
+
+  it("até 13 câmeras @1000ms: todas distintas, vizinhas ≥56ms (> tick de 50ms — nunca 2 no mesmo tick)", () => {
+    const phases = Array.from({ length: 13 }, (_, i) => staggerPhaseMs(i, 1000));
+    expect(new Set(phases).size).toBe(13); // zero colisão (hash % roundMs colidiu a 36ms com 2 câmeras)
+    expect(minCircularGap(phases, 1000)).toBeGreaterThanOrEqual(56);
+  });
+
+  it("roundMs novo re-deriva a fase na MESMA fração áurea (foco/linha muda a cadência)", () => {
+    for (const i of [0, 1, 2, 3, 4]) {
+      // fração do round preservada entre grids (±arredondamento de 1ms)
+      expect(Math.abs(staggerPhaseMs(i, 500) / 500 - staggerPhaseMs(i, 1000) / 1000)).toBeLessThan(0.005);
+    }
+    // espalhamento se mantém no grid novo: 3 câmeras que caem p/ 500ms (linha @2fps)
+    const phases = [0, 1, 2].map((i) => staggerPhaseMs(i, 500));
+    expect(phases).toEqual([0, 309, 118]);
+    expect(minCircularGap(phases, 500)).toBe(118);
+  });
+
+  it("entradas degeneradas não explodem: índice ausente/negativo → fase 0; roundMs inválido → [0,1)", () => {
+    expect(staggerPhaseMs(undefined, 1000)).toBe(0);
+    expect(staggerPhaseMs(-3, 1000)).toBe(0);
+    expect(staggerPhaseMs(2, 0)).toBe(0);
+    expect(staggerPhaseMs(2, undefined)).toBe(0);
+  });
+});
+
+describe("dispatchReady — slot absoluto NÃO re-alinha sob jitter (a matemática do protótipo da frente 2)", () => {
+  // Simulação determinística do tick de produção: relógio de 50ms com atraso
+  // ocasional (event loop ocupado por decode do gate/IPC/GC — frente2 §1), câmeras
+  // SEMPRE com frame novo (último-vence) e lastSentAt=now na avaliação (como
+  // gateAndDispatch). `eligible` é a regra sob teste.
+  function lcg(seed) {
+    let s = seed >>> 0;
+    return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  }
+  function simulate({ eligible, cams, minutes = 10, tickMs = 50, seed = 7, delayEvery = 0.05, delayMin = 20, delayMax = 140 }) {
+    const rnd = lcg(seed);
+    const dispatches = cams.map(() => []);
+    const end = minutes * 60_000;
+    let now = 0;
+    while (now < end) {
+      now += tickMs + (rnd() < delayEvery ? delayMin + rnd() * (delayMax - delayMin) : 0);
+      for (let i = 0; i < cams.length; i++) {
+        if (eligible(cams[i], now)) {
+          cams[i].lastSentAt = now;
+          dispatches[i].push(now);
+        }
+      }
+    }
+    return dispatches;
+  }
+  // Rodadas "conjuntas": ≥2 câmeras despachando no MESMO tick (o alinhamento do serrote).
+  function jointRounds(dispatches, sinceMs = 0) {
+    const seen = new Map();
+    for (const times of dispatches)
+      for (const t of times) if (t >= sinceMs) seen.set(t, (seen.get(t) || 0) + 1);
+    let joint = 0;
+    for (const n of seen.values()) if (n >= 2) joint += 1;
+    return joint;
+  }
+  const mkCam = (i, roundMs = 1000) => ({
+    fadiga: false,
+    busy: false,
+    latest: { buf: {} },
+    lastSentAt: 0,
+    staggerIndex: i,
+    roundMs,
+  });
+  const MAX_TICK_GAP = 50 + 140; // pior avaliação possível: tick + atraso máximo simulado
+
+  it("10min de jitter: fase preservada (offset ≤ tick+atraso), ZERO rodadas conjuntas, frequência exata", () => {
+    const cams = [0, 1, 2].map((i) => mkCam(i));
+    const ds = simulate({ eligible: (st, now) => dispatchReady(st, now, 1000), cams });
+    ds.forEach((times, i) => {
+      const ph = staggerPhaseMs(i, 1000);
+      for (const t of times) {
+        // o despacho cai no COMEÇO do slot próprio: um tick atrasado adia ESTE
+        // despacho, mas o grid (a fase) não anda — auto-corretivo
+        const off = (((t - ph) % 1000) + 1000) % 1000;
+        expect(off).toBeLessThan(MAX_TICK_GAP + 5);
+      }
+      // o fix muda a FASE, não a frequência: 1 despacho por slot de 1000ms
+      expect(Math.abs(times.length - 600)).toBeLessThanOrEqual(2);
+    });
+    expect(jointRounds(ds)).toBe(0); // nunca 2 câmeras no mesmo tick — sem rajada, sem fila
+  });
+
+  it("a regra RELATIVA antiga COLAPSA sob o MESMO jitter (estado absorvente — prova de sensibilidade do sensor)", () => {
+    // Nascem perfeitamente espalhadas (0/333/666ms) e mesmo assim re-alinham: uma
+    // vez 2 câmeras no mesmo tick, lastSentAt idêntico as prende juntas p/ sempre.
+    const cams = [0, 1, 2].map((i) => ({ ...mkCam(i), lastSentAt: -1000 + i * 333 }));
+    const relative = (st, now) => now - st.lastSentAt >= st.roundMs;
+    const ds = simulate({ eligible: relative, cams });
+    // último minuto: rodadas conjuntas abundantes (colapsado) — o slot absoluto dá 0
+    expect(jointRounds(ds, 9 * 60_000)).toBeGreaterThan(20);
+  });
+
+  it("mudança de roundMs (foco/linha) re-deriva a fase no ato — grid novo, sem colidir com a vizinha", () => {
+    const st1 = mkCam(1); // fase 618 @1000 → 309 @500
+    const st2 = mkCam(2); // fase 236 @1000 → 118 @500
+    const after = { a: [], b: [] };
+    let now = 0;
+    for (let k = 0; k < 400; k++) {
+      now += 50; // sem jitter: isola o efeito da troca de cadência
+      if (now === 10_000) {
+        st1.roundMs = 500; // câmera ganhou linha/foco: cadência sobe p/ 2fps
+        st2.roundMs = 500;
+      }
+      for (const [st, out] of [[st1, after.a], [st2, after.b]]) {
+        if (dispatchReady(st, now, 1000)) {
+          st.lastSentAt = now;
+          if (now > 10_000) out.push(now);
+        }
+      }
+    }
+    // despachos caem no grid NOVO com a fase RE-DERIVADA (500k+309 e 500k+118)
+    for (const t of after.a) expect((((t - 309) % 500) + 500) % 500).toBeLessThan(55);
+    for (const t of after.b) expect((((t - 118) % 500) + 500) % 500).toBeLessThan(55);
+    // cadência dobrou de fato (~2 despachos/s no trecho a 500ms)
+    expect(after.a.length).toBeGreaterThanOrEqual(18);
+    expect(after.b.length).toBeGreaterThanOrEqual(18);
+    // e as duas seguem sem rodada conjunta (fases 309/118: distância 191ms > tick)
+    const setA = new Set(after.a);
+    for (const t of after.b) expect(setA.has(t)).toBe(false);
   });
 });

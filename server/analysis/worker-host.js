@@ -75,21 +75,55 @@ function pickWorker(workers, rr = 0) {
   return best;
 }
 
+// ── Stagger de fase — fix do serrote 0↔100% do pool (perf-round3/frente2-serrote-stagger.md) ──
+// A elegibilidade RELATIVA (now - lastSentAt ≥ roundMs) alinhava as câmeras: todas
+// venciam a cadência no MESMO tick, e o alinhamento é ESTADO ABSORVENTE — qualquer
+// tick atrasado (decode do gate/IPC/GC) junta ≥2 câmeras e NADA as separa de volta
+// (20/20 simulações colapsaram; na bancada nasciam já em fase). Resultado medido:
+// pool em serrote 0↔100%, fila p95 259ms p/ o 3º job da rajada.
+const GOLDEN_FRAC = 0.6180339887498949; // 1/φ — sequência áurea (baixa discrepância)
+
+/**
+ * Fase determinística da câmera dentro do seu roundMs: fase_i = frac(i·(1/φ))·roundMs.
+ * POR ÍNDICE de criação (0,1,2…), NÃO hash do id — hash % roundMs REPROVOU na
+ * bancada (2 câmeras colidiram a 36ms e o serrote FICOU; aniversário: ~60% de
+ * colisão com 3 câmeras em ~4 slots de pulso). A áurea espalha livre de colisão
+ * p/ qualquer N. PURA em (índice, roundMs corrente): mudança de cadência
+ * (foco/linha) re-deriva a fase sozinha, preservando o espalhamento.
+ *
+ * @param {number} index   índice de criação da câmera (o engine mantém a ordem)
+ * @param {number} roundMs cadência corrente da câmera
+ * @returns {number} fase em ms ∈ [0, roundMs)
+ */
+function staggerPhaseMs(index, roundMs) {
+  const r = Math.max(1, Math.round(roundMs) || 1);
+  const i = Number.isFinite(index) && index > 0 ? Math.floor(index) : 0;
+  return Math.round(((i * GOLDEN_FRAC) % 1) * r) % r;
+}
+
 /**
  * COALESCÊNCIA/≤1-EM-VOO POR CÂMERA (guarda de despacho, PURA). A câmera despacha
  * neste tick só se: não é fadiga (roda no cliente), não tem job em voo (busy), tem
- * frame novo (latest, último-vence) e respeitou a cadência (roundMs). Isso preserva
- * "só o frame MAIS NOVO de cada câmera importa" e "≤1 job em voo por câmera".
+ * frame novo (latest, último-vence) e um SLOT NOVO do seu grid próprio começou.
  *
- * @param {object} st              estado por câmera do engine
- * @param {number} now            Date.now()
- * @param {number} defaultRoundMs cadência base (quando st.roundMs não está setado)
+ * Cadência por SLOT ABSOLUTO (grid k·roundMs + fase áurea), não por tempo relativo:
+ * elegível quando floor((now−fase)/roundMs) avançou desde o último envio. É
+ * auto-corretivo — a régua é o relógio, não o último envio, então um dispatch
+ * atrasado NÃO desloca a fase da câmera; jitter não re-alinha as câmeras e a
+ * cadência média segue exata (1/roundMs — muda a FASE, não a frequência). Medido
+ * na bancada (frente2): fila p95 259→2ms, vales <25% do pool 7-9%→0,1-1,7%,
+ * cauda da inferência p95 −14%.
+ *
+ * @param {object} st              estado por câmera do engine (lê st.staggerIndex)
+ * @param {number} now             Date.now()
+ * @param {number} defaultRoundMs  cadência base (quando st.roundMs não está setado)
  */
 function dispatchReady(st, now, defaultRoundMs) {
   if (!st || st.fadiga) return false;
   if (st.busy || !st.latest) return false;
-  if (now - st.lastSentAt < (st.roundMs || defaultRoundMs)) return false;
-  return true;
+  const r = st.roundMs || defaultRoundMs || 1;
+  const ph = staggerPhaseMs(st.staggerIndex, r);
+  return Math.floor((now - ph) / r) > Math.floor((st.lastSentAt - ph) / r);
 }
 
 // ── Pool (efeitos colaterais: fork/kill/IPC) ─────────────────────────────────
@@ -302,4 +336,4 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize })
   return { spawnWorker, ready, send, stats, reload, stop };
 }
 
-module.exports = { createWorkerPool, pickWorker, resolveWorkerCount, dispatchReady };
+module.exports = { createWorkerPool, pickWorker, resolveWorkerCount, dispatchReady, staggerPhaseMs };

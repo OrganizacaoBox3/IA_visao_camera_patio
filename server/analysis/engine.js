@@ -3,7 +3,8 @@
 // contratos, modelo N/S/M e dimensionamento: README.md deste diretório.
 //
 // O que mora AQUI (e só aqui): ciclo de vida (init/stop/timers), amostragem por
-// câmera (último-vence + cadência FOCO > LINHA > normal), gate de movimento
+// câmera (último-vence + cadência FOCO > LINHA > normal em slots absolutos com
+// fase áurea por câmera — anti-serrote, frente2), gate de movimento
 // (decode do thumbnail + decisão do motion.js), válvula do autoscale e o
 // TRANSPORTE dos contratos socket (`analysis-status`, `analysis-tracks`). As
 // demais responsabilidades têm módulo próprio:
@@ -196,14 +197,30 @@ function applyFocusChanges(changed) {
   }
 }
 
+// Índice de CRIAÇÃO da câmera → fase áurea do stagger anti-serrote (worker-host.
+// staggerPhaseMs). Map por id (e não contador no estado): câmera podada (prune)
+// que volta reusa o MESMO índice — fase estável durante a vida do processo.
+const staggerOrder = new Map();
+function staggerIndexOf(id) {
+  if (!staggerOrder.has(id)) staggerOrder.set(id, staggerOrder.size);
+  return staggerOrder.get(id);
+}
+
 function createState(id) {
+  const now = Date.now();
   const st = {
     id,
     latest: null, // { buf, ts } — último frame recebido (último-vence)
     busy: false,
     inflight: 0,
-    lastSentAt: 0,
-    lastFrameAt: Date.now(),
+    // Stagger anti-serrote (perf-round3/frente2-serrote-stagger.md): fase áurea por
+    // índice de criação + nascer com lastSentAt=AGORA (não 0) → o 1º despacho cai no
+    // PRÓXIMO slot do grid próprio da câmera (dispatchReady, slot absoluto), não no
+    // mesmo tick de todas que materializaram juntas (o burst de nascimento era a
+    // semente do alinhamento). Custo declarado: a 1ª inferência espera ≤1 roundMs.
+    staggerIndex: staggerIndexOf(id),
+    lastSentAt: now,
+    lastFrameAt: now,
     lastRelayAt: 0, // último frame vindo do RELÉ (só onFrame) — base da decisão de pull
     source: "relay", // origem do último frame: "relay" | "go2rtc"
     errors: 0,
@@ -269,8 +286,9 @@ function tick() {
   for (const st of states.values()) {
     if (st.gating) continue; // decode de thumbnail em voo → não reentra (evita despacho duplo)
     // Guarda de despacho PURA (worker-host.dispatchReady): fadiga, coalescência (≤1 job
-    // em voo por câmera), último-vence e cadência. Único choke point — pega relé E pull
-    // go2rtc. O roteamento ao worker de menor carga é do pool.send.
+    // em voo por câmera), último-vence e cadência por SLOT ABSOLUTO com fase áurea por
+    // câmera (anti-serrote — frente2). Único choke point — pega relé E pull go2rtc.
+    // O roteamento ao worker de menor carga é do pool.send.
     if (!dispatchReady(st, now, ROUND_MS)) continue;
     // Gate de movimento: decodifica um thumbnail barato e PULA a inferência em cena
     // estática. Async (não bloqueia o tick); st.gating serializa por câmera.
@@ -283,7 +301,12 @@ function tick() {
 }
 
 // Thumbnail de luma single-channel (0..255, length MOTION_W*MOTION_H) a partir do JPEG.
-// sharp faz shrink-on-load (decodifica já em escala reduzida via DCT) → sub-ms.
+// sharp faz shrink-on-load (decodifica já em escala reduzida via DCT). CUSTO MEDIDO:
+// 8,28ms de CPU por decode (26ms wall sob contenção) — NÃO é sub-ms como se assumia
+// (analises/perf-round3/frente3-hub-hotloops.md §4d). Trade-off que se paga: ~8ms p/
+// economizar uma inferência de centenas de ms (1 pulo do gate a cada ~50 decodes já
+// paga); roda no pool de threads do libvips, sem bloquear o event loop. Barateá-lo
+// (shrink mais agressivo/kernel nearest) só vale investigar com ≥8 câmeras.
 // `greyscale` + 1º canal: robusto ao nº de canais que o raw devolver.
 async function decodeThumb(jpeg) {
   const { data, info } = await sharp(jpeg)
@@ -323,13 +346,13 @@ function dispatchToWorker(st, frame, now) {
 // GATE + despacho de UMA câmera. Consome o frame (último-vence), mede o movimento no
 // thumbnail e decide (motion.gateDecision, PURO). NUNCA-CEGO: baseline (1º frame), piso
 // de PROBE (cena estática ainda roda; focada com piso menor) e FAIL-OPEN (erro de decode
-// → despacha). A cadência (lastSentAt) conta do momento da AVALIAÇÃO — pular NÃO
-// acelera a próxima medição.
+// → despacha). lastSentAt=now CONSOME o slot corrente do grid da câmera (slot
+// absoluto — dispatchReady): pular NÃO acelera a próxima medição nem desloca a fase.
 async function gateAndDispatch(st, now) {
   const frame = st.latest;
   if (!frame) return;
   st.latest = null; // consome (um frame mais novo chega depois — último-vence)
-  st.lastSentAt = now; // a medição do gate JÁ conta como "rodada" p/ a cadência
+  st.lastSentAt = now; // a medição do gate JÁ consome o slot da rodada (cadência/fase preservadas)
   st.gating = true;
   try {
     if (!MOTION_GATE_ON) {
@@ -512,6 +535,17 @@ function clearFocus(socketId) {
   applyFocusChanges(focus.clear(socketId));
 }
 
+/**
+ * Cadência EFETIVA da câmera em fps — FPS_FOCUS > FPS_LINE > FPS normal conforme o
+ * estado corrente (fadiga = 0: roda no cliente). Câmera ainda sem estado (nenhum
+ * frame materializou) devolve o FPS normal. CONTRATO ADITIVO p/ o ingest dinâmico
+ * (frente P2) calcular o piso de captura por câmera.
+ */
+function effectiveFps(cameraId) {
+  const st = states.get(String(cameraId));
+  return st ? targetFpsOf(st) : FPS;
+}
+
 /** GET /api/analysis/status — montagem em telemetry.js (contrato aditivo). */
 function status() {
   return telemetry.buildStatus({
@@ -620,6 +654,7 @@ module.exports = {
   snapshotTo,
   setFocus,
   clearFocus,
+  effectiveFps, // cadência efetiva por câmera (fps) — consumidor: ingest dinâmico (P2)
   status,
   stop,
   // Puros re-exportados de focus.js (contrato de teste — focus.test.js; não são runtime):
