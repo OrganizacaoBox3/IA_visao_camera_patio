@@ -1,19 +1,31 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// eval/counting.mjs — SENSOR FIM-A-FIM da CONTAGEM (o KPI): travessias
-// esperadas × contadas no pipeline REAL dets → ByteTrack → tripwire.
+// eval/counting.mjs — SENSOR FIM-A-FIM da CONTAGEM (o KPI) e do TRACKING
+// EMITIDO: travessias esperadas × contadas E payload `analysis-tracks` sadio,
+// no pipeline REAL dets → pipeline.processRound → ByteTrack → tripwire.
 //
-// O que mede: os MÓDULOS DE PRODUÇÃO server/analysis/bytetrack.js e counting.js
-// (importados, nada reimplementado), ligados com o MESMO wiring e knobs do motor
-// (engine.js createState/processDets), alimentados por sequências DETERMINÍSTICAS
-// de detecções sintéticas com nº de travessias CONHECIDO. Cada cenário exercita
-// um mecanismo que decide contagem no campo: nascimento por score alto, sustain
-// por score baixo (2ª passada), sobrevivência a detecção intermitente (TTL),
-// histerese de 2 rodadas, filtro de micro-jitter (minMove) e teleporte (id novo).
+// O que mede: os MÓDULOS DE PRODUÇÃO server/analysis/pipeline.js (processRound —
+// o MESMO caminho por rodada do motor: filtro de classe → exclusão/automask
+// (no-op aqui) → tracking → contagem → ingest "flow" → montagem do payload
+// `analysis-tracks`), bytetrack.js e counting.js (importados, nada
+// reimplementado), alimentados por sequências DETERMINÍSTICAS de detecções
+// sintéticas com nº de travessias CONHECIDO. Cada cenário exercita um mecanismo
+// que decide contagem no campo: nascimento por score alto, sustain por score
+// baixo (2ª passada), sobrevivência a detecção intermitente (TTL), histerese de
+// 2 rodadas, filtro de micro-jitter (minMove) e teleporte (id novo).
+//
+// SENSORES DO FIX-RASTRO (analises/fix-rastro-tracking.md) — o CONTRATO do
+// stream que SALTA, medido no PAYLOAD EMITIDO (o que o front desenha):
+//   • salto moderado (gap ≤2.5s, deslocamento ≈ vx·dt) → MESMO id, travessia conta;
+//   • salto extremo → id novo é OK, mas NUNCA >1 track emitido p/ 1 pessoa;
+//   • oclusão longa → o track antigo SOME do payload em ≤2 rodadas (estado LOST
+//     não-emitido), em vez de coastar congelado até o TTL (~8s de "máscara fantasma").
+// Contra o código PRÉ-FIX esses asserts FALHAM de propósito (prova de
+// sensibilidade do sensor); ficam verdes quando o fix do tracker aterrissar.
 //
 // O que NÃO mede (fronteira honesta): o recall do DETECTOR (sensor: gate.mjs/
 // run-eval.mjs) e travessias em vídeo real (replay de campo — extensão prevista
-// em analises/acuracia-modelos.md §3/Onda 2; este harness fecha o elo
-// dets→contagem que não tinha sensor nenhum).
+// em analises/acuracia-modelos.md §3/Onda 2; bancada VISUAL do salto:
+// scripts/make-jumpy-clip.mjs).
 //
 // Knobs: espelho dos DEFAULTS de produção — dono canônico:
 // server/analysis/precision.js (+ cadência de câmera COM linha ANALYSIS_FPS_LINE=2
@@ -29,12 +41,14 @@ import { ROOT } from "./lib.mjs";
 const require = createRequire(import.meta.url);
 const { createByteTracker } = require(path.join(ROOT, "server", "analysis", "bytetrack.js"));
 const { createCounter } = require(path.join(ROOT, "server", "analysis", "counting.js"));
+const { createPipeline } = require(path.join(ROOT, "server", "analysis", "pipeline.js"));
 
 // ── Knobs (espelho de engine.js createState — ver header) ───────────────────
 const KNOBS = {
   roundMs: 500, // câmera COM tripwire roda a ANALYSIS_FPS_LINE=2 (recall×cadência)
   highScore: 0.35, // nascimento de track / 1ª passada (ANALYSIS_HIGH_SCORE)
   trackerIou: 0.25, // associação det×track (engine.js → createByteTracker)
+  birthIouThreshold: 0.55, // guarda de nascimento (PRECISION.tracker.birthIouThreshold)
   ttlMs: 8000, // max(1500, 3.5·1000, 6000+2000) — sobrevive ao piso de PROBE do gate de movimento
   minMove: 0.01, // filtro de micro-jitter do counter
   maxDist: 0.35, // gate de teleporte do counter
@@ -48,9 +62,10 @@ const WIRE = { id: "porta", a: { x: 0.5, y: 0.8 }, b: { x: 0.5, y: 0.2 } };
 // ── Geradores determinísticos de detecções ("pessoa" sintética) ──────────────
 const PERSON = { w: 0.06, h: 0.16 }; // bbox normalizada; foot = bottom-center (âncora do julgamento)
 
-/** Detecção como o worker devolve pós-filtro de classe: {score, bbox:[x,y,w,h]} norm. */
+/** Detecção como o worker devolve: {class,score,bbox:[x,y,w,h]} norm. (o filtro de
+ *  classe agora roda DENTRO do pipeline de produção — por isso `class` vai junto). */
 function det(cx, footY, score) {
-  return { score, bbox: [cx - PERSON.w / 2, footY - PERSON.h, PERSON.w, PERSON.h] };
+  return { class: "person", score, bbox: [cx - PERSON.w / 2, footY - PERSON.h, PERSON.w, PERSON.h] };
 }
 
 /** steps+1 posições lineares from→to (passo constante; nunca cai exatamente na linha). */
@@ -150,13 +165,60 @@ const SCENARIOS = [
     rounds: rounds(lane([0.3, 0.3, 0.3, 0.3, 0.7, 0.7, 0.7, 0.7])),
     expected: { in: 0, out: 0 },
   },
+
+  // ── Sensores do FIX-RASTRO (stream que salta) — ver header e o doc ──────────
+  {
+    name: "salto moderado (stream engasga ≤2.5s)",
+    why: "contrato: gap com deslocamento ≈ vx·dt mantém o MESMO id e a travessia conta",
+    // Caminhada linear 0.30→0.72 (passo 0.03/rodada) com dois engasgos de stream:
+    // dets em k=0,1 (aprende velocidade), GAP 1.5s (k=2,3), det k=4, GAP 2.5s
+    // (k=5..8), det k=9 (já do outro lado da linha: 0.42→0.57 cruza no gap) e
+    // k=10..14 contínuos (sustentam a histerese). Deslocamento SEMPRE ≈ vx·dt.
+    rounds: rounds(
+      lane(xsLinear(0.3, 0.72, 14).map((x, k) => ([2, 3, 5, 6, 7, 8].includes(k) ? null : x))),
+    ),
+    expected: { in: 1, out: 0 },
+    tracking: { distinctIds: 1 }, // 1 pessoa = 1 id no payload do cenário inteiro
+  },
+  {
+    name: "salto extremo 3× (não vira rastro)",
+    why: "1 pessoa teleportando: id novo é OK, mas NUNCA >1 track emitido por rodada",
+    // 1 pessoa que salta 3× (0.20→0.60→0.25→0.65, saltos de 0.35-0.40 — acima de
+    // maxDist e sem IoU com a predição), parada 4 rodadas em cada ponto. Pré-fix,
+    // cada salto deixa o track velho coastando até o TTL (8s) → 2..4 "máscaras"
+    // emitidas ao mesmo tempo para UMA pessoa (o rastro do bug de campo).
+    rounds: rounds(
+      lane([0.2, 0.2, 0.2, 0.2, 0.6, 0.6, 0.6, 0.6, 0.25, 0.25, 0.25, 0.25, 0.65, 0.65, 0.65, 0.65]),
+    ),
+    expected: { in: 0, out: 0 },
+    tracking: { maxSimultaneous: 1 }, // é UMA pessoa: nunca >1 track no payload
+  },
+  {
+    name: "oclusão longa (5s) e reaparece longe",
+    why: "id novo é OK; o track antigo some do payload em ≤2 rodadas (LOST não-emitido)",
+    // Anda 0.30→0.42 (k=0..4), SOME por 10 rodadas (5s) e reaparece LONGE
+    // (x=0.25, pé em y=0.75 — sem IoU com observado nem predito) andando de novo.
+    // Pré-fix, o track antigo é emitido congelado em 0.42 até o TTL (16 rodadas).
+    rounds: rounds(
+      lane(xsLinear(0.3, 0.42, 4)),
+      lane(xsLinear(0.25, 0.37, 4), { footY: 0.75, delay: 15 }),
+    ),
+    expected: { in: 0, out: 0 },
+    // ids emitidos até a rodada 4 (o track antigo) não podem aparecer após a rodada 4+2.
+    tracking: { ghost: { vanishRound: 4, graceRounds: 2 } },
+  },
 ];
 
-// ── Pipeline por rodada — MESMO wiring de engine.js processDets ──────────────
+// ── Rodadas via pipeline.processRound de PRODUÇÃO (o wiring do motor inteiro:
+// filtro de classe → exclusão/automask (vazios) → tracker → counter → ingest →
+// montagem do payload `analysis-tracks`). O que capturamos em `emitted` é
+// EXATAMENTE o que o dashboard receberia — onde quer que o fix filtre o LOST
+// (tracker ou pipeline), este sensor mede o resultado. ──────────────────────────
 function runScenario(sc) {
   const tracker = createByteTracker({
     highScore: KNOBS.highScore,
     iouThreshold: KNOBS.trackerIou,
+    birthIouThreshold: KNOBS.birthIouThreshold,
     ttlMs: KNOBS.ttlMs,
   });
   const counter = createCounter([WIRE], {
@@ -166,52 +228,127 @@ function runScenario(sc) {
     debounceMs: KNOBS.debounceMs,
     minCrossingFrames: KNOBS.minCrossingFrames,
   });
+  // Estado mínimo por câmera — espelho dos campos de engine.js createState que o
+  // pipeline toca (zonas vazias e autoMask null = caminho neutro).
+  const st = {
+    id: "cam-eval",
+    tracker,
+    counter,
+    zonesAtiv: [],
+    zonesExcl: [],
+    autoMask: null,
+    window: { frames: 0, zones: new Map() },
+    rounds: [],
+    detsLog: [],
+  };
+  const flows = []; // eventos "flow"/"cross" ingeridos (metadado persistido)
+  const emitted = []; // emitted[r] = tracks do payload `analysis-tracks` da rodada r
+  const pipeline = createPipeline({
+    highScore: KNOBS.highScore,
+    ingest: (kind, _sub, payload) => {
+      if (kind === "flow") flows.push(payload);
+      return Promise.resolve();
+    },
+    hasViewers: () => true, // sempre montar o payload — é o objeto do sensor
+    emitTracks: (p) => emitted.push(p.tracks),
+    cameraLabelOf: () => "cam-eval",
+  });
   let now = 0;
-  const events = [];
   for (const dets of sc.rounds) {
     now += KNOBS.roundMs;
-    const tracks = tracker.update(dets, now, KNOBS.highScore);
-    events.push(
-      ...counter.update(
-        tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy, foot: t.foot })),
-        now,
-      ),
-    );
+    pipeline.processRound(st, dets, now);
   }
-  return { totals: counter.totals(), events };
+  return { totals: counter.totals(), flows, emitted };
+}
+
+// ── Checagens do payload emitido (cenários com `tracking`) ───────────────────
+function trackingReport(tr, emitted) {
+  const fails = [];
+  const info = [];
+  const allIds = new Set();
+  let maxSim = 0;
+  let maxSimRound = -1;
+  emitted.forEach((tracks, r) => {
+    if (tracks.length > maxSim) {
+      maxSim = tracks.length;
+      maxSimRound = r;
+    }
+    for (const t of tracks) allIds.add(t.id);
+  });
+  if (tr.distinctIds != null) {
+    info.push(`ids distintos emitidos: ${allIds.size} (contrato: ${tr.distinctIds})`);
+    if (allIds.size !== tr.distinctIds)
+      fails.push(
+        `fragmentou o id: ${allIds.size} ids distintos no payload — salto moderado deve manter o MESMO id (${tr.distinctIds})`,
+      );
+  }
+  if (tr.maxSimultaneous != null) {
+    info.push(`máx tracks simultâneos emitidos: ${maxSim} (teto: ${tr.maxSimultaneous})`);
+    if (maxSim > tr.maxSimultaneous)
+      fails.push(
+        `RASTRO: ${maxSim} tracks emitidos na MESMA rodada (r${maxSimRound}) para 1 pessoa (teto ${tr.maxSimultaneous})`,
+      );
+  }
+  if (tr.ghost) {
+    const { vanishRound, graceRounds } = tr.ghost;
+    const oldIds = new Set();
+    for (let r = 0; r <= vanishRound && r < emitted.length; r++)
+      for (const t of emitted[r]) oldIds.add(t.id);
+    let lastGhost = -1;
+    for (let r = vanishRound + graceRounds + 1; r < emitted.length; r++)
+      if (emitted[r].some((t) => oldIds.has(t.id))) lastGhost = r;
+    info.push(
+      lastGhost < 0
+        ? `track antigo saiu do payload até a rodada ${vanishRound + graceRounds} (ok)`
+        : `track antigo AINDA emitido na rodada ${lastGhost} (limite: ${vanishRound + graceRounds})`,
+    );
+    if (lastGhost >= 0)
+      fails.push(
+        `RASTRO: track que sumiu na rodada ${vanishRound} seguiu emitido até a rodada ${lastGhost} ` +
+          `(limite: ${vanishRound + graceRounds} — coasting/LOST não pode ser emitido)`,
+      );
+  }
+  return { fails, info };
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
 console.log(
-  `\n[eval/counting] Sensor fim-a-fim de contagem — dets sintéticas → bytetrack.js → counting.js (produção)`,
+  `\n[eval/counting] Sensor fim-a-fim de contagem+tracking — dets sintéticas → pipeline.js (bytetrack+counting+payload) de produção`,
 );
 console.log(
-  `  knobs: ${KNOBS.roundMs}ms/rodada (linha@2fps) · highScore ${KNOBS.highScore} · trackerIou ${KNOBS.trackerIou} · ttl ${KNOBS.ttlMs}ms · minMove ${KNOBS.minMove} · maxDist ${KNOBS.maxDist} · debounce ${KNOBS.debounceMs}ms · histerese ${KNOBS.minCrossingFrames}\n`,
+  `  knobs: ${KNOBS.roundMs}ms/rodada (linha@2fps) · highScore ${KNOBS.highScore} · trackerIou ${KNOBS.trackerIou} · birthIou ${KNOBS.birthIouThreshold} · ttl ${KNOBS.ttlMs}ms · minMove ${KNOBS.minMove} · maxDist ${KNOBS.maxDist} · debounce ${KNOBS.debounceMs}ms · histerese ${KNOBS.minCrossingFrames}\n`,
 );
 
 let failed = 0;
 const w0 = Math.max(...SCENARIOS.map((s) => s.name.length));
 console.log(`  ${"CENÁRIO".padEnd(w0)}  ESPERADO  CONTADO  STATUS`);
 for (const sc of SCENARIOS) {
-  const { totals } = runScenario(sc);
-  const ok = totals.in === sc.expected.in && totals.out === sc.expected.out;
+  const { totals, emitted } = runScenario(sc);
+  const okTotals = totals.in === sc.expected.in && totals.out === sc.expected.out;
+  const tr = sc.tracking ? trackingReport(sc.tracking, emitted) : { fails: [], info: [] };
+  const ok = okTotals && tr.fails.length === 0;
   if (!ok) failed++;
   const fmt = (t) => `${t.in}/${t.out}`;
   console.log(
     `  ${sc.name.padEnd(w0)}  ${fmt(sc.expected).padStart(8)}  ${fmt(totals).padStart(7)}  ${ok ? "OK" : "FALHOU  ←"}`,
   );
+  for (const line of tr.info) console.log(`  ${" ".repeat(w0)}  · ${line}`);
+  for (const f of tr.fails) console.log(`  ${" ".repeat(w0)}  ✗ ${f}`);
   if (!ok) console.log(`  ${" ".repeat(w0)}  (${sc.why})`);
 }
 
 if (failed) {
   console.error(
-    `\n[eval/counting] FALHOU: ${failed} de ${SCENARIOS.length} cenário(s) com contagem ≠ esperado (in/out).`,
+    `\n[eval/counting] FALHOU: ${failed} de ${SCENARIOS.length} cenário(s) fora do contrato (contagem in/out ou payload de tracks).`,
   );
   console.error(
-    `       Mudou knob/lógica de tracking ou contagem? O diff acima diz QUAL mecanismo quebrou.\n`,
+    `       Mudou knob/lógica de tracking ou contagem? O diff acima diz QUAL mecanismo quebrou.`,
+  );
+  console.error(
+    `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver analises/fix-rastro-tracking.md.\n`,
   );
   process.exit(1);
 }
 console.log(
-  `\n[eval/counting] OK — ${SCENARIOS.length} cenários: travessias contadas = esperadas em todos.\n`,
+  `\n[eval/counting] OK — ${SCENARIOS.length} cenários: travessias e payload de tracks dentro do contrato em todos.\n`,
 );
