@@ -1,9 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// zones.js — PORT da atribuição de zona de src/CameraWorkspace.tsx (zoneAtAtiv,
-// ~linha 614) + do subconjunto de máscara de src/zoneMask.ts que ela consome —
-// mudanças de comportamento devem ser feitas LÁ e re-portadas; os testes
-// (zones.test.js) garantem paridade. CommonJS, JS puro, SEM dependências
-// (motor de análise server-side, F1 do plano-analise-server-side).
+// zones.js — PORT da atribuição de zona de src/CameraWorkspace.tsx (zoneAtAtiv)
+// + do subconjunto de máscara de src/zoneMask.ts que ela consome — mudanças de
+// comportamento devem ser feitas LÁ e re-portadas; os testes (zones.test.js)
+// garantem paridade. CommonJS, JS puro, SEM dependências.
 //
 // CRITÉRIO (idêntico ao zoneAtAtiv do CameraWorkspace):
 //   PRIMÁRIO — centro do bbox (ou o ponto dado) DENTRO do retângulo da zona,

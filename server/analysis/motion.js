@@ -1,55 +1,40 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // motion.js — GATE DE MOVIMENTO do motor de análise (PURO/determinístico, testável).
 //
-// PORQUÊ: a MEDIÇÃO que ancora a Onda-Motion — a inferência (session.run) é 89-97% do
-// custo de um frame (~130-650ms); decode/postproc <5%. O maior ganho NÃO é otimizar a
-// inferência: é NÃO INFERIR quando a cena está estática. Num CD à noite, a maioria das
-// câmeras vê chão parado — rodar o D-FINE nelas 6×/s é queimar CPU à toa.
+// PORQUÊ (medição-âncora): a inferência (session.run) é 89-97% do custo de um frame
+// (~130-650ms); decode/postproc <5%. O maior ganho não é otimizar a inferência: é
+// NÃO INFERIR quando a cena está estática — num CD à noite a maioria das câmeras vê
+// chão parado. O engine decodifica um THUMBNAIL de luma (64×48, sub-ms) antes de
+// despachar; este módulo compara com o anterior (diff de luminância — a MESMA
+// matemática de src/processors/atividade.ts) e o engine pula o dispatch quando o
+// ratio fica abaixo do limiar. A economia é o session.run inteiro.
 //
-// COMO: o engine decodifica um THUMBNAIL barato de luma (sharp shrink-on-load, ~64×48
-// greyscale raw — sub-ms) ANTES de despachar ao worker; este módulo compara com o
-// thumbnail anterior (diff de luminância, a MESMA matemática de src/processors/atividade.ts:
-// |luma−prev| > pixelDelta → pixel "mudou"; ratio = mudados/total) e o engine PULA o
-// dispatch quando o ratio fica abaixo do limiar. A economia é o session.run inteiro.
+// NUNCA-CEGO (invariante — é vigilância, o gate jamais cega a câmera):
+//   • BASELINE: o 1º frame (sem anterior) SEMPRE roda.
+//   • PISO DE PROBE: cena 100% estática ainda roda a cada probeMs (focada: probeFocusMs).
+//   • FAIL-OPEN: erro de decode do thumbnail → o engine despacha assim mesmo.
+//   • O TTL do tracker cobre o probe (precision.trackTtlMs) — pessoa parada não
+//     some entre dois probes.
 //
-// NUNCA-CEGO (é vigilância — o gate jamais cega a câmera):
-//   • BASELINE: o 1º frame (sem anterior) SEMPRE roda — estabelece a luma de referência.
-//   • PISO DE PROBE: mesmo em cena 100% estática, roda ao menos a cada PROBE_MS (default 6s;
-//     câmera FOCADA a cada PROBE_FOCUS_MS, default 2s). Pega a pessoa que apareceu e CONGELOU.
-//   • FAIL-OPEN: erro de decode do thumbnail → o engine despacha assim mesmo (decisão do caller).
-//   • O TTL do ByteTrack é esticado no engine p/ cobrir o PROBE_MS → pessoa parada não some
-//     entre dois probes.
+// MÁSCARA DE HOTSPOT: as zonas de EXCLUSÃO (as mesmas que filtram FP de detecção)
+// viram mapa de ignore do thumbnail — relógio/galho/timestamp queimado não disparam
+// o gate. Zero config nova: quem pintou exclusão herda a máscara de graça.
 //
-// MÁSCARA DE HOTSPOT (reuso das zonas de EXCLUSÃO): relógio/galho/timestamp queimado geram
-// movimento que NÃO é pessoa. O engine rasteriza as zonas modo "exclusao" (as MESMAS que já
-// filtram FP de detecção) num mapa de ignore do thumbnail; os pixels marcados não contam no
-// ratio. Zero config nova: quem já pintou exclusão para o objeto fixo, o gate herda de graça.
-//
-// ENV (norte "zero config" — defaults sensatos, poucos knobs):
-//   ANALYSIS_MOTION_GATE           on|off  (default ON; "0"/"off"/"false"/"no" desliga — escape hatch)
-//   ANALYSIS_MOTION_RATIO          fração do thumbnail que precisa mudar p/ "há movimento" (default 0.005)
-//   ANALYSIS_MOTION_PROBE_MS       piso de probe em cena estática (default 6000)
-//   ANALYSIS_MOTION_PROBE_FOCUS_MS piso de probe da câmera focada/tela cheia (default 2000)
-// Thumbnail (64×48) e pixelDelta (22, = atividade.motionPixelDelta) são CONSTANTES (YAGNI:
-// knob que ninguém calibra em campo é ruído de config).
+// KNOBS de qualidade (ratio/probes/pixelDelta): precision.js (painel — env
+// interpretado lá). Daqui só o LIGA/DESLIGA (ANALYSIS_MOTION_GATE, default ON —
+// escape hatch de custo) e as dims do thumbnail (fixas: o gate é grosso de propósito).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-/** Número de env com clamp [min,max] e default. */
-function numEnv(raw, def, min, max) {
-  const v = Number(raw);
-  if (!Number.isFinite(v)) return def;
-  return Math.min(max, Math.max(min, v));
-}
+const { PRECISION } = require("./precision");
 
-// ── Configuração (lida 1× na carga do módulo) ────────────────────────────────
 const GATE_ON = !/^(0|off|false|no)$/i.test(String(process.env.ANALYSIS_MOTION_GATE ?? "on"));
-const THUMB_W = 64; // largura do thumbnail de luma (fixo — coarse de propósito: o gate é grosso)
-const THUMB_H = 48; // altura do thumbnail de luma
-const PIXEL_DELTA = 22; // |luma−prev| (0..255) p/ "pixel mudou" — MESMO de atividade.motionPixelDelta
-const MOTION_RATIO = numEnv(process.env.ANALYSIS_MOTION_RATIO, 0.005, 0, 1);
-const PROBE_MS = numEnv(process.env.ANALYSIS_MOTION_PROBE_MS, 6000, 500, 60_000);
-const PROBE_FOCUS_MS = numEnv(process.env.ANALYSIS_MOTION_PROBE_FOCUS_MS, 2000, 250, 60_000);
+const THUMB_W = 64; // dims do thumbnail de luma — fixas (coarse de propósito)
+const THUMB_H = 48;
+const PIXEL_DELTA = PRECISION.gate.pixelDelta;
+const MOTION_RATIO = PRECISION.gate.motionRatio;
+const PROBE_MS = PRECISION.gate.probeMs;
+const PROBE_FOCUS_MS = PRECISION.gate.probeFocusMs;
 
 /**
  * Diff de luminância entre dois thumbnails (single-channel, 0..255), ignorando os pixels
@@ -74,14 +59,13 @@ function motionRatio(cur, prev, ignore = null, pixelDelta = PIXEL_DELTA) {
 }
 
 /**
- * Rasteriza retângulos NORMALIZADOS (0..1) num mapa de ignore w×h (1 = ignora o pixel). Usado
- * p/ reaproveitar as zonas de EXCLUSÃO como máscara de hotspot do gate. Retângulo conservador
- * (o bbox inteiro da zona) — num gate coarse 64×48, ignorar um pouco a mais é seguro (não
- * queremos QUALQUER movimento vindo do relógio/timestamp). null quando não há retângulo.
+ * Rasteriza retângulos NORMALIZADOS (0..1) num mapa de ignore w×h (1 = ignora o pixel).
+ * Retângulo conservador (o bbox inteiro da zona): num gate coarse 64×48, ignorar um pouco
+ * a mais é seguro — não queremos QUALQUER movimento vindo do relógio/timestamp.
  * @param {number} w
  * @param {number} h
  * @param {Array<{x:number,y:number,w:number,h:number}>} rects
- * @returns {Uint8Array|null}
+ * @returns {Uint8Array|null} null quando nenhum pixel foi marcado (caminho rápido no caller)
  */
 function buildIgnoreMask(w, h, rects) {
   if (!rects || !rects.length) return null;
@@ -103,8 +87,8 @@ function buildIgnoreMask(w, h, rects) {
 }
 
 /**
- * DECISÃO DO GATE (PURA). Dado o ratio de movimento, o tempo desde a última inferência REAL e o
- * piso de probe, decide se despacha ao worker. Ordem: baseline → movimento → probe → pula.
+ * DECISÃO DO GATE (PURA). Dado o ratio de movimento, o tempo desde a última inferência REAL
+ * e o piso de probe, decide se despacha ao worker. Ordem: baseline → movimento → probe → pula.
  *   • hasPrev=false  → infer (baseline: 1º frame estabelece referência, nunca-cego)
  *   • ratio ≥ limiar → infer (há movimento)
  *   • sinceMs ≥ probe→ infer (piso de probe: cena estática há muito tempo, checa mesmo assim)
@@ -125,7 +109,7 @@ module.exports = {
   motionRatio,
   buildIgnoreMask,
   gateDecision,
-  // Config (lida pelo engine p/ montar o thumbnail e esticar o TTL do tracker):
+  // Config (lida pelo engine p/ montar o thumbnail e pela telemetria):
   GATE_ON,
   THUMB_W,
   THUMB_H,

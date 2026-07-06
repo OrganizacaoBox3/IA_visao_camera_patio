@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // bytetrack.js — PORT de src/vision/bytetrack.ts — mudanças de comportamento
 // devem ser feitas LÁ e re-portadas; os testes (bytetrack.test.js) garantem
-// paridade. CommonJS, JS puro, SEM dependências (motor de análise server-side,
-// F1 do plano-analise-server-side).
+// paridade. CommonJS, JS puro, SEM dependências. Os DEFAULTS internos preservam a
+// paridade com o TS; em produção o engine injeta os knobs do painel (precision.js).
 //
 // ByteTrack-lite (Zhang et al. 2022), reduzido ao nosso caso:
 //   • 1ª PASSADA: detecções de score ALTO (≥ highScore) associam com os tracks

@@ -1,7 +1,7 @@
-// Regressão do R5 — leak do Map `pulls` em go2rtc-source.js. Antes: um stream que SEMPRE
-// falha o pull nunca criava state, então o prune() (que só limpava `pulls` ao deletar um
-// state) jamais o alcançava; quando o stream sumia do go2rtc, a entrada vazava p/ sempre.
-// prunePulls() agora poda entradas órfãs (ausentes do go2rtcStreams E sem state) por idade.
+// Regressão do anti-leak do Map `pulls` em go2rtc-source.js: um stream que SEMPRE falha
+// o pull nunca cria state, então a poda por state (engine.prune) jamais o alcança; sem a
+// poda própria, quando o stream some do go2rtc a entrada vazaria p/ sempre. prunePulls()
+// poda entradas órfãs (ausentes do go2rtcStreams E sem state) por idade.
 // vitest é ESM; o módulo sob teste é CommonJS → createRequire (padrão de bytetrack.test.js).
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createRequire } from "node:module";
@@ -40,7 +40,7 @@ function makeSource({ streamKeys, states = new Map(), running = () => true }) {
   return { src, keys, states };
 }
 
-describe("go2rtc-source — R5: prunePulls não vaza entradas de pull órfãs", () => {
+describe("go2rtc-source — prunePulls não vaza entradas de pull órfãs", () => {
   let logSpy;
   let warnSpy;
   beforeEach(() => {
@@ -80,7 +80,7 @@ describe("go2rtc-source — R5: prunePulls não vaza entradas de pull órfãs", 
     await tick();
     expect(src.stats().streams).toBe(0);
 
-    // Sem R5: as 2 entradas ficariam presas p/ sempre. Com R5: podadas por idade (>5min).
+    // Sem a poda própria as 2 entradas ficariam presas p/ sempre; com ela, saem por idade (>5min).
     const future = Date.now() + 6 * 60 * 1000;
     src.prunePulls(future);
     expect(src.pullCount()).toBe(0);

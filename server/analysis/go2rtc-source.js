@@ -1,30 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// go2rtc-source.js — Fonte alternativa de frames: pull de frame.jpeg do go2rtc.
+// go2rtc-source.js — Fonte alternativa de frames: pull de frame.jpeg do go2rtc
+// (ADITIVO, OFF por default). Dona do estado de aquisição puxada (Set de streams
+// + Map de pulls/backoff); o engine injeta deps via createGo2rtcSource.
 //
-// Extraído de engine.js (R5/retrofit): a aquisição "puxada" (descoberta de streams +
-// pull por câmera + backoff) é uma responsabilidade própria e dona do seu estado
-// (Set go2rtcStreams, Map pulls). Fábrica createGo2rtcSource(deps): o engine injeta o
-// go2rtc, o Map `states`, o createState (para materializar a câmera puxada), o predicado
-// running() (=enabled && !stopping) e ROUND_MS. Comportamento byte-a-byte do original.
-//
-// FONTE go2rtc (Fase 3 — ADITIVO, OFF por default): além do relé, o motor pode PUXAR
-// frames do go2rtc (GET /api/frame.jpeg?src=<cameraId>) a ~ANALYSIS_FPS e alimentar o
-// MESMO pipeline. Resolve o caveat da câmera WHIP (Fase 5) que deixa de mandar relé.
-// QUEM é puxada:
+// O motor PUXA frames (GET /api/frame.jpeg?src=<cameraId>) a ~ANALYSIS_FPS e
+// alimenta o MESMO pipeline do relé (st.latest, último-vence). Cobre a câmera
+// WHIP que não manda relé. QUEM é puxada:
 //   • só quando go2rtc está habilitado (go2rtc.enabled()) — logo, OFF por default;
 //   • câmera que o go2rtc conhece (GET /api/streams) E cujo RELÉ está PARADO
 //     (sem `onFrame` há PULL_STALE_MS) → evita puxar E receber relé (dobraria a aquisição);
 //   • ANALYSIS_SOURCE=go2rtc força o pull de TODAS as streams do go2rtc.
 // CONTENÇÃO: o pull respeita a cadência do worker e faz BACKOFF exponencial por câmera.
+// INVARIANTE anti-leak: entrada de pull ÓRFÃ (sem stream conhecido nem state) é
+// podada por idade em prunePulls() — sem isso, stream que só falha cresce sem teto.
 // LGPD: JPEG puxado é EFÊMERO em memória, alimenta o worker por IPC e nada é gravado.
-//
-// R5 (leak do `pulls`): stream que SEMPRE falha nunca criava state, então nunca era podado
-// no prune() (que só limpava `pulls` ao deletar um state). prunePulls() agora poda entradas
-// órfãs — ausentes do go2rtcStreams E sem state — por idade (PULL_PRUNE_MS).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-// ── Fonte go2rtc (Fase 3): pull de frame.jpeg p/ câmeras SEM relé (ex.: WHIP) ──
 // ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
 // outro valor → modo "relay-less" (puxa só quem não manda relé). ANALYSIS_GO2RTC_PULL=0
 // desliga o pull mesmo com go2rtc ligado (escape hatch).
@@ -34,7 +26,7 @@ const PULL_TIMEOUT_MS = Math.max(500, Number(process.env.ANALYSIS_GO2RTC_TIMEOUT
 const STREAMS_REFRESH_MS = Math.max(1000, Number(process.env.ANALYSIS_GO2RTC_STREAMS_MS) || 4000);
 const PULL_BACKOFF_BASE_MS = 2000;
 const PULL_BACKOFF_MAX_MS = 30_000;
-// R5: entrada órfã de `pulls` (sem stream conhecido nem state) é podada após isto sem toque.
+// Entrada órfã de `pulls` (sem stream conhecido nem state) é podada após isto sem toque.
 const PULL_PRUNE_MS = 5 * 60_000;
 
 /**
@@ -138,7 +130,7 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
       if (st && st.latest) continue;
       let ps = pulls.get(id);
       if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0, lastAt: now }));
-      ps.lastAt = now; // R5: marca atividade recente (stream ainda conhecido/elegível) p/ o prunePulls
+      ps.lastAt = now; // marca atividade recente (stream ainda conhecido/elegível) p/ o prunePulls
       if (ps.inflight || now < ps.nextAt) continue; // um pull por câmera em voo; respeita o backoff
       void pullFrame(id, ps);
     }
@@ -150,9 +142,9 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
   }
 
   /**
-   * R5 — poda o leak de `pulls`: entradas órfãs (ausentes do go2rtcStreams E sem state) que
-   * não são tocadas há PULL_PRUNE_MS. Cobre o caso do stream que SEMPRE falha (nunca cria
-   * state → o prune() por state jamais o alcançava) e que depois some do go2rtc.
+   * Poda entradas órfãs de `pulls` (ausentes do go2rtcStreams E sem state) não tocadas
+   * há PULL_PRUNE_MS — o stream que só falha nunca cria state, então a poda por state
+   * do engine jamais o alcança (invariante anti-leak; observável em pullCount()).
    */
   function prunePulls(now) {
     for (const [id, ps] of pulls) {
@@ -166,7 +158,7 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
     return { active: pullActive(), mode: PULL_FORCE_ALL ? "all" : "relay-less", streams: go2rtcStreams.size };
   }
 
-  /** Nº de câmeras com estado de pull vivo — observabilidade do leak (R5) p/ diagnóstico/teste. */
+  /** Nº de câmeras com estado de pull vivo — observabilidade do anti-leak p/ diagnóstico/teste. */
   function pullCount() {
     return pulls.size;
   }

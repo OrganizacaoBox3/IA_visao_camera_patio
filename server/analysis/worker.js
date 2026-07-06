@@ -1,77 +1,52 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// worker.js — WORKER PROCESS de inferência D-FINE-N (F1 do plano-analise-server-side,
-// ADR-009). Roda via child_process.fork({serialization:"advanced"}) a partir do
-// engine.js: recebe JPEGs por IPC, devolve detecções COCO normalizadas.
+// worker.js — WORKER PROCESS de inferência D-FINE (ADR-009). Forkado pelo
+// worker-host ({serialization:"advanced"}): recebe JPEGs por IPC, devolve
+// detecções COCO normalizadas. Arquitetura e dimensionamento: README.md.
 //
-// POR QUE UM PROCESSO SEPARADO (spike §6): o binding do onnxruntime-node
-// SERIALIZA inferências dentro de um processo Node; além disso, um crash nativo
-// do ORT não pode derrubar o hub (relé + persistência). O engine respawna este
-// worker com backoff se ele morrer.
+// POR QUE PROCESSO SEPARADO: o binding do onnxruntime-node SERIALIZA inferências
+// dentro de um processo, e um crash nativo do ORT não pode derrubar o hub
+// (relé + persistência) — o worker-host respawna com backoff (spike-dfine-hub.md §6).
 //
-// PRÉ/PÓS-PROCESSAMENTO — reaproveitado DO SPIKE VALIDADO (spike-dfine/infer.mjs):
-//   • decode JPEG via sharp → resize SIZE×SIZE "squash" (fit:fill — o
-//     preprocessor_config do modelo usa RTDetrImageProcessor com do_pad:false,
-//     NÃO letterbox) → rescale 1/255, SEM mean/std → tensor CHW fp32.
-//     SIZE = 640 (default de treino); configurável por ANALYSIS_INPUT (eixo dinâmico
-//     do ONNX → múltiplo de 32 sem re-exportar; menor = mais rápido, menos recall
-//     de pessoa pequena — tradeoff medido em analises/perf-input-size-dfine.md).
-//   • saídas: logits [1,300,80] + pred_boxes [1,300,4] (cxcywh NORMALIZADO) →
-//     sigmoid + argmax por query + corte de score + NMS leve por classe (a
-//     D-FINE-N emite queries duplicadas no mesmo alvo na faixa 0.25-0.5 —
-//     spike §4.3).
-//   • CPU EP APENAS: DML retorna saída ERRADA e WebGPU crasha nesta família de
-//     modelo (spike §5). intraOpNumThreads=2 (~2,7× mais eficiente por frame
-//     que o default; latência ~178ms serve folgado a 1-2fps — spike §3).
-//
-// LONGO ALCANCE (F3): pedido com `tiles {cols,rows,overlap}` → TILING estilo SAHI:
-//   decode 1× p/ raw → extract de cada região (sharp) → squash 640/tile → N
-//   inferências SEQUENCIAIS (a fila último-vence por câmera já protege o atraso)
-//   → reprojeção das bboxes p/ frações do FRAME (mesma conta do front,
-//   src/vision/detect.ts) → fusão: NMS por classe + dedupe por CONTENÇÃO ≥0.7
-//   (interseção/área da caixa MENOR, mantém o maior score — espelha
-//   src/vision/nms.ts: a caixa PARCIAL do tile vizinho tem IoU baixo com a caixa
-//   inteira e sobreviveria ao NMS clássico). Custo: N× inferência por rodada.
+// PRÉ/PÓS: squash SIZE×SIZE (fit:fill — o preprocessor do modelo usa
+// RTDetrImageProcessor com do_pad:false, NÃO letterbox), rescale 1/255 SEM
+// mean/std → tensor CHW fp32; saídas logits[1,300,80] + pred_boxes[1,300,4]
+// (cxcywh normalizado) → sigmoid + argmax + corte de score + NMS por classe
+// (o D-FINE emite queries duplicadas no mesmo alvo na faixa 0.25-0.5).
+// CPU EP APENAS: DML retorna saída ERRADA e WebGPU crasha nesta família de
+// modelo (spike §5). Knobs de QUALIDADE (scoreMin/nmsIou/input/contenção/tiles):
+// precision.js — o env é o transporte (o fork herda), o painel interpreta.
 //
 // PROTOCOLO IPC (advanced serialization — Buffer viaja como binário):
 //   engine → worker: { type:"detect", id, cameraId, jpeg:Buffer, w?, h?,
-//                      tiles?:{cols,rows,overlap} }   (tiles ausente → squash 640 único)
+//                      tiles?:{cols,rows,overlap} }   (tiles ausente → squash único)
 //   worker → engine: { id, cameraId, dets:[{class, score, bbox:[x,y,w,h] 0..1}],
 //                      decodeMs, inferMs, cpu }        (sucesso)
 //                    { id, cameraId, dropped:true }     (substituído na fila antes de rodar)
 //                    { id, cameraId, error }            (falha neste frame; worker segue vivo)
 //   worker → engine: { type:"ready", model, cpu } no boot ·
 //                    { type:"fatal", error } se o modelo não carregar (e sai).
+//   4 CONSUMIDORES: engine (via worker-host) + eval/run-eval.mjs + eval/gate.mjs
+//   + eval/compare-models.mjs — mudança de shape SÓ aditiva.
 //
-// FILA: último-vence POR CÂMERA (profundidade 1 por câmera) — se chega um frame
-// novo de uma câmera cujo pedido ainda não rodou, o antigo é descartado e
-// respondido com {dropped:true}. Entre câmeras, FIFO.
+// FILA: último-vence POR CÂMERA (profundidade 1 por câmera); FIFO entre câmeras.
+// Frame antigo substituído é respondido com {dropped:true} (libera o slot no engine).
 //
 // LGPD/ADR-002: o JPEG vive só em memória durante a inferência; NADA é gravado.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
 const path = require("node:path");
+const { PRECISION } = require("./precision");
 
 const MODEL =
   process.env.ANALYSIS_MODEL_PATH || path.join(__dirname, "..", "models", "dfine_n_coco.onnx");
 
-// INPUT DO RESIZE (configurável — perf 2026-07). O D-FINE tem EIXO DINÂMICO no ONNX,
-// então roda em qualquer múltiplo de 32 SEM re-exportar; input menor corta inferência
-// (medido no tier S: 640→512 = -23% infer; 640→416 = -40% — analises/perf-input-size-dfine.md).
-// Default 640 (input de treino): a MEDIÇÃO mandou MANTER. No full-set (591 GT), 512 custa
-// ~7-8pp de recall de pessoa PEQUENA (o gargalo que o tiling existe p/ tratar) por só -23% de
-// CPU — trade ruim p/ pé-direito alto. 512 fica como escape hatch CPU-bound (passa o gate do
-// fixture); 416 é rejeitado (reprova o gate). Deve ser múltiplo de 32 (stride do backbone);
-// valores fora disso são arredondados p/ o múltiplo de 32 mais próximo.
-function resolveInputSize() {
-  const raw = Number(process.env.ANALYSIS_INPUT);
-  if (!Number.isFinite(raw) || raw <= 0) return 640; // default: input nativo do treino
-  const snapped = Math.round(raw / 32) * 32; // eixo dinâmico exige múltiplo do stride 32
-  return Math.max(160, Math.min(1024, snapped)); // limites sãos (evita OOM / grafo degenerado)
-}
-const SIZE = resolveInputSize(); // alvo do resize squash (H=W); tiles usam o MESMO input
-const SCORE_MIN = Number(process.env.ANALYSIS_SCORE_MIN ?? 0.25); // só devolve dets ≥ isto
-const NMS_IOU = Number(process.env.ANALYSIS_NMS_IOU ?? 0.6);
+// Knobs de qualidade — painel de precisão (dono único; sensores documentados lá).
+const SIZE = PRECISION.detector.input; // alvo do resize squash (H=W); tiles usam o MESMO input
+const SCORE_MIN = PRECISION.detector.scoreMin; // só devolve dets ≥ isto
+const NMS_IOU = PRECISION.detector.nmsIou;
+const CONTAINMENT_THR = PRECISION.detector.containment; // dedupe do tiling (fuseTiles)
+// Custo (não qualidade): threads intra-op do ORT — fica fora do painel.
 const INTRA_THREADS = Number(process.env.ANALYSIS_INTRA_THREADS ?? 2);
 
 // id2label do config.json do modelo (onnx-community/dfine_n_coco-ONNX) — COCO 80.
@@ -96,7 +71,7 @@ function send(msg) {
   if (process.send) process.send(msg);
 }
 
-// RGB raw 640×640 → tensor CHW fp32 [1,3,640,640] (rescale 1/255, sem mean/std).
+// RGB raw SIZE×SIZE → tensor CHW fp32 [1,3,SIZE,SIZE] (rescale 1/255, sem mean/std).
 function rgbToTensor(data) {
   const n = SIZE * SIZE;
   const f = new Float32Array(3 * n);
@@ -108,7 +83,7 @@ function rgbToTensor(data) {
   return new ort.Tensor("float32", f, [1, 3, SIZE, SIZE]);
 }
 
-// JPEG buffer → tensor CHW fp32 [1,3,640,640] (squash resize, 1/255 — igual ao spike).
+// JPEG buffer → tensor CHW fp32 (squash resize, 1/255).
 async function preprocess(jpegBuf) {
   const { data } = await sharp(jpegBuf)
     .resize(SIZE, SIZE, { fit: "fill" })
@@ -130,7 +105,7 @@ function iouXYWH(a, b) {
   return union > 0 ? inter / union : 0;
 }
 
-/** NMS leve POR CLASSE (spike §4.3: a nano emite queries duplicadas no mesmo alvo). */
+/** NMS leve POR CLASSE (o D-FINE emite queries duplicadas no mesmo alvo). */
 function nmsPerClass(dets) {
   const byClass = new Map();
   for (const d of dets) {
@@ -180,7 +155,7 @@ function postprocess(outputs) {
   return nmsPerClass(dets);
 }
 
-// ── Longo alcance (F3): tiling 2×2 + reprojeção + fusão (espelha src/vision/) ─
+// ── Longo alcance: tiling + reprojeção + fusão (espelha src/vision/) ─────────
 
 /** CONTENÇÃO: interseção / área da caixa MENOR (0..1) — port de src/vision/nms.ts. */
 function containment(a, b) {
@@ -192,14 +167,10 @@ function containment(a, b) {
   return minArea > 0 ? inter / minArea : 0;
 }
 
-// Dedupe do tiling com overlap: caixa PARCIAL do tile vizinho (meia pessoa) tem
-// IoU BAIXO com a caixa inteira (união grande) e passa no NMS clássico — a
-// contenção ≥0.7 mata essa dupla. 0.7 é conservador de propósito (nms.ts): duas
-// pessoas realmente lado a lado não atingem 70% de contenção mútua.
-const CONTAINMENT_THR = 0.7;
-
 /** Fusão pós-reprojeção: POR CLASSE, guloso do maior score — descarta a caixa com
- *  IoU ≥ NMS_IOU OU contenção ≥ 0.7 contra alguma já mantida (fica a de maior score). */
+ *  IoU ≥ NMS_IOU OU contenção ≥ CONTAINMENT_THR contra alguma já mantida. A caixa
+ *  PARCIAL do tile vizinho tem IoU BAIXO com a inteira e passaria no NMS clássico —
+ *  a contenção mata essa dupla (racional do 0.7: precision.js). */
 function fuseTiles(dets) {
   const byClass = new Map();
   for (const d of dets) {
@@ -239,8 +210,9 @@ function tileGrid(cols, rows, overlap) {
 
 /**
  * Detecção com TILING (perfil longo alcance): decode 1× → extract por tile →
- * squash 640/tile → inferências SEQUENCIAIS → reprojeção tile→frame → fusão.
+ * squash SIZE/tile → inferências SEQUENCIAIS → reprojeção tile→frame → fusão.
  * Devolve { dets, decodeMs, inferMs } com dets em frações 0..1 do FRAME.
+ * Custo: N× inferência por rodada (medição: README.md §Longo alcance).
  */
 async function detectTiled(jpegBuf, spec) {
   const cols = Math.max(1, Math.min(4, Math.round(spec.cols) || 1));
@@ -313,7 +285,7 @@ async function drain() {
     jobs.delete(cameraId);
     if (!job) continue;
     try {
-      // F3: pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
+      // pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
       if (job.tiles && (job.tiles.cols > 1 || job.tiles.rows > 1)) {
         const r = await detectTiled(job.jpeg, job.tiles);
         send({ id: job.id, cameraId, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
@@ -340,22 +312,30 @@ async function drain() {
 }
 
 // ── Boot: carrega modelo, faz warmup e anuncia "ready" ───────────────────────
-(async () => {
-  try {
-    ort = require("onnxruntime-node");
-    sharp = require("sharp");
-    session = await ort.InferenceSession.create(MODEL, {
-      executionProviders: ["cpu"], // CPU EP only — DML/WebGPU reprovados em paridade (spike §5)
-      intraOpNumThreads: INTRA_THREADS,
-    });
-    // warmup com tensor zerado: o 1º frame real não paga o custo de inicialização do grafo
-    await session.run({
-      pixel_values: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]),
-    });
-    send({ type: "ready", model: path.basename(MODEL), input: SIZE, cpu: process.cpuUsage() });
-    void drain(); // pedidos que chegaram durante o load
-  } catch (e) {
-    send({ type: "fatal", error: e && e.message ? e.message : String(e) });
-    process.exit(1);
-  }
-})();
+// Só quando o worker é o processo PRINCIPAL (fork do worker-host/eval). Sob require
+// (unit test) o boot não roda — nada de ORT/sharp/IPC no processo do teste.
+if (require.main === module) {
+  (async () => {
+    try {
+      ort = require("onnxruntime-node");
+      sharp = require("sharp");
+      session = await ort.InferenceSession.create(MODEL, {
+        executionProviders: ["cpu"], // CPU EP only — DML/WebGPU reprovados em paridade (spike §5)
+        intraOpNumThreads: INTRA_THREADS,
+      });
+      // warmup com tensor zerado: o 1º frame real não paga o custo de inicialização do grafo
+      await session.run({
+        pixel_values: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]),
+      });
+      send({ type: "ready", model: path.basename(MODEL), input: SIZE, cpu: process.cpuUsage() });
+      void drain(); // pedidos que chegaram durante o load
+    } catch (e) {
+      send({ type: "fatal", error: e && e.message ? e.message : String(e) });
+      process.exit(1);
+    }
+  })();
+}
+
+// Puros exportados SÓ p/ unit test (worker.test.js). NÃO são contrato de runtime —
+// o contrato deste processo é o protocolo IPC do cabeçalho.
+module.exports = { iouXYWH, nmsPerClass, postprocess, containment, fuseTiles, tileGrid };

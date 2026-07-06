@@ -1,4 +1,4 @@
-// Testes da onda Flow-Focus: cadência dedicada à câmera FOCADA (aberta em tela cheia).
+// Testes do FOCO do operador: cadência dedicada à câmera FOCADA (aberta em tela cheia).
 //   • pickRoundMs — cálculo PURO da cadência efetiva por precedência (foco > linha > normal).
 //   • focusUnion  — união PURA dos ids focados a partir do registro socketId→cameraId.
 //   • setFocus/clearFocus — a UNIÃO entre sockets (add/remove por socket, disconnect limpa),

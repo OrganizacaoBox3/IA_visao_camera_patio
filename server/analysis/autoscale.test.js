@@ -1,4 +1,4 @@
-// Testes da DECISÃO PURA de auto-dimensionamento (Onda 5). Provam o contrato de segurança:
+// Testes da DECISÃO PURA de auto-dimensionamento. Provam o contrato de segurança:
 //   • afogado por N janelas consecutivas → DOWNGRADE (histerese forte); <N → segura.
 //   • LATENCY-BOUND (fps ≪ alvo com workers TRABALHANDO, CPU moderada) por N janelas →
 //     DOWNGRADE; fome de frames (fps baixo com workers OCIOSOS) NUNCA rebaixa.

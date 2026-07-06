@@ -53,11 +53,11 @@ describe("attributeZone — critério primário: centro dentro da zona", () => {
   });
 });
 
-describe("attributeZone — desempate em zonas sobrepostas (bug jul/2026 do 'primeira da lista')", () => {
+describe("attributeZone — desempate em zonas sobrepostas (regra: maior interseção, depois menor área)", () => {
   it("zona-semente full-frame ANTES na lista NÃO rouba: bbox contido em ambas → vence a MENOR (a desenhada)", () => {
-    // Cenário do bug confirmado em runtime: seed "Espera" cobre o frame todo e vinha
-    // primeiro; a zona desenhada pelo operador é menor. bbox∩seed == bbox∩desenhada
-    // (bbox contido nas duas) → empate de overlap → vence a de MENOR área.
+    // Cenário de campo: seed "Espera" cobre o frame todo e vem primeiro; a zona
+    // desenhada pelo operador é menor. bbox∩seed == bbox∩desenhada (bbox contido
+    // nas duas) → empate de overlap → vence a de MENOR área (a mais específica).
     const zs = [zone("Espera", 0, 0, 1, 1), zone("Doca 3", 0.35, 0.3, 0.3, 0.5)];
     expect(attributeZone(bboxAt(0.5, 0.5), zs)).toBe("Doca 3");
   });

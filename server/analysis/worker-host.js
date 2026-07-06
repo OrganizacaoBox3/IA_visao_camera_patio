@@ -1,28 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // worker-host.js — POOL de workers de inferência (spawn/respawn POR-WORKER + CPU
-// + roteamento por menor-carga). Destrava o throughput do hub: o binding do
-// onnxruntime-node SERIALIZA inferências DENTRO de um processo (spike §6), então
-// 1 worker satura ~1-2 cores e deixa o resto da máquina ocioso. N processos
-// escalam quase linear (spike §7: 4 processos ≈ 9,9 fps vs 1 ≈ 2 fps).
+// + roteamento por menor-carga). POR QUE POOL: o binding do onnxruntime-node
+// SERIALIZA inferências DENTRO de um processo — 1 worker satura ~1-2 cores e deixa
+// o resto ocioso; N processos escalam quase linear (4 ≈ 9,9 fps vs 1 ≈ 2 fps —
+// spike-dfine-hub.md §6/§7).
 //
-// STATELESS POR FRAME: o worker (worker.js) só faz inferência — decode→session.run→
-// postprocess, sem estado por câmera (o TRACKING/ByteTrack/counting/zones vive no
-// ENGINE, por câmera). Logo QUALQUER worker processa QUALQUER frame → roteamento por
-// MENOR-CARGA (fila mais curta), sem assignment sticky. O engine já garante ≤1 job
-// em voo por câmera (st.busy), então nunca há 2 frames da mesma câmera concorrendo
-// nem risco de reordenação; a resposta carrega cameraId+id e o engine reassembla.
+// STATELESS POR FRAME: o worker só faz inferência — sem estado por câmera (o
+// tracking/contagem/zonas vive no ENGINE). Logo QUALQUER worker processa QUALQUER
+// frame → roteamento por MENOR-CARGA (fila mais curta), sem assignment sticky. O
+// engine garante ≤1 job em voo por câmera (st.busy) — nunca há 2 frames da mesma
+// câmera concorrendo nem reordenação; a resposta carrega cameraId+id.
 //
-// CUSTO: cada worker carrega SUA cópia do .onnx em RAM (~190-240 MB RSS/worker,
-// spike §7). N cópias do modelo é o preço do paralelismo real no Node — aceitável
-// p/ os tiers S/N num hub de escritório (8C/16T comporta o pool + relé/ffmpeg).
+// CUSTO declarado: cada worker carrega SUA cópia do .onnx em RAM (~190-240 MB
+// RSS/worker) — o preço do paralelismo real no Node.
 //
 // NUNCA-CEGO POR-WORKER: respawn é INDIVIDUAL (um cai → só ele volta, com backoff);
 // enquanto ≥1 worker vive, o motor segue analisando. No exit de um worker, SÓ as
 // câmeras cujo job em voo estava NELE são liberadas (as dos outros seguem).
-//
-// worker.js = D-FINE / onnxruntime-node em PROCESSO SEPARADO (spike §6). Buffers de
-// JPEG viajam como binário (serialization:"advanced"), sem base64. O worker.js NÃO
-// muda — só passa a ter N instâncias.
+// Buffers de JPEG viajam como binário (serialization:"advanced"), sem base64.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 

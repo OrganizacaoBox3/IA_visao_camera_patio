@@ -1,19 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// model.js — Catálogo de modelos + provisionamento (verificação sha256 + download).
+// model.js — Catálogo de modelos D-FINE (N/S/M, mesma arquitetura → drop-in) +
+// provisionamento: verificação sha256, download com escrita atômica, fallback
+// S/M→N e troca de tier em runtime (autoscale). Racional da escolha de tier e
+// medições de recall/CPU: README.md §Modelo + eval/MODELS.md.
 //
-// Extraído de engine.js (R5/retrofit): a lógica de "qual .onnx e como garanti-lo no
-// disco" é uma responsabilidade própria (YAGNI: uma responsabilidade por unidade).
-// O engine consome via getModelPath()/getModelSpec() — o caminho e o spec são MUTÁVEIS
-// porque ensureModel() faz fallback S→N quando o download do grande falha (mantém o
-// comportamento byte-a-byte do original).
-//
-// Modelo: catálogo N/S/M (D-FINE, MESMA arquitetura → drop-in — eval/MODELS.md).
-// Resolução por env ANALYSIS_MODEL = n|s|m (default "s"). O default de PRODUÇÃO é o
-// D-FINE-S obj2coco: no fixture/full-set (eval/MODELS.md) o recall de pessoa média/pequena
-// ~DOBRA vs o N — exatamente o gargalo que travava a contagem de linha
-// (analises/acuracia-modelos.md §3) — a ~2.4× o CPU (~0.9 câmera/core @1fps no S vs ~2.2 no
-// N; ~7 vs ~17 câmeras/core). CPU-bound? ANALYSIS_MODEL=n volta ao nano (recall menor, mais
-// câmeras/core). Todos onnx-community/*-ONNX, Apache-2.0, fp32; baixados no boot com sha256.
+// CONTRATO com o engine: getModelPath()/getModelSpec() leem estado MUTÁVEL — o
+// caminho/spec mudam por fallback (ensureModel) ou troca de tier (setActiveTier,
+// ATÔMICO: só assume o novo tier com o arquivo garantido no disco; em falha,
+// REVERTE — o worker nunca aponta p/ modelo ausente, o motor nunca fica cego).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 

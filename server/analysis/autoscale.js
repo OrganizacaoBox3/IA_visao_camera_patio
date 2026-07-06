@@ -1,28 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// autoscale.js — DECISÃO PURA de dimensionamento do modelo (Onda 5 do
-// mapa-config-simplificacao.md — "auto-dimensionamento S↔N/M por hardware").
+// autoscale.js — DECISÃO PURA de dimensionamento do modelo (tier N/S/M).
 //
 // NORTE do produto: MELHOR qualidade que o hardware SUSTENTA, com ZERO decisão do
-// usuário. Hoje `ANALYSIS_MODEL=n|s|m` era escolha manual; aqui ela vira AUTOMÁTICA:
+// usuário (`ANALYSIS_MODEL` vira PIN opcional):
 //   • PICK DE STARTUP — o melhor tier que o orçamento (cores × câmeras) comporta.
-//   • VÁLVULA DE RUNTIME — desce um tier (downgrade-only) quando o worker está
-//     comprovadamente AFOGADO (cadência muito abaixo do alvo E CPU sustentada alta)
-//     OU LATENCY-BOUND (cadência ≪ alvo com workers TRABALHANDO — a inferência do tier
-//     é lenta demais p/ o alvo, sem nunca bater o teto de CPU; bug real de produção),
-//     com histerese FORTE (N janelas consecutivas) + cooldown pós-troca (anti-flap).
-//     Sobe só CONSERVADOR (folga sustentada por MUITO mais tempo + orçamento comporta).
+//     Orçamento GROSSO de propósito: um mini-benchmark por tier no boot exigiria
+//     baixar os TRÊS modelos (~130 MB) só p/ calibrar — a válvula de runtime
+//     corrige com a cadência/CPU REAIS medidas (começa no melhor plausível,
+//     degrada só sob pressão medida).
+//   • VÁLVULA DE RUNTIME — desce um tier quando o pool está comprovadamente
+//     AFOGADO (cadência ≪ alvo E CPU sustentada alta) OU LATENCY-BOUND (ver regra
+//     em decideRuntime), com histerese FORTE (N janelas consecutivas) + cooldown
+//     pós-troca (anti-flap). Sobe só CONSERVADOR (folga sustentada por muito mais
+//     tempo + orçamento comporta).
 //
-// Este módulo é PURO/DETERMINÍSTICO e testável (autoscale.test.js): recebe métricas +
-// o estado de histerese, devolve o próximo tier + o porquê. O EFEITO COLATERAL (recarregar
-// o .onnx via model.js + respawn do worker) fica no engine — e model.setActiveTier() é
-// ATÔMICO (reverte se o download falhar), então o motor NUNCA fica sem modelo (SEGURANÇA:
-// um sistema de vigilância não pode ficar cego — nunca descemos abaixo do PISO N).
-//
-// SOBRE O "MINI-BENCHMARK" (por que NÃO fazemos no boot): medir 1 inferência por tier
-// exigiria baixar os TRÊS modelos (~130 MB) só p/ calibrar — viola "barato" e atrasa o
-// boot. Em vez disso o pick de startup é um orçamento GROSSO (cores × câmeras) e a válvula
-// de runtime corrige com a cadência/CPU REAIS medidas pelo worker (inferMs/cpuPct). É o
-// caminho honesto/KISS: começa no melhor plausível, degrada só sob pressão medida.
+// PURO/DETERMINÍSTICO e testável (autoscale.test.js): recebe métricas + estado de
+// histerese, devolve o próximo tier + o porquê. O EFEITO COLATERAL (recarregar o
+// .onnx via model.js + respawn) fica no engine — e model.setActiveTier() é ATÔMICO
+// (reverte se o download falhar): o motor NUNCA fica sem modelo, nunca abaixo do
+// PISO N (vigilância não pode ficar cega).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
@@ -35,12 +31,9 @@ const TIERS = ["n", "s", "m"];
 // startup + teto de upgrade). A verdade de runtime é a cadência/CPU medidas.
 const CAP_PER_CORE = { n: 17, s: 7, m: 4 };
 
-// CIÊNCIA DO POOL (spike §6/§7): o binding do onnxruntime SERIALIZA inferências DENTRO de
-// um processo — 1 worker satura ~intraOpNumThreads cores e o resto da máquina fica ocioso;
-// N processos escalam quase linear (4 proc ≈ 9,9 fps vs 1 ≈ 2 fps). Logo a capacidade do
-// hub NÃO é `cores × cap/core` (isso superestimava 1 worker e fazia o autoscale REBAIXAR p/
-// mascarar o teto), e sim `cores_EFETIVOS × cap/core`, onde cores_efetivos = min(cores,
-// workers × threads/worker). Cada worker usa ~2 threads intra-op (worker.js INTRA_THREADS).
+// Capacidade do hub NÃO é `cores × cap/core` (superestima: o ORT serializa inferência
+// por processo — ver worker-host.js) e sim `cores_EFETIVOS × cap/core`, com
+// cores_efetivos = min(cores, workers × threads/worker). ~2 threads intra-op/worker.
 const THREADS_PER_WORKER = Math.max(1, Number(process.env.ANALYSIS_INTRA_THREADS) || 2);
 
 const DEFAULTS = {
@@ -50,9 +43,9 @@ const DEFAULTS = {
   cooldownMs: 120_000, // silêncio pós-troca (não reavalia p/ trocar) — anti-oscilação
   downFpsRatio: 0.6, // cadência alcançada < 60% do alvo = está atrás
   downCpuPct: 150, // worker usando ≥1,5 core (2 intra-threads perto do teto) = afogado
-  // LATENCY-BOUND (bug real: homolog 4 cores/3 câmeras, tier M ~600–840ms/frame → 0,3–0,4fps
-  // com alvo 1fps; workers a ~70–85% de UM core — NUNCA batem downCpuPct porque o gargalo é a
-  // LATÊNCIA da inferência, não o teto de CPU → o motor ficava PRESO no M entregando mal).
+  // LATENCY-BOUND: a inferência do tier é lenta demais p/ o alvo SEM nunca bater o
+  // teto de CPU (workers a ~70-85% de um core) — sem esta regra o motor fica preso
+  // num tier grande entregando mal (regra completa + porquê do sinal: decideRuntime).
   latFpsRatio: 0.5, // estritamente < metade do alvo (na fronteira EXATA vale só a regra 'afogado')
   latCpuPct: 40, // piso modesto POR worker: há inferência ACONTECENDO (≠ fome de frames, ~10–20%)
   upFpsRatio: 0.95, // batendo ~100% do alvo
@@ -145,15 +138,13 @@ function decideRuntime(state, sample, cfg = {}) {
   // Sem `workers` (compat): escala 1 (comportamento pré-pool).
   const cpuScale = Math.max(1, sample.workers || 1);
   const chokedNow = fpsRatio <= c.downFpsRatio && sample.cpuPct >= c.downCpuPct * cpuScale;
-  // LATENCY-BOUND: MUITO atrás do alvo (estritamente < latFpsRatio — o caso exatamente-na-
-  // metade com folga de pool fica com a regra conservadora de 'afogado') E workers
-  // comprovadamente TRABALHANDO (cpuPct ≥ piso modesto POR worker). O piso de CPU separa o
-  // falso-positivo "câmera SEM FONTE" (pull falhando): lá o fps também despenca, mas os
-  // workers estão OCIOSOS (sem inferência → cpuPct ~10–20%) e rebaixar não traria frame
-  // nenhum de volta. SINAL ESCOLHIDO: cpuPct (e não inferMs médio) porque o inferMs por
-  // câmera (st.lastMs) é o valor da ÚLTIMA inferência — fica ESTALE alto quando a fonte
-  // morre (exatamente o falso-positivo a evitar) — enquanto cpuPct é medido em janela
-  // rolante (worker-host.sampleCpu) e CAI junto com a demanda real.
+  // LATENCY-BOUND: MUITO atrás do alvo (estritamente < latFpsRatio — na fronteira exata
+  // vale só a regra conservadora de 'afogado') E workers comprovadamente TRABALHANDO
+  // (cpuPct ≥ piso POR worker). O piso de CPU separa o falso-positivo "câmera SEM FONTE"
+  // (pull falhando): lá o fps também despenca, mas os workers estão OCIOSOS (~10-20%) e
+  // rebaixar não traria frame de volta. SINAL: cpuPct, e não inferMs — o inferMs por
+  // câmera (st.lastMs) é o valor da ÚLTIMA inferência e fica STALE alto quando a fonte
+  // morre; cpuPct é janela rolante (worker-host.sampleCpu) e CAI junto com a demanda.
   const latencyBoundNow =
     !chokedNow && fpsRatio < c.latFpsRatio && sample.cpuPct >= c.latCpuPct * cpuScale;
   const idleNow = fpsRatio >= c.upFpsRatio && sample.cpuPct <= c.upCpuPct * cpuScale;

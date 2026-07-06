@@ -1,4 +1,4 @@
-# server/analysis — Motor de análise no hub (F1 · ADR-009)
+# server/analysis — Motor de análise no hub (ADR-009)
 
 Detecção de pessoas + tracking + contagem por linha + ocupação por zona rodando **no hub**,
 24/7, independente de espectador. O navegador segue exibindo vídeo/overlays; os INDICADORES
@@ -11,28 +11,33 @@ passam a nascer aqui. Plano: `analises/plano-analise-server-side.md` · mediçõ
 relé de frames (index.js webcam · rtsp.js ffmpeg)
       │  onFrame(cameraId, jpegBuf, ts)  — último-vence por câmera
       ▼
-engine.js (in-process no hub)
+engine.js (ORQUESTRADOR, in-process no hub)
   · amostra @ANALYSIS_FPS (default 1) e envia ao worker (1 pedido em voo/câmera)
-  · câmera com CameraCfg.longRange (camcfg) → pedido leva tiles 2×2 (F3, ver §Longo alcance)
-  · dets "person" cujo PÉ cai em zona modo "exclusao" → DESCARTADAS aqui (§Zona de exclusão)
-  · dets "person" → bytetrack.js (por câmera) → counting.js (tripwires do camcfg)
-  · zonas modo "atividade" (camcfg) → people/occupied por zona (janela ~3s)
-  · pgstore.ingest DIRETO ("flow"/"cross" e "ativ"/"samples" — formatos do front)
-  · emite `analysis-status {cameraId, engine:"hub"}` (anti-duplicação, F1-C)
-  · emite `analysis-tracks {cameraId, ts, tracks, zones}` volatile → dashboards (F2)
+  · câmera com CameraCfg.longRange (camcfg) → pedido leva tiles 2×2 (§Longo alcance)
+  · pipeline.js (por rodada): dets "person" cujo PÉ cai em zona modo "exclusao" →
+    DESCARTADAS (§Zona de exclusão) → automask.js → bytetrack.js (por câmera) →
+    counting.js (tripwires do camcfg) → zonas modo "atividade" (people/occupied,
+    janela ~3s) → pgstore.ingest DIRETO ("flow"/"cross" e "ativ"/"samples")
+  · emite `analysis-status {cameraId, engine:"hub"}` (anti-duplicação hub⇄cliente)
+  · emite `analysis-tracks {cameraId, ts, tracks, zones}` volatile → dashboards
+  · telemetry.js monta o GET /api/analysis/status
       │  IPC fork(serialization:"advanced") — {id, cameraId, jpeg:Buffer}
       ▼
 worker.js (child_process — processo SEPARADO: ORT serializa inferência por processo
-           e um crash nativo não derruba o relé; respawn com backoff no engine)
+           e um crash nativo não derruba o relé; respawn com backoff no worker-host)
   · sharp decode → squash 640×640 → tensor fp32 (pré/pós do spike validado)
   · com `tiles` (longRange): decode 1× → extract por tile → squash 640/tile →
     N inferências sequenciais → reprojeção tile→frame → NMS + contenção ≥0.7
-  · D-FINE-N ONNX · onnxruntime-node CPU EP · intraOpNumThreads=2
+  · D-FINE ONNX (tier N/S/M — autoscale) · onnxruntime-node CPU EP · 2 threads
   · sigmoid + argmax + score≥0.25 + NMS leve por classe → dets normalizadas
 ```
 
-`bytetrack.js`, `counting.js` e `zones.js` são ports 1:1 dos módulos TS do front
-(frente F1-B) — mesmas APIs, mesmos testes de paridade.
+**Knobs de QUALIDADE (score/NMS/input/tiles/tracker/counter/gate) têm dono único:
+`precision.js`** — cada um com o porquê e o SENSOR que mede o efeito. Mexer em
+precisão = editar lá e medir (`npm run eval`; default exige full-set).
+
+`bytetrack.js`, `counting.js` e `zones.js` são ports 1:1 dos módulos TS do front —
+mesmas APIs, mesmos testes de paridade (mudanças de comportamento nascem LÁ).
 
 ## Modelo — N / S / M (env `ANALYSIS_MODEL`, default **S**)
 
@@ -96,7 +101,7 @@ expõe `excluded1m` por câmera (aditivo) = dets suprimidas em 60s.
 > `cleanZone` rebaixa `modo` para `"atividade"` na persistência e o engine nunca vê a zona de
 > exclusão. (Mesmo padrão da nota de `longRange` abaixo.)
 
-## Longo alcance / Panorâmica (tiling 2×2 — F3)
+## Longo alcance / Panorâmica (tiling 2×2)
 
 Câmera com **`CameraCfg.longRange: true`** no camcfg (o mesmo perfil "Longo alcance /
 Panorâmica" da central — `src/cameraConfig.ts`) é analisada com **tiling 2×2, overlap 0.1**
@@ -132,10 +137,10 @@ fora do alcance do nano (limite do modelo, não do tiling).
   - `ativ`/`samples`: `{ cameraId, samples:[{ zoneId, label, atividade, idleMs:0, frames,
     activeFrames, people }] }` — `people` = pico na janela (→ `people_peak`), `activeFrames` =
     rodadas com ≥1 pessoa (→ `activePct`). `idleMs` fica 0: ociosidade por MOTION (e os alarmes
-    dela) continuam no front — fora da F1.
+    dela) continuam no front — fora do motor do hub.
 - **Socket** `analysis-status { cameraId, engine: "hub" | null }` → room `dashboards`
-  (snapshot no connect + a cada mudança). F1-C usa p/ desligar o ingest do browser.
-- **Socket** `analysis-tracks { cameraId, ts, tracks, zones }` (F2 — overlays servidos) →
+  (snapshot no connect + a cada mudança). O front usa p/ desligar o ingest do browser.
+- **Socket** `analysis-tracks { cameraId, ts, tracks, zones }` (overlays servidos) →
   room `dashboards`, **volatile** (último-vence, sem backlog — mesmo padrão dos frames),
   emitido a CADA rodada de análise da câmera (@`ANALYSIS_FPS`; payload de KBs), inclusive
   com 0 tracks (rodada vazia apaga as caixas) e mesmo sem zona/tripwire configurada:
@@ -148,7 +153,7 @@ fora do alcance do nano (limite do modelo, não do tiling).
 - **HTTP** `GET /api/analysis/status` (autenticado) → `{ enabled, model, targetFps,
   worker:{ready,pid,respawns,cpuPct}, perCamera:{ [id]: {fps, queue, lastMs, dets1m,
   excluded1m, longRange} } }` (`excluded1m` aditivo — dets suprimidas por zona de exclusão em 60s;
-  `longRange` aditivo — F3: true = rodada com tiling 2×2).
+  `longRange` aditivo — true = rodada com tiling 2×2).
 - **Shed**: câmera analisada conta como espectador — `rtsp.setAnalysisViewer()` impede o
   `idleSource` de pausar o ffmpeg. Webcam ainda pode ser rebaixada a `SHED_WEBCAM_FPS` (2fps ≥
   cadência de análise; o nó economiza CPU e o motor não perde nada).

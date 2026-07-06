@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // counting.js — PORT de src/vision/counting.ts — mudanças de comportamento
 // devem ser feitas LÁ e re-portadas; os testes (counting.test.js) garantem
-// paridade. CommonJS, JS puro, SEM dependências (motor de análise server-side,
-// F1 do plano-analise-server-side).
+// paridade. CommonJS, JS puro, SEM dependências. Em produção o engine injeta os
+// knobs do painel (precision.js).
 //
 // Biblioteca PURA de contagem por linha (tripwire) com direção + heatmap de
 // ocupação. Funções determinísticas + fábricas de estado encapsulado (closures).

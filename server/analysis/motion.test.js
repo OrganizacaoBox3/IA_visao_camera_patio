@@ -1,4 +1,4 @@
-// Testes do gate de movimento (motion.js) — o "coração" da Onda-Motion: pular a inferência em
+// Testes do gate de movimento (motion.js) — o coração da economia de CPU: pular a inferência em
 // cena estática SEM cegar a câmera. Provamos a matemática do diff de luma, a máscara de hotspot
 // (reuso das zonas de exclusão) e a DECISÃO do gate: pula quando estático, roda no movimento,
 // roda no PROBE (nunca abaixo do piso) e roda o baseline (1º frame).
