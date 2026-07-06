@@ -155,7 +155,8 @@ Teste no VPS, logado como `deploy`: `sudo -n systemctl status visao-hub --no-pag
 > sendo a chave dedicada + repo privado + aprovação do environment; (2) o
 > `npm install` liberado roda **como root** os install-scripts das deps (ver residuais,
 > §9); (3) se o script remoto mudar, este arquivo precisa mudar **no mesmo PR** — o
-> deploy falha alto (`sudo: a password is required`) se divergir, nunca silencioso.
+> deploy falha alto (`sudo: a password is required`) se divergir, nunca silencioso
+> (a pré-checagem de espaço do [1/7] usa `du`/`df` **sem sudo** — não entra nesta lista).
 
 Alternativa (**não recomendada** neste VPS): `HOMOLOG_SSH_USER=root` — o script detecta e
 dispensa o sudo, mas abre mão de todo o confinamento acima. Só se o dono do VPS já opera
@@ -265,7 +266,10 @@ O que acontece, na ordem:
    → empacota **só o que sobe** (`dist/ server/ bin/go2rtc package.json package-lock.json
    scripts/`) → **audita o tar** (se qualquer estado/segredo de runtime aparecer, falha).
 2. **aprovação** (se reviewers configurados no environment).
-3. **deploy** (SSH no VPS): backup **aditivo** `.bak-<stamp>` (`cp -a`; sem poda
+3. **deploy** (SSH no VPS): pré-checagens — instalação existente + **espaço em disco**
+   (livre ≥ tamanho da app × 1,3 + 1 GB, medido com `du`/`df` **sem sudo**; insuficiente =
+   falha clara **antes** de tocar qualquer coisa — aprendizado do deploy #4) → backup
+   **aditivo** `.bak-<stamp>` (`cp -a`; sem poda
    automática) → posiciona por **cópia aditiva, preservando o estado de runtime**
    (`cameras.json`, `alarms.json`, `camcfg.json`, `data-hist.json`, `users.json`,
    `wa-auth/`, `server/models/` — nada disso vem no pacote nem é apagado) →
@@ -352,7 +356,7 @@ propósito: é o gate imediatamente antes da ação irreversível, não uma dupl
 | Push do workflow recusado | `refusing to allow an OAuth App to create or update workflow` | Token com escopo `workflow` (§1.2). |
 | `npm install` compilando nativas sem toolchain | erro de build de `sharp`/`onnxruntime-node` no VPS | `sudo apt install -y build-essential python3` (raro em x86_64 — prebuilds cobrem). |
 | 1º boot sem internet de saída | motor cai para N ou desliga; health ainda passa (`ouvindo em` basta) | Subir o `.onnx` manualmente + `ANALYSIS_MODEL_PATH` (runbook §6B). |
-| Disco da VPS compartilhada | backups `.bak-*` acumulam (cada um com `node_modules`, ~centenas de MB) | Sem poda automática (deliberado — VPS compartilhada): remover antigos manualmente (§6); conferir `df -h` antes do primeiro run. |
+| Disco da VPS compartilhada | pré-checagem [1/7] falha: `Espaço insuficiente: livre X GB, necessário Y GB` (backups `.bak-*` acumulam, cada um com `node_modules`; o deploy #4 morreu com `No space left on device` no **meio** do backup — daí a checagem) | O script exige livre ≥ tamanho da app × 1,3 + 1 GB (backup `cp -a` + staging + churn do npm), medido com `du -sb`/`df` **sem sudo**, ANTES de tocar qualquer coisa. Se falhar: remover backups antigos manualmente (`ls -dt /var/www/visao-patio.bak-*` → §6) ou liberar disco. Sem poda automática (deliberado — VPS compartilhada). |
 | Staging `/tmp/visao-deploy-staging` ocupado por outro usuário | `mkdir` falha (`File exists`/`Permission denied`) | Caminho fixo e exclusivo do deploy; se colidir, investigar quem criou (VPS compartilhada) antes de remover. |
 | `npm audit` do `verify` vermelho no dia do deploy | build falha por vuln transitiva nova (gate honesto, mas acopla ao registry) | Corrigir/ajustar a dep; em urgência real, deploy manual pelo runbook (decisão humana). |
 | Host key desconhecida/trocada | `ssh-keyscan` vazio ou `Host key verification failed` | Conferir host/porta; com known_hosts pinado (§2.5), refazer a coleta da fingerprint se o VPS foi legitimamente reinstalado. |
@@ -366,7 +370,9 @@ propósito: é o gate imediatamente antes da ação irreversível, não uma dupl
   `npm audit` dentro do `verify`. Tradeoff aceito conscientemente.
 - **Backups `.bak-*` acumulam `node_modules`** (~centenas de MB cada). Deliberadamente o
   CD **não** poda nada (VPS compartilhada — nenhum `rm` de escopo amplo); a limpeza é
-  manual (§6). Sem disciplina, o disco enche.
+  manual (§6). Sem disciplina, o disco enche — a pré-checagem de espaço do passo [1/7]
+  (desde o deploy #4) transforma isso em **falha clara e precoce** (nada é tocado), mas
+  não libera um byte: a poda continua humana.
 - **Sem `HOMOLOG_SSH_KNOWN_HOSTS`, o primeiro contato é TOFU** (§2.5). Cadastre o secret
   para eliminar essa janela.
 - **Wildcards do sudoers restrito não são sandbox perfeito** (§2.3) — reduzem raio de

@@ -180,7 +180,9 @@ jobs:
             release.tar.gz "$SSH_USER@$SSH_HOST:visao-release.tar.gz"
 
       # Script remoto idempotente = runbook §§3,5,7,8 automatizados:
-      # backup → posiciona preservando estado de runtime → npm install --omit=dev →
+      # pré-checagens (incl. ESPAÇO EM DISCO: livre ≥ app×1,3 + 1GB — aprendizado do
+      # deploy #4, que morreu com "No space left on device" no MEIO do cp -a do backup)
+      # → backup → posiciona preservando estado de runtime → npm install --omit=dev →
       # chmod/chown → restart → health-check com retry. O heredoc é 'quoted': nada do
       # runner é interpolado no script (sem superfície de injeção); tudo roda no VPS.
       - name: Deploy remoto (idempotente) + health-check
@@ -223,6 +225,24 @@ jobs:
           test -f "$TAR" || { echo "ERRO: release não encontrado em $TAR"; exit 1; }
           test -d "$APP" || { echo "ERRO: $APP não existe — rode o setup inicial (docs/deploy-digitalocean.md)"; exit 1; }
           $SUDO systemctl cat "$SERVICE" >/dev/null || { echo "ERRO: unit $SERVICE não instalada"; exit 1; }
+          # ESPAÇO EM DISCO, antes de tocar qualquer coisa (aprendizado do deploy #4:
+          # "No space left on device" no MEIO do cp -a do backup, VPS compartilhada a 100%).
+          # du/df dispensam sudo (doc §2.3 — sudoers intocado). Subpastas ilegíveis pelo
+          # usuário de deploy (ex.: wa-auth/, 700 visao) são ignoradas pelo 2>/dev/null —
+          # a medida é um PISO do tamanho real (e -b é apparent size); o colchão de
+          # 30% + 1GiB absorve isso. Necessário = app×1,3 + 1GiB: 1× backup (cp -a) +
+          # ~0,3× staging/extração + churn do npm install.
+          APP_BYTES="$(du -sb "$APP" 2>/dev/null | awk '{print $1; exit}' || true)"
+          [ -n "$APP_BYTES" ] || { echo "ERRO: não consegui medir o tamanho de $APP (du -sb)"; exit 1; }
+          FREE_BYTES="$(df --output=avail -B1 "$APP" | tail -n 1 | tr -d '[:space:]')"
+          NEED_BYTES=$(( APP_BYTES * 13 / 10 + 1073741824 ))
+          fmt_gb() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1073741824 }'; }
+          if [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
+            echo "ERRO: Espaço insuficiente: livre $(fmt_gb "$FREE_BYTES") GB, necessário $(fmt_gb "$NEED_BYTES") GB (app $(fmt_gb "$APP_BYTES") GB × 1,3 + 1GB p/ backup+staging+npm) — remova backups antigos (ls -dt $APP.bak-*) ou libere disco."
+            echo "      (o CD NUNCA apaga nada sozinho — a poda de backups é manual, decisão deliberada; doc §6)"
+            exit 1
+          fi
+          echo "espaço OK: livre $(fmt_gb "$FREE_BYTES") GB ≥ necessário $(fmt_gb "$NEED_BYTES") GB (app $(fmt_gb "$APP_BYTES") GB)"
           echo "pré-checagens OK · node $(node -v) · npm $(npm -v)"
 
           echo "== [2/7] backup ADITIVO (cp -a) =="
