@@ -21,9 +21,33 @@
   max-width: 70ch;
 }
 
-.cam-sec-hint {
-  margin: 0 0 var(--sp-3);
-  font-size: 12px;
+/* Cabeçalho de seção: título + "?" de ajuda na mesma linha (a prosa-manual virou tooltip). */
+.cam-sec-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* Botão "?" de ajuda (HelpTip) e copiar-ID: gatilho mínimo de Tooltip, cor muted (going-gray). */
+.cam-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: help;
+  vertical-align: middle;
+}
+.cam-help:hover {
+  color: var(--text);
+}
+.cam-help:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
 }
 
 /* Lista de câmeras IP cadastradas (linha = nome + url mascarada + tipo + estado + ações). */
@@ -63,12 +87,30 @@
   gap: var(--sp-2);
 }
 
+/* ID do nó local: encurtado (8 chars) + botão copiar; o UUID completo mora no tooltip. */
+.cam-row__id {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
 /* ── Ajustes inline por câmera (papel + vídeo no painel) na linha unificada ──
-   Reusa a linha neutra .cam-row; os dois Selects ficam à direita, empilhando no mobile. */
+   Reusa a linha neutra .cam-row; os dois Selects ficam à direita, empilhando no mobile.
+   Cada Select ganha rótulo EXTERNO (FieldLabel) — o valor fica limpo (auditoria #15). */
 .cam-set-controls {
   display: grid;
   gap: var(--sp-2);
   min-width: 220px;
+}
+.cam-set-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cam-set-field__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
 }
 /* Dica quando a câmera está offline (ajustes desabilitados) — ocupa a largura do grid. */
 .cam-adjust-hint {
@@ -85,10 +127,6 @@
 }
 .cam-status[data-online="0"] {
   color: var(--state-warn-fg);
-}
-.cam-set-note {
-  margin: var(--sp-3) 0 0;
-  font-size: 12px;
 }
 
 /* Rodapé das seções (ação primária à esquerda, fora da lista). */
@@ -114,10 +152,12 @@
   flex: 1;
   min-width: 220px;
 }
-.cam-enroll .muted {
+/* Rótulo do link ("Link de inscrição" + "?") ocupa a linha inteira acima do campo. */
+.cam-enroll__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   flex-basis: 100%;
-  margin: 0;
-  font-size: 12px;
 }
 
 /* ── Form do cadastro/edição IP (dentro do Dialog) ── */
@@ -179,12 +219,12 @@
     min-width: 0;
   }
 
-  /* Nó local: o campo do link de inscrição encolhe para caber e o botão passa à linha
-     de baixo (full-width via .cam-enroll flex-wrap). */
+  /* Nó local: o campo do link de inscrição encolhe para caber e o botão COPIAR (filho
+     direto) passa à linha de baixo em largura total — o ">" poupa o "?" do HelpTip. */
   .cam-enroll input {
     min-width: 0;
   }
-  .cam-enroll button {
+  .cam-enroll > button {
     width: 100%;
   }
 }

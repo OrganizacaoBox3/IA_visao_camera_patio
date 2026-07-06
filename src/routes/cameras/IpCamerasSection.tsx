@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
+import { Copy } from "lucide-react";
 import { APP_CONFIG } from "../../config";
 import { useAuth } from "../../auth";
 import {
@@ -11,12 +12,16 @@ import {
   Dialog,
   AlertDialog,
   Field,
+  FieldLabel,
   Badge,
   Alert,
+  EmptyState,
   Tooltip,
   useToast,
   SectionTitle,
 } from "../../ui";
+import { copyToClipboard } from "../../ui/clipboard";
+import { HelpTip } from "./HelpTip";
 import { setCameraCfg, type CameraCfg } from "../../cameraConfig";
 import { useCamCfgs } from "../useCamCfgs";
 import { type Camera } from "../dashboard/types";
@@ -61,6 +66,12 @@ function cameraKind(url: string): string {
   if (u.startsWith("rtsp")) return "RTSP";
   if (u.includes(".m3u8")) return "HLS";
   return "HTTP/MJPEG";
+}
+
+// ID de câmera encurtado p/ exibição (nó local = UUID): os 8 primeiros chars identificam;
+// o ID completo fica no tooltip do botão copiar (auditoria #15 — UUID cru fora da superfície).
+function shortId(id: string): string {
+  return id.length > 10 ? `${id.slice(0, 8)}…` : id;
 }
 
 // Linha reconciliada: identidade + de qual(is) fonte(s) veio. `ip` = registro IP (superadmin);
@@ -262,6 +273,12 @@ export function CamerasList() {
     }
   }
 
+  // Copia o ID da câmera (nó local mostra o ID encurtado; o completo vai p/ a área de transferência).
+  async function copyId(id: string) {
+    const ok = await copyToClipboard(id);
+    toast(ok ? "ID copiado." : "Não foi possível copiar o ID.", ok ? "ok" : "alert");
+  }
+
   async function removeCamera(c: IpCamera) {
     setBusy(true);
     try {
@@ -278,14 +295,16 @@ export function CamerasList() {
 
   return (
     <section className="panel" aria-label="Câmeras">
-      <SectionTitle>Câmeras da central</SectionTitle>
-      <p className="muted cam-sec-hint">
-        Uma linha por câmera — de rede (IP/RTSP) ou nó local (webcam). Câmera IP cadastrada aparece
-        aqui mesmo <b>offline</b> (com Editar/Remover); ao conectar, o hub a mostra na Central
-        automaticamente. <b>Papel</b> e <b>Vídeo no painel</b> só valem para câmera{" "}
-        <b>conectada</b> (ficam desabilitados enquanto offline). A URL pode conter credenciais — é
-        tratada como sensível (exibida com o usuário/senha ocultos).
-      </p>
+      {/* Prosa-manual (~57 palavras) virou tooltip "?" — hierarquia de ajuda da casa
+          (label → placeholder → tooltip; nunca parágrafo permanente na tela). */}
+      <div className="cam-sec-head">
+        <SectionTitle flush>Câmeras da central</SectionTitle>
+        <HelpTip label="Sobre a lista de câmeras">
+          Uma linha por câmera — de rede (IP/RTSP) ou nó local (webcam). Câmera IP cadastrada
+          aparece mesmo offline; ao conectar, entra na Central automaticamente. Tipo e vídeo só
+          são ajustáveis com a câmera conectada. A URL é sensível: usuário/senha ficam ocultos.
+        </HelpTip>
+      </div>
 
       {loading && <p className="empty-note">Carregando…</p>}
       {!loading && loadErr && (
@@ -296,12 +315,19 @@ export function CamerasList() {
           </Button>
         </Alert>
       )}
+      {/* Vazio na fórmula status + causa + ação (NN/g). O texto do superadmin é load-bearing
+          no e2e (getByText exato) — preservado letra a letra. */}
       {!loading && !loadErr && rows.length === 0 && (
-        <p className="empty-note">
-          {isSuper
-            ? "Nenhuma câmera IP cadastrada ainda."
-            : "Nenhuma câmera conectada. Abra um nó local abaixo; ele aparece aqui assim que conectar à central."}
-        </p>
+        <EmptyState>
+          <p className="m-0">
+            {isSuper ? "Nenhuma câmera IP cadastrada ainda." : "Nenhuma câmera conectada."}
+          </p>
+          <p className="m-0 text-sec text-text-muted">
+            {isSuper
+              ? "Adicione uma câmera de rede abaixo ou abra um nó local (webcam)."
+              : "Abra um nó local abaixo — ele aparece aqui ao conectar."}
+          </p>
+        </EmptyState>
       )}
       {!loading && !loadErr && rows.length > 0 && (
         <div className="cam-list">
@@ -313,15 +339,27 @@ export function CamerasList() {
               <div key={`cam-${row.id}`} className="cam-row cam-set-row">
                 <div className="cam-row__name">
                   <b>{row.label}</b>
-                  {/* IP → url mascarada (host visível, credenciais ocultas — LGPD); nó local → id.
-                      title= aqui anota um DADO exibido (span não-interativo), não uma affordance de
-                      controle — segue no title= nativo (mesma exceção do heatmap). */}
+                  {/* IP → url mascarada (host visível, credenciais ocultas — LGPD); nó local →
+                      ID encurtado + copiar (o UUID completo mora no tooltip, não na superfície).
+                      title= no span anota um DADO exibido (não-interativo) — exceção documentada. */}
                   {row.ip ? (
                     <span className="muted" title="URL com credenciais ocultas">
                       {maskCameraUrl(row.ip.url)}
                     </span>
                   ) : (
-                    <span className="muted">{row.id}</span>
+                    <span className="muted cam-row__id">
+                      {shortId(row.id)}
+                      <Tooltip content={`ID completo: ${row.id}`}>
+                        <button
+                          type="button"
+                          className="cam-help"
+                          aria-label="Copiar ID da câmera"
+                          onClick={() => void copyId(row.id)}
+                        >
+                          <Copy size={12} strokeWidth={1.75} aria-hidden />
+                        </button>
+                      </Tooltip>
+                    </span>
                   )}
                 </div>
                 {row.ip && <Badge>{cameraKind(row.ip.url)}</Badge>}
@@ -345,33 +383,46 @@ export function CamerasList() {
                   </label>
                 )}
                 <div className="cam-set-controls">
-                  <Select
-                    value={isFadiga ? "fadiga" : "area"}
-                    onChange={(v) => setKind(row.id, v === "fadiga")}
-                    ariaLabel="Tipo da câmera"
-                    disabled={!canAdjust}
-                    options={[
-                      { value: "area", label: "Câmera de área (zonas)" },
-                      { value: "fadiga", label: "Operador (fadiga)" },
-                    ]}
-                  />
-                  {/* Transporte do VÍDEO NO PAINEL (go2rtc). Rótulo desambiguado do `transport`
-                      tcp/udp do RTSP (no cadastro IP) — aquele é do ffmpeg. "Automático" (padrão) =
-                      melhor disponível; MJPEG/WebRTC são OVERRIDES manuais (escape hatch). */}
-                  <Select
-                    value={cfg.transport}
-                    onChange={(v) => setTransport(row.id, v as CameraCfg["transport"])}
-                    ariaLabel="Vídeo no painel"
-                    disabled={!canAdjust}
-                    options={[
-                      { value: "auto", label: "Vídeo no painel: Automático (melhor disponível)" },
-                      { value: "mjpeg", label: "Vídeo no painel: MJPEG" },
-                      { value: "webrtc", label: "Vídeo no painel: WebRTC" },
-                    ]}
-                  />
+                  <div className="cam-set-field">
+                    <FieldLabel>Tipo da câmera</FieldLabel>
+                    <Select
+                      value={isFadiga ? "fadiga" : "area"}
+                      onChange={(v) => setKind(row.id, v === "fadiga")}
+                      ariaLabel="Tipo da câmera"
+                      disabled={!canAdjust}
+                      options={[
+                        { value: "area", label: "Câmera de área (zonas)" },
+                        { value: "fadiga", label: "Operador (fadiga)" },
+                      ]}
+                    />
+                  </div>
+                  {/* Transporte do VÍDEO NO PAINEL (go2rtc). Rótulo EXTERNO (Field) + valores
+                      limpos — o prefixo saiu de dentro do value (auditoria #15); a mecânica
+                      auto/override (go2rtc × relé) mora no tooltip "?", não na superfície. */}
+                  <div className="cam-set-field">
+                    <span className="cam-set-field__label">
+                      <FieldLabel>Vídeo no painel</FieldLabel>
+                      <HelpTip label="Como o vídeo chega ao painel">
+                        Automático (padrão) escolhe o melhor transporte e troca sozinho: WebRTC
+                        (vídeo fluido) quando disponível, senão MJPEG — sem configurar nada.
+                        MJPEG e WebRTC forçam um modo fixo (ajuste manual).
+                      </HelpTip>
+                    </span>
+                    <Select
+                      value={cfg.transport}
+                      onChange={(v) => setTransport(row.id, v as CameraCfg["transport"])}
+                      ariaLabel="Vídeo no painel"
+                      disabled={!canAdjust}
+                      options={[
+                        { value: "auto", label: "Automático" },
+                        { value: "mjpeg", label: "MJPEG" },
+                        { value: "webrtc", label: "WebRTC" },
+                      ]}
+                    />
+                  </div>
                   {!canAdjust && (
                     <span className="muted cam-adjust-hint">
-                      Conecte a câmera para ajustar papel e vídeo.
+                      Conecte a câmera para ajustar tipo e vídeo.
                     </span>
                   )}
                 </div>
@@ -409,12 +460,6 @@ export function CamerasList() {
         </div>
       )}
 
-      <p className="muted cam-set-note">
-        <b>Automático</b> (padrão) = melhor disponível: usa WebRTC (vídeo fluido via go2rtc) quando o
-        go2rtc serve a câmera e cai para MJPEG (frames do relé) quando não — sem configurar nada.
-        <b> MJPEG</b> e <b>WebRTC</b> forçam um transporte fixo (override manual).
-      </p>
-
       {/* Form de criação/edição (Dialog). Mesmo form nos dois modos; na edição a URL em branco
           mantém a atual (nunca pré-preenchemos a url completa — credenciais). */}
       <Dialog
@@ -427,7 +472,7 @@ export function CamerasList() {
         description={
           editing
             ? "Altere só o que precisar. Deixe a URL em branco para manter a atual."
-            : "Cadastre uma câmera de rede (RTSP/HLS/MJPEG). Ao salvar, o hub conecta e ela entra na grade automaticamente."
+            : "Ao salvar, a central conecta e a câmera entra na grade."
         }
       >
         <form
@@ -450,9 +495,7 @@ export function CamerasList() {
             htmlFor="cam-url"
             error={fUrlError ?? undefined}
             hint={
-              editing
-                ? "Em branco mantém a URL atual. rtsp:// · rtsps:// · http(s)://"
-                : "rtsp:// · rtsps:// · http(s):// (HLS .m3u8 ou MJPEG)"
+              editing ? "Em branco mantém a URL atual." : "rtsp:// ou http(s):// (HLS/MJPEG)"
             }
           >
             <Input
@@ -472,10 +515,7 @@ export function CamerasList() {
             />
           </Field>
           {urlIsRtsp && (
-            <Field
-              label="Transporte (RTSP)"
-              hint="TCP é o mais compatível; auto deixa o ffmpeg decidir."
-            >
+            <Field label="Transporte (RTSP)" hint="TCP é o mais compatível.">
               <Select
                 value={fTransport}
                 onChange={(v) => setFTransport(v as CameraTransport)}
@@ -502,11 +542,7 @@ export function CamerasList() {
               {/* Placeholders = defaults reais do hub (server/rtsp.js defaultCfg): fps 10 · width 720 · q 4.
                   Hints orientam o caso rua/panorâmica (item 2.5 do plano-melhoria-reconhecimento):
                   720 px encolhe pedestre distante p/ ~5–11 px — abaixo do mínimo do detector. */}
-              <Field
-                label="fps (1–30)"
-                htmlFor="cam-fps"
-                hint="Quadros/s que o hub extrai do stream; padrão 10. Menos fps = menos CPU."
-              >
+              <Field label="fps (1–30)" htmlFor="cam-fps" hint="Padrão 10 — menos fps, menos CPU.">
                 <Input
                   id="cam-fps"
                   type="number"
@@ -520,7 +556,7 @@ export function CamerasList() {
               <Field
                 label="Largura (px, 160–1920)"
                 htmlFor="cam-width"
-                hint="Padrão 720. Use 1280–1920 p/ câmeras de rua/panorâmicas — em 720 um pedestre distante fica pequeno demais p/ o detector. Mais largura = mais CPU."
+                hint="Padrão 720 — use 1280–1920 em câmera de rua/panorâmica. Mais largura, mais CPU."
               >
                 <Input
                   id="cam-width"
@@ -535,7 +571,7 @@ export function CamerasList() {
               <Field
                 label="Qualidade (1–31)"
                 htmlFor="cam-quality"
-                hint="Compressão JPEG do ffmpeg — MENOR = melhor imagem; padrão 4."
+                hint="Menor = melhor imagem; padrão 4."
               >
                 <Input
                   id="cam-quality"

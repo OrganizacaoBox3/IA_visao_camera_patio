@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { Button, Input, useToast, SectionTitle } from "../../ui";
+import { Button, Input, FieldLabel, useToast, SectionTitle } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
+import { HelpTip } from "./HelpTip";
 
 // Seção "Câmera local (webcam / nó)" — fonte ÚNICA da UI de nó local: abrir o nó neste
 // dispositivo + copiar o link de inscrição (token do hub). Consumida pela tela /cameras
@@ -45,45 +46,54 @@ export function LocalNodeSection({ camToken, canEnroll = true, compact = false }
       className={compact ? "panel max-w-[640px]" : "panel"}
       aria-label="Câmera local (webcam / nó)"
     >
-      <SectionTitle>Câmera local (webcam / nó)</SectionTitle>
+      {/* Prosa-manual (~39 palavras) virou tooltip "?" — a superfície fica só com o título,
+          a ação e o link de inscrição (hierarquia de ajuda: label → tooltip; nunca parágrafo). */}
+      <div className="cam-sec-head">
+        <SectionTitle flush>Câmera local (webcam)</SectionTitle>
+        <HelpTip label="Sobre a câmera local">
+          Qualquer dispositivo com navegador e webcam (PC, celular) vira uma câmera da central. A
+          análise roda no próprio navegador — nenhuma imagem fica gravada no servidor.
+        </HelpTip>
+      </div>
 
       {!compact && (
-        <>
-          <p className="muted cam-sec-hint">
-            Qualquer dispositivo com navegador e webcam (PC, celular) vira uma câmera: abra a
-            página do nó e ele entra na central automaticamente. A IA roda no próprio navegador —
-            nenhuma imagem é enviada ao servidor além dos frames do relé.
-          </p>
-          <div className="cam-node-actions">
-            <Button asChild variant="primary">
-              <a href={nodeUrl} target="_blank" rel="noreferrer">
-                Abrir nó neste dispositivo
-              </a>
-            </Button>
-          </div>
-        </>
+        <div className="cam-node-actions">
+          <Button asChild variant="primary">
+            <a href={nodeUrl} target="_blank" rel="noreferrer">
+              Abrir nó neste dispositivo
+            </a>
+          </Button>
+        </div>
       )}
 
       {canEnroll &&
         (enrollUrl ? (
           <div className="cam-enroll">
+            <span className="cam-enroll__label">
+              <FieldLabel htmlFor="cam-enroll-url">Link de inscrição</FieldLabel>
+              <HelpTip label="Como usar o link de inscrição">
+                Abra este link no dispositivo (celular/PC) que será a câmera — ele conecta sem
+                login.
+              </HelpTip>
+            </span>
             <Input
+              id="cam-enroll-url"
               readOnly
               aria-label="Link de inscrição da câmera"
               value={enrollUrl}
               onFocus={(e) => e.currentTarget.select()}
             />
             <Button onClick={onCopyEnroll}>Copiar link de inscrição</Button>
-            <p className="muted">
-              Abra este link no dispositivo (celular/PC) que será a câmera — ele conecta sem login
-              humano.
-            </p>
           </div>
         ) : (
-          <p className="muted">
-            Defina <code>CAMERA_TOKEN</code> no hub (systemd) para gerar o link de inscrição de
-            outros dispositivos. Sem ele, a câmera usa a sessão de um usuário logado no mesmo
-            navegador.
+          // Sem token no hub: fórmula status + causa/ação; o detalhe de infra (CAMERA_TOKEN)
+          // saiu da superfície — vira tooltip técnico (o bloco é superadmin-only).
+          <p className="muted m-0">
+            Link de inscrição indisponível neste servidor.{" "}
+            <HelpTip label="Como habilitar o link de inscrição">
+              O administrador define CAMERA_TOKEN no serviço do hub para gerar o link. Sem ele, o
+              nó usa a sessão de um usuário logado neste navegador.
+            </HelpTip>
           </p>
         ))}
 
