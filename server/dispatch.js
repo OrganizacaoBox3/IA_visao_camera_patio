@@ -1,24 +1,17 @@
-// Disparo de alertas → WhatsApp. Destinatários de DUAS fontes (dedupe por número):
+// Canal WhatsApp — disparo de alertas. Destinatários de DUAS fontes (dedupe por número):
 //   1) lista do superadmin (recipients.json) — números avulsos;
 //   2) usuários com número no /perfil + opt-in + "receber" ativo.
-// Classifica o texto (tipo + crítico) por palavra-chave e respeita o filtro de cada destino.
+// A taxonomia (tipo + crítico) vem do NÚCLEO de alarme (alarm/classify) — o canal só
+// formata/filtra/envia; quem decide o QUE enviar é a política (ADR-004).
 const users = require("./users");
 const recipients = require("./recipients");
 const whatsapp = require("./whatsapp");
 const settings = require("./settings");
+const { classify } = require("./alarm/classify");
+const { ENABLED: POLICY_ENABLED } = require("./alarm/config");
 
 const DEDUP_MS = Number(process.env.ALERT_DEDUP_MS ?? 60_000);
-const sent = new Map(); // `${numero}|${text}` -> ts
-
-function classify(text) {
-  const t = String(text || "");
-  const critico = t.includes("⚠");
-  let tipo = "atividade";
-  if (/fadiga|celular|bocejo|operador|risco/i.test(t)) tipo = "fadiga";
-  else if (/leitura|no-?read|taxa|c[oó]digo/i.test(t)) tipo = "leitura";
-  else if (/objeto|presen|carreg|palete|empilhad|caixa/i.test(t)) tipo = "objetos";
-  return { critico, tipo };
-}
+const sent = new Map(); // `${numero}|${text}` -> ts (SÓ usado com a política desligada; ver dispatchAlert)
 
 // Mensagem PROFISSIONAL para WhatsApp (markdown do WA: *negrito* / _itálico_), configurável pelo superadmin.
 const FADIGA_DETALHE = {
@@ -101,9 +94,14 @@ function dispatchAlert(text, ts, priority) {
   const msg = formatWhatsApp(text, meta, ts, cfg); // mensagem profissional (não o texto cru do toast)
   const now = Date.now();
   for (const t of targets(meta)) {
-    const key = `${t.numero}|${text}`;
-    if (sent.has(key) && now - sent.get(key) < DEDUP_MS) continue;
-    sent.set(key, now);
+    // Dedup de canal (nº|texto) = REDE DE SEGURANÇA do modo ALARM_POLICY_ENABLED=0 (sem a
+    // política, ninguém deduplicou ainda). Com a política LIGADA (default), o dedup mora num
+    // lugar só — alarm/state.dedup — e este mapa fica inerte (não checa nem acumula).
+    if (!POLICY_ENABLED) {
+      const key = `${t.numero}|${text}`;
+      if (sent.has(key) && now - sent.get(key) < DEDUP_MS) continue;
+      sent.set(key, now);
+    }
     whatsapp
       .sendText(t.numero, msg)
       .catch((e) => console.error(`[dispatch] envio falhou p/ ${t.nome}:`, e.message));
@@ -111,4 +109,4 @@ function dispatchAlert(text, ts, priority) {
   if (sent.size > 800) for (const [k, t] of sent) if (now - t > DEDUP_MS) sent.delete(k);
 }
 
-module.exports = { dispatchAlert, classify, targets, formatWhatsApp };
+module.exports = { dispatchAlert, targets, formatWhatsApp };

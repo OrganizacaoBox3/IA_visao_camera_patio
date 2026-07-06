@@ -31,7 +31,7 @@
 // supressão/colapso é logada (pino). Ver alarm/config.js p/ as variáveis de
 // ambiente e alarm/persist.js p/ a semântica de persistência das shelves.
 // ============================================================================
-const { classify } = require("./dispatch");
+const { classify } = require("./alarm/classify");
 
 const { log, ENABLED, DEDUP_MS, FLOOD_WINDOW_MS, FLAP_WINDOW_MS } = require("./alarm/config");
 const { dedup, floodWin, floodState, shelved, flap, emitLog } = require("./alarm/state");

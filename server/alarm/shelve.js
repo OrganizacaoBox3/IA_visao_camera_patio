@@ -8,7 +8,7 @@ const { shelved } = require("./state");
 const { normSeg, normShelveKey, segMatch, pickCamera, pickZona } = require("./keys");
 const { SHELVE_MAX_MS, SHELVE_DEFAULT_MS } = require("./config");
 const { saveShelves } = require("./persist");
-const { classify } = require("../dispatch");
+const { classify } = require("./classify");
 
 // Constrói a chave de shelve (não-curinga) a partir de um payload de alerta,
 // usando a MESMA derivação de cameraId/zona/tipo do evaluate(). Útil para a UI

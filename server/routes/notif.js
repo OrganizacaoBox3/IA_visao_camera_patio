@@ -3,6 +3,7 @@
 const recipients = require("../recipients");
 const settings = require("../settings");
 const dispatch = require("../dispatch");
+const { classify } = require("../alarm/classify");
 const whatsapp = require("../whatsapp");
 
 async function handle(req, res, ctx) {
@@ -66,7 +67,7 @@ async function handle(req, res, ctx) {
     };
     const out = {};
     for (const [tipo, txt] of Object.entries(samples))
-      out[tipo] = dispatch.formatWhatsApp(txt, dispatch.classify(txt), now, s);
+      out[tipo] = dispatch.formatWhatsApp(txt, classify(txt), now, s);
     json(res, 200, out);
     return true;
   }

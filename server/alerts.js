@@ -3,11 +3,13 @@
 // Webhook genérico: o payload inclui `text` e `content` p/ casar com Slack, Teams, Discord, Zapier,
 // Make, n8n e endpoints próprios sem configuração extra. Configurável por env:
 //   ALERT_WEBHOOK_URL   (obrigatório p/ ligar)   — URL do webhook
-//   ALERT_DEDUP_MS      (default 60000)           — janela que ignora o MESMO alerta repetido
+//   ALERT_DEDUP_MS      (default 60000)           — janela do dedup de canal (SÓ vale com a
+//                                                   política de alarmes desligada; ver notify)
+const { ENABLED: POLICY_ENABLED } = require("./alarm/config");
 const WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || "";
 const DEDUP_MS = Number(process.env.ALERT_DEDUP_MS ?? 60_000);
 
-const lastSent = new Map(); // text -> ts (dedup por mensagem)
+const lastSent = new Map(); // text -> ts (SÓ usado com a política desligada; ver notify)
 
 function andonEnabled() {
   return !!WEBHOOK_URL;
@@ -34,17 +36,22 @@ async function post(text, ts, priority) {
   }
 }
 
-/** Recebe { text, ts } do painel; aplica dedup por mensagem e dispara o webhook. */
+/** Recebe a decisão da política ({ text, ts, priority? }) e dispara o webhook. */
 function notify(p) {
   if (!andonEnabled() || !p) return;
   const text = String(p.text || "").trim();
   if (!text) return;
-  const now = Date.now();
-  const prev = lastSent.get(text);
-  if (prev && now - prev < DEDUP_MS) return; // mesmo alerta dentro da janela → ignora
-  lastSent.set(text, now);
-  if (lastSent.size > 300)
-    for (const [k, t] of lastSent) if (now - t > DEDUP_MS) lastSent.delete(k); // limpa antigos
+  // Dedup de canal (por texto) = REDE DE SEGURANÇA do modo ALARM_POLICY_ENABLED=0 (sem a
+  // política, ninguém deduplicou ainda). Com a política LIGADA (default), o dedup mora num
+  // lugar só — alarm/state.dedup — e este mapa fica inerte (não checa nem acumula).
+  if (!POLICY_ENABLED) {
+    const now = Date.now();
+    const prev = lastSent.get(text);
+    if (prev && now - prev < DEDUP_MS) return; // mesmo alerta dentro da janela → ignora
+    lastSent.set(text, now);
+    if (lastSent.size > 300)
+      for (const [k, t] of lastSent) if (now - t > DEDUP_MS) lastSent.delete(k); // limpa antigos
+  }
   void post(text, p.ts, p.priority); // priority vem da política de alarmes (alarmPolicy), quando presente
 }
 
