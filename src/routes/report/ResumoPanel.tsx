@@ -8,6 +8,7 @@ import {
   type FadigaKpis,
 } from "../../report/calc";
 import { classLabel } from "./ObjetosPanel";
+import { Insight } from "./chrome";
 
 export function ResumoPanel({
   periodLabel,
@@ -157,14 +158,16 @@ export function ResumoPanel({
           <div className="rc-foot">predominante: {classLabel(ok.topClasse)}</div>
         </button>
       </div>
-      <section className="insight">
-        <b>Destaques</b>{" "}
-        {[...tips.slice(0, 1), ...ftips.slice(0, 1), ...rtips.slice(0, 1)]
-          .filter(Boolean)
-          .join(" · ") || "Sem ocorrências relevantes no período."}
-      </section>
+      <Insight
+        label="Destaques"
+        tips={[
+          [...tips.slice(0, 1), ...ftips.slice(0, 1), ...rtips.slice(0, 1)]
+            .filter(Boolean)
+            .join(" · ") || "Sem ocorrências relevantes no período.",
+        ]}
+      />
       <p className="rep-foot">
-        Toque num cartão para abrir o detalhe. Indicadores agregados, sem imagens (LGPD).
+        Clique num cartão para abrir o detalhe · indicadores agregados, sem imagens (LGPD).
       </p>
     </>
   );

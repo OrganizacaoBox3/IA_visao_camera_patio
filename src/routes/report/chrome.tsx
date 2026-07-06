@@ -1,7 +1,9 @@
 // Cascas comuns dos painéis do Relatório: a "lente" (recorte atual) e o rodapé de histórico.
 // Extraídos p/ eliminar a repetição idêntica entre os modos (Atividade/Leitura/Objetos/Fadiga).
 
+import { Lightbulb, type LucideIcon } from "lucide-react";
 import type { Shift } from "../../report/calc";
+import "./report.css";
 
 // Título de seção do padrão da casa (átomo de src/ui). Re-exportado aqui para os painéis do
 // Relatório seguirem importando de "./chrome" sem alteração (troca de origem 1:1, A1 concluída).
@@ -28,11 +30,24 @@ export const SHIFTS: Shift[] = ["Manhã", "Tarde", "Noite"];
 // Agregado por turno (byShiftA/byShiftR do ReportPage) — antes duplicado em cada painel.
 export type ByShift = { m: Record<Shift, number>; max: number };
 
-// Faixa de insights ("💡 …") idêntica entre os modos — só mudam o rótulo e as dicas.
-export function Insight({ label, tips }: { label: string; tips: string[] }) {
+// Faixa de insights idêntica entre os modos — só mudam rótulo/dicas (e o ícone: Bell no modo
+// Alarmes). Going-gray (#12): superfície neutra (.rep-insight, ./report.css) + Lucide no lugar
+// do emoji 💡/🔔 — padrão do shell (18/16px, stroke 1.75, currentColor).
+export function Insight({
+  label,
+  tips,
+  icon: Icon = Lightbulb,
+}: {
+  label: string;
+  tips: string[];
+  icon?: LucideIcon;
+}) {
   return (
-    <section className="insight">
-      <b>{label}</b> {tips.join(" · ")}
+    <section className="rep-insight">
+      <Icon size={16} strokeWidth={1.75} aria-hidden className="rep-insight__ico" />
+      <div className="rep-insight__text">
+        <b>{label}</b> {tips.join(" · ")}
+      </div>
     </section>
   );
 }
@@ -45,14 +60,13 @@ export function RepLens({ lens }: { lens: string }) {
   );
 }
 
-export function HistoryFooter({ onClear, busy }: { onClear: () => void; busy: boolean }) {
+export function HistoryFooter() {
   return (
     <div className="rep-foot">
-      {/* fonte real (banco/arquivo) aparece na barra de filtros via /api/data/status */}
-      Histórico do servidor · indicadores agregados, sem imagens ·{" "}
-      <button onClick={onClear} disabled={busy} className="linkbtn">
-        limpar histórico
-      </button>
+      {/* fonte real (banco/arquivo) aparece na barra de filtros via /api/data/status.
+          A AÇÃO "limpar histórico" (#13) virou botão explícito na barra de ferramentas
+          do ReportPage (era link mono escondido aqui) — o rodapé é só informação. */}
+      Histórico do servidor · indicadores agregados, sem imagens
     </div>
   );
 }

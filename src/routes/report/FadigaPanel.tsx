@@ -25,8 +25,6 @@ export function FadigaPanel({
   fevt,
   tab,
   onTabChange,
-  busy,
-  onClear,
 }: {
   lens: string;
   fk: FKpis;
@@ -39,8 +37,6 @@ export function FadigaPanel({
   fevt: FadigaEventRow[];
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
-  busy: boolean;
-  onClear: () => void;
 }) {
   return (
     <>
@@ -72,7 +68,7 @@ export function FadigaPanel({
         <Kpi value={fBocejos} label="bocejos" />
         <Kpi value={`${String(fk.peakHour).padStart(2, "0")}h`} label="horário crítico" />
       </KpiRow>
-      <Insight label="💡 Operador" tips={ftips} />
+      <Insight label="Operador" tips={ftips} />
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -137,7 +133,7 @@ export function FadigaPanel({
           />
         </TabsContent>
       </Tabs>
-      <HistoryFooter onClear={onClear} busy={busy} />
+      <HistoryFooter />
     </>
   );
 }

@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { io } from "socket.io-client";
+import { Hourglass, TriangleAlert } from "lucide-react";
 import { useAuth } from "../auth";
+import { APP_CONFIG } from "../config";
 import { Sparkline } from "../components/Sparkline";
 import {
   PageHeader,
@@ -20,20 +23,23 @@ import {
   listShelves,
   createShelve,
   deleteShelve,
+  getZones,
   type AlarmMetrics,
   type AlarmCounts,
   type Shelve,
 } from "../api";
+import type { Camera } from "./dashboard/types";
 import "./alarm-health.css";
 
-// Tela de SAÚDE DE ALARMES (ISA-18.2 / EEMUA 191 — racionalização · Onda B).
-// É uma tela de engenharia/ops: monitora a saúde do PRÓPRIO sistema de alertas (taxa, % de
-// críticos vs. o alvo ≤5%, distribuição por prioridade) e gerencia SHELVES (silenciamentos
-// temporários com expiração). going-gray: base neutra, cor saturada só p/ anormalidade.
+// Tela de SAÚDE DE ALARMES (racionalização ISA-18.2 / EEMUA 191 · Onda B — normas só em
+// tooltip/comentário; jargão de engenharia não renderiza). Monitora a saúde do PRÓPRIO
+// sistema de alertas (taxa, % de críticos vs. alvo ≤5%, distribuição por prioridade) e
+// gerencia SILENCIAMENTOS temporários com expiração (shelving, no vocabulário da norma).
+// going-gray: base neutra, cor saturada só p/ anormalidade.
 //
 // RBAC (decisão documentada): o LINK de navegação só aparece p/ canConfigure (é tela de
 // engenharia). Mesmo assim, a rota é acessível por URL — então quem NÃO tem canConfigure vê
-// as métricas em modo somente-leitura e os controles de shelve (criar/remover) ficam ocultos.
+// as métricas em modo somente-leitura e os controles de silenciamento ficam ocultos.
 
 const REFRESH_MS = 7000; // auto-refresh leve (5–10s)
 const HIST_CAP = 30; // amostras retidas p/ as mini-tendências (client-side)
@@ -44,13 +50,26 @@ const PRIO_LABEL: Record<keyof AlarmCounts, string> = {
   critical: "Crítico",
 };
 
-// Opções de duração do shelve (com expiração automática — não é desabilitar permanente).
+// Opções de duração do silenciamento (com expiração automática — nunca desliga permanente).
 const DUR_OPTS = [
   { value: String(15 * 60_000), label: "15 minutos" },
   { value: String(30 * 60_000), label: "30 minutos" },
   { value: String(60 * 60_000), label: "1 hora" },
   { value: String(120 * 60_000), label: "2 horas" },
   { value: String(8 * 60 * 60_000), label: "8 horas (turno)" },
+];
+
+// Tipos de alerta da política (contrato AlarmTipo) — "*" = curinga do back ("qualquer").
+const ANY = "*";
+const TIPO_LABEL: Record<string, string> = {
+  atividade: "Atividade",
+  leitura: "Leitura",
+  objetos: "Objetos",
+  fadiga: "Operador (fadiga)",
+};
+const TIPO_OPTS = [
+  { value: ANY, label: "Qualquer tipo" },
+  ...Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label })),
 ];
 
 function fmtDuration(ms: number): string {
@@ -65,7 +84,7 @@ function fmtDuration(ms: number): string {
 }
 
 export function AlarmHealthPage() {
-  const { canConfigure } = useAuth();
+  const { token, canConfigure } = useAuth();
   const { toast } = useToast();
 
   const [metrics, setMetrics] = useState<AlarmMetrics | null>(null);
@@ -77,14 +96,84 @@ export function AlarmHealthPage() {
   const [rateHist, setRateHist] = useState<number[]>([]);
   const [critHist, setCritHist] = useState<number[]>([]);
 
-  // Formulário de criação de shelve.
-  const [fKey, setFKey] = useState("");
+  // Câmeras CONECTADAS (rótulos p/ o builder e p/ a lista de silenciamentos). Mesmo padrão
+  // de /cameras: socket só-para-a-lista — `watch({ids:[]})` = zero vídeo nesta tela.
+  const [cams, setCams] = useState<Camera[]>([]);
+  useEffect(() => {
+    const socket = io(APP_CONFIG.net.serverUrl, {
+      transports: ["websocket"],
+      auth: { token },
+      query: { role: "dashboard" },
+    });
+    socket.on("connect", () => socket.emit("watch", { ids: [] }));
+    socket.on("cameras", (list: Camera[]) => setCams(Array.isArray(list) ? list : []));
+    return () => {
+      socket.disconnect();
+    };
+  }, [token]);
+
+  // ── Builder do silenciamento (#6): 3 Selects (câmera → zona → tipo) MONTAM a chave
+  //    `cameraId|zona|tipo` do contrato do back por baixo — ninguém digita chave crua. ──
+  const [fCam, setFCam] = useState(ANY);
+  const [fZona, setFZona] = useState(ANY);
+  const [fTipo, setFTipo] = useState(ANY);
   const [fDur, setFDur] = useState(DUR_OPTS[1].value);
   const [fReason, setFReason] = useState("");
   const [fBusy, setFBusy] = useState(false);
   const [fErr, setFErr] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
-  const [confirmKey, setConfirmKey] = useState<string | null>(null); // shelve aguardando confirmação de remoção
+  const [confirmKey, setConfirmKey] = useState<string | null>(null); // silenciamento aguardando confirmação de remoção
+
+  // Zonas da câmera escolhida (rótulos) — zonas de exclusão nunca alarmam, ficam de fora.
+  const [zoneOpts, setZoneOpts] = useState<string[]>([]);
+  useEffect(() => {
+    if (fCam === ANY) {
+      setZoneOpts([]);
+      return;
+    }
+    let dead = false;
+    getZones(fCam)
+      .then((zs) => {
+        if (dead) return;
+        const labels = zs
+          .filter((z) => z.modo !== "exclusao")
+          .map((z) => z.label.trim())
+          .filter(Boolean);
+        setZoneOpts([...new Set(labels)]);
+      })
+      .catch(() => {
+        if (!dead) setZoneOpts([]); // sem zonas → só "qualquer zona" (a câmera inteira)
+      });
+    return () => {
+      dead = true;
+    };
+  }, [fCam]);
+
+  // Rótulos legíveis (a chave crua nunca renderiza; fica no tooltip p/ diagnóstico).
+  const camLabel = useCallback(
+    (seg: string) =>
+      seg === ANY
+        ? "qualquer câmera"
+        : (cams.find((c) => c.id.toLowerCase() === seg.toLowerCase())?.label ?? seg),
+    [cams],
+  );
+  const zonaLabel = (seg: string) => (seg === ANY ? "qualquer zona" : seg);
+  const tipoLabel = (seg: string) => (seg === ANY ? "qualquer tipo" : (TIPO_LABEL[seg] ?? seg));
+  const shelveLabel = useCallback(
+    (key: string) => {
+      const [cam = ANY, zona = ANY, tipo = ANY] = key.split("|");
+      return `${camLabel(cam)} · ${zonaLabel(zona)} · ${tipoLabel(tipo)}`;
+    },
+    [camLabel],
+  );
+
+  const camOpts = useMemo(
+    () => [
+      { value: ANY, label: "Qualquer câmera" },
+      ...cams.map((c) => ({ value: c.id, label: c.label })),
+    ],
+    [cams],
+  );
 
   const load = useCallback(async (cancelled: () => boolean) => {
     try {
@@ -117,21 +206,26 @@ export function AlarmHealthPage() {
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
-    const key = fKey.trim();
-    if (!key) {
-      setFErr("Informe a chave (cameraId|zona|tipo).");
+    // Guard-rail: "qualquer" nas TRÊS dimensões silenciaria o sistema inteiro.
+    if (fCam === ANY && fZona === ANY && fTipo === ANY) {
+      setFErr("Escolha ao menos uma dimensão específica (câmera, zona ou tipo).");
       return;
     }
+    // Chave do contrato do back ("cameraId|zona|tipo", "*" = curinga) montada aqui;
+    // o servidor normaliza (trim/lowercase) via normShelveKey — contrato intacto.
+    const key = `${fCam}|${fZona}|${fTipo}`;
     setFBusy(true);
     setFErr(null);
     try {
       await createShelve({ key, ms: Number(fDur), reason: fReason.trim() || undefined });
-      setFKey("");
+      setFCam(ANY);
+      setFZona(ANY);
+      setFTipo(ANY);
       setFReason("");
-      toast("Shelve criado.", "ok");
+      toast("Silenciamento criado.", "ok");
       await load(() => false);
     } catch (e2) {
-      const msg = e2 instanceof Error ? e2.message : "Falha ao criar shelve.";
+      const msg = e2 instanceof Error ? e2.message : "Falha ao criar o silenciamento.";
       setFErr(msg);
       toast(msg, "alert");
     } finally {
@@ -144,9 +238,9 @@ export function AlarmHealthPage() {
     try {
       await deleteShelve(key);
       setShelves((s) => (s ? s.filter((x) => x.key !== key) : s));
-      toast("Shelve removido.", "ok");
+      toast("Silenciamento removido.", "ok");
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Falha ao remover shelve.", "alert");
+      toast(e instanceof Error ? e.message : "Falha ao remover o silenciamento.", "alert");
     } finally {
       setRemoving(null);
     }
@@ -156,13 +250,11 @@ export function AlarmHealthPage() {
     <div className="page">
       <PageHeader
         title="Saúde de alarmes"
-        subtitle="Racionalização do sistema de alertas (ISA-18.2 / EEMUA 191)"
+        subtitle="Taxa, prioridades e silenciamentos temporários do sistema de alertas"
       >
         <span className="ah-foot">
-          <span className="ah-foot__dot" aria-hidden>
-            ●
-          </span>{" "}
-          atualiza a cada {Math.round(REFRESH_MS / 1000)}s
+          <span className="ah-foot__dot" aria-hidden /> atualiza a cada{" "}
+          {Math.round(REFRESH_MS / 1000)}s
         </span>
       </PageHeader>
 
@@ -214,9 +306,17 @@ export function AlarmHealthPage() {
                   ariaLabel="tendência do percentual de críticos"
                 />
                 {metrics.overTarget ? (
-                  <span className="ah-kpi__flag">⚠ acima do alvo — ruído/sobrecarga</span>
+                  <span className="ah-kpi__flag">
+                    <TriangleAlert size={12} strokeWidth={1.75} aria-hidden /> acima do alvo —
+                    ruído/sobrecarga
+                  </span>
                 ) : (
-                  <span className="ah-kpi__sub">dentro do alvo EEMUA</span>
+                  // Norma vira tooltip (achado 10.3) — a tela fala língua de produto.
+                  <Tooltip
+                    content={`Alvo de boas práticas (EEMUA 191 / ISA-18.2): críticos ≤ ${metrics.criticalTargetPct}% do total.`}
+                  >
+                    <span className="ah-kpi__sub">dentro do alvo</span>
+                  </Tooltip>
                 )}
               </div>
 
@@ -233,9 +333,9 @@ export function AlarmHealthPage() {
               </div>
 
               <div className="ah-kpi">
-                <span className="ah-kpi__label">Shelves ativos</span>
+                <span className="ah-kpi__label">Silenciamentos ativos</span>
                 <span className="ah-kpi__value">{metrics.shelvedActive}</span>
-                <span className="ah-kpi__sub">silenciamentos com expiração</span>
+                <span className="ah-kpi__sub">expiram sozinhos ao fim da duração</span>
               </div>
             </section>
 
@@ -251,10 +351,10 @@ export function AlarmHealthPage() {
               </div>
             </section>
 
-            {/* Shelves: lista ativa + criação (criação/remoção só p/ canConfigure). */}
+            {/* Silenciamentos: lista ativa + criação (criar/remover só p/ canConfigure). */}
             <div className="ah-cols">
               <section className="ah-kpi">
-                <h2 className="ah-kpi__label">Shelves ativos</h2>
+                <h2 className="ah-kpi__label">Silenciamentos ativos</h2>
                 {shelves == null ? (
                   <div className="ah-foot">
                     <Spinner /> carregando…
@@ -269,9 +369,14 @@ export function AlarmHealthPage() {
                       {shelves.map((s) => (
                         <div className="ah-shelve" key={s.key}>
                           <div className="ah-shelve__top">
-                            <span className="ah-shelve__key">{s.key}</span>
+                            {/* Rótulo legível (câmera · zona · tipo); a chave crua do
+                                contrato só aparece no tooltip (diagnóstico). */}
+                            <Tooltip content={`chave: ${s.key}`}>
+                              <span className="ah-shelve__label">{shelveLabel(s.key)}</span>
+                            </Tooltip>
                             <span className="ah-shelve__remaining">
-                              ⏳ {fmtDuration(s.remainingMs)}
+                              <Hourglass size={12} strokeWidth={1.75} aria-hidden />{" "}
+                              {fmtDuration(s.remainingMs)}
                             </span>
                           </div>
                           <div className="ah-shelve__meta">
@@ -300,24 +405,44 @@ export function AlarmHealthPage() {
 
               {canConfigure ? (
                 <form className="ah-kpi ah-form" onSubmit={onCreate}>
-                  <h2 className="ah-kpi__label">Silenciar temporariamente (shelve)</h2>
-                  <p className="ah-form__hint">
-                    Chave no formato <code>cameraId|zona|tipo</code>, com <code>*</code> como
-                    curinga. Ex.: <code>cam-1|doca-3|fadiga</code> (específico),{" "}
-                    <code>cam-1|*|*</code> (toda a câmera), <code>*|*|leitura</code> (um tipo em
-                    tudo). Expira sozinho ao fim da duração.
-                  </p>
-                  <Field label="Chave" htmlFor="ah-key">
-                    <Input
-                      id="ah-key"
-                      placeholder="cameraId|zona|tipo"
-                      value={fKey}
-                      onChange={(e) => setFKey(e.target.value)}
+                  <h2 className="ah-kpi__label">Silenciar alertas temporariamente</h2>
+                  <Field label="Câmera">
+                    <Select
+                      ariaLabel="Câmera"
+                      value={fCam}
+                      onChange={(v) => {
+                        setFCam(v);
+                        setFZona(ANY); // zona pertence à câmera — troca de câmera reseta
+                      }}
+                      options={camOpts}
                     />
                   </Field>
-                  <Field label="Duração" htmlFor="ah-dur">
+                  <Field
+                    label="Zona"
+                    hint={fCam === ANY ? "Escolha uma câmera para listar as zonas." : undefined}
+                  >
                     <Select
-                      ariaLabel="Duração do shelve"
+                      ariaLabel="Zona"
+                      value={fZona}
+                      onChange={setFZona}
+                      disabled={fCam === ANY}
+                      options={[
+                        { value: ANY, label: "Qualquer zona" },
+                        ...zoneOpts.map((z) => ({ value: z, label: z })),
+                      ]}
+                    />
+                  </Field>
+                  <Field label="Tipo de alerta">
+                    <Select
+                      ariaLabel="Tipo de alerta"
+                      value={fTipo}
+                      onChange={setFTipo}
+                      options={TIPO_OPTS}
+                    />
+                  </Field>
+                  <Field label="Duração">
+                    <Select
+                      ariaLabel="Duração do silenciamento"
                       value={fDur}
                       onChange={setFDur}
                       options={DUR_OPTS}
@@ -335,16 +460,23 @@ export function AlarmHealthPage() {
                       onChange={(e) => setFReason(e.target.value)}
                     />
                   </Field>
+                  <p className="ah-form__hint">
+                    Vai silenciar:{" "}
+                    <b>
+                      {camLabel(fCam)} · {zonaLabel(fZona)} · {tipoLabel(fTipo)}
+                    </b>{" "}
+                    — expira sozinho ao fim da duração.
+                  </p>
                   <div>
-                    <Button variant="primary" type="submit" disabled={fBusy || !fKey.trim()}>
-                      {fBusy ? "Criando…" : "Criar shelve"}
+                    <Button variant="primary" type="submit" disabled={fBusy}>
+                      {fBusy ? "Silenciando…" : "Silenciar"}
                     </Button>
                   </div>
                   {fErr && <Alert tone="alert">{fErr}</Alert>}
                 </form>
               ) : (
                 <section className="ah-kpi">
-                  <h2 className="ah-kpi__label">Gerenciar shelves</h2>
+                  <h2 className="ah-kpi__label">Gerenciar silenciamentos</h2>
                   <EmptyState>
                     Somente perfis de configuração (engenheiro/superadmin) podem criar ou remover
                     silenciamentos. Você está em modo somente-leitura.
@@ -355,20 +487,20 @@ export function AlarmHealthPage() {
 
             {/* A linha "Sessão: usuário · papel" foi REMOVIDA (padronização A3): o AppShell já
                 mostra usuário+papel no menu de conta, e o modo somente-leitura já é comunicado
-                pelo painel "Gerenciar shelves" — o rodapé era redundante e órfão. */}
+                pelo painel "Gerenciar silenciamentos" — o rodapé era redundante e órfão. */}
 
-            {/* Confirmação destrutiva da remoção de shelve (controlada via AlertDialog). */}
+            {/* Confirmação destrutiva da remoção (controlada via AlertDialog). */}
             <AlertDialog
               open={confirmKey !== null}
               onOpenChange={(o) => {
                 if (!o) setConfirmKey(null);
               }}
-              title="Remover shelve?"
+              title="Remover silenciamento?"
               description={
                 confirmKey ? (
                   <>
-                    O silenciamento <code>{confirmKey}</code> será removido e os alertas
-                    correspondentes voltam ao fluxo normal.
+                    O silenciamento de <b>{shelveLabel(confirmKey)}</b> será removido e os
+                    alertas correspondentes voltam ao fluxo normal.
                   </>
                 ) : undefined
               }

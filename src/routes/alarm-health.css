@@ -63,9 +63,15 @@
   font-family: var(--mono);
 }
 .ah-kpi__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-size: 11px;
   font-weight: 600;
   color: var(--state-critical-fg);
+}
+.ah-kpi__flag svg {
+  flex: none;
 }
 
 /* Barra de distribuição por prioridade (analógica — "nunca número cru"). */
@@ -176,18 +182,25 @@
   align-items: baseline;
   gap: var(--sp-2);
 }
-.ah-shelve__key {
-  font-family: var(--mono);
+/* Rótulo legível "câmera · zona · tipo" (#6) — a chave crua `cameraId|zona|tipo` só
+   existe no tooltip; por isso texto normal (não mono). */
+.ah-shelve__label {
   font-size: 13px;
   color: var(--text);
-  word-break: break-all;
+  word-break: break-word;
 }
 .ah-shelve__remaining {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   font-family: var(--mono);
   font-size: 12px;
   color: var(--state-warn-fg);
   white-space: nowrap;
+}
+.ah-shelve__remaining svg {
+  flex: none;
 }
 .ah-shelve__meta {
   font-size: 11px;
@@ -207,17 +220,15 @@
   flex-direction: column;
   gap: var(--sp-3);
 }
+/* Resumo dinâmico do builder ("Vai silenciar: …") — 1 linha, sem sintaxe de chave. */
 .ah-form__hint {
   font-size: 11px;
   color: var(--state-neutral-fg);
   line-height: 1.45;
 }
-.ah-form__hint code {
-  font-family: var(--mono);
-  background: var(--state-neutral-bg);
-  border: 1px solid var(--state-neutral-border);
-  border-radius: 4px;
-  padding: 0 var(--sp-1);
+.ah-form__hint b {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .ah-foot {
@@ -228,6 +239,12 @@
   align-items: center;
   gap: var(--sp-2);
 }
+/* Dot de "atualiza sozinho" como círculo CSS (era glifo ●). Estado normal → neutro
+   (going-gray: verde ficaria decorativo aceso 100% do tempo). */
 .ah-foot__dot {
-  color: var(--state-ok);
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--state-neutral-fg);
+  flex: none;
 }

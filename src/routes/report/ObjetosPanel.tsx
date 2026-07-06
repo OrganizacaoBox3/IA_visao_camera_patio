@@ -7,6 +7,7 @@ import {
   objectEvolution,
   type ObjectEventRow,
 } from "../../report/calc";
+import { Package } from "lucide-react";
 import { objClass } from "../../objects/catalog";
 import { Tabs, TabsContent, ScrollArea } from "../../ui";
 import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
@@ -16,9 +17,10 @@ import { RankingBars } from "./RankingBars";
 import { TrendChart } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
 
+// Rótulo humano da classe SEM emoji (#9/#12 — emoji era glifo funcional; a cor/ícone do
+// overlay vive no catálogo, mas em relatório/CSV a classe é texto).
 export function classLabel(k: string): string {
-  const c = objClass(k);
-  return c ? `${c.emoji} ${c.label}` : k;
+  return objClass(k)?.label ?? k;
 }
 
 type OKpis = ReturnType<typeof objectKpis>;
@@ -38,8 +40,6 @@ export function ObjetosPanel({
   presSetores,
   tab,
   onTabChange,
-  busy,
-  onClear,
 }: {
   lens: string;
   ok: OKpis;
@@ -55,8 +55,6 @@ export function ObjetosPanel({
   presSetores: string[];
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
-  busy: boolean;
-  onClear: () => void;
 }) {
   return (
     <>
@@ -64,7 +62,15 @@ export function ObjetosPanel({
       <KpiRow>
         <Kpi value={ok.avgCount} label="objetos médios em cena" />
         <Kpi value={ok.peak} label="pico simultâneo" />
-        <Kpi value={classLabel(ok.topClasse)} label="objeto predominante" />
+        {/* #9: ícone Lucide neutro no lugar do emoji 📦 do catálogo (.kpi-vico, report.css) */}
+        <Kpi
+          value={
+            <span className="kpi-vico">
+              <Package size={20} strokeWidth={1.75} aria-hidden /> {classLabel(ok.topClasse)}
+            </span>
+          }
+          label="objeto predominante"
+        />
         {/* going-gray: cor em valor numérico só condicional a estado — sem accent incondicional */}
         <Kpi value={`${ok.presenceTopPct}%`} label="presença (predominante)" />
         <Kpi
@@ -73,7 +79,7 @@ export function ObjetosPanel({
           valueStyle={{ color: oLoads ? "var(--state-warn)" : undefined }}
         />
       </KpiRow>
-      <Insight label="💡 Objetos" tips={otips} />
+      <Insight label="Objetos" tips={otips} />
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -122,7 +128,7 @@ export function ObjetosPanel({
                       <th scope="col">Setor</th>
                       {classes.map((cl) => (
                         <th key={cl} scope="col" title={cl}>
-                          {objClass(cl)?.emoji ?? cl}
+                          {classLabel(cl)}
                         </th>
                       ))}
                     </tr>
@@ -212,7 +218,7 @@ export function ObjetosPanel({
           />
         </TabsContent>
       </Tabs>
-      <HistoryFooter onClear={onClear} busy={busy} />
+      <HistoryFooter />
     </>
   );
 }

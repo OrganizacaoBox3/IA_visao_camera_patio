@@ -39,8 +39,6 @@ export function LeituraPanel({
   revt,
   tab,
   onTabChange,
-  busy,
-  onClear,
 }: {
   lens: string;
   rk: RKpis;
@@ -54,8 +52,6 @@ export function LeituraPanel({
   revt: ReadingEventRow[];
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
-  busy: boolean;
-  onClear: () => void;
 }) {
   return (
     <>
@@ -90,7 +86,7 @@ export function LeituraPanel({
         <Kpi value={rk.topPonto} label="ponto de maior volume" />
         <Kpi value={`${String(rk.peakHour).padStart(2, "0")}h`} label="horário de pico" />
       </KpiRow>
-      <Insight label="💡 Leitura" tips={rtips} />
+      <Insight label="Leitura" tips={rtips} />
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -208,7 +204,7 @@ export function LeituraPanel({
           />
         </TabsContent>
       </Tabs>
-      <HistoryFooter onClear={onClear} busy={busy} />
+      <HistoryFooter />
     </>
   );
 }

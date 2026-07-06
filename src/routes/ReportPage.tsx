@@ -3,6 +3,7 @@
 // computa SÓ a visão atual ("off"/"summary"/"full"); as agregações puras vivem em report/calc.
 // LGPD: tudo aqui são indicadores agregados — nunca imagens.
 import { useState } from "react";
+import { Download, Printer, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { type Period, type Shift } from "../report/calc";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
 import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/csv";
@@ -197,7 +198,11 @@ export function ReportPage() {
             { value: "alarmes", label: "Alarmes" },
           ]}
         />
-        <span className="privacy">● indicadores · sem imagens</span>
+        {/* going-gray (#12): estado normal → pílula neutra (.rep-privacy, report/report.css)
+            com ShieldCheck (mesmo par do rail), não verde saturado permanente. */}
+        <span className="rep-privacy">
+          <ShieldCheck size={13} strokeWidth={1.75} aria-hidden /> indicadores · sem imagens
+        </span>
         <div className="flex-1" />
         <span className="muted text-[11px]">
           {isAlarmes
@@ -278,13 +283,27 @@ export function ReportPage() {
           </span>
         )}
         <IconButton label="Recarregar do histórico" onClick={refresh}>
-          ↻
+          <RefreshCw size={18} strokeWidth={1.75} aria-hidden />
         </IconButton>
         <Button onClick={() => setPresent((v) => !v)}>
           {present ? "Sair da apresentação" : "Apresentação"}
         </Button>
-        <Button onClick={downloadCSV}>⬇ CSV</Button>
-        <Button onClick={printPDF}>⎙ PDF</Button>
+        <Button onClick={downloadCSV}>
+          <Download size={16} strokeWidth={1.75} aria-hidden /> CSV
+        </Button>
+        <Button onClick={printPDF}>
+          <Printer size={16} strokeWidth={1.75} aria-hidden /> PDF
+        </Button>
+        {/* #13: ação destrutiva clara na área de ferramentas (ghost discreto, texto em tom
+            crítico) — era link mono 10px escondido no rodapé. O AlertDialog abaixo confirma. */}
+        <Button
+          variant="ghost"
+          className="rep-clear"
+          disabled={busy}
+          onClick={() => setConfirmClear(true)}
+        >
+          <Trash2 size={16} strokeWidth={1.75} aria-hidden /> Limpar histórico
+        </Button>
       </div>
 
       <div className="print-head only-print" aria-hidden>
@@ -367,8 +386,6 @@ export function ReportPage() {
             flow={atividade.details.flowView}
             tab={tab}
             onTabChange={setTab}
-            busy={busy}
-            onClear={() => setConfirmClear(true)}
           />
         )}
 
@@ -386,8 +403,6 @@ export function ReportPage() {
             revt={leitura.details.revt}
             tab={tab}
             onTabChange={setTab}
-            busy={busy}
-            onClear={() => setConfirmClear(true)}
           />
         )}
 
@@ -407,8 +422,6 @@ export function ReportPage() {
             presSetores={objetos.details.presSetores}
             tab={tab}
             onTabChange={setTab}
-            busy={busy}
-            onClear={() => setConfirmClear(true)}
           />
         )}
 
@@ -425,8 +438,6 @@ export function ReportPage() {
             fevt={fadiga.summary.fevt}
             tab={tab}
             onTabChange={setTab}
-            busy={busy}
-            onClear={() => setConfirmClear(true)}
           />
         )}
 
@@ -461,7 +472,7 @@ export function ReportPage() {
         onOpenChange={setConfirmClear}
         variant="danger"
         title="Limpar todo o histórico?"
-        description="Esta ação apaga permanentemente todos os indicadores, eventos e alarmes registrados no histórico (Postgres). Não é possível desfazer."
+        description="Esta ação apaga permanentemente todos os indicadores, eventos e alarmes registrados no histórico do servidor. Não é possível desfazer."
         confirmLabel="Limpar histórico"
         cancelLabel="Cancelar"
         onConfirm={clearHistory}

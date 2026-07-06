@@ -52,8 +52,6 @@ export function AtividadePanel({
   flow,
   tab,
   onTabChange,
-  busy,
-  onClear,
 }: {
   lens: string;
   k: Kpis;
@@ -69,8 +67,6 @@ export function AtividadePanel({
   flow: FlowView | null; // null = hub sem o kind "flow" → seção oculta
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
-  busy: boolean;
-  onClear: () => void;
 }) {
   // "fluxo" só é uma aba válida quando o hub expõe o kind "flow"; se o estado herdou "fluxo"
   // e a seção sumiu (refresh/hub antigo), cai para "quando" sem efeito colateral.
@@ -103,7 +99,7 @@ export function AtividadePanel({
         {/* going-gray: contagem é informação neutra — sem cor saturada */}
         <Kpi value={peoplePeak} label="pico de pessoas" />
       </KpiRow>
-      <Insight label="💡 Oportunidades" tips={tips} />
+      <Insight label="Oportunidades" tips={tips} />
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -221,7 +217,7 @@ export function AtividadePanel({
           </TabsContent>
         )}
       </Tabs>
-      <HistoryFooter onClear={onClear} busy={busy} />
+      <HistoryFooter />
     </>
   );
 }

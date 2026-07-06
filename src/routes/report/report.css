@@ -1,0 +1,67 @@
+/* Chrome do Relatório — estilos das cascas (insight / pílula de privacidade / ferramentas).
+   Going-gray (#12): substitui NO NÍVEL DO COMPONENTE as regras verdes de index.css
+   (`.insight` em 1002-1018/783-785 e `.privacy` em 210-217), que ficam ÓRFÃS — remoção
+   fica para a onda B (index.css é de outra frente). Só tokens da fundação; cor nova zero. */
+
+/* Faixa de insights: conteúdo informativo em estado NORMAL → painel neutro com fio accent
+   à esquerda (cor saturada é reservada à anormalidade). Ícone Lucide entra pelo componente. */
+.rep-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: var(--sp-3) var(--sp-4);
+}
+.rep-insight__ico {
+  flex: none;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+.rep-insight__text b {
+  color: var(--text);
+}
+
+/* Pílula "indicadores · sem imagens": é sempre verdade (estado normal) → neutra, não verde. */
+.rep-privacy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 11px;
+  color: var(--state-neutral-fg);
+  border: 1px solid var(--state-neutral-border);
+  background: var(--state-neutral-bg);
+  padding: 3px var(--sp-2);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.rep-privacy svg {
+  flex: none;
+}
+
+/* Valor de KPI com ícone Lucide (ex.: "objeto predominante" — antes emoji 📦). */
+.kpi.big .v .kpi-vico {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.kpi.big .v .kpi-vico svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* "Limpar histórico" (#13): ação destrutiva VISÍVEL na barra de ferramentas (era link mono
+   10px escondido no rodapé). Ghost discreto com texto no tom crítico; AlertDialog confirma. */
+.rep-clear {
+  color: var(--state-critical-fg);
+}
+
+@media print {
+  .rep-insight {
+    border-color: #ccc;
+    background: #fff;
+    break-inside: avoid;
+  }
+}

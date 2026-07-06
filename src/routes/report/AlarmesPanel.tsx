@@ -1,4 +1,5 @@
 import { type RefObject } from "react";
+import { Bell } from "lucide-react";
 import { alarmKpis, alarmTrend, alarmHeatmap, type AlarmWindow } from "../../report/calc";
 import {
   ALARM_PRIORITY_LABEL,
@@ -106,7 +107,7 @@ export function AlarmesPanel({
               valueStyle={{ color: ak.news ? "var(--state-warn)" : undefined }}
             />
           </KpiRow>
-          <Insight label="🔔 Alarmes" tips={aTips} />
+          <Insight label="Alarmes" tips={aTips} icon={Bell} />
           <div className="rep-2col" ref={trendRef}>
             <section className="panel">
               <SectionTitle>
@@ -225,7 +226,8 @@ export function AlarmesPanel({
             </ScrollArea>
           </section>
           <div className="rep-foot">
-            Eventos de alarme (B1) · só metadados, sem imagens (LGPD) ·{" "}
+            {/* "(B1)" era nome de contrato interno — jargão não renderiza (achado 7.4) */}
+            Eventos de alarme · só metadados, sem imagens (LGPD) ·{" "}
             <button onClick={onRefresh} className="linkbtn">
               recarregar
             </button>
