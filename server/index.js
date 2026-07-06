@@ -131,11 +131,12 @@ httpServer.on("upgrade", (req, socket, head) => {
   if (req.url && req.url.startsWith("/go2rtc/")) go2rtc.proxyUpgrade(req, socket, head);
 });
 
-// ── Motor de análise no hub (F1/ADR-009) — tee de observação sobre o io ─────────────────────
+// ── Motor de análise no hub (ADR-009) — tee de observação sobre o io ────────────────────────
 // O engine consome coisas que já trafegam pelo io SEM mudar nenhum contrato: frames do relé
-// RTSP (emitidos dentro de rtsp.js via ctx.io) e "camcfg-updated" (emitido pelas rotas de
-// config). Este wrapper repassa TODO emit ao io real e apenas OBSERVA esses dois eventos.
-// Frames de webcam não passam por aqui — o handler de "frame" abaixo chama onFrame direto.
+// (RTSP via rtsp.js e webcam via sockets/camera.js — o MESMO caminho) e "camcfg-updated"
+// (emitido pelas rotas de config). Este wrapper repassa TODO emit ao io real e apenas OBSERVA
+// esses dois eventos. INVARIANTE: trocar ioAnalysis→io em qualquer consumidor desliga
+// frames/zonas do motor SEM nenhum erro — é o fio a proteger em refactor.
 function analysisTee(target) {
   return {
     to: (room) => analysisTee(target.to(room)),
@@ -186,11 +187,13 @@ const broadcast = () => {
 // A LÓGICA de rebaixamento/religamento por audiência vive em ./shed.js (extraída na Onda C do
 // retrofit). Aqui só instanciamos com as dependências e chamamos a API pública (sweepShed/
 // setLastCapture/onCameraConnected) nos pontos do fluxo de socket abaixo.
-const shed = createShed({ io, cameras, socketById, rtsp });
+// analysisViewer: câmera analisada conta como espectador (ADR-009) — o shed nunca a rebaixa.
+const shed = createShed({ io, cameras, socketById, rtsp, analysisViewer: analysis.isAnalyzing });
 
-// Contexto da camada socket. O pipeline de alarme (alert → política → canais → events →
-// "alarm-event") vive em alarm/pipeline.js; aqui só se injeta as dependências.
-const socketCtx = { io, cameras, cameraList, socketById, shed, analysis, rtsp };
+// Contexto da camada socket: io = TEE de análise — o frame de webcam entra no motor pelo
+// MESMO caminho do RTSP (1 caminho só); os demais eventos passam intactos. O pipeline de
+// alarme (alert → política → canais → events → "alarm-event") vive em alarm/pipeline.js.
+const socketCtx = { io: ioAnalysis, cameras, cameraList, socketById, shed, analysis, rtsp };
 io.on("connection", (socket) => {
   if (socket.handshake.query.role === "camera") socketCamera.attach(socket, socketCtx);
   else socketDashboard.attach(socket, socketCtx);

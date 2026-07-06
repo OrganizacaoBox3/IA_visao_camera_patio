@@ -9,6 +9,8 @@
 
 const SHED_IDLE_MS = Number(process.env.SHED_IDLE_MS ?? 60_000);
 const SHED_SWEEP_MS = Number(process.env.SHED_SWEEP_MS ?? 5_000);
+// INVARIANTE: SHED_WEBCAM_FPS ≥ 1 — o sampler do motor de análise é @1fps (ADR-009); abaixo
+// disso a análise de webcam rebaixada degradaria sem nenhum aviso.
 const SHED_WEBCAM_FPS = Number(process.env.SHED_WEBCAM_FPS ?? 2);
 // fps default do nó webcam (espelha APP_CONFIG.net.frameFps em src/config.ts): o hub não conhece
 // o default do nó, então restaura com este valor quando NÃO há um set-capture manual guardado.
@@ -20,8 +22,9 @@ const WEBCAM_DEFAULT_FPS = Number(process.env.WEBCAM_DEFAULT_FPS ?? 12);
  *  - cameras: Map id -> { id, label, kind? } (fonte da verdade de câmeras conectadas)
  *  - socketById: Map id -> socket da câmera (para enviar `capture` direcionado)
  *  - rtsp: módulo de ingestão RTSP (idleSource/wakeSource, idempotentes)
+ *  - analysisViewer?: predicado (id) => boolean — "o motor analisa esta câmera?"
  */
-function createShed({ io, cameras, socketById, rtsp }) {
+function createShed({ io, cameras, socketById, rtsp, analysisViewer }) {
   /** id -> último perfil pedido via `set-capture` (não deixar o shed sobrescrever o operador) */
   const lastCaptureCfg = new Map();
   /** id -> epoch ms de quando ficou SEM espectador (debounce do shed) */
@@ -35,6 +38,10 @@ function createShed({ io, cameras, socketById, rtsp }) {
   }
 
   function shedCamera(cam) {
+    // ADR-009 — análise conta como ESPECTADOR: câmera analisada NUNCA é rebaixada (nem o
+    // ffmpeg RTSP pausado, nem a webcam derrubada p/ SHED_WEBCAM_FPS). É o pilar do motor
+    // 24/7 sem dashboard aberto; a decisão de shed é DESTE módulo, então o guard mora aqui.
+    if (analysisViewer && analysisViewer(cam.id)) return;
     if (cam.kind === "rtsp") {
       rtsp.idleSource(cam.id); // idempotente: no-op se já idle/parada
       return;
