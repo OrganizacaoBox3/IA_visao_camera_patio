@@ -5,15 +5,7 @@ import { fmtDuration } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
-import {
-  AtividadeProcessor,
-  filterExcludedPersons,
-  type AtividadeCtx,
-} from "./processors/atividade";
-import { LeituraProcessor } from "./processors/leitura";
-import { ObjetosProcessor } from "./processors/objetos";
-import { FadigaProcessor } from "./processors/fadiga";
-import { loadFadigaThresholds } from "./fadiga/calibration";
+import { filterExcludedPersons, type AtividadeCtx } from "./processors/atividade";
 import { pushRead, pushPass } from "./reading/cluster";
 import {
   recordSamples,
@@ -29,11 +21,12 @@ import {
   type ZoneSample,
 } from "./report/store";
 import { type Dataset } from "./report/mock";
-import { objClass, OBJECT_CATALOG } from "./objects/catalog";
+import { OBJECT_CATALOG } from "./objects/catalog";
 import {
   loadZonesForCamera,
   persistZones,
   newZoneId,
+  assignZone,
   DEFAULT_GRID,
   ZONE_MODE_LABEL,
   type Zone,
@@ -60,6 +53,13 @@ import {
   type TripwireCounts,
 } from "./vision/counting";
 import { createByteTracker, type ByteTracker } from "./vision/bytetrack";
+import { createLumaSource, type LumaSource } from "./vision/luma";
+import { schedulerStats } from "./vision/scheduler";
+import { shouldIngest } from "./camera/ingestPolicy";
+import { panelSig, twSig, dominantMode, legendFor } from "./camera/derive";
+import { holderFor as holderForZone, type Holder } from "./camera/holders";
+import { useFocusTrap } from "./camera/useFocusTrap";
+import type { HubAnalysis, Track } from "./types/analysis";
 import {
   Button,
   IconButton,
@@ -114,171 +114,40 @@ const BRUSH_OPTS = [
 const HEAT_COLS = 32,
   HEAT_ROWS = 18;
 
-// ── P0 + P2 (analises/plano-performance-imagem.md): EXIBIÇÃO × ANÁLISE na grade ──
-// Na GRADE (tiles, mode ≠ "full") o vídeo é desenhado TODO frame (drawScene) e a análise LEVE —
-// motion + máquina de estado por zona (ATIVA/LENTA/OCIOSA/VAZIA/ALERTA) + alarmes — segue em TEMPO
-// REAL, pois é a funcionalidade essencial que não pode parar quando a câmera não está aberta. Só a
-// inferência PESADA é rebaixada a uma cadência muito menor, p/ liberar a main thread e deixar o
-// vídeo fluido. Na câmera ABERTA (full) tudo volta à cadência normal (pipeline completo, como hoje).
-// Consequência aceita: na grade, ocupação/contagem (coco), objetos (OWL-ViT), leitura (ZXing) e
-// fadiga (MediaPipe) atualizam mais devagar; ao ABRIR a câmera, tudo volta a atualizar na hora.
-// Constantes locais (NÃO editar config.ts — outra frente). Substituem o throttle de tile p/ o pesado.
-const TILE_OBJECT_INTERVAL_MS = 4000; // coco (detecção de pessoas/objetos) na grade — vs C.objectIntervalMs na aberta
-const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · MediaPipe/coco (fadiga) na grade
-
-// ── Fase 0.3 (plano-retrofit-performance) — readback de motion no MODO HUB rebaixado ──
-// No modo hub o MOTOR do hub já produz people/occupied por zona a partir dos frames que ELE
-// tem; o readback LOCAL de luma (getImageData O(pw·ph) + loop, POR FRAME de vídeo ~15fps) é a
-// maior fonte de jank na main-thread e é redundante. Rebaixamos a análise de ATIVIDADE local
-// (luma + máquina de estado) a esta cadência só p/ manter VIVO o estado/alarme de OCIOSIDADE
-// local (o hub na F1 NÃO grava alarmes — ver comentário do bloco `hubActive`): 2fps sobra p/
-// um alarme minuto-escala que confirma transições em ~900ms. O dt dos frames pulados é
-// ACUMULADO e entregue inteiro no frame analisado (tempo real intacto). O modo LOCAL (sem hub)
-// NÃO é afetado — throttle não se aplica. Leitura/objetos/fadiga seguem 100% locais e intactos.
-const HUB_MOTION_INTERVAL_MS = 500;
-
-// ── (P0 fluidez browser/webcam) piso de cadência da LUMA no modo LOCAL ──
-// O bloco de luma (drawImage + getImageData O(pw·ph) + loop RGBA→luma) é o maior custo SÍNCRONO
-// do rAF por frame analisado. No modo local/full ele rodava a CADA frame novo (~15fps; feeds mais
-// rápidos, mais ainda). Este piso o limita a ~10fps — mesmo mecanismo do gate do modo hub (o dt
-// pulado segue ACUMULADO em activityDtRef e entra inteiro no frame analisado; tempo real intacto).
-// SEGURANÇA (mesmo argumento do (3.4) na grade, que já roda a ~7fps com os MESMOS limiares): a
-// máquina de estado confirma transições em stateConfirmationMs=900ms ≫ 100ms e o alarme é
-// minuto-escala — nenhuma mudança de estado observável se perde. Diff mais espaçado (~100ms vs
-// ~66ms) muda o ratio de motion marginalmente PARA CIMA (movimento anda mais entre amostras),
-// direção conservadora p/ o alarme de ociosidade. Na grade o parity (3.4) já espaça ≥133ms a
-// 15fps → este piso só protege feeds de fps alto.
-const LOCAL_MOTION_MIN_INTERVAL_MS = 100;
+// ── Cadências EXIBIÇÃO × ANÁLISE ──────────────────────────────────────────────
+// Na GRADE o vídeo desenha TODO frame e a análise LEVE (motion + máquina de estado + alarme por
+// zona) segue em tempo real — é a função essencial que não para com a câmera fechada; só a
+// inferência PESADA cai p/ as cadências abaixo (libera a main-thread). Na câmera ABERTA (full) o
+// pipeline roda completo. Invariante das cadências: o dt dos frames pulados é ACUMULADO e entra
+// inteiro no frame analisado (tempo real intacto); a máquina de estado confirma transições em
+// 900ms ≫ estes intervalos — nenhuma mudança de estado observável se perde.
+const TILE_OBJECT_INTERVAL_MS = 4000; // detecção de pessoas (coco) na grade — full usa C.objectIntervalMs
+const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT · ZXing · MediaPipe por zona na grade
+// Piso do readback de luma (drawImage+getImageData O(pw·ph) é o maior custo síncrono do tick):
+const HUB_MOTION_INTERVAL_MS = 500; // modo hub: o motor cobre a análise; o local só mantém vivo o alarme de ociosidade
+const LOCAL_MOTION_MIN_INTERVAL_MS = 100; // modo local: ~10fps bastam p/ alarme minuto-escala
 
 // Contadores de sessão "vazios" p/ o HUD no modo hub (constante única — sem alocar por frame).
-// Espelho do hub (refs + "hoje" servido + applyHubAnalysis) vive em ./camera/useHubAnalysis.
 const EMPTY_TW_COUNTS: Record<string, TripwireCounts> = {};
 
-// ── F2 (ADR-009): overlays SERVIDOS — contrato do evento `analysis-tracks` (aditivo, volatile
-// @1fps): tracks/zonas calculados pelo MOTOR DO HUB (D-FINE + ByteTrack server-side). Tipos
-// exportados p/ a central (DashboardPage guarda o payload em ref e passa um getter estável).
-export type HubTrack = {
-  id: number;
-  /** bbox normalizado [x,y,w,h] 0..1 (mesma convenção de Track.bbox). */
-  bbox: [number, number, number, number];
-  cx: number;
-  cy: number;
-  zone: string | null;
-  /** score real da detecção 0..1 (Fase 4). Ausente = hub antigo → trata como 1 (retrocompat). */
-  score?: number;
-  /** VELOCIDADE do Kalman do tracker (contrato aditivo): normalizada 0..1 por SEGUNDO, mesma convenção
-   *  do bbox. Alimenta o DEAD-RECKONING do overlay (extrapolação DISPLAY-ONLY entre payloads). Ausente
-   *  = hub antigo → interpolação por 2 keyframes (retrocompat). */
-  vx?: number;
-  vy?: number;
-};
-export type HubZone = { id: string; label: string; people: number; occupied: boolean };
-export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
+// Contrato do evento `analysis-tracks` (ADR-009) → módulo neutro ./types/analysis. RE-EXPORTADO
+// aqui p/ compat: os importadores existentes (central/hooks) seguem funcionando e migram depois.
+export type { HubTrack, HubZone, HubAnalysis, Track } from "./types/analysis";
 
-// ── Fase 1 (go2rtc): transporte de VÍDEO WebRTC da câmera aberta → ./camera/useWebrtcTransport ──
-// Cadência da ANÁLISE/overlay no transporte WebRTC: o <video> roda liso por HW (decode fora da
-// main-thread); amostramos o ELEMENTO p/ motion/inferência/overlay a ~15fps (paridade com o MJPEG
-// da câmera aberta) via bucket de tempo no gate de "frame novo" do rAF. O vídeo NÃO depende disto
-// — só o trabalho de análise/desenho, que assim não re-carrega a main-thread no rAF (~60fps).
+// Transporte WebRTC da câmera aberta (./camera/useWebrtcTransport): o <video> roda liso por HW;
+// a ANÁLISE/overlay amostram o elemento por bucket de tempo (paridade com o MJPEG ~15fps) — o
+// vídeo não depende disto, só o trabalho de análise/desenho.
 const WEBRTC_TICK_MS = 66;
-
-// (P1 fluidez) rVFC como GATE de "frame novo" do WebRTC: o bucket de WEBRTC_TICK_MS acima é só
-// TEMPO — com o vídeo a menos de ~15fps (cena parada, fonte lenta, rede), o tick reprocessava o
-// MESMO quadro várias vezes. requestVideoFrameCallback (padrão da casa — CameraPage.tsx) marca
-// quando o <video> APRESENTOU um quadro novo; o rAF continua DONO do loop/desenho (ADR-007) e só
-// consulta o contador. Os dois gates compõem: processa no máx. a cada WEBRTC_TICK_MS E só com
-// quadro novo. VÁLVULA DE SEGURANÇA: rVFC "suportado" mas mudo há > este prazo (vídeo pausado,
-// aba estrangulada, bug de plataforma) → volta ao bucket puro = comportamento atual (nunca pior).
-// Sem suporte a rVFC ou no MJPEG: caminho idêntico ao de hoje, byte-a-byte.
+// rVFC como gate de "frame novo" do WebRTC (o bucket acima é só TEMPO — fonte lenta reprocessava
+// o mesmo quadro). O rAF segue DONO do loop (ADR-007); o callback só incrementa contadores.
+// Válvula: rVFC mudo além deste prazo (pausa/estrangulamento/plataforma) → volta ao bucket puro.
 const WEBRTC_VFC_STALE_MS = 1000;
 
-// Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
+// CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo — roda o processador de cada
+// zona na sua ROI e compõe overlay + painel. Vizinhos de domínio: desenho puro em ./camera/draw
+// (ZoneResult); derivações puras da view em ./camera/derive; processadores em ./camera/holders.
 
-// CameraWorkspace: UMA câmera, VÁRIAS zonas, cada uma com seu modo (atividade/leitura/objetos).
-// Roda o processador de cada zona na sua ROI, compõe o overlay e o painel num lugar só.
-// Helpers puros de geometria/cor/desenho ficam em ./camera/draw; telemetria em ./camera/useTelemetry.
-
-// resultado por zona guardado p/ desenho + painel → tipo em ./camera/draw (ZoneResult).
-
-// União DISCRIMINADA (modo↔proc): o compilador estreita `proc` pelo `modo`, eliminando os casts
-// `as XProcessor` no laço quente — um pareamento errado modo↔processador vira erro de tipo (ADR/R6).
-// "exclusao" NÃO instancia processador (o laço faz `continue` antes de holderFor) → fora da união.
-type Holder =
-  | { modo: "atividade"; proc: AtividadeProcessor }
-  | { modo: "leitura"; proc: LeituraProcessor }
-  | { modo: "objetos"; proc: ObjetosProcessor }
-  | { modo: "fadiga"; proc: FadigaProcessor };
-
-// ── (plano-performance-bit 1.10) assinatura BARATA do snapshot do painel ──
-// Serializa, por zona, SÓ o que o JSX do painel exibe (id + estado + números na granularidade
-// mostrada: % de motion, segundos de parada, EAR com 2 casas…). O tick de UI compara a assinatura
-// com a anterior e só chama setPanel quando algo VISÍVEL mudou — sem mudança, zero re-render
-// (antes, objetos novos a cada 200/500ms re-renderizavam ~800 linhas de JSX à toa).
-// Campos NÃO exibidos no painel (dets de objetos, scene de fadiga, occupied/alerts de atividade)
-// ficam de fora de propósito: eles alimentam o overlay do canvas via resultsRef, não o JSX.
-function panelSig(results: Map<string, ZoneResult>): string {
-  let sig = "";
-  for (const [id, r] of results) {
-    if (r.modo === "atividade") {
-      const v = r.view;
-      sig += `${id}|a|${v.state}|${Math.round(v.motion * 100)}|${Math.floor(v.idleMs / 1000)}|${v.people}|${v.flowLevel}|${v.flow.map((s) => Math.round(s * 100)).join(",")};`;
-    } else if (r.modo === "leitura") {
-      sig += `${id}|l|${r.lastCode ?? ""}|${r.ratePct}|${r.perMin}|${r.noReads}|${r.passes};`;
-    } else if (r.modo === "objetos") {
-      let c = "";
-      for (const k in r.counts) c += `${k}:${r.counts[k]},`;
-      sig += `${id}|o|${r.total}|${c};`;
-    } else {
-      sig += `${id}|f|${r.risk}|${r.ear == null ? "" : r.ear.toFixed(2)}|${r.phone ? 1 : 0}|${r.faceState};`;
-    }
-  }
-  return sig;
-}
-
-// Idem p/ os contadores de tripwire mostrados no painel "linhas" ({ [wireId]: {in,out} }).
-function twSig(counts: Record<string, { in: number; out: number }>): string {
-  let sig = "";
-  for (const id in counts) sig += `${id}:${counts[id].in}:${counts[id].out};`;
-  return sig;
-}
-
-// MODE_TONE (modo→Tone do Badge) + RISK_TONE ficam em ./camera/tabs/tone (compartilhados com o drawer).
-// Telemetria "nunca número cru" (constantes/bandas/metric fns/useTelemetry) em ./camera/useTelemetry.
-
-// MODO-COMO-PRESET: o workspace tem N zonas (cada uma com seu modo), mas overlays/confiança
-// são GLOBAIS da sessão. O "preset ativo" segue o modo PREDOMINANTE entre as zonas
-// (empate → ordem atividade>leitura>objetos>fadiga). Trocar o modo de uma zona reaplica o preset.
-const PRESET_ORDER: ModeKey[] = ["atividade", "leitura", "objetos", "fadiga"];
-function dominantMode(zs: Zone[]): ModeKey {
-  if (!zs.length) return "atividade";
-  const counts: Record<string, number> = {};
-  for (const z of zs) counts[z.modo] = (counts[z.modo] ?? 0) + 1;
-  return PRESET_ORDER.reduce(
-    (best, m) => ((counts[m] ?? 0) > (counts[best] ?? 0) ? m : best),
-    PRESET_ORDER[0],
-  );
-}
-
-// Overlay compacto de fadiga DENTRO da zona (drawFadigaZone) em ./camera/draw.
-// Track é EXPORTADO p/ o espelho do hub (useHubAnalysis.applyHubAnalysis) montar o mesmo shape.
-export type Track = {
-  id: number;
-  cx: number;
-  cy: number;
-  /** PÉ do bbox (bottom-center, normalizado) — âncora da contagem por linha (item 1.4). */
-  foot: { x: number; y: number };
-  bbox: [number, number, number, number];
-  firstSeen: number;
-  lastSeen: number;
-  zone: string | null;
-  score: number;
-  /** VELOCIDADE do Kalman (0..1 por segundo), passthrough do HubTrack — DISPLAY-ONLY. Ausente = hub
-   *  antigo. A contagem/zonas NÃO usam (a posição extrapolada é só p/ desenho). */
-  vx?: number;
-  vy?: number;
-};
-// TimelineItem (evento da sessão) mora com a aba que o exibe → ./camera/tabs/TimelineTab.
-
+// Props opcionais são RETROCOMPATÍVEIS por contrato: ausentes → comportamento local/MJPEG integral.
 type Props = {
   cameraId: string;
   label: string;
@@ -287,33 +156,21 @@ type Props = {
   onOpen?: () => void;
   onClose?: () => void;
   onAlert?: (msg: string) => void;
-  // SYNC AO VIVO (ADR-006): contador de revisão por câmera, incrementado pela central
-  // (DashboardPage) quando o backend emite `camcfg-updated {kind:"tripwires", cameraId}`.
-  // OPCIONAL/retrocompatível: se a central não passar, o CameraWorkspace mantém o
-  // comportamento atual (carrega os tripwires só ao abrir/trocar a câmera).
+  /** SYNC AO VIVO (ADR-006): revisão incrementada pela central a cada `camcfg-updated
+   *  {kind:"tripwires"}`. Ausente → tripwires carregam só ao abrir/trocar a câmera. */
   tripwiresRev?: number;
-  // F1-C (ADR-009): fonte da ANÁLISE desta câmera, anunciada pelo hub (`analysis-status`).
-  // "hub" = o motor server-side (D-FINE) grava os indicadores → este componente SUPRIME os
-  // ingests locais de atividade (recordSamples) e fluxo (recordFlow) p/ não duplicar, e o
-  // "hoje" das linhas passa a ser refresh periódico do servidor. OPCIONAL/retrocompatível:
-  // ausente (hub antigo sem o evento) → "local" = comportamento idêntico ao atual.
+  /** Fonte da ANÁLISE (ADR-009, evento `analysis-status`): "hub" = o motor server-side grava os
+   *  indicadores → esta instância suprime os ingests duplicáveis (./camera/ingestPolicy) e o
+   *  "hoje" das linhas vira refresh do servidor. Ausente → "local". */
   analysisEngine?: "hub" | "local";
-  // F2/F3 (ADR-009): getter ESTÁVEL (padrão gettersRef da central) do último `analysis-tracks` da
-  // câmera — tracks/zonas do MOTOR DO HUB. Consumido com engine==="hub" em AMBOS os modos (grade
-  // desde a F2; câmera aberta desde a F3): a instância vira espelho (desenha o que o servidor
-  // mandou) e deixa de agendar o coco local.
-  // OPCIONAL/retrocompatível: ausente/null → comportamento atual (pipeline local).
+  /** Getter ESTÁVEL do último `analysis-tracks` (tracks/zonas do MOTOR do hub). Consumido com
+   *  engine==="hub" em ambos os modos: a instância vira espelho e não agenda o coco local. */
   getHubAnalysis?: () => HubAnalysis | null;
-  // Fase 1 (go2rtc): transporte de VÍDEO da câmera aberta (tela cheia). "webrtc" → o vídeo vem de
-  // `<video-stream>` (decode por HW, estável) ATRÁS de um canvas TRANSPARENTE de zonas/tracks/editor.
-  // "mjpeg"/ausente → EXATAMENTE o comportamento atual (frames MJPEG desenhados no canvas), byte-a-byte.
-  // A mudança é ADITIVA (um branch webrtc); o caminho MJPEG fica INTACTO. Só vale no mode "full"
-  // (na grade o webrtc é servido pelo CameraTile/Go2rtcVideoTile, não por este componente).
+  /** Transporte do VÍDEO da câmera aberta: "webrtc" = <video-stream> (decode por HW) atrás de um
+   *  canvas TRANSPARENTE; "mjpeg"/ausente = frames desenhados no canvas (caminho original). */
   transport?: "mjpeg" | "webrtc";
-  // Fase 1 (go2rtc): fallback de transporte da TELA CHEIA. Chamado UMA vez (por câmera/montagem)
-  // quando o WebRTC do fullscreen NÃO estabelece vídeo (fonte caída no go2rtc / sem quadro em
-  // WEBRTC_FAIL_MS). O pai (DashboardPage) usa o id p/ remontar a câmera aberta em MJPEG. NÃO é
-  // chamado em sucesso. Só vale no branch webrtc (mode "full"); inerte no MJPEG. OPCIONAL.
+  /** Fallback da tela cheia: chamado 1× quando o WebRTC não estabelece vídeo (o pai remonta a
+   *  câmera aberta em MJPEG). Inerte no MJPEG. */
   onWebrtcFail?: (cameraId: string) => void;
 };
 
@@ -333,38 +190,34 @@ export function CameraWorkspace({
   transport = "mjpeg",
   onWebrtcFail,
 }: Props) {
-  // RBAC Setup × Live (Onda C item 12): canConfigure = superadmin OU engenheiro (contrato em auth.tsx).
-  // Operador (sem canConfigure) opera a tela em SÓ-LEITURA: vê ao vivo/overlays/telemetria/cine-loop/
-  // camadas, mas NÃO edita configuração (criar/apagar/pintar zona, thresholds/sensibilidade/limite).
+  // RBAC: canConfigure = superadmin OU engenheiro (contrato em auth.tsx). Operador opera em
+  // SÓ-LEITURA (vê tudo; não cria/apaga/pinta zona nem mexe em thresholds).
   const { canConfigure } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const procRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
-  const prevLumaRef = useRef<Float32Array | null>(null);
-  const curLumaRef = useRef<Float32Array | null>(null); // buffer reutilizável (swap c/ prev) — evita new Float32Array por frame
-  const lumaSizeRef = useRef(0);
+  const lumaRef = useRef<LumaSource | null>(null); // readback RGBA→luma + ping-pong (vision/luma)
   const lastFrameElRef = useRef<unknown>(null); // identidade do último frame processado (gate de "frame novo")
   const lastFrameTsRef = useRef(0);
-  // (P1 fluidez) rVFC no transporte WebRTC (ver WEBRTC_VFC_STALE_MS): seq de quadros APRESENTADOS
-  // pelo <video> + último consumido pelo loop; a corrente rVFC é armada por elemento (vfcVideoRef).
-  const vfcSeqRef = useRef(0); // incrementa a cada requestVideoFrameCallback (quadro real novo)
-  const vfcSeenSeqRef = useRef(-1); // último seq consumido por um tick processado
+  // rVFC no transporte WebRTC (ver WEBRTC_VFC_STALE_MS): seq de quadros APRESENTADOS pelo <video>
+  // + último consumido pelo loop; a corrente é armada por elemento (vfcVideoRef).
+  const vfcSeqRef = useRef(0);
+  const vfcSeenSeqRef = useRef(-1);
   const vfcLastAtRef = useRef(0); // performance.now() do último callback (válvula anti-congelamento)
-  const vfcVideoRef = useRef<HTMLVideoElement | null>(null); // elemento com a corrente armada
-  const vfcHandleRef = useRef(0); // handle p/ cancelVideoFrameCallback no cleanup/troca
+  const vfcVideoRef = useRef<HTMLVideoElement | null>(null);
+  const vfcHandleRef = useRef(0);
   const detsRef = useRef<Detection[]>([]);
   const lastObjAtRef = useRef(0);
-  const objInFlightRef = useRef(false); // P0: na grade, pula a detecção coco enquanto já há uma em voo
-  const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // P2: última inferência PESADA por zona (gate de tile)
+  const objInFlightRef = useRef(false); // máx. 1 detectFrame em voo por câmera
+  const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // última inferência PESADA por zona (gate da grade)
   const lastFrameAtRef = useRef(0);
-  const gridParityRef = useRef(false); // (3.4) alterna a análise de atividade na GRADE (frame sim, frame não)
-  const lastMotionAtRef = useRef(0); // último readback de luma/motion (piso: hub 500ms · local 100ms)
-  const activityDtRef = useRef(0); // (3.4) dt acumulado dos frames pulados → entregue inteiro no frame analisado
+  const gridParityRef = useRef(false); // grade: análise de atividade em frames alternados
+  const lastMotionAtRef = useRef(0); // último readback de luma (piso: hub 500ms · local 100ms)
+  const activityDtRef = useRef(0); // dt acumulado dos frames pulados → entregue inteiro no frame analisado
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
   const lastUiRef = useRef(0);
-  // (1.10) últimas versões ENVIADAS ao estado pelo tick de UI — comparar antes de setar.
+  // Últimas versões ENVIADAS ao estado pelo tick de UI — comparar antes de setar (zero re-render sem mudança).
   const lastPanelSigRef = useRef("");
   const lastTwSigRef = useRef("");
   const lastFpsRef = useRef(-1);
@@ -375,6 +228,14 @@ export function CameraWorkspace({
   const resultsRef = useRef<Map<string, ZoneResult>>(new Map());
   const zonesRef = useRef<Zone[]>([]);
   const meterRef = useRef(new FrameMeter());
+  // Última latência medida por estágio de processador (ms) — alimenta o HUD de telemetria.
+  const stageMsRef = useRef<{
+    detect: number | null; // objetos (OWL-ViT)
+    decode: number | null; // leitura (ZXing)
+    face: number | null; // fadiga: FaceLandmarker
+    hand: number | null; // fadiga: HandLandmarker
+    obj: number | null; // fadiga: coco/celular
+  }>({ detect: null, decode: null, face: null, hand: null, obj: null });
   const onAlertRef = useRef(onAlert);
   const onCloseRef = useRef(onClose); // estável p/ o handler de ESC (evita re-armar o listener a cada render)
   const fullRef = useRef<HTMLDivElement | null>(null); // raiz do overlay em tela cheia (foco preso)
@@ -390,9 +251,8 @@ export function CameraWorkspace({
   const paintingRef = useRef(false);
   const eraseRef = useRef(false);
   const tracksRef = useRef<Track[]>([]); // presença (IDs anônimos + permanência)
-  // ByteTrack-lite (Onda 2): tracker criado sob demanda no rAF; roda SÓ em rodada NOVA de
-  // detecção (detsRev), não a cada frame — realimentar o mesmo resultado stale zeraria a
-  // velocidade estimada e mataria a predição p/ rodadas lentas.
+  // Tracker criado sob demanda no rAF; roda SÓ em rodada NOVA de detecção (detsRev) — realimentar
+  // o mesmo resultado stale zeraria a velocidade estimada e mataria a predição em rodadas lentas.
   const trackerRef = useRef<ByteTracker | null>(null);
   const detsRevRef = useRef(0); // incrementa quando detectFrame entrega resultado novo
   const consumedDetsRevRef = useRef(0); // última rodada consumida pelo tracker/counter
@@ -401,18 +261,13 @@ export function CameraWorkspace({
   const eventIdRef = useRef(0);
   const layersRef = useRef<OverlayLayers>({ ...APP_CONFIG.overlay.layers }); // camadas visíveis (lido no rAF)
   const confRef = useRef<number>(APP_CONFIG.overlay.confidenceThreshold); // limiar global de confiança
-  // Perfil "Longo alcance / Panorâmica" (opt-in por câmera). O rAF lê o REF (identidade estável);
-  // o estado governa a UI + persistência. Default false = comportamento atual (zero regressão).
+  // Perfil "Longo alcance" (opt-in por câmera): o rAF lê o REF; o estado governa UI + persistência.
   const longRangeRef = useRef(false);
-  // Ocupação (Onda C item 13): heatmap da lib pura counting.ts (criado sob demanda no rAF).
-  // Os tripwires/counter vivem no hook ./camera/useTripwires (ver abaixo).
-  const occRef = useRef<Occupancy | null>(null);
-  // Telemetria lateral (Onda B item 10): ring buffer leve por zona/indicador, alimentado pelo
-  // loop já existente na cadência de UI (sem custo extra de inferência). Hook em ./camera/useTelemetry.
+  const occRef = useRef<Occupancy | null>(null); // heatmap de ocupação (lib pura counting.ts)
+  // Telemetria lateral: ring buffer por zona/indicador na cadência de UI (./camera/useTelemetry).
   const { pushHist, hist, clearZone } = useTelemetry();
-  // ── CONGELAR + CINE-LOOP (Onda B) ── hook dedicado (./camera/useCineLoop).
-  // Buffer de quadros EM MEMÓRIA / EFÊMERO (LGPD: nunca vai ao servidor; ver cineBuffer.ts).
-  // Expõe estado/handlers p/ o JSX + `cineRef`/`reviewRef`/`captureFrame` p/ o rAF principal.
+  // CONGELAR + CINE-LOOP (./camera/useCineLoop). Buffer de quadros EM MEMÓRIA / EFÊMERO — LGPD:
+  // nunca vai ao servidor (ADR-002; ver cineBuffer.ts).
   const {
     review,
     scrubIndex,
@@ -442,33 +297,28 @@ export function CameraWorkspace({
   const [erase, setErase] = useState(false);
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
-  // Fase 0.1: HUD de telemetria sobre o vídeo (câmera aberta). O toggle mora no estado (UI);
-  // o rAF/drawScene lê o REF (sem re-render por frame — a régua não pode custar frames).
+  // HUD: toggle no estado (UI); o rAF lê o REF (a régua não pode custar re-render por frame).
   const [hud, setHud] = useState(false);
   const hudRef = useRef(false);
-  // Backend do tfjs de detecção (worker): null até o worker reportar (não renderiza até saber).
-  const [detBackend, setDetBackend] = useState<string | null>(null);
+  const [detBackend, setDetBackend] = useState<string | null>(null); // null até o worker reportar
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [drawerTab, setDrawerTab] = useState<
     "zonas" | "linhas" | "timeline" | "presenca" | "camadas"
   >("zonas");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
-  // Onda 2: camadas + slider de confiança (estado local; inicia de APP_CONFIG.overlay).
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
-  // Perfil "Longo alcance / Panorâmica" (opt-in por câmera; ver cameraConfig.longRange).
-  const [longRange, setLongRange] = useState(false);
-  // MODO-COMO-PRESET: modo cujo preset está aplicado à sessão (camadas + confiança + métricas em destaque).
+  const [longRange, setLongRange] = useState(false); // perfil por câmera (cameraConfig.longRange)
+  // MODO-COMO-PRESET: modo cujo preset está aplicado à sessão (camadas + confiança + métricas).
   const [activePreset, setActivePreset] = useState<ModeKey | null>(null);
   // Histórico p/ "alertas/dia estimados" do slider de sensibilidade (carregado on-demand).
   const [histDataset, setHistDataset] = useState<Dataset | null>(null);
   const [histState, setHistState] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
-  // ── Fase 1 (go2rtc): transporte de VÍDEO WebRTC da câmera aberta ── hook ./camera/useWebrtcTransport.
-  // `webrtc` governa o RENDER (camada de vídeo + key do canvas); `webrtcRef` é o espelho lido no
-  // rAF/drawScene; `currentFrame` é a fonte da GEOMETRIA do editor/tripwire (WebRTC → <video>; MJPEG
-  // → getFrame). Chamado antes de useTripwires (que consome currentFrame). Byte-a-byte no MJPEG.
+  // Transporte de VÍDEO WebRTC da câmera aberta (./camera/useWebrtcTransport): `webrtc` governa o
+  // RENDER; `webrtcRef` é o espelho lido no rAF/drawScene; `currentFrame` é a fonte da GEOMETRIA
+  // do editor/tripwire. Chamado antes de useTripwires (que consome currentFrame).
   const { webrtc, webrtcRef, videoStreamRef, currentFrame } = useWebrtcTransport({
     transport,
     mode,
@@ -479,8 +329,8 @@ export function CameraWorkspace({
     review,
   });
 
-  // ── F1/F2/F3 (ADR-009): espelho do MOTOR DO HUB ── hook ./camera/useHubAnalysis.
-  // Refs lidos no rAF/drawScene (engine/getter/zonas/ts/firstSeen/flow) + "hoje" das linhas servido.
+  // Espelho do MOTOR DO HUB (ADR-009) — ./camera/useHubAnalysis: refs lidos no rAF/drawScene +
+  // "hoje" das linhas servido pelo servidor.
   const {
     analysisEngineRef,
     getHubAnalysisRef,
@@ -490,14 +340,11 @@ export function CameraWorkspace({
     hubFlowRef,
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
-  // Interpolador DISPLAY-ONLY das caixas do hub na CÂMERA FOCADA (o MESMO puro da grade —
-  // camera/interpolate.ts). 1 instância por workspace; lido/ingerido no drawScene (modo hub).
+  // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
 
-  // ── Tripwires (linhas de contagem) ── hook dedicado (./camera/useTripwires).
-  // Estado/refs/editor + ciclo de vida (load/migração/sync ADR-006 + fiação do counter).
-  // O rAF principal cria/atualiza `counterRef`; o desenho lê `tripwiresRef`/`twCountsRef`/`twDrawRef`;
-  // os handlers de ponteiro leem `tripwireMode`/`twDrawRef` e chamam `commitTripwire`.
+  // Tripwires (./camera/useTripwires): estado/editor + ciclo de vida (load/migração/sync ADR-006).
+  // O rAF cria/atualiza `counterRef`; o desenho lê `tripwiresRef`/`twCountsRef`/`twDrawRef`.
   const {
     tripwires,
     tripwireMode,
@@ -520,10 +367,8 @@ export function CameraWorkspace({
     label,
     canConfigure,
     tripwiresRev,
-    // Fase 1 (go2rtc): `currentFrame` (não `getFrame`) → o commit da LINHA mapeia o traçado pelo
-    // content-rect do <video> no WebRTC (mesmo letterbox do palco/editor); no MJPEG é o getFrame()
-    // de sempre. O hook só lê getFrame no commitTripwire (não em deps de efeito), então a identidade
-    // por-render de currentFrame (const do useWebrtcTransport) é inócua.
+    // `currentFrame` (não `getFrame`): o commit da LINHA mapeia o traçado pelo content-rect do
+    // <video> no WebRTC (mesmo letterbox do palco/editor); no MJPEG é o getFrame() de sempre.
     getFrame: currentFrame,
     viewportRef,
     onAlertRef,
@@ -560,9 +405,8 @@ export function CameraWorkspace({
   useEffect(() => {
     longRangeRef.current = longRange;
   }, [longRange]);
-  // Zonas: fonte de verdade = BACKEND (compartilhado por câmera), com FALLBACK gracioso p/ o
-  // localStorage e a SEMENTE de zonas padrão. A carga é ASSÍNCRONA (antes era síncrona via
-  // localStorage) → effect com guarda de corrida (cancelled) + estado de "carregando" leve.
+  // Zonas: fonte de verdade = BACKEND (compartilhado por câmera), com fallback gracioso p/ o
+  // localStorage. Carga assíncrona → guarda de corrida (cancelled) + estado de "carregando" leve.
   useEffect(() => {
     let cancelled = false;
     setZonesLoading(true);
@@ -570,8 +414,7 @@ export function CameraWorkspace({
       const z = await loadZonesForCamera(cameraId, label, canConfigure);
       if (cancelled) return;
       setZones(z);
-      // MODO-COMO-PRESET: ao abrir a câmera, carrega o preset do modo predominante (camadas + confiança).
-      // Não toca na GEOMETRIA/zonas persistidas — só governa overlays/visão/métricas da sessão.
+      // Preset do modo predominante ao abrir (só overlays/visão da sessão; geometria intacta).
       const dom = dominantMode(z);
       const p = MODE_PRESETS[dom];
       setLayers({ ...p.layers });
@@ -583,11 +426,9 @@ export function CameraWorkspace({
       cancelled = true;
     };
   }, [cameraId, label, canConfigure]);
-  // Config de câmera (compartilhada): hidrata/migra o cache local a partir do backend ao abrir a
-  // câmera (best-effort, fire-and-forget). A UI de config vive na central, que lê o cache síncrono
-  // getCameraCfg; refrescá-lo aqui faz a config fluir do backend sem acoplar as telas.
+  // Config de câmera compartilhada: lê o cache síncrono já (sem flash) e hidrata do backend
+  // best-effort — a config flui do backend sem acoplar as telas (a UI de config vive na central).
   useEffect(() => {
-    // Perfil "Longo alcance": lê o cache SÍNCRONO já (sem flash), depois hidrata do backend.
     setLongRange(getCameraCfg(cameraId).longRange);
     let cancelled = false;
     loadCamConfig(cameraId, canConfigure)
@@ -599,8 +440,7 @@ export function CameraWorkspace({
       cancelled = true;
     };
   }, [cameraId, canConfigure]);
-  // Tripwires: load/migração/sync ao vivo + re-set do counter → hook ./camera/useTripwires.
-  // Carrega o histórico (read-only) ao abrir a config de uma zona de atividade — p/ a previsão de alertas/dia.
+  // Histórico (read-only) ao abrir a config de uma zona de atividade — previsão de alertas/dia.
   useEffect(() => {
     const z = cfgZoneId ? zonesRef.current.find((zz) => zz.id === cfgZoneId) : null;
     if (!z || z.modo !== "atividade") {
@@ -623,11 +463,8 @@ export function CameraWorkspace({
       cancelled = true;
     };
   }, [cfgZoneId]);
-  // F3 (ADR-009): o ensureDetectClient() que vivia aqui (mount, incondicional) foi movido p/ o
-  // rAF, no gate `needPersons` — spawnar o worker no mount baixava tfjs+coco p/ TODA câmera,
-  // inclusive as analisadas pelo hub (que não inferem mais localmente). Agora o worker só nasce
-  // quando o caminho LOCAL é de fato agendado (engine local + zona de atividade/linha na aberta);
-  // fadiga (celular) chama ensureDetectClient no construtor do FadigaProcessor, como sempre.
+  // Invariante (ADR-009): o worker de detecção só nasce se o caminho LOCAL for de fato agendado
+  // (gate `needPersons` no rAF) — câmera analisada pelo hub não paga tfjs/coco.
   useEffect(() => {
     const m = holdersRef.current;
     return () => {
@@ -636,94 +473,12 @@ export function CameraWorkspace({
     };
   }, []);
 
-  // Overlay em tela cheia: ESC fecha + foco preso (focus trap) enquanto aberto (acessibilidade).
-  // Quando o diálogo de config está aberto, deferimos ESC/Tab ao Radix (que tem o próprio trap).
-  useEffect(() => {
-    if (mode !== "full") return;
-    const root = fullRef.current;
-    if (!root) return;
-    const prevFocus = document.activeElement as HTMLElement | null;
-    const focusables = (): HTMLElement[] =>
-      Array.from(
-        root.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        ),
-      ).filter(
-        (el) =>
-          !el.hasAttribute("disabled") &&
-          el.tabIndex !== -1 &&
-          (el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement),
-      );
-    const onKey = (e: KeyboardEvent) => {
-      if (cfgOpenRef.current) return; // diálogo aberto → Radix trata
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCloseRef.current?.();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const list = focusables();
-      if (!list.length) {
-        e.preventDefault();
-        root.focus();
-        return;
-      }
-      const first = list[0],
-        last = list[list.length - 1],
-        active = document.activeElement as HTMLElement | null;
-      if (e.shiftKey && (active === first || !root.contains(active))) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (active === last || !root.contains(active))) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    root.focus({ preventScroll: true });
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      prevFocus?.focus?.();
-    };
-  }, [mode]);
+  // Casca fullscreen NÃO vira Radix Dialog (ADR-007) → ESC + trap de foco MANUAIS (hook).
+  useFocusTrap(mode === "full", fullRef, cfgOpenRef, onCloseRef);
 
-  // Aplica o perfil "Longo alcance" ao processador (só atividade/objetos o consomem). Idempotente:
-  // AtividadeProcessor.setLongRange faz early-return se não mudou; ObjetosProcessor só seta um bool.
-  function applyLongRange(h: Holder) {
-    const lr = longRangeRef.current;
-    // União discriminada: `h.modo` estreita `h.proc` — sem cast (só atividade/objetos consomem).
-    if (h.modo === "atividade") h.proc.setLongRange(lr);
-    else if (h.modo === "objetos") h.proc.setLongRange(lr);
-  }
-  // Constrói o Holder DISCRIMINADO (pareamento modo↔proc estabelecido num único ponto). "exclusao"
-  // nunca chega aqui (o laço faz `continue` antes) → mapeado p/ atividade, como o `else` do original.
-  function makeHolder(modo: Holder["modo"]): Holder {
-    switch (modo) {
-      case "leitura":
-        return { modo, proc: new LeituraProcessor() };
-      case "objetos":
-        return { modo, proc: new ObjetosProcessor() };
-      case "fadiga": {
-        const proc = new FadigaProcessor();
-        proc.setThresholds(loadFadigaThresholds()); // calibração global
-        return { modo, proc };
-      }
-      case "atividade":
-        return { modo, proc: new AtividadeProcessor(performance.now()) };
-    }
-  }
+  // Processador da zona (criação/reuso/dispose + perfil LR) → ./camera/holders.
   function holderFor(z: Zone): Holder {
-    const cur = holdersRef.current.get(z.id);
-    if (cur && cur.modo === z.modo) {
-      applyLongRange(cur); // mantém o perfil em dia quando o toggle muda em runtime
-      return cur;
-    }
-    cur?.proc.dispose();
-    if (cur?.modo === "fadiga") cropsRef.current.delete(z.id);
-    const h = makeHolder(z.modo === "exclusao" ? "atividade" : z.modo);
-    holdersRef.current.set(z.id, h);
-    applyLongRange(h); // processador recém-criado herda o perfil atual da câmera
-    return h;
+    return holderForZone(holdersRef.current, cropsRef.current, z, longRangeRef.current);
   }
 
   // Recorte da ROI da zona (cap ~480px) → FrameSource alimentado ao FadigaProcessor.
@@ -751,44 +506,11 @@ export function CameraWorkspace({
     const m = getMask(z);
     return m && anySet(m) ? (nx: number, ny: number) => containsNorm(m, nx, ny) : undefined;
   }
-  // Zona da pessoa (plano-melhoria-reconhecimento 2.2). Critério PRIMÁRIO: centro do bbox dentro
-  // da zona (respeitando a máscara). Com zonas SOBREPOSTAS, desempata pela MAIOR área de
-  // interseção bbox∩zona (a zona que mais "contém" o corpo vence); persistindo o empate, vence a
-  // zona de MENOR área (a mais específica). Antes valia a PRIMEIRA zona da lista, o que fazia a
-  // contagem cair em zona-semente (ex.: "Espera") em vez da zona desenhada pelo operador
-  // (bug confirmado em runtime — diagnóstico jul/2026). Geometria/persistência de zonas intactas.
-  function zoneAtAtiv(
-    ativ: Zone[],
-    cx: number,
-    cy: number,
-    bbox?: readonly [number, number, number, number], // normalizado [x,y,w,h] (Track.bbox)
-  ): string | null {
-    let best: Zone | null = null;
-    let bestOv = -1;
-    for (const z of ativ) {
-      if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
-      const cn = containsFn(z);
-      if (cn && !cn(cx, cy)) continue;
-      let ov = 0;
-      if (bbox) {
-        const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
-        const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
-        ov = Math.max(0, ix) * Math.max(0, iy);
-      }
-      if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
-        best = z;
-        bestOv = ov;
-      }
-    }
-    return best?.label ?? null;
-  }
 
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
-  // Onda 2 (plano-contagem-pessoas): ByteTrack-lite (vision/bytetrack.ts) no lugar do greedy
-  // por distância. Associação em 2 passadas por IoU: score ALTO associa/nasce; score BAIXO
-  // (minScore..limiar — as detecções 0.15-0.4 que antes eram jogadas fora) só SUSTENTA tracks
-  // existentes. Predição linear no gate mantém o id vivo em rodadas lentas (LR full).
-  // O contrato downstream é o MESMO: tracks alimentam presença/zona/counter/heatmap.
+  // ByteTrack-lite (vision/bytetrack.ts): 2 passadas por IoU — score alto associa/nasce; score
+  // baixo só SUSTENTA tracks; predição linear mantém o id vivo em rodadas lentas.
+  // Contrato downstream: tracks alimentam presença/zona/counter/heatmap.
   function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
     const T = APP_CONFIG.people.track;
     const tracker =
@@ -797,16 +519,15 @@ export function CameraWorkspace({
         highScore: APP_CONFIG.people.scoreThreshold,
         iouThreshold: T.iouThreshold,
         ttlMs: T.ttlMs,
+        birthIouThreshold: T.birthIouThreshold, // dono do knob: config.people.track
       }));
     // Longo alcance: limiar de "person" mais baixo (alvos distantes pontuam menos) — vira o
     // corte da 1ª passada/nascimento; abaixo dele a detecção ainda entra na 2ª passada.
     const personScoreThr = longRangeRef.current
       ? APP_CONFIG.detection.longRange.peopleScoreThreshold
       : APP_CONFIG.people.scoreThreshold;
-    // `dets` JÁ vem sem as pessoas em zona de exclusão (filtradas 1× na origem — ver o filtro
-    // no rAF). Aqui só resta o filtro de CLASSE (o score é do tracker). A supressão de exclusão
-    // não é reaplicada por track para não divergir do `occupied`: tracker E ocupação partem da
-    // MESMA lista filtrada.
+    // Invariante: `dets` JÁ vem sem as pessoas em zona de exclusão (filtro único na ORIGEM) —
+    // tracker E ocupação partem da MESMA lista; aqui só resta o filtro de CLASSE.
     const persons = dets
       .filter((d) => d.class === "person")
       .map((d) => ({
@@ -826,7 +547,9 @@ export function CameraWorkspace({
       bbox: t.bbox,
       firstSeen: t.firstSeen,
       lastSeen: t.lastSeen,
-      zone: zoneAtAtiv(ativ, t.cx, t.cy, t.bbox), // zona por overlap — continua
+      // Zona pela regra ÚNICA do front (zones.assignZone): desempate por maior interseção
+      // bbox∩zona, depois menor área — nunca por ordem da lista.
+      zone: assignZone(ativ, t.cx, t.cy, t.bbox, containsFn)?.label ?? null,
       score: t.score,
     }));
   }
@@ -842,10 +565,8 @@ export function CameraWorkspace({
 
   useEffect(() => {
     let stopped = false;
-    // ── (P1 fluidez) corrente rVFC do transporte WebRTC (ver WEBRTC_VFC_STALE_MS) ──
-    // Arma UMA corrente auto-re-agendada por elemento <video>; o callback SÓ incrementa contadores
-    // (nenhum trabalho, nenhum desenho — o rAF segue dono do loop, ADR-007). Troca de elemento
-    // cancela a corrente antiga; o cleanup do efeito zera vfcVideoRef p/ o próximo efeito re-armar.
+    // Corrente rVFC do WebRTC: UMA por elemento <video>, auto-re-agendada; o callback SÓ
+    // incrementa contadores (o rAF segue dono do loop — ADR-007).
     const supportsVfc =
       typeof HTMLVideoElement !== "undefined" &&
       "requestVideoFrameCallback" in HTMLVideoElement.prototype;
@@ -869,35 +590,25 @@ export function CameraWorkspace({
       };
       vfcHandleRef.current = video.requestVideoFrameCallback(onFrame);
     };
-    const loop = () => {
-      if (stopped) return;
-      rafRef.current = requestAnimationFrame(loop);
-      const canvas = canvasRef.current,
-        viewport = viewportRef.current;
-      if (!canvas || !viewport) return;
-      const proc = procRef.current ?? (procRef.current = document.createElement("canvas")); // canvas de motion offscreen
-      // ── Fonte do frame ── MJPEG: getFrame() (relé socket.io), como sempre. WebRTC (Fase 1): o
-      // "frame" de ANÁLISE é o <video> nativo (decode por HW). O `el` é o próprio elemento — drawImage
-      // /getImageData/createImageBitmap aceitam HTMLVideoElement, então motion, crops (fadiga/objetos/
-      // leitura), detecção local e cine-loop funcionam SEM caminho especial. O `ts` é um BUCKET de tempo
-      // (~WEBRTC_TICK_MS): como o <video> tem identidade estável, o gate de "frame novo" abaixo passa a
-      // throttlar o tick a ~15fps (o vídeo segue liso por HW; só a análise/overlay amostram na cadência
-      // do MJPEG, sem carregar a main-thread a 60fps).
+    // ── Estágios NOMEADOS do tick — extração 1:1 do laço, MESMA ordem/semântica (ADR-007: o rAF
+    // é dono do loop e não sai do componente; cada estágio é um closure nomeado, params explícitos). ──
+
+    // AQUISIÇÃO: fonte do frame + gate de "frame novo". MJPEG: getFrame() (relé socket.io);
+    // WebRTC: o "frame" de análise é o próprio <video> (decode por HW) com `ts` em bucket de
+    // WEBRTC_TICK_MS + gate rVFC (só quadro APRESENTADO novo; a válvula reabre se o rVFC calar).
+    // O loop roda a ~60fps, o frame chega a ~15fps: mesmo el/ts → null pula o tick inteiro.
+    const acquireStage = (): FrameSource | null => {
       let f: FrameSource | null;
       if (webrtcRef.current) {
         const video = videoStreamRef.current?.video;
-        if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-        // (P1) GATE rVFC: sem quadro NOVO apresentado desde o último tick processado → nada a
-        // analisar/desenhar (o <video> por HW já mostra o mesmo quadro). A válvula reabre o
-        // caminho do bucket quando o rVFC fica mudo > WEBRTC_VFC_STALE_MS (pausa/estrangulamento
-        // /plataforma sem callback) — pior caso = comportamento atual. MJPEG: intocado.
+        if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return null;
         if (supportsVfc) {
           armVfc(video);
           if (
             vfcSeqRef.current === vfcSeenSeqRef.current &&
             performance.now() - vfcLastAtRef.current < WEBRTC_VFC_STALE_MS
           )
-            return;
+            return null;
         }
         f = {
           el: video,
@@ -908,183 +619,94 @@ export function CameraWorkspace({
       } else {
         f = getFrame();
       }
-      if (!f || !f.w || !f.h) return;
-      // ── GATE de "frame novo": o loop roda no refresh do monitor (~60fps), mas o frame chega a
-      //    ~15fps. Se o ImageBitmap (identidade do `el`) / `ts` não mudou desde o último processamento,
-      //    pula o tick inteiro (motion + luma + detecção + draw) — evita reprocessar o mesmo pixel ~4×.
-      //    (mesmo padrão do FadigaProcessor: `idEl !== snap.lastEl`). ──
+      if (!f || !f.w || !f.h) return null;
       if (f.el === lastFrameElRef.current && (f.ts == null || f.ts === lastFrameTsRef.current))
-        return;
+        return null;
       lastFrameElRef.current = f.el;
       lastFrameTsRef.current = f.ts ?? 0;
-      vfcSeenSeqRef.current = vfcSeqRef.current; // (P1) tick processado consome o quadro rVFC corrente
-      const now = performance.now();
-      meterRef.current.tick(now);
-      // CINE: alimenta o ring buffer com o MESMO frame que já passou pelo gate (sem decode extra).
-      // Só na câmera aberta (full) e fora da revisão — em revisão o buffer fica congelado/estável.
-      // LGPD: tudo em memória/efêmero; nada é enviado/persistido (ver cineBuffer.ts).
-      captureFrame(f.el, f.w, f.h, now, Date.now());
-      if (pausedRef.current) return; // ⏸ inspeção: congela o frame (não processa nem redesenha)
+      vfcSeenSeqRef.current = vfcSeqRef.current; // tick processado consome o quadro rVFC corrente
+      return f;
+    };
+
+    // CADÊNCIA do motion: na grade, atividade analisa frames ALTERNADOS; em ambos os modos vale o
+    // piso por engine (hub 500ms · local 100ms). O dt dos frames pulados é ACUMULADO e entregue
+    // inteiro no frame analisado — idle/tempo real não perdem nada.
+    const cadenceStage = (now: number): { analyzeActivity: boolean; activityDt: number } => {
       const frameDt = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0;
       lastFrameAtRef.current = now;
-      // ── (3.4) GRADE: análise de ATIVIDADE em frames ALTERNADOS ──
-      // No tile (mode !== "full"), o bloco de luma/motion (readback getImageData + loop O(pw·ph))
-      // e o process() das zonas de atividade rodam em 1 de cada 2 frames novos (~12fps → ~6fps
-      // efetivos). Folga real: o alarme de atividade CONFIRMA transições em ~900ms ≫ 166ms de
-      // intervalo a 6fps — nenhuma mudança de estado observável se perde. O dt do frame pulado é
-      // ACUMULADO (activityDtRef) e entregue inteiro no frame analisado, então totalIdleMs/recIdleMs
-      // seguem contando tempo REAL. O draw do palco continua TODO frame (fluidez intacta); a câmera
-      // ABERTA (full) analisa todo frame como antes. A luma long-range (2.5, 1×/câmera) preserva o
-      // caminho — só passa a ser produzida na cadência que sobra (a dos frames analisados).
       gridParityRef.current = !gridParityRef.current;
       let analyzeActivity = mode === "full" || gridParityRef.current;
-      // Piso de cadência do readback de luma/motion (getImageData é o maior custo síncrono do
-      // tick): MODO HUB a HUB_MOTION_INTERVAL_MS (2fps — Fase 0.3, o motor do hub já cobre a
-      // análise; o local só mantém vivo o alarme de ociosidade) e MODO LOCAL a
-      // LOCAL_MOTION_MIN_INTERVAL_MS (~10fps — P0 fluidez browser/webcam; ver constante). O dt
-      // dos frames pulados segue ACUMULADO (activityDtRef) e entra inteiro no frame analisado,
-      // então idle/tempo real não perdem nada. `analysisEngineRef` é lido antes do `hubActive`
-      // de baixo (mesmo valor; aquele é reusado no resto do tick).
       if (analyzeActivity) {
         const motionMinMs =
-          analysisEngineRef.current === "hub" ? HUB_MOTION_INTERVAL_MS : LOCAL_MOTION_MIN_INTERVAL_MS;
+          analysisEngineRef.current === "hub"
+            ? HUB_MOTION_INTERVAL_MS
+            : LOCAL_MOTION_MIN_INTERVAL_MS;
         if (now - lastMotionAtRef.current < motionMinMs) analyzeActivity = false;
         else lastMotionAtRef.current = now;
       }
       activityDtRef.current += frameDt;
       const activityDt = activityDtRef.current;
       if (analyzeActivity) activityDtRef.current = 0;
-      const zs = zonesRef.current;
-      const ativ = zs.filter((z) => z.modo === "atividade");
-      // Zonas de EXCLUSÃO (CALIBRAÇÃO): máscaras que suprimem detecções de pessoa (pé dentro delas)
-      // no pipeline local — consumidas por updateTracks. Não produzem indicador nem processador.
-      const excl = zs.filter((z) => z.modo === "exclusao");
-      // ── Tripwires precisam de DETECÇÃO DE PESSOAS mesmo SEM zona de atividade ──
-      // BUGFIX: detectFrame/updateTracks eram gated por `ativ.length` — câmera só com linhas de
-      // contagem (sem zona de atividade) nunca detectava/rastreava ninguém e as linhas NUNCA
-      // contavam. Na GRADE a detecção roda a cada TILE_OBJECT_INTERVAL_MS (4s): um alvo em
-      // movimento "teleporta" além de trackMaxDist (0.12) entre rodadas → vira track NOVO de cada
-      // lado da linha e o cruzamento (que exige o MESMO track atravessar) não existe. Contar assim
-      // seria inventar número: na grade a contagem fica PAUSADA (HUD indica "abra a câmera") e a
-      // detecção NÃO é agendada só por causa das linhas. Na câmera ABERTA (350ms) conta normal.
-      const hasWires = tripwiresRef.current.length > 0;
-      const countingActive = hasWires && mode === "full";
-      // ── F2/F3 (ADR-009): engine==="hub" → espelho do MOTOR DO HUB (grade E câmera aberta) ──
-      // O hub roda D-FINE+ByteTrack 24/7 e emite `analysis-tracks` @1fps; com o motor ligado
-      // NENHUMA instância agenda o coco local (needPersons ganha `&& !hubActive` — fim do worker
-      // tfjs de detecção p/ câmeras hub) e ambas desenham os tracks/zonas servidos (bloco abaixo).
-      // F3 — TRADE-OFF DECLARADO (câmera ABERTA): o overlay de pessoas passa a atualizar na
-      // cadência do motor (~1fps) em vez de ~350ms local — aceito em troca de aposentar o
-      // tfjs/coco do cliente; interpolação entre payloads fica p/ depois, se incomodar.
-      // Consequência nas LINHAS (full+hub): o counter LOCAL fica parado (freshDets nunca dispara
-      // sem detecção local) — sem timeline de cruzamento local; o HUD/painel já mostram o "hoje"
-      // do SERVIDOR (F1-C), que é a autoridade. Cine-loop, motion/estado/alarme de atividade,
-      // fadiga (MediaPipe+celular via FadigaProcessor) e leitura seguem 100% LOCAIS.
-      // Engine "local" (motor desligado) → fallback INTEGRAL: pipeline local idêntico ao de sempre.
-      const hubActive = analysisEngineRef.current === "hub";
-      const needPersons = (ativ.length > 0 || countingActive) && !hubActive;
+      return { analyzeActivity, activityDt };
+    };
 
-      // ── nível de frame: motion luma + coco-ssd (só se houver zona de atividade) ──
-      // (2.5) LONGO ALCANCE: a luma de movimento é produzida AQUI, 1× por câmera, já na resolução
-      // do perfil (longRange.procWidth=480) e compartilhada com TODAS as zonas via ctx.luma — antes
-      // cada AtividadeProcessor re-rasterizava o frame inteiro a 480px por frame. Os ratios/limiares
-      // LR seguem no processador (inalterados). Toggle em runtime: pw muda → o check de tamanho
-      // abaixo invalida canvas/buffers de luma (sem vazamento, sem diff entre resoluções distintas).
+    // MOTION: readback RGBA→luma 1× por câmera, já na resolução do perfil, compartilhado com
+    // TODAS as zonas via ctx.luma (kernel + ping-pong em vision/luma). Em frame não analisado não
+    // há luma nova — o `prev` interno segue sendo a do último frame ANALISADO e o diff seguinte
+    // cobre o intervalo inteiro (sem perder movimento).
+    type MotionOut = {
+      luma: Float32Array | null;
+      prev: Float32Array | null;
+      pw: number;
+      ph: number;
+    };
+    const motionStage = (f: FrameSource, analyze: boolean, hasAtiv: boolean): MotionOut => {
       const pw = longRangeRef.current ? APP_CONFIG.detection.longRange.procWidth : C.procWidth,
         ph = Math.max(1, Math.round((pw * f.h) / f.w));
-      let luma: Float32Array | null = null;
-      let prev = prevLumaRef.current;
-      // (3.4) meio-frame da grade: sem luma nova (readback pulado); o swap lá embaixo não roda
-      // (luma === null), então `prev` continua sendo a luma do último frame ANALISADO — o diff do
-      // próximo frame analisado cobre o intervalo inteiro (~166ms), sem perder movimento.
-      if (ativ.length && analyzeActivity) {
-        const size = pw * ph;
-        if (proc.width !== pw || proc.height !== ph || lumaSizeRef.current !== size) {
-          proc.width = pw;
-          proc.height = ph;
-          lumaSizeRef.current = size;
-          prevLumaRef.current = null;
-          curLumaRef.current = null;
-          prev = null; // tamanho mudou → invalida buffers
-        }
-        const pctx = proc.getContext("2d", { willReadFrequently: true })!;
-        pctx.drawImage(f.el, 0, 0, pw, ph);
-        const img = pctx.getImageData(0, 0, pw, ph).data;
-        // buffer reutilizável p/ a luma atual (swap com o anterior no fim) — evita new Float32Array por frame (P2)
-        let cur = curLumaRef.current;
-        if (!cur || cur.length !== size) cur = new Float32Array(size);
-        for (let i = 0, j = 0; i < img.length; i += 4, j++)
-          cur[j] = 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
-        luma = cur;
-      }
-      // Inferência FORA da main thread (worker), via SCHEDULER global (fila única + prioridade).
-      // (2.4a) 1 TILE = 1 TAREFA: `detectFrame` recebe `schedule` e enfileira CADA tile como uma
-      // tarefa própria (`${key}:t<i>`) — a câmera ABERTA (high) intercala entre os tiles de um
-      // lote da grade (low) em vez de esperar o lote inteiro (~0,5–1,3s com 16 tiles LR). Por isso
-      // NÃO se embrulha mais detectFrame em requestInference (deadlock com maxConcurrent=1).
-      // O gate de voo (objBusy) agora vale TAMBÉM no full: com os tiles em tarefas separadas, a
-      // coalescência por key única deixou de descartar o lote pendente — o gate garante no máximo
-      // 1 detectFrame em voo por câmera (o próximo dispara com o frame mais novo ao concluir).
-      // Na GRADE roda numa cadência MUITO menor (TILE_OBJECT_INTERVAL_MS); com longo alcance,
-      // detect.ts ainda faz TILE ROTATION (K de 16 tiles por chamada, fundindo com cache — 2.4b).
-      // O motion (acima) e a máquina de estado por zona seguem em tempo real.
-      // BUGFIX tripwires: este bloco vivia DENTRO de `if (ativ.length && analyzeActivity)` —
-      // agora agenda por `needPersons` (zona de atividade OU tripwire com câmera aberta).
-      if (needPersons) {
-        // F3: worker de detecção nasce AQUI, on-demand (idempotente — early-return após o 1º
-        // spawn). Engine hub→local em runtime reentra por este gate e o worker sobe na hora;
-        // enquanto o worker carrega, detectFrame devolve [] (mesma semântica do boot atual).
-        ensureDetectClient();
-        // Gate/intervalo/opts do agendamento → sub-passos puros em ./camera/rafSteps (testáveis).
-        const objInterval = detectionInterval(mode, C.objectIntervalMs, TILE_OBJECT_INTERVAL_MS);
-        if (shouldRunDetection(now, lastObjAtRef.current, objInterval, objInFlightRef.current)) {
-          lastObjAtRef.current = now;
-          objInFlightRef.current = true;
-          const el = f.el,
-            fw = f.w,
-            fh = f.h;
-          const { tiled, opts } = detectScheduleOpts(cameraId, mode, longRangeRef.current);
-          detectFrame(el, fw, fh, tiled, opts)
-            .then((res) => {
-              if (res) {
-                detsRef.current = res;
-                detsRevRef.current++; // rodada NOVA de detecção (gate do tracker abaixo)
-              }
-            })
-            .catch(() => {})
-            .finally(() => {
-              objInFlightRef.current = false;
-            });
-        }
-      }
-      // ── F2/F3 (ADR-009): alimenta tracksRef/detsRef com o payload do HUB (engine hub, grade e full) ──
-      // Sub-passo PURO em ./camera/useHubAnalysis (applyHubAnalysis): converte HubTrack → Track e
-      // pseudo-dets "person", com gate de payload novo + descarte de STALE. Muta tracksRef/detsRef/
-      // hubZonesRef/hubTracksTsRef/hubFirstSeenRef. Motion/estado/alarme seguem 100% locais.
-      applyHubAnalysis(hubActive, hubActive ? (getHubAnalysisRef.current?.() ?? null) : null, now, f.w, f.h, {
-        tracksRef,
-        detsRef,
-        hubZonesRef,
-        hubTracksTsRef,
-        hubFirstSeenRef,
-      });
-      // ── ZONA DE EXCLUSÃO (CALIBRAÇÃO) — filtro ÚNICO na ORIGEM ─────────────────
-      // Remove a detecção de PESSOA cujo PÉ (bottom-center) cai numa zona modo "exclusao"
-      // (mask-aware) AQUI, 1×, para que TUDO downstream veja a MESMA lista: o tracker
-      // (presença/counter/overlay) E o `occupied` do AtividadeProcessor (OCIOSA×VAZIA, que lê
-      // ctx.dets). Antes o filtro só rodava no tracker — um FP mascarado sumia dos tracks mas
-      // ctx.dets levava a caixa crua e uma zona de atividade sobreposta ainda marcava "ocupada".
-      // Exclusão é só p/ pessoa (veículos de occupancyClasses seguem contando). No modo hub os
-      // dets já vêm filtrados pelo motor → aqui é no-op idempotente. Mesma semântica do engine.
-      const dets = filterExcludedPersons(
-        detsRef.current,
-        excl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) })),
-        f.w,
-        f.h,
-      );
-      // (Onda 2) O ByteTracker roda SÓ em rodada NOVA de detecção — não a cada frame de vídeo
-      // com o mesmo detsRef stale (que zeraria a velocidade estimada e mataria a predição).
-      // Entre rodadas, tracksRef mantém as últimas posições (draw/presença seguem fluidos).
+      if (!hasAtiv || !analyze) return { luma: null, prev: null, pw, ph };
+      const s = (lumaRef.current ??= createLumaSource()).sample(f.el, pw, ph);
+      return s ? { luma: s.luma, prev: s.prev, pw, ph } : { luma: null, prev: null, pw, ph };
+    };
+
+    // DETECÇÃO local: agenda o coco FORA da main (worker + scheduler global; 1 tile = 1 tarefa —
+    // NÃO embrulhar detectFrame em requestInference: deadlock com maxConcurrent=1). O worker
+    // nasce AQUI on-demand (câmera hub não paga tfjs; engine hub→local reentra por este gate).
+    // Gate de voo: máx. 1 detectFrame em voo por câmera; o próximo usa o frame mais novo.
+    const detectStage = (f: FrameSource, now: number, needPersons: boolean): void => {
+      if (!needPersons) return;
+      ensureDetectClient();
+      const objInterval = detectionInterval(mode, C.objectIntervalMs, TILE_OBJECT_INTERVAL_MS);
+      if (!shouldRunDetection(now, lastObjAtRef.current, objInterval, objInFlightRef.current))
+        return;
+      lastObjAtRef.current = now;
+      objInFlightRef.current = true;
+      const el = f.el,
+        fw = f.w,
+        fh = f.h;
+      const { tiled, opts } = detectScheduleOpts(cameraId, mode, longRangeRef.current);
+      detectFrame(el, fw, fh, tiled, opts)
+        .then((res) => {
+          if (res) {
+            detsRef.current = res;
+            detsRevRef.current++; // rodada NOVA de detecção (gate do tracker)
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          objInFlightRef.current = false;
+        });
+    };
+
+    // TRACKING: o ByteTracker roda SÓ em rodada NOVA de detecção (realimentar o mesmo resultado
+    // stale zeraria a velocidade estimada e mataria a predição); entre rodadas tracksRef mantém
+    // as últimas posições (draw/presença seguem fluidos).
+    const trackingStage = (
+      dets: Detection[],
+      ativ: Zone[],
+      f: FrameSource,
+      now: number,
+      needPersons: boolean,
+    ): { tracks: Track[]; freshDets: boolean } => {
       const freshDets = detsRevRef.current !== consumedDetsRevRef.current;
       if (needPersons && freshDets) {
         consumedDetsRevRef.current = detsRevRef.current;
@@ -1092,21 +714,27 @@ export function CameraWorkspace({
       }
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
+      return { tracks, freshDets };
+    };
 
-      // ── Tripwires + ocupação (Onda C item 13) — REUSA os tracks já existentes (sem inferência extra) ──
-      // counter/occupancy criados 1x (sob demanda); a geometria é re-setada via effect quando as linhas mudam.
-      // Parâmetros em config.people.track: counterMaxDist (teleporte de um MESMO id re-ancora sem
-      // contar — defesa extra além do gate de IoU do ByteTracker), debounceMs (anti-oscilação
-      // pós-contagem) e minCrossingFrames (histerese: o lado novo precisa se sustentar ≥2 rodadas
-      // de detecção — jitter de 1 rodada não conta). Âncora no PÉ do bbox (Track.foot, item 1.4).
+    // CONTAGEM + ocupação: reusa os tracks (sem inferência extra). O counter avança na cadência
+    // das RODADAS de detecção (freshDets é o "update" da histerese minCrossingFrames) e SÓ com a
+    // câmera aberta; âncora no PÉ do bbox (Track.foot). Knobs com dono em config.people.track.
+    const countingStage = (
+      tracks: Track[],
+      now: number,
+      countingActive: boolean,
+      freshDets: boolean,
+    ): void => {
+      const T = APP_CONFIG.people.track;
       const counter =
         counterRef.current ??
         (counterRef.current = createCounter(tripwiresRef.current, {
-          minMove: 0.01,
-          ttl: 1500,
-          maxDist: APP_CONFIG.people.track.counterMaxDist,
-          debounceMs: APP_CONFIG.people.track.debounceMs,
-          minCrossingFrames: APP_CONFIG.people.track.minCrossingFrames,
+          minMove: T.counterMinMove,
+          ttl: T.counterTtlMs,
+          maxDist: T.counterMaxDist,
+          debounceMs: T.debounceMs,
+          minCrossingFrames: T.minCrossingFrames,
         }));
       const occ =
         occRef.current ??
@@ -1118,11 +746,6 @@ export function CameraWorkspace({
           max: 6,
         }));
       const tps = tracks.map((t) => ({ id: t.id, cx: t.cx, cy: t.cy, foot: t.foot }));
-      // Na GRADE a contagem fica PAUSADA (ver comentário `countingActive` acima): não alimentar o
-      // counter com tracks "teleportados" evita contagem falsa; o gap > ttl na retomada faz o
-      // counter re-ancorar as posições sem contar (counting.ts). O HUD indica o estado pausado.
-      // `freshDets`: o counter avança na cadência das RODADAS de detecção (mesma dos tracks) —
-      // é o "update" da histerese (minCrossingFrames) e evita reprocessar posições repetidas.
       if (countingActive && freshDets) {
         const crossings = counter.update(tps, now);
         for (const ev of crossings) {
@@ -1131,14 +754,9 @@ export function CameraWorkspace({
             `${ev.dir === "in" ? "Entrada" : "Saída"} · Linha ${wi >= 0 ? wi + 1 : "?"}`,
             "info",
           );
-          // (1.1) Evento de cruzamento PERSISTIDO — só metadados (LGPD ok / ADR-002).
-          // Fire-and-forget: o store é resiliente (nunca lança dentro do loop de vídeo).
-          // F1-C (ADR-009): SUPRIMIDO quando o MOTOR DO HUB analisa esta câmera — o hub grava
-          // os mesmos cruzamentos direto no pgstore; gravar aqui também duplicaria o indicador.
-          // (F3: no modo hub este bloco nem chega a rodar — sem detecção local não há freshDets,
-          // o counter fica parado e o "hoje" exibido é o do servidor. O guard fica como defesa
-          // em profundidade p/ qualquer caminho futuro que reanime o counter no modo hub.)
-          if (analysisEngineRef.current !== "hub")
+          // Cruzamento PERSISTIDO — só metadados (ADR-002); fire-and-forget (store resiliente).
+          // Política de ingest do modo hub: tabela única em camera/ingestPolicy (ADR-009).
+          if (shouldIngest("flow", analysisEngineRef.current))
             void recordFlow({
               cameraId,
               cameraLabel: label,
@@ -1147,58 +765,58 @@ export function CameraWorkspace({
               ts: Date.now(),
             });
         }
-        if (crossings.length) twCountsRef.current = counter.counts(); // só re-snapshota quando há evento (HUD do canvas)
+        if (crossings.length) twCountsRef.current = counter.counts(); // re-snapshota só com evento (HUD)
       }
-      occ.add(tps.map((t) => ({ x: t.cx, y: t.cy }))); // decai + acumula ocupação 1x/frame (heatmap)
+      occ.add(tps.map((t) => ({ x: t.cx, y: t.cy }))); // decai + acumula ocupação 1×/frame (heatmap)
+    };
 
-      // (3.4) flow/rec só fecham janela em frame ANALISADO (senão o recEmit cairia num frame pulado,
-      // resetaria lastRecAt sem coletar amostra e a cadência de gravação dobraria esporadicamente).
-      const sampleFlow = analyzeActivity && now - lastFlowAtRef.current > 500;
-      const recEmit = analyzeActivity && now - lastRecAtRef.current > 3000;
+    // ZONAS: dispatch por modo (união discriminada — pareamento errado modo↔proc é erro de tipo).
+    // Inferência PESADA (leitura/objetos/fadiga rodam na MAIN thread) cai na grade p/
+    // TILE_HEAVY_INTERVAL_MS por zona; ATIVIDADE fica FORA do gate (análise leve essencial).
+    const zoneStage = (
+      f: FrameSource,
+      now: number,
+      zs: Zone[],
+      m: MotionOut,
+      activityDt: number,
+      analyzeActivity: boolean,
+      dets: Detection[],
+      tracks: Track[],
+      hubActive: boolean,
+      sampleFlow: boolean,
+      recEmit: boolean,
+      engine: "hub" | "local",
+    ): ZoneSample[] => {
       const recSamples: ZoneSample[] = [];
-
-      // ── por zona ──
       for (const z of zs) {
-        // Exclusão: modo de SUPRESSÃO, sem indicador nem processador — o filtro do pé já roda em
-        // updateTracks. Pula antes de holderFor p/ não instanciar processador (o `else` cairia em
-        // fadiga). A zona segue sendo DESENHADA (drawZoneOverlays itera todas) como máscara.
+        // Exclusão: modo de SUPRESSÃO, sem indicador nem processador (o filtro do pé já rodou na
+        // origem). Pula antes de holderFor; a zona segue sendo DESENHADA como máscara.
         if (z.modo === "exclusao") continue;
         const h = holderFor(z);
-        // P0/P2: leitura (ZXing), objetos (OWL-ViT) e fadiga (MediaPipe/coco) rodam o processador na
-        // MAIN THREAD → são a maior fonte de jank na grade. Na GRADE (tile) rebaixamos essa inferência
-        // PESADA a TILE_HEAVY_INTERVAL_MS por zona; nos frames pulados mantemos o ÚLTIMO resultado em
-        // resultsRef (overlay/painel atualizam devagar). Na câmera ABERTA (full) roda todo frame.
-        // ATIVIDADE fica FORA deste gate: motion + máquina de estado + alarme por zona seguem em tempo
-        // real inclusive na grade (análise LEVE essencial — não pode parar com a câmera fechada).
         if (z.modo !== "atividade" && mode !== "full") {
           const lastHeavy = lastHeavyAtRef.current.get(z.id) ?? 0;
           if (now - lastHeavy < TILE_HEAVY_INTERVAL_MS) continue;
           lastHeavyAtRef.current.set(z.id, now);
         }
-        // Dispatch pelo `h.modo` (união discriminada) → `h.proc` estreita sem cast. h.modo === z.modo
-        // (holderFor garante), então a semântica é idêntica à do dispatch por z.modo anterior.
         if (h.modo === "atividade") {
-          // (3.4) meio-frame da grade: sem luma nova → sem process(); resultsRef mantém o último
-          // estado p/ o draw (que continua todo frame). O dt pulado já está acumulado em activityDt.
+          // Frame não analisado: sem luma nova → sem process(); resultsRef mantém o último estado
+          // p/ o draw (que continua todo frame). O dt pulado já está acumulado em activityDt.
           if (!analyzeActivity) continue;
           const ctx: AtividadeCtx = {
             now,
-            frameDt: activityDt, // (3.4) inclui o dt dos frames pulados na grade (tempo real)
+            frameDt: activityDt, // inclui o dt dos frames pulados (tempo real)
             paused: pausedRef.current,
-            luma,
-            prev,
-            pw,
-            ph,
+            luma: m.luma,
+            prev: m.prev,
+            pw: m.pw,
+            ph: m.ph,
             dets,
             frameW: f.w,
             frameH: f.h,
             tracks,
             sampleFlow,
             recEmit,
-            // (2.5) Fallback do modo longo alcance: a luma LR já é produzida ACIMA (1× por câmera,
-            // em longRange.procWidth) e chega via ctx.luma; o processador só re-rasteriza a partir
-            // de frameEl se ctx.luma vier ausente (callers que não produzem a luma no frame).
-            frameEl: f.el,
+            frameEl: f.el, // fallback LR do processador: só re-rasteriza se ctx.luma vier ausente
           };
           const az = {
             id: z.id,
@@ -1213,9 +831,8 @@ export function CameraWorkspace({
             contains: containsFn(z),
           };
           const r = h.proc.process(az, ctx);
-          // F2/F3 (ADR-009): pessoas por zona EXIBIDAS (rótulo no canvas + pill do painel) vêm do
-          // zones[] do hub quando disponível — a atribuição de zona do MOTOR é a autoridade
-          // (mesma que grava o indicador). Estado/motion/alarme locais seguem intactos.
+          // Pessoas EXIBIDAS por zona vêm do zones[] do hub quando disponível — a atribuição do
+          // MOTOR é a autoridade (a mesma que grava o indicador). Estado/motion/alarme locais.
           const hz = hubActive
             ? hubZonesRef.current?.find((zz) => zz.id === z.id || zz.label === z.label)
             : undefined;
@@ -1227,31 +844,32 @@ export function CameraWorkspace({
           if (r.event) pushTimeline(r.event.text, r.event.sev);
           if (r.alert) {
             onAlertRef.current?.(`⚠ ${label}: ${r.alert.text}`);
-            // F1-C (ADR-009): recordAlert MANTIDO mesmo no modo hub — o alarme de ociosidade
-            // nasce do MOTION local (na F1 o motor do hub NÃO grava alarmes), então não há
-            // duplicação; suprimir aqui deixaria o indicador de alarmes cego.
-            recordAlert({
-              cameraId,
-              cameraLabel: label,
-              zoneId: r.alert.zoneId,
-              area: r.alert.area,
-              atividade: r.alert.atividade,
-              ts: Date.now(),
-              durationMin: r.alert.durationMin,
-            });
+            // Alarme nasce do MOTION local (o motor do hub não grava alarmes) → sempre ingerido
+            // (tabela ADR-009 em camera/ingestPolicy).
+            if (shouldIngest("alert", engine))
+              recordAlert({
+                cameraId,
+                cameraLabel: label,
+                zoneId: r.alert.zoneId,
+                area: r.alert.area,
+                atividade: r.alert.atividade,
+                ts: Date.now(),
+                durationMin: r.alert.durationMin,
+              });
           }
         } else if (h.modo === "leitura") {
           const r = h.proc.process(
             { x: z.x, y: z.y, w: z.w, h: z.h, ponto: z.ponto },
             { frame: f, now, cameraId, cameraLabel: label },
           );
-          // F1-C (ADR-009): recordReads/recordPass MANTIDOS mesmo no modo hub — Leitura (ZXing)
-          // segue 100% no cliente (o motor F1 não cobre este modo) → sem risco de duplicação.
-          r.reads.forEach((rd) => recordReads(pushRead(rd)));
-          r.passes.forEach((ps) => {
-            const pr = pushPass(ps);
-            if (pr.newPassage) recordPass(ps.ponto, ps.ts);
-          });
+          if (r.decodeMs != null) stageMsRef.current.decode = r.decodeMs;
+          // Leitura é 100% cliente (o motor não cobre o modo) → sempre ingerida (ADR-009).
+          if (shouldIngest("reads", engine)) r.reads.forEach((rd) => recordReads(pushRead(rd)));
+          if (shouldIngest("pass", engine))
+            r.passes.forEach((ps) => {
+              const pr = pushPass(ps);
+              if (pr.newPassage) recordPass(ps.ponto, ps.ts);
+            });
           const prevR = resultsRef.current.get(z.id);
           const lastCode = r.reads.length
             ? r.reads[r.reads.length - 1].code
@@ -1272,23 +890,29 @@ export function CameraWorkspace({
             z.selectedClasses,
             { frame: f, now },
           );
-          // F1-C (ADR-009): recordObjectEvent/recordObjectSamples MANTIDOS mesmo no modo hub —
-          // Objetos (OWL-ViT) segue no cliente (o motor F1 não cobre este modo; F4 condicional).
-          r.events.forEach((e) => recordObjectEvent(e));
+          if (r.detectMs != null) stageMsRef.current.detect = r.detectMs;
+          // Objetos segue no cliente (o motor não cobre o modo) → sempre ingerido (ADR-009).
+          if (shouldIngest("object", engine)) {
+            r.events.forEach((e) => recordObjectEvent(e));
+            if (r.samples) recordObjectSamples({ samples: r.samples });
+          }
           r.alerts.forEach((a) => onAlertRef.current?.(a));
-          if (r.samples) recordObjectSamples({ samples: r.samples });
           const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
           resultsRef.current.set(z.id, { modo: "objetos", counts: r.counts, total, dets: r.dets });
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
+          // Fica no cliente por exceção declarada da ADR-009 → sempre ingerida.
           const r = h.proc.process({ frame: cropFor(z, f), now, srcEl: f.el });
-          // F1-C (ADR-009): recordFadigaEvent/recordFadigaSamples MANTIDOS mesmo no modo hub —
-          // Fadiga (MediaPipe) fica no cliente por decisão da ADR-009 (exceção declarada).
+          if (r.faceMs != null) stageMsRef.current.face = r.faceMs;
+          if (r.handMs != null) stageMsRef.current.hand = r.handMs;
+          if (r.objMs != null) stageMsRef.current.obj = r.objMs;
           r.events.forEach((e) => {
-            recordFadigaEvent({ posto: z.label, type: e.type, ts: e.ts });
+            if (shouldIngest("fadiga", engine))
+              recordFadigaEvent({ posto: z.label, type: e.type, ts: e.ts });
             pushTimeline(`${z.label}: ${e.type}`, e.type === "bocejo" ? "info" : "high");
           });
-          if (r.sample) recordFadigaSamples({ posto: z.label, ...r.sample });
+          if (r.sample && shouldIngest("fadiga", engine))
+            recordFadigaSamples({ posto: z.label, ...r.sample });
           if (r.alertRisk)
             onAlertRef.current?.(`⚠ ${label} · ${z.label}: ${RISK_LABEL[r.alertRisk]}`);
           const s = r.snapshot;
@@ -1302,89 +926,153 @@ export function CameraWorkspace({
           });
         }
       }
+      return recSamples;
+    };
 
-      // swap dos buffers de luma: a atual vira "anterior"; a anterior é reciclada p/ o próximo frame
-      if (luma) {
-        curLumaRef.current = prevLumaRef.current;
-        prevLumaRef.current = luma;
+    // UI: reflete indicadores no estado na cadência de UI comparando ASSINATURAS antes de setar
+    // (mesma cadência/formato; sem mudança visível → nenhum setState → zero re-render).
+    const uiStage = (now: number, tracks: Track[]): void => {
+      if (now - lastUiRef.current <= (mode === "full" ? 200 : 500)) return;
+      lastUiRef.current = now;
+      for (const [zid, r] of resultsRef.current) {
+        if (r.modo === "atividade") {
+          pushHist(zid, "motion", r.view.motion);
+          pushHist(zid, "people", r.view.people);
+        } else if (r.modo === "leitura") {
+          pushHist(zid, "rate", r.ratePct);
+          pushHist(zid, "perMin", r.perMin);
+          pushHist(zid, "noReads", r.noReads);
+        } else if (r.modo === "objetos") {
+          pushHist(zid, "total", r.total);
+        } else if (r.modo === "fadiga" && r.ear != null) {
+          pushHist(zid, "ear", r.ear);
+        }
       }
+      const pSig = panelSig(resultsRef.current);
+      if (pSig !== lastPanelSigRef.current) {
+        lastPanelSigRef.current = pSig;
+        setPanel(new Map(resultsRef.current));
+      }
+      const tw = counterRef.current ? counterRef.current.counts() : {}; // in/out do painel lateral
+      const tSig = twSig(tw);
+      if (tSig !== lastTwSigRef.current) {
+        lastTwSigRef.current = tSig;
+        setTwCounts(tw);
+      }
+      const fps = Math.round(meterRef.current.fps);
+      if (fps !== lastFpsRef.current) {
+        lastFpsRef.current = fps;
+        setPerf({ fps });
+      }
+      const be = getDetectBackend(); // chega assíncrono (worker "ready")
+      if (be !== lastDetBackendRef.current) {
+        lastDetBackendRef.current = be;
+        setDetBackend(be);
+      }
+      const dwellable = tracks.filter((t) => now - t.firstSeen >= APP_CONFIG.people.dwellMinMs);
+      const dwell = dwellable.length
+        ? dwellable.reduce((a, t) => a + (now - t.firstSeen), 0) / dwellable.length
+        : 0;
+      const lp = lastPresenceRef.current;
+      if (tracks.length !== lp.now || peakRef.current !== lp.peak || dwell !== lp.dwell) {
+        lastPresenceRef.current = { now: tracks.length, peak: peakRef.current, dwell };
+        setPresence({ now: tracks.length, peak: peakRef.current, dwell });
+      }
+    };
+
+    // ── O TICK: orquestração dos estágios, na MESMA ordem do laço original (ADR-007) ──
+    const loop = () => {
+      if (stopped) return;
+      rafRef.current = requestAnimationFrame(loop);
+      const canvas = canvasRef.current,
+        viewport = viewportRef.current;
+      if (!canvas || !viewport) return;
+      const f = acquireStage();
+      if (!f) return;
+      const now = performance.now();
+      meterRef.current.tick(now);
+      // CINE: mesmo frame que passou pelo gate (sem decode extra). Buffer em memória/EFÊMERO —
+      // nada é enviado/persistido (LGPD, ADR-002; ver cineBuffer.ts).
+      captureFrame(f.el, f.w, f.h, now, Date.now());
+      if (pausedRef.current) return; // ⏸ inspeção: congela o frame (não processa nem redesenha)
+
+      const { analyzeActivity, activityDt } = cadenceStage(now);
+      const zs = zonesRef.current;
+      const ativ = zs.filter((z) => z.modo === "atividade");
+      const excl = zs.filter((z) => z.modo === "exclusao"); // supressão de FP — sem indicador/processador
+      // Linhas contam SÓ na câmera aberta: na grade a detecção esparsa (4s) "teleporta" tracks
+      // (o cruzamento exige o MESMO track atravessar) e contar seria inventar número — o HUD
+      // indica pausado e a detecção NÃO é agendada só por causa das linhas.
+      const hasWires = tripwiresRef.current.length > 0;
+      const countingActive = hasWires && mode === "full";
+      // engine "hub" (ADR-009): o motor roda D-FINE+ByteTrack 24/7 → nenhuma instância agenda o
+      // coco local; ambas espelham os tracks/zonas servidos. Trade-off declarado: overlay de
+      // pessoas na cadência do motor (~1fps) em troca de aposentar o tfjs do cliente; o counter
+      // local fica parado (o "hoje" é o do servidor). Motion/alarme, fadiga e leitura: locais.
+      const engine = analysisEngineRef.current;
+      const hubActive = engine === "hub";
+      const needPersons = (ativ.length > 0 || countingActive) && !hubActive;
+
+      const m = motionStage(f, analyzeActivity, ativ.length > 0);
+      detectStage(f, now, needPersons);
+      // Espelho do hub: HubTrack→Track + pseudo-dets, com gate de payload novo + descarte de
+      // stale — sub-passo puro em ./camera/useHubAnalysis.
+      applyHubAnalysis(
+        hubActive,
+        hubActive ? (getHubAnalysisRef.current?.() ?? null) : null,
+        now,
+        f.w,
+        f.h,
+        { tracksRef, detsRef, hubZonesRef, hubTracksTsRef, hubFirstSeenRef },
+      );
+      // ZONA DE EXCLUSÃO — filtro ÚNICO na ORIGEM: tracker E `occupied` das zonas veem a MESMA
+      // lista (só pessoa; veículos seguem contando). Modo hub: dets já vêm filtrados → no-op.
+      const dets = filterExcludedPersons(
+        detsRef.current,
+        excl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) })),
+        f.w,
+        f.h,
+      );
+      const { tracks, freshDets } = trackingStage(dets, ativ, f, now, needPersons);
+      countingStage(tracks, now, countingActive, freshDets);
+
+      // flow/rec só fecham janela em frame ANALISADO (senão o recEmit cairia num frame pulado e
+      // a cadência de gravação dobraria esporadicamente).
+      const sampleFlow = analyzeActivity && now - lastFlowAtRef.current > 500;
+      const recEmit = analyzeActivity && now - lastRecAtRef.current > 3000;
+      const recSamples = zoneStage(
+        f,
+        now,
+        zs,
+        m,
+        activityDt,
+        analyzeActivity,
+        dets,
+        tracks,
+        hubActive,
+        sampleFlow,
+        recEmit,
+        engine,
+      );
       if (sampleFlow) lastFlowAtRef.current = now;
       if (recEmit) {
         lastRecAtRef.current = now;
-        // F1-C (ADR-009): ingest de ATIVIDADE suprimido quando o MOTOR DO HUB analisa esta
-        // câmera — o hub grava ativ (people/occupied/flow por zona) direto no pgstore; gravar
-        // aqui também duplicaria. Overlays/máquina de estado/painel continuam locais (visual).
-        if (recSamples.length && analysisEngineRef.current !== "hub")
+        // Ingest de ATIVIDADE segue a tabela ADR-009 (o hub grava ativ direto no pgstore).
+        if (recSamples.length && shouldIngest("ativ", engine))
           recordSamples({ cameraId, samples: recSamples });
       }
-
-      // Em revisão o palco mostra um quadro do buffer (render dedicado) — NÃO sobrescreve com o ao vivo.
-      // A inferência/alertas de fundo seguem rodando acima (só o desenho do palco para de avançar).
+      // Em revisão o palco mostra um quadro do buffer — inferência/alertas seguem rodando acima.
       if (!reviewRef.current) drawScene(canvas, viewport, f);
-
-      if (now - lastUiRef.current > (mode === "full" ? 200 : 500)) {
-        lastUiRef.current = now;
-        // Telemetria lateral: amostra os indicadores na cadência de UI (sem custo de inferência).
-        for (const [zid, r] of resultsRef.current) {
-          if (r.modo === "atividade") {
-            pushHist(zid, "motion", r.view.motion);
-            pushHist(zid, "people", r.view.people);
-          } else if (r.modo === "leitura") {
-            pushHist(zid, "rate", r.ratePct);
-            pushHist(zid, "perMin", r.perMin);
-            pushHist(zid, "noReads", r.noReads);
-          } else if (r.modo === "objetos") {
-            pushHist(zid, "total", r.total);
-          } else if (r.modo === "fadiga" && r.ear != null) {
-            pushHist(zid, "ear", r.ear);
-          }
-        }
-        // (1.10) comparar antes de setar: cada setState abaixo criava objeto NOVO a cada tick e
-        // re-renderizava todo o JSX mesmo sem mudança visível. Mesma cadência, mesmo formato de
-        // dado — só que sem mudança → nenhum setState → zero re-render.
-        const pSig = panelSig(resultsRef.current);
-        if (pSig !== lastPanelSigRef.current) {
-          lastPanelSigRef.current = pSig;
-          setPanel(new Map(resultsRef.current));
-        }
-        const tw = counterRef.current ? counterRef.current.counts() : {}; // contadores in/out do painel lateral
-        const tSig = twSig(tw);
-        if (tSig !== lastTwSigRef.current) {
-          lastTwSigRef.current = tSig;
-          setTwCounts(tw);
-        }
-        const fps = Math.round(meterRef.current.fps);
-        if (fps !== lastFpsRef.current) {
-          lastFpsRef.current = fps;
-          setPerf({ fps });
-        }
-        // Backend de detecção (2.4): chega assíncrono (worker "ready") — amostra na cadência de UI.
-        const be = getDetectBackend();
-        if (be !== lastDetBackendRef.current) {
-          lastDetBackendRef.current = be;
-          setDetBackend(be);
-        }
-        const dwellable = tracks.filter((t) => now - t.firstSeen >= APP_CONFIG.people.dwellMinMs);
-        const dwell = dwellable.length
-          ? dwellable.reduce((a, t) => a + (now - t.firstSeen), 0) / dwellable.length
-          : 0;
-        const lp = lastPresenceRef.current;
-        if (tracks.length !== lp.now || peakRef.current !== lp.peak || dwell !== lp.dwell) {
-          lastPresenceRef.current = { now: tracks.length, peak: peakRef.current, dwell };
-          setPresence({ now: tracks.length, peak: peakRef.current, dwell });
-        }
-      }
-      // Fase 0.1: custo REAL deste tick na main-thread (rolling em FrameMeter.avgProcMs) → HUD.
-      // `now` é o performance.now() do início do trabalho (pós-gate de "frame novo", pós-⏸): mede
-      // motion + inferência-agendada + laço por-zona + drawScene. Régua da câmera aberta (ms/frame).
+      uiStage(now, tracks);
+      // Custo REAL do tick na main-thread (rolling → HUD): motion + agendamento + zonas + draw.
       meterRef.current.pushProc(performance.now() - now);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => {
       stopped = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      // (P1) solta a corrente rVFC e zera o dono — o próximo efeito (remontagem/troca de câmera)
-      // re-arma no elemento vivo; sem isto, armVfc veria o MESMO <video> e nunca re-armaria.
+      // Solta a corrente rVFC e zera o dono — sem isto, armVfc veria o MESMO <video> na
+      // remontagem/troca de câmera e nunca re-armaria.
       const vfcVideo = vfcVideoRef.current;
       if (vfcVideo && vfcHandleRef.current) {
         try {
@@ -1406,27 +1094,19 @@ export function CameraWorkspace({
       canvas.width = Math.round(vpW * dpr);
       canvas.height = Math.round(vpH * dpr);
     }
-    // (3.3) PALCO opaco: alpha:false dispensa o blending do canvas com a página no compositor
-    // (frame inteiro, todo repaint); desynchronized é HINT p/ tirar o palco do caminho síncrono de
-    // apresentação onde suportado (ignorado nos demais). Com alpha:false a área NÃO pintada fica
-    // PRETA — por isso o clearRect virou fillRect na MESMA cor do fundo do tile/palco
-    // (--cam-surface-bg, index.css): o frame cobre o retângulo de conteúdo e o letterbox é a única
-    // área restante, agora pintada na cor de sempre → zero mudança visual.
-    // NOTA: mesmo canvas do drawReviewFrame (camera/draw.ts) — os atributos do 1º getContext valem
-    // p/ sempre; os dois pedem os MESMOS atributos p/ não depender de quem chama primeiro.
-    // Fase 1 (go2rtc): no WebRTC o vídeo nativo (<video-stream>) fica ATRÁS; o canvas é só overlay
-    // TRANSPARENTE (alpha:true → clearRect deixa ver o vídeo). No MJPEG segue opaco (alpha:false +
-    // fillRect do fundo + drawImage do frame), byte-a-byte. O canvas usa `key` por transporte no JSX,
-    // então cada instância só vê UM modo → o atributo do 1º getContext (travado p/ sempre) é o certo.
+    // INVARIANTE dos atributos do canvas (travam no 1º getContext, p/ sempre): MJPEG = palco
+    // OPACO (alpha:false dispensa blending no compositor; letterbox pintado via fillRect na cor
+    // --cam-surface-bg). WebRTC = overlay TRANSPARENTE (alpha:true; o <video-stream> fica atrás).
+    // O canvas usa `key` por transporte no JSX → cada instância só vê UM modo; drawReviewFrame
+    // (camera/draw.ts) pede os MESMOS atributos p/ não depender de quem chama primeiro.
     const wrtc = webrtcRef.current;
     const ctx = canvas.getContext(
       "2d",
       wrtc ? { alpha: true, desynchronized: true } : { alpha: false, desynchronized: true },
     )!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // Retângulo de conteúdo (letterbox). No WebRTC f.w/f.h = videoWidth/Height do <video>, que usa
-    // object-fit:contain no MESMO palco → getContentRect dá EXATAMENTE o box do vídeo: zonas/tracks
-    // caem sobre o vídeo sem depender do frame MJPEG (mesmo mapeamento do TrackOverlay do tile).
+    // Retângulo de conteúdo (letterbox). No WebRTC o <video> usa object-fit:contain no MESMO
+    // palco → getContentRect dá exatamente o box do vídeo (zonas/tracks caem sobre ele).
     const cr = getContentRect(vpW, vpH, f.w, f.h);
     if (wrtc) {
       ctx.clearRect(0, 0, vpW, vpH);
@@ -1437,38 +1117,32 @@ export function CameraWorkspace({
     }
     const detailed = mode === "full";
 
-    // Heatmap de ocupação (camada) — agora UNIFICADO na lib pura counting.ts (occ.grid() já normalizado 0..1).
-    // Desenhado sob as geometrias, com ramp warn→critical (tokens). O toggle "heatmap" continua governando.
+    // Heatmap de ocupação (camada, sob as geometrias) — grade normalizada da lib counting.ts.
     if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
 
-    // ── SUAVIZAÇÃO DISPLAY-ONLY das caixas do hub (interpolação por velocidade + fade) ───────────
-    // No modo HUB os tracks chegam em cadência baixa (~1fps; ~6fps focado) e a bbox CRUA congela+SALTA
-    // entre payloads. UNIFICADO com a grade: reusa o MESMO TrackInterpolator puro (camera/interpolate.ts)
-    // — ingere o payload (dedupe por ts, igual ao TrackOverlay) e AMOSTRA a bbox no tempo real; a caixa
-    // acompanha a pessoa e quem some faz FADE (opacity → drawTracks), não congela. A LÓGICA (contagem/
-    // exclusão/tripwire/ocupação) JÁ RODOU acima sobre `tracksRef` EXATO; aqui só muda o que se VÊ:
-    // toDisplayTracks monta o shape de desenho a partir do sample() + firstSeen (do hubFirstSeenRef,
-    // mantido pelo applyHubAnalysis). Modo LOCAL (coco-ssd) NÃO interpola: usa o track cru, como hoje.
+    // Suavização DISPLAY-ONLY das caixas do hub (TrackInterpolator, o MESMO puro da grade): a
+    // bbox crua congela+salta na cadência do motor (~1fps). Invariante: a LÓGICA (contagem/
+    // exclusão/tripwire/ocupação) JÁ RODOU sobre tracksRef EXATO; aqui só muda o que se VÊ.
+    // Ingere só payload FRESCO (mesmo limiar do applyHubAnalysis); modo local não interpola.
     const hubEngine = analysisEngineRef.current === "hub";
     let displayTracks: ReadonlyArray<TrackBox> = tracksRef.current;
     if (hubEngine) {
       const nowMs = performance.now();
       const hd = getHubAnalysisRef.current?.() ?? null;
-      // Ingere só payload FRESCO (mesmo limiar do applyHubAnalysis/TrackOverlay): payload velho não
-      // ancora keyframe em dado morto — as caixas vivas fazem fade e somem.
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) hubInterpRef.current.ingest(hd, nowMs);
-      displayTracks = toDisplayTracks(hubInterpRef.current.sample(nowMs), hubFirstSeenRef.current, nowMs);
+      displayTracks = toDisplayTracks(
+        hubInterpRef.current.sample(nowMs),
+        hubFirstSeenRef.current,
+        nowMs,
+      );
     }
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)
       drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed);
 
-    // Laço por-zona (retângulo/máscara + rótulo + detecções + overlay de fadiga) → ./camera/draw.
-    // Passa os valores já resolvidos (refs/estado) + getMask; os gates de camada seguem lá dentro.
-    // ÚLTIMO arg (bug "2 caixas p/ 1 pessoa"): bboxes dos tracks JÁ desenhados acima — a camada
-    // de dets do modo "objetos" omite a det de pessoa coberta por um track (1 pessoa = 1 caixa;
-    // a caixa "oficial" de pessoa é a do track). Só quando drawTracks de fato desenhou (camada on).
+    // Laço por-zona (retângulo/máscara + rótulo + dets + fadiga) → ./camera/draw. Último arg
+    // (1 pessoa = 1 caixa): a camada de dets omite a det de pessoa já coberta por um track.
     drawZoneOverlays(
       ctx,
       cr,
@@ -1481,14 +1155,9 @@ export function CameraWorkspace({
       layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
     );
 
-    // Tripwires (linhas de contagem com direção) — SEMPRE visíveis (operador vê linhas + contagens).
-    // Linha a→b (token --state-info) + seta de direção "in" via inwardNormal (token --state-neutral)
-    // + HUD in/out "hoje" (acumulado do servidor via flowBaseRef + sessão corrente — item 1.2).
-    // F1-C (ADR-009) — modo HUB: o "hoje" do HUD é SÓ o acumulado do servidor (hubFlowRef,
-    // refresh ~30s); somar a sessão local contaria cada cruzamento 2× (o hub grava os mesmos
-    // cruzamentos). counts=EMPTY zera a parcela da sessão; paused=false pois o motor conta
-    // 24/7 mesmo com o tile fechado (a mensagem "conta na câmera aberta" só vale no modo local).
-    // (hubEngine já resolvido acima, na suavização das caixas — reusa a mesma leitura do ref.)
+    // Tripwires — SEMPRE visíveis. Modo hub (ADR-009): o "hoje" é SÓ o acumulado do servidor
+    // (somar a sessão local contaria cada cruzamento 2×) e paused=false (o motor conta 24/7);
+    // modo local: base do servidor + sessão corrente, pausado na grade.
     drawTripwires(
       ctx,
       cr,
@@ -1498,24 +1167,19 @@ export function CameraWorkspace({
       hubEngine ? hubFlowRef.current : flowBaseRef.current,
     );
 
-    // grade de pintura (ao editar a máscara de uma zona)
-    if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows);
+    if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows); // grade de pintura
+    drawZoneDraft(ctx, drawRef.current); // retângulo de zona em arraste
+    drawTripwireDraft(ctx, twDrawRef.current); // linha em traçado
 
-    // retângulo de uma nova zona em arraste
-    drawZoneDraft(ctx, drawRef.current);
-
-    // tripwire em traçado (clique em A, arrasta até B)
-    drawTripwireDraft(ctx, twDrawRef.current);
-
-    // Fase 0.1: HUD de telemetria (toggleável) — SÓ na câmera aberta (detailed). Desenhado por
-    // ÚLTIMO (sobre tudo), canto superior direito. `overlayAge` só faz sentido no modo hub
-    // (idade do último payload de track — expõe a caixa congelada a ~1fps); local → null.
-    // `dropped`/`recvFps` lidos DEFENSIVOS do FrameSource (outra frente pode expô-los; podem faltar).
+    // HUD de telemetria (toggleável; só na câmera aberta), desenhado por último. overlayAge só
+    // faz sentido no modo hub; dropped/recvFps são opcionais do FrameSource (lidos defensivos);
+    // estágios dos processadores vêm de stageMsRef e a fila do scheduler de schedulerStats().
     if (hudRef.current && detailed) {
       const eng = analysisEngineRef.current === "hub" ? "hub" : "local";
       const age =
         eng === "hub" && hubTracksTsRef.current > 0 ? Date.now() - hubTracksTsRef.current : null;
       const fx = f as FrameSource & { dropped?: number; recvFps?: number };
+      const st = stageMsRef.current;
       drawTelemetryHud(ctx, cr, {
         fps: meterRef.current.fps,
         msFrame: meterRef.current.avgProcMs,
@@ -1523,12 +1187,15 @@ export function CameraWorkspace({
         overlayAgeMs: age,
         dropped: typeof fx.dropped === "number" ? fx.dropped : undefined,
         recvFps: typeof fx.recvFps === "number" ? fx.recvFps : undefined,
+        detectMs: st.detect,
+        decodeMs: st.decode,
+        faceMs: st.face,
+        handMs: st.hand,
+        objMs: st.obj,
+        queue: schedulerStats(),
       });
     }
   }
-
-  // Cine-loop / revisão / snapshot / export de clipe → hook ./camera/useCineLoop
-  // (render do quadro de revisão, play, enterReview/exitReview/scrubBy, downloadSnapshot, exportClip).
 
   // ── máscara (blueprint em grade) ──
   function getMask(z: Zone): Mask | null {
@@ -1660,9 +1327,7 @@ export function CameraWorkspace({
     };
     setZones((p) => persist([...p, nz]));
   }
-  // Editor de tripwires (commitTripwire/invertTripwire/removeTripwire/resetCounts/toggleTripwireMode)
-  // → hook ./camera/useTripwires. O onUp acima chama `commitTripwire` ao soltar uma linha traçada.
-  // Modos de edição mutuamente exclusivos (não conflitar tripwire × zona × pintura).
+  // Modos de edição mutuamente exclusivos (tripwire × zona × pintura não conflitam).
   function toggleDrawMode() {
     setDrawMode((v) => {
       const nv = !v;
@@ -1674,9 +1339,8 @@ export function CameraWorkspace({
     });
   }
 
-  // Write-through: aplica a edição já (retorna `next` p/ o setZones) e persiste no BACKEND, mantendo
-  // o localStorage como cache/fallback. Em erro do PUT: toast (padrão existente) SEM perder a edição
-  // local — o cache local garante a persistência offline; a central re-sincroniza depois.
+  // Write-through: aplica a edição já e persiste no BACKEND (localStorage = cache/fallback).
+  // Erro do PUT → toast SEM perder a edição local; a central re-sincroniza depois.
   function persist(next: Zone[]): Zone[] {
     persistZones(cameraId, next).catch((e) => {
       const msg = e instanceof ApiError ? e.message : "Não foi possível salvar as zonas.";
@@ -1687,17 +1351,15 @@ export function CameraWorkspace({
   function patchZone(id: string, patch: Partial<Zone>) {
     setZones((p) => persist(p.map((z) => (z.id === id ? { ...z, ...patch } : z))));
   }
-  // MODO-COMO-PRESET: recarrega de uma vez camadas + confiança a partir do preset do modo,
-  // e marca o preset ativo (governa o que o painel destaca). Não mexe em geometria/zonas.
+  // Aplica o preset do modo (camadas + confiança); não mexe em geometria/zonas.
   function applyPreset(mode: ModeKey) {
     const p = MODE_PRESETS[mode];
     setLayers({ ...p.layers });
     setConf(p.confidenceThreshold);
     setActivePreset(mode);
   }
-  // Perfil "Longo alcance / Panorâmica" (por câmera, gated por canConfigure). Aplica na hora
-  // (longRangeRef → próxima detecção usa opts; holderFor propaga setLongRange aos processadores) e
-  // PERSISTE no backend via setCameraCfg (write-through; cache local mantém a UX offline).
+  // Perfil "Longo alcance" (por câmera): aplica na hora (longRangeRef → rAF/processadores) e
+  // persiste via setCameraCfg (write-through; cache local mantém a UX offline).
   function onLongRangeChange(on: boolean) {
     setLongRange(on);
     longRangeRef.current = on; // efeito imediato no rAF (sem esperar o commit do estado)
@@ -1754,38 +1416,8 @@ export function CameraWorkspace({
     (r) => r.modo === "atividade" && r.view.state === "ALERTA",
   ).length;
 
-  // Legenda do overlay: só as cores realmente em uso (pelos modos/classes das zonas atuais).
-  const legend: { color: string; label: string }[] = (() => {
-    const out: { color: string; label: string }[] = [];
-    const modes = new Set(zones.map((z) => z.modo));
-    if (modes.has("atividade")) {
-      out.push(
-        { color: "var(--state-neutral)", label: "Ativa" },
-        { color: "var(--state-warn)", label: "Lenta/Ociosa" },
-        { color: "var(--state-critical)", label: "Alerta" },
-        { color: "var(--state-info)", label: "Pessoa" },
-      );
-    }
-    if (modes.has("leitura")) out.push({ color: "var(--state-info)", label: "Faixa de leitura" });
-    if (modes.has("objetos")) {
-      const keys = new Set(
-        zones.filter((z) => z.modo === "objetos").flatMap((z) => z.selectedClasses),
-      );
-      for (const k of keys) {
-        const o = objClass(k);
-        if (o) out.push({ color: o.color, label: o.label });
-      }
-    }
-    if (modes.has("fadiga"))
-      out.push(
-        { color: "var(--state-neutral)", label: "OK" },
-        { color: "var(--state-warn)", label: "Alerta" },
-        { color: "var(--state-critical)", label: "Duplo" },
-      );
-    if (modes.has("exclusao"))
-      out.push({ color: "var(--state-neutral)", label: "Exclusão (ignorada)" });
-    return out;
-  })();
+  // Legenda do overlay: só as cores em uso pelos modos/classes atuais (./camera/derive).
+  const legend = legendFor(zones);
   const cfgZone = cfgZoneId ? (zones.find((z) => z.id === cfgZoneId) ?? null) : null;
   // Preset ativo + se o operador divergiu dele manualmente nesta sessão (sobrepondo o preset).
   const activePresetDef = activePreset ? MODE_PRESETS[activePreset] : null;
@@ -1954,14 +1586,11 @@ export function CameraWorkspace({
             if (paintZone) e.preventDefault();
           }}
         >
-          {/* Fase 1 (go2rtc): camada de vídeo WebRTC ATRÁS do canvas. Decode por HW (estável) →
-              elimina a oscilação do MJPEG (rajada de HLS + spike de CPU do motor). Props aplicadas
-              imperativamente no efeito acima. Só quando webrtc; câmera mjpeg nem monta o elemento. */}
+          {/* Vídeo WebRTC ATRÁS do canvas (decode por HW); câmera mjpeg nem monta o elemento. */}
           {webrtc && <video-stream ref={videoStreamRef} />}
-          {/* `key` por transporte: o canvas é opaco (alpha:false) no MJPEG e transparente
-              (alpha:true) no WebRTC; os atributos do 1º getContext travam p/ sempre, então uma
-              troca de transporte em runtime remonta o canvas com o alpha certo. DOM: o canvas vem
-              DEPOIS do <video-stream> → pinta POR CIMA (z-index auto = ordem de pintura). */}
+          {/* `key` por transporte: os atributos do 1º getContext travam p/ sempre (opaco no MJPEG,
+              transparente no WebRTC) → troca em runtime REMONTA o canvas com o alpha certo. O
+              canvas vem DEPOIS do <video-stream> → pinta por cima (ordem de pintura). */}
           <canvas className="overlay" key={webrtc ? "rtc" : "mjpeg"} ref={canvasRef} />
           {review && (
             <>
@@ -2139,9 +1768,8 @@ export function CameraWorkspace({
           {summary || "sem zonas"}
         </span>
         <span className="kb muted">FPS {perf.fps}</span>
-        {/* Fase 0.1: toggle do HUD de telemetria sobre o vídeo (going-gray: neutro; é ferramenta
-            de medição, não anormalidade). Estado na UI; o rAF lê o ref (sem re-render por frame). */}
-        <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local) e idade do overlay">
+        {/* Toggle do HUD (going-gray: régua de medição, não anormalidade). O rAF lê o ref. */}
+        <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local), idade do overlay e latência por estágio (OWL-ViT/ZXing/MediaPipe) + fila de inferência">
           <Toggle
             aria-label="HUD de telemetria"
             pressed={hud}
@@ -2153,17 +1781,16 @@ export function CameraWorkspace({
             HUD
           </Toggle>
         </Tooltip>
-        {/* F1-C (ADR-009) — fonte da análise: NEUTRO (going-gray, informativo, não é anormalidade)
-            e SÓ no modo hub; local = nada (comportamento atual). F3: no modo hub o worker tfjs
-            local nem sobe p/ pessoas (tracks vêm do servidor) — o badge de detecção abaixo só
-            aparece se algum consumidor local (fadiga/celular, engine local) iniciou o worker. */}
+        {/* Fonte da análise (ADR-009): NEUTRO e só no modo hub; local = nada. No modo hub o
+            worker tfjs nem sobe p/ pessoas — o badge de detecção abaixo só aparece se um
+            consumidor local (fadiga/celular, engine local) o iniciou. */}
         {analysisEngine === "hub" && (
           <Tooltip content="indicadores gravados pelo servidor — D-FINE">
             <span className="kb muted">análise: hub</span>
           </Tooltip>
         )}
-        {/* Backend de detecção (2.4) — going-gray: neutro em GPU; saturado (warn) SÓ em CPU,
-            que é o modo degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
+        {/* Backend de detecção — going-gray: neutro em GPU; satura (warn) SÓ em CPU, o modo
+            degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
         {detBackend != null &&
           (detBackend === "cpu" ? (
             <Tooltip content="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)">

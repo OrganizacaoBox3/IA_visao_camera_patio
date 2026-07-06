@@ -220,8 +220,7 @@ export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
 
 // Ponto normalizado (0..1) cai dentro da zona? Respeita a MÁSCARA via `contains` (quando a zona
 // foi pintada); sem máscara, é o retângulo cheio `x,y,w,h`. Função PURA (testável) reusada pelo
-// filtro de EXCLUSÃO (o "pé"/bottom-center da pessoa) no CameraWorkspace. Espelha o gate de
-// retângulo+máscara já usado em zoneAtAtiv/containsFn.
+// filtro de EXCLUSÃO (o "pé"/bottom-center da pessoa) no CameraWorkspace.
 export function pointInZone(
   z: Pick<Zone, "x" | "y" | "w" | "h">,
   px: number,
@@ -230,4 +229,38 @@ export function pointInZone(
 ): boolean {
   if (px < z.x || px > z.x + z.w || py < z.y || py > z.y + z.h) return false;
   return contains ? contains(px, py) : true;
+}
+
+// ── Atribuição de zona com DESEMPATE — regra ÚNICA do front ──────────────────────────────────
+// Candidata = ponto (cx,cy) dentro do retângulo E da máscara (via containsOf). Entre candidatas
+// SOBREPOSTAS vence a de MAIOR interseção bbox∩zona (a zona que mais "contém" o corpo);
+// persistindo o empate, a de MENOR área (a mais específica). Sem bbox, interseção = 0 p/ todas →
+// decide a menor área. Consumida por CameraWorkspace (tracks) e ObjetosProcessor (zoneOf) —
+// first-match por ordem de lista NÃO é critério válido (a contagem caía na zona errada).
+export type AssignableZone = { x: number; y: number; w: number; h: number };
+export function assignZone<Z extends AssignableZone>(
+  zones: readonly Z[],
+  cx: number,
+  cy: number,
+  bbox?: readonly [number, number, number, number],
+  containsOf?: (z: Z) => ((nx: number, ny: number) => boolean) | undefined,
+): Z | null {
+  let best: Z | null = null;
+  let bestOv = -1;
+  for (const z of zones) {
+    if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
+    const cn = containsOf?.(z);
+    if (cn && !cn(cx, cy)) continue;
+    let ov = 0;
+    if (bbox) {
+      const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
+      const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
+      ov = Math.max(0, ix) * Math.max(0, iy);
+    }
+    if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
+      best = z;
+      bestOv = ov;
+    }
+  }
+  return best;
 }

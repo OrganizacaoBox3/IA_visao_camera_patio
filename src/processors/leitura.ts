@@ -3,6 +3,7 @@
 // drenando os eventos a cada process(). A view cuida de cluster/gravação/desenho/painel (SRP).
 import { APP_CONFIG } from "../config";
 import { decodeFromCanvas, ensureDecoder, decoderKind, type DecoderKind } from "../reading/decoder";
+import { createLumaSource } from "../vision/luma";
 import type { ReadEvent, PassEvent } from "../reading/cluster";
 import type { FrameSource } from "../frame";
 import type { Disposable } from "./types";
@@ -25,9 +26,7 @@ export type LeituraResult = {
 
 export class LeituraProcessor implements Disposable {
   private proc = document.createElement("canvas");
-  private motion = document.createElement("canvas");
-  private prevLuma: Float32Array | null = null;
-  private curLuma: Float32Array | null = null; // buffer reutilizável (swap c/ prevLuma) — evita new por frame
+  private motionLuma = createLumaSource(); // luma da ROI p/ detecção de passagem (vision/luma)
   private decoding = false;
   private lastDecodeAt = 0;
   private lastEmit: { code: string; ts: number } | null = null;
@@ -56,44 +55,28 @@ export class LeituraProcessor implements Disposable {
       sh = Math.max(1, Math.round(zone.h * f.h));
 
     // ── PASSAGEM de caixa (motion na ROI; borda de subida = entrou caixa) ──
+    // Kernel/ping-pong de luma em vision/luma (dono único); aqui só o diff + máquina de passagem.
     const mpw = R.motionProcWidth,
       mph = Math.max(1, Math.round((mpw * sh) / sw));
-    if (this.motion.width !== mpw || this.motion.height !== mph) {
-      this.motion.width = mpw;
-      this.motion.height = mph;
-      this.prevLuma = null;
-      this.curLuma = null;
-    }
-    const mctx = this.motion.getContext("2d", { willReadFrequently: true });
-    if (mctx) {
-      mctx.drawImage(f.el, sx, sy, sw, sh, 0, 0, mpw, mph);
-      const mdata = mctx.getImageData(0, 0, mpw, mph).data;
-      const size = mpw * mph;
-      let luma = this.curLuma;
-      if (!luma || luma.length !== size) luma = new Float32Array(size); // (re)aloca só na 1ª vez / ao mudar de tamanho
-      for (let i = 0, j = 0; i < mdata.length; i += 4, j++)
-        luma[j] = 0.299 * mdata[i] + 0.587 * mdata[i + 1] + 0.114 * mdata[i + 2];
-      const prev = this.prevLuma;
-      if (prev) {
-        let changed = 0;
-        const total = luma.length;
-        for (let k = 0; k < total; k++)
-          if (Math.abs(luma[k] - prev[k]) > R.motionPixelDelta) changed++;
-        const ratio = total > 0 ? changed / total : 0;
-        if (this.passState === "clear" && ratio > R.passEnterRatio) {
-          this.passState = "occupied";
-          if (now - this.lastPassAt > R.passDebounceMs) {
-            this.lastPassAt = now;
-            this.passesCount++;
-            this.pendingPasses.push({ cameraId: ctx.cameraId, ponto: zone.ponto, ts: Date.now() });
-          }
-        } else if (this.passState === "occupied" && ratio < R.passClearRatio) {
-          this.passState = "clear";
+    const s = this.motionLuma.sample(f.el, mpw, mph, { sx, sy, sw, sh });
+    if (s && s.prev) {
+      const luma = s.luma,
+        prev = s.prev;
+      let changed = 0;
+      const total = luma.length;
+      for (let k = 0; k < total; k++)
+        if (Math.abs(luma[k] - prev[k]) > R.motionPixelDelta) changed++;
+      const ratio = total > 0 ? changed / total : 0;
+      if (this.passState === "clear" && ratio > R.passEnterRatio) {
+        this.passState = "occupied";
+        if (now - this.lastPassAt > R.passDebounceMs) {
+          this.lastPassAt = now;
+          this.passesCount++;
+          this.pendingPasses.push({ cameraId: ctx.cameraId, ponto: zone.ponto, ts: Date.now() });
         }
+      } else if (this.passState === "occupied" && ratio < R.passClearRatio) {
+        this.passState = "clear";
       }
-      // swap: a luma atual vira "anterior"; o buffer antigo é reciclado p/ a próxima leitura
-      this.curLuma = this.prevLuma;
-      this.prevLuma = luma;
     }
 
     // ── DECODE throttled na ROI (largura limitada → mais rápido) ──

@@ -160,30 +160,22 @@ function tileGrid(tiled: boolean, optTiles?: TileSpec): Tile[] {
   return out;
 }
 
-// ── Supressão de duplicatas por classe (NMS por IoU + dedupe por CONTENÇÃO) ──
-// Lógica pura em ./nms.ts (testável sem tfjs). Além do NMS clássico (IoU ≥ nmsIoU),
-// suprime a caixa majoritariamente CONTIDA em outra da mesma classe (interseção /
-// área_menor ≥ CONTAINMENT_THR, mantendo a de maior score): é a "pessoa duplicada"
-// do tiling — caixa PARCIAL num tile vizinho tem IoU BAIXO com a caixa inteira
-// (união grande) e sobrevivia ao NMS. Vale p/ TODOS os consumidores de detectFrame.
-// 0.7 é CONSERVADOR de propósito: duas pessoas realmente próximas lado a lado não
-// atingem 70% de contenção mútua (só oclusão forte atinge — e aí o detector já
-// tende a emitir uma caixa só). Trade-off declarado em nms.ts.
-const CONTAINMENT_THR = 0.7;
+// Dedupe por CONTENÇÃO além do NMS (lógica pura em ./nms.ts; trade-off do número declarado no
+// dono: config.detection.containmentThr): caixa parcial num tile vizinho tem IoU baixo com a
+// caixa inteira e sobrevivia ao NMS. Vale p/ todos os consumidores de detectFrame.
+const CONTAINMENT_THR = C.containmentThr;
 
-// ── (2.4b) TILE ROTATION na GRADE (perfil longo alcance) ─────────────────────
-// Estado por CALLER, keyed por `opts.schedule.key` (ex.: `${cameraId}:atividade`) — vive AQUI
-// (module-level) porque o caller já passa uma key estável p/ o scheduler; nada muda na API.
-// Na GRADE (`tiled === false`) com grid multi-tile, cada chamada processa só K dos N tiles
-// (round-robin persistente) e FUNDE as detecções novas com o cache dos tiles não processados,
-// aplicando o NMS no conjunto fundido. Entradas do cache expiram após ~2 varreduras completas sem
-// refresh (em regime cada tile é re-processado a cada varredura; o TTL protege contra rotação
-// interrompida — ex.: câmera que alternou p/ full e voltou).
-// TRADE-OFF DECLARADO: na grade, a bbox de um tile só atualiza quando a rotação volta nele
-// (até N/K = 4 chamadas ≈ 4 × TILE_OBJECT_INTERVAL_MS); motion/alarme não dependem disso.
-// Na câmera ABERTA (`tiled === true`) a grade é processada COMPLETA por chamada (recall preservado).
-const GRID_TILES_PER_CALL = 4; // K tiles processados por chamada na grade (de N=16 no perfil LR)
-const GRID_CACHE_TTL_SWEEPS = 2; // expira entrada não refrescada após ~2 varreduras completas
+// ── TILE ROTATION na GRADE (perfil longo alcance) ────────────────────────────
+// Estado por CALLER, keyed por `opts.schedule.key` (o caller já passa uma key estável p/ o
+// scheduler). Na GRADE (`tiled === false`) com grid multi-tile, cada chamada processa só K dos N
+// tiles (round-robin persistente) e FUNDE as detecções novas com o cache dos tiles não
+// processados, aplicando o NMS no conjunto fundido. Trade-off do K declarado no dono
+// (config.detection.longRange.gridTilesPerCall). Na câmera ABERTA (`tiled === true`) a grade é
+// processada COMPLETA por chamada (recall preservado).
+const GRID_TILES_PER_CALL = C.longRange.gridTilesPerCall; // K tiles por chamada na grade LR
+// Cache expira após ~2 varreduras completas sem refresh — protege contra rotação interrompida
+// (ex.: câmera que alternou p/ full e voltou); em regime cada tile é re-processado por varredura.
+const GRID_CACHE_TTL_SWEEPS = 2;
 type TileCacheEntry = { dets: NormDet[]; round: number };
 type RotationState = { sig: string; pos: number; round: number; cache: (TileCacheEntry | null)[] };
 const rotationByKey = new Map<string, RotationState>();

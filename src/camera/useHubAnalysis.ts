@@ -1,13 +1,13 @@
-// ── F1/F2/F3 (ADR-009): análise no HUB — espelho dos overlays servidos + "hoje" das linhas ──
-// Extraído do CameraWorkspace (Onda C) SEM mudança de comportamento. Com engine==="hub" o MOTOR do
-// hub (D-FINE+ByteTrack, 24/7) grava os indicadores e emite `analysis-tracks` @1fps; este componente
-// vira ESPELHO (desenha os tracks/zonas servidos) e SUPRIME os ingests locais p/ não duplicar.
-// Engine "local" (motor desligado) → efeitos inertes = pipeline local idêntico ao de sempre.
+// ── Espelho da análise no HUB (ADR-009): overlays servidos + "hoje" das linhas ──
+// Com engine==="hub" o MOTOR do hub (D-FINE+ByteTrack, 24/7) grava os indicadores e emite
+// `analysis-tracks` @1fps; a câmera vira ESPELHO (desenha os tracks/zonas servidos) e SUPRIME os
+// ingests locais duplicáveis (tabela em camera/ingestPolicy.ts). Engine "local" → efeitos
+// inertes = pipeline local idêntico ao de sempre.
 import { useEffect, useRef, useState } from "react";
 import { type Detection } from "../vision/model";
 import { type TripwireCounts } from "../vision/counting";
 import { loadFlowToday } from "../report/store";
-import type { HubAnalysis, HubZone, Track } from "../CameraWorkspace";
+import type { HubAnalysis, HubZone, Track } from "../types/analysis";
 
 // Payload do hub mais velho que isto é STALE (motor reiniciando/rede) → não desenhar caixa velha.
 // Exportado: o CameraWorkspace usa o MESMO limiar p/ gatear o ingest do interpolador da câmera focada.
@@ -103,13 +103,9 @@ export function applyHubAnalysis(
   }
 }
 
-// ── Suavização DISPLAY-ONLY das caixas do HUB — UNIFICADA no TrackInterpolator (camera/interpolate.ts) ──
-// O hub emite `analysis-tracks` em cadência baixa (~1fps; ~6fps focado); a bbox CRUA congela+salta entre
-// payloads. A GRADE (routes/dashboard/TrackOverlay) e a CÂMERA FOCADA (CameraWorkspace.drawScene) usam
-// AGORA o MESMO interpolador puro (velocidade + fade/expire). O antigo easeHubTracks (LERP até-alvo, sem
-// fade) foi removido — a câmera focada instancia um TrackInterpolator e monta os displayTracks via
-// toDisplayTracks(). SEPARAÇÃO display×lógica preservada: a lógica (contagem/exclusão/tripwire/ocupação)
-// segue lendo `tracksRef` EXATO (applyHubAnalysis); só o DESENHO usa o interpolado.
+// Suavização DISPLAY-ONLY das caixas do hub: TrackInterpolator (camera/interpolate.ts), o MESMO
+// puro na grade e na câmera focada. Invariante: a LÓGICA (contagem/exclusão/tripwire/ocupação)
+// lê `tracksRef` EXATO (applyHubAnalysis); só o DESENHO usa a bbox interpolada.
 
 export function useHubAnalysis(
   analysisEngine: "hub" | "local",

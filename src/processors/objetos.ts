@@ -10,6 +10,7 @@ import {
   type ObjBackend,
 } from "../objects/detector";
 import { objClass } from "../objects/catalog";
+import { assignZone } from "../zones";
 import type { ObjSample, ObjectEvent } from "../report/store";
 import type { FrameSource } from "../frame";
 import type { Disposable } from "./types";
@@ -90,17 +91,15 @@ export class ObjetosProcessor implements Disposable {
     this.longRange = on;
   }
 
-  private zoneOf(setores: ObjetosSetor[], cx: number, cy: number): string {
-    for (const z of setores)
-      if (
-        cx >= z.x &&
-        cx <= z.x + z.w &&
-        cy >= z.y &&
-        cy <= z.y + z.h &&
-        (!z.contains || z.contains(cx, cy))
-      )
-        return z.label;
-    return setores[0]?.label ?? "Cena";
+  // Setor do objeto pela regra ÚNICA de atribuição de zona (zones.assignZone): com setores
+  // SOBREPOSTOS, desempate por maior interseção bbox∩setor, depois menor área — o first-match
+  // por ordem de lista atribuía ao setor errado (mesmo bug já corrigido na atividade).
+  // Fora de qualquer setor → 1º setor (fallback histórico deste modo; "Cena" sem setores).
+  private zoneOf(setores: ObjetosSetor[], bbox: readonly [number, number, number, number]): string {
+    const cx = bbox[0] + bbox[2] / 2,
+      cy = bbox[1] + bbox[3] / 2;
+    const z = assignZone(setores, cx, cy, bbox, (s) => s.contains);
+    return z?.label ?? setores[0]?.label ?? "Cena";
   }
 
   process(setores: ObjetosSetor[], classes: string[], ctx: ObjetosCtx): ObjetosResult {
@@ -139,7 +138,7 @@ export class ObjetosProcessor implements Disposable {
     for (const s of setores) matrix[s.label] = {};
     for (const d of this.dets) {
       counts[d.key] = (counts[d.key] ?? 0) + 1;
-      const z = this.zoneOf(setores, d.bbox[0] + d.bbox[2] / 2, d.bbox[1] + d.bbox[3] / 2);
+      const z = this.zoneOf(setores, d.bbox);
       (matrix[z] ??= {})[d.key] = (matrix[z][d.key] ?? 0) + 1;
     }
 
@@ -152,8 +151,7 @@ export class ObjetosProcessor implements Disposable {
       for (const cx of caixas)
         if (overlap(p.bbox, cx.bbox) > 0.02) {
           carregando++;
-          if (!cargaSetor)
-            cargaSetor = this.zoneOf(setores, p.bbox[0] + p.bbox[2] / 2, p.bbox[1] + p.bbox[3] / 2);
+          if (!cargaSetor) cargaSetor = this.zoneOf(setores, p.bbox);
           break;
         }
     if (carregando > 0 && now - this.lastCargaEvt > 4000) {
@@ -171,7 +169,7 @@ export class ObjetosProcessor implements Disposable {
       this.lastAccum = now;
       const cur = new Map<string, number>();
       for (const d of this.dets) {
-        const z = this.zoneOf(setores, d.bbox[0] + d.bbox[2] / 2, d.bbox[1] + d.bbox[3] / 2);
+        const z = this.zoneOf(setores, d.bbox);
         const k = `${z}${d.key}`;
         cur.set(k, (cur.get(k) ?? 0) + 1);
       }

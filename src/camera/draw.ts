@@ -376,6 +376,14 @@ export type HudStats = {
   overlayAgeMs: number | null; // ms desde o último payload de track do hub (null = local/sem payload)
   dropped?: number; // opcional: frames dropados na recepção
   recvFps?: number; // opcional: fps de RECEPÇÃO de frames
+  // Telemetria POR ESTÁGIO dos processadores (última medição; ausente/null = estágio inativo).
+  // Campos ADITIVOS/opcionais — a régua por estágio que precede qualquer ajuste de cadência.
+  detectMs?: number | null; // objetos: OWL-ViT (worker)
+  decodeMs?: number | null; // leitura: ZXing/BarcodeDetector
+  faceMs?: number | null; // fadiga: FaceLandmarker (main-thread)
+  handMs?: number | null; // fadiga: HandLandmarker (main-thread)
+  objMs?: number | null; // fadiga: coco/celular (assíncrono)
+  queue?: { running: number; queued: number }; // fila do scheduler global de inferência
 };
 // Limiares de anormalidade (going-gray: satura só acima deles).
 const HUD_FPS_LOW = 12; // abaixo disso o vídeo "pula"
@@ -398,6 +406,13 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
     ]);
   if (s.recvFps != null) lines.push([`recv ${Math.round(s.recvFps)} fps`, s.recvFps < HUD_FPS_LOW]);
   if (s.dropped != null) lines.push([`drop ${s.dropped}`, s.dropped > 0]);
+  // Estágios dos processadores + fila (neutros: régua de medição, não anormalidade — going-gray).
+  if (s.detectMs != null) lines.push([`owl ${Math.round(s.detectMs)} ms`, false]);
+  if (s.decodeMs != null) lines.push([`zxing ${Math.round(s.decodeMs)} ms`, false]);
+  if (s.faceMs != null) lines.push([`face ${Math.round(s.faceMs)} ms`, false]);
+  if (s.handMs != null) lines.push([`hand ${Math.round(s.handMs)} ms`, false]);
+  if (s.objMs != null) lines.push([`cel ${Math.round(s.objMs)} ms`, false]);
+  if (s.queue) lines.push([`fila ${s.queue.running}/${s.queue.queued}`, false]);
   ctx.font = "11px ui-monospace, monospace";
   const lh = 14,
     pad = 5;

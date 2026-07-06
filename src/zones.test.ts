@@ -21,6 +21,7 @@ import {
   newZoneId,
   loadZones,
   pointInZone,
+  assignZone,
   withDefaults,
   ZONE_MODE_COLOR,
   ZONE_MODE_LABEL,
@@ -276,5 +277,48 @@ describe("zones — pointInZone (filtro de exclusão)", () => {
     expect(pointInZone(z, 0.4, 0.3, contains)).toBe(true); // no retângulo E na máscara
     expect(pointInZone(z, 0.4, 0.5, contains)).toBe(false); // no retângulo, fora da máscara
     expect(pointInZone(z, 0.05, 0.3, contains)).toBe(false); // fora do retângulo (nem chega à máscara)
+  });
+});
+
+// assignZone: a regra ÚNICA de atribuição de zona com desempate. Fixa o FIX do zoneOf de
+// ObjetosProcessor (first-match por ordem de lista) — o MESMO bug já corrigido na atividade:
+// com zonas sobrepostas, a contagem caía na primeira zona da lista em vez da zona que de fato
+// contém o corpo.
+describe("zones — assignZone (desempate por interseção, depois menor área)", () => {
+  // Zona "grande" primeiro na lista (pega first-match); zona "específica" sobreposta depois.
+  const grande = { label: "Espera", x: 0, y: 0, w: 1, h: 1 };
+  const especifica = { label: "Doca 3", x: 0.4, y: 0.4, w: 0.3, h: 0.3 };
+  const zonas = [grande, especifica];
+
+  it("BUG do first-match: bbox majoritariamente na zona específica NÃO cai na primeira da lista", () => {
+    // bbox 0.45..0.65 × 0.45..0.65 — inteiramente dentro da específica (e também da grande).
+    const bbox = [0.45, 0.45, 0.2, 0.2] as const;
+    const z = assignZone(zonas, 0.55, 0.55, bbox);
+    // interseção com a específica = área inteira do bbox; com a grande, idem — EMPATE de
+    // interseção → vence a de MENOR área (a específica), nunca a primeira da lista.
+    expect(z?.label).toBe("Doca 3");
+  });
+
+  it("maior interseção vence mesmo quando a zona vem depois na lista", () => {
+    const a = { label: "A", x: 0, y: 0, w: 0.6, h: 1 };
+    const b = { label: "B", x: 0.4, y: 0, w: 0.6, h: 1 };
+    // centro em x=0.5 (dentro das duas); bbox 0.42..0.58 pende p/ B? Não: simétrico. Puxa p/ A:
+    const bboxA = [0.3, 0.4, 0.25, 0.2] as const; // 0.3..0.55 → interseção maior com A
+    expect(assignZone([b, a], 0.42, 0.5, bboxA)?.label).toBe("A");
+    const bboxB = [0.45, 0.4, 0.25, 0.2] as const; // 0.45..0.7 → interseção maior com B
+    expect(assignZone([a, b], 0.58, 0.5, bboxB)?.label).toBe("B");
+  });
+
+  it("sem bbox: decide pela MENOR área entre as zonas que contêm o ponto", () => {
+    expect(assignZone(zonas, 0.5, 0.5)?.label).toBe("Doca 3");
+    expect(assignZone(zonas, 0.1, 0.1)?.label).toBe("Espera"); // fora da específica
+  });
+
+  it("respeita a máscara via containsOf e devolve null quando nenhuma zona contém o ponto", () => {
+    type Z = { label: string; x: number; y: number; w: number; h: number; contains?: (nx: number, ny: number) => boolean };
+    const mascarada: Z = { label: "M", x: 0, y: 0, w: 1, h: 1, contains: (_nx, ny) => ny < 0.3 };
+    expect(assignZone([mascarada], 0.5, 0.2, undefined, (s) => s.contains)?.label).toBe("M");
+    expect(assignZone([mascarada], 0.5, 0.8, undefined, (s) => s.contains)).toBeNull();
+    expect(assignZone([especifica], 0.1, 0.1)).toBeNull();
   });
 });

@@ -28,6 +28,11 @@ export const APP_CONFIG = {
     detectTileWidth: 512, // largura (px) de cada bloco enviado ao modelo
     tiles: { cols: 2, rows: 2, overlap: 0.12 }, // cols*rows=1 desliga o tiling
     nmsIoU: 0.45, // IoU p/ fundir detecções duplicadas nas bordas dos blocos
+    // Dedupe por CONTENÇÃO (dono: vision/detect.ts→nms.ts · sensor: nms.test.ts + recall×duplicata
+    // no eval): caixa majoritariamente CONTIDA noutra da mesma classe (inter/área_menor ≥ isto) é
+    // a "pessoa duplicada" do tiling que o NMS não pega (IoU baixo com a caixa inteira). 0.7 é
+    // conservador: baixar mataria recall de pares próximos; subir deixa passar a duplicata parcial.
+    containmentThr: 0.7,
 
     // PERFIL "LONGO ALCANCE" / PANORÂMICA (P0 do plano `analises/plano-deteccao-objetos.md`).
     // OPT-IN POR CÂMERA: são só os PARÂMETROS do perfil; nada aqui muda o comportamento default.
@@ -44,6 +49,10 @@ export const APP_CONFIG = {
       procWidth: 480, // largura do canvas de movimento (mais detalhe p/ micro-movimento distante)
       motionActiveRatio: 0.004, // fração da zona alterada p/ "ATIVA" no perfil (mais sensível)
       motionSlowRatio: 0.0015, // fração p/ "LENTA/baixa movimentação" no perfil
+      // Rotação de tiles na GRADE LR (dono: vision/detect.ts · sensor: latência de bbox na grade ×
+      // custo por chamada): K tiles processados por chamada, dos N=cols×rows; a bbox de um tile só
+      // re-atualiza quando a rotação volta nele (até N/K chamadas). Motion/alarme não dependem disso.
+      gridTilesPerCall: 4,
     },
 
     // Máquina de estados / anti-flicker
@@ -70,6 +79,14 @@ export const APP_CONFIG = {
     track: {
       iouThreshold: 0.25, // IoU mínimo p/ associar detecção×track (contra a bbox PREDITA)
       ttlMs: 1500, // morte do track sem associação (ms)
+      // Guarda de NASCIMENTO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts + travessias
+      // contadas): detecção alta sem par que sobrepõe um track ativo além disto NÃO nasce — mata
+      // o bug de campo "2 pessoas onde há 1". 0.55 conservador: pessoas realmente lado a lado
+      // ficam em IoU ~0.2–0.3; só sobreposição de "mesma pessoa" passa disso.
+      birthIouThreshold: 0.55,
+      // Counter de linha (dono: vision/counting.ts · sensor: counting.test.ts + replay):
+      counterMinMove: 0.01, // deslocamento mínimo (norm.) p/ avaliar cruzamento — filtra micro-jitter
+      counterTtlMs: 1500, // gap sem update além disto = continuidade perdida → re-ancora sem contar
       // Gate de TELEPORTE do counter (counting.ts maxDist). Era 0.25; com o ByteTracker o id só
       // avança por IoU com a predição (deslocamentos de id são estruturalmente plausíveis) e uma
       // rodada LENTA (LR full ~0,5-1,3s) desloca até ~0.3 do frame — 0.35 deixa o cruzamento real
