@@ -18,10 +18,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { EVAL_DIR, SMALL_MAX, MEDIUM_MAX, sizeBucket } from "./lib.mjs";
 
-const EVAL_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(EVAL_DIR, "data");
 const IMAGES_DIR = path.join(DATA_DIR, "images");
 const ANN_PATH = path.join(DATA_DIR, "instances_val2017.json");
@@ -38,10 +37,7 @@ const N_PER_BUCKET = 50; // 3 buckets × 50 = 150 positivas
 const N_NEGATIVES = 150;
 const SEED = 42;
 
-// COCO: área (px²) <32² pequena · 32²–96² média · >96² grande (aqui: área do bbox)
-const SMALL_MAX = 32 * 32;
-const MEDIUM_MAX = 96 * 96;
-const sizeBucket = (area) => (area < SMALL_MAX ? "S" : area < MEDIUM_MAX ? "M" : "L");
+// Buckets S/M/L por área de bbox: regra única em eval/lib.mjs (sizeBucket).
 
 // PRNG determinística (mulberry32) — seleção reprodutível sem depender de lib.
 function mulberry32(seed) {

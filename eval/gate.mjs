@@ -1,16 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// eval/gate.mjs — SENSOR DE REGRESSÃO de acurácia (plano-acuracia-modelos §3.3).
+// eval/gate.mjs — SENSOR DE REGRESSÃO de acurácia (npm run eval).
 //
-// Roda o MESMO worker de produção (server/analysis/worker.js) sobre o FIXTURE
-// commitado (eval/fixture, 29 imagens COCO — 21 com pessoas S/M/L + 8 vazias),
-// no modo squash 640 (default do motor), computa P/R/F1 e FP-em-vazias nos
-// pontos de operação e COMPARA com os limiares mínimos de eval/thresholds.json.
+// Roda o MESMO worker de produção (via eval/lib.mjs) sobre o FIXTURE commitado
+// (eval/fixture, 29 imagens COCO — 21 com pessoas S/M/L + 8 vazias), no modo
+// squash 640 (default do motor), computa P/R/F1 e FP-em-vazias nos pontos de
+// operação e COMPARA com os limiares mínimos de eval/thresholds.json.
 //   • passa → exit 0.
 //   • regride (qualquer check abaixo do mínimo / acima do máximo) → exit 1 + diff.
 //
-// DETERMINÍSTICO: mesmo modelo + mesmo fixture → mesmos números (D-FINE-N/CPU EP,
-// squash fill, sem aleatoriedade). Não entra em `npm run verify` — é gate manual /
-// CI opcional, rode ANTES de trocar modelo/threshold/NMS.
+// DETERMINÍSTICO: mesmo modelo + mesmo fixture → mesmos números (CPU EP, squash
+// fill, sem aleatoriedade). Não entra em `npm run verify` — é gate manual / CI
+// opcional, rode ANTES de trocar modelo/threshold/NMS. Decisão de DEFAULT exige
+// também o full-set (run-eval.mjs): o fixture pequeno não decide sozinho
+// (evidência: analises/perf-input-size-dfine.md).
 //
 // Uso:
 //   node eval/gate.mjs               → mede e compara (gate)
@@ -21,29 +23,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { fork } from "node:child_process";
+import { EVAL_DIR, startWorker, matchGreedy, prf, resolveModelPath } from "./lib.mjs";
 
-const EVAL_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.dirname(EVAL_DIR);
-const WORKER = path.join(ROOT, "server", "analysis", "worker.js");
-// Modelo do gate = o DEFAULT de produção (D-FINE-S obj2coco). Resolvido igual ao engine:
-// ANALYSIS_MODEL = n|s|m (default s); ANALYSIS_MODEL_PATH fixa um .onnx explícito.
-const MODEL_FILES = {
-  n: "dfine_n_coco.onnx",
-  s: "dfine_s_obj2coco.onnx",
-  m: "dfine_m_obj2coco.onnx",
-};
-const MODEL_KEY = (process.env.ANALYSIS_MODEL || "s").toLowerCase();
-const MODEL =
-  process.env.ANALYSIS_MODEL_PATH ||
-  path.join(ROOT, "server", "models", MODEL_FILES[MODEL_KEY] || MODEL_FILES.s);
+// Modelo = o MESMO da produção (default S; ANALYSIS_MODEL/ANALYSIS_MODEL_PATH sobrepõem).
+const MODEL = resolveModelPath();
 const FIXTURE_DIR = path.join(EVAL_DIR, "fixture");
 const FIXTURE_IMG = path.join(FIXTURE_DIR, "img");
 const FIXTURE_MANIFEST = path.join(FIXTURE_DIR, "manifest-fixture.json");
 const THRESHOLDS_PATH = path.join(EVAL_DIR, "thresholds.json");
 
-const IOU_MATCH = 0.5;
 const CALIBRATE = process.argv.includes("--calibrate");
 const JSON_ONLY = process.argv.includes("--json");
 
@@ -61,70 +49,6 @@ if (!fs.existsSync(FIXTURE_MANIFEST) || !fs.existsSync(FIXTURE_IMG)) {
   process.exit(2);
 }
 const manifest = JSON.parse(fs.readFileSync(FIXTURE_MANIFEST, "utf8"));
-
-// ── Worker de produção via IPC (mesmo contrato do engine.js / run-eval) ──────
-function startWorker() {
-  const w = fork(WORKER, [], {
-    serialization: "advanced",
-    stdio: ["ignore", "inherit", "inherit", "ipc"],
-    env: { ...process.env, ANALYSIS_SCORE_MIN: "0.25", ANALYSIS_MODEL_PATH: MODEL },
-  });
-  const pending = new Map();
-  let onReady;
-  const ready = new Promise((res, rej) => {
-    onReady = res;
-    w.on("exit", (code) => rej(new Error(`worker saiu com código ${code} antes do ready`)));
-  });
-  w.on("message", (m) => {
-    if (!m) return;
-    if (m.type === "ready") onReady(m);
-    else if (m.type === "fatal") {
-      console.error("[eval] worker fatal:", m.error);
-      process.exit(2);
-    } else if (m.id != null && pending.has(m.id)) {
-      const res = pending.get(m.id);
-      pending.delete(m.id);
-      res(m);
-    }
-  });
-  const detect = (id, jpeg) =>
-    new Promise((res) => {
-      pending.set(id, res);
-      w.send({ type: "detect", id, cameraId: id, jpeg }); // sem tiles → squash 640 (default)
-    });
-  return { ready, detect, kill: () => w.kill() };
-}
-
-// ── Matching guloso por score (1-1, IoU≥thr) — dets e GT em PIXELS ───────────
-function iou(a, b) {
-  const ix = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
-  const iy = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
-  if (ix <= 0 || iy <= 0) return 0;
-  const inter = ix * iy;
-  return inter / (a[2] * a[3] + b[2] * b[3] - inter);
-}
-function matchGreedy(dets, gts) {
-  const detMatch = new Array(dets.length).fill(-1);
-  const gtTaken = new Array(gts.length).fill(false);
-  const order = dets.map((_, i) => i).sort((a, b) => dets[b].score - dets[a].score);
-  for (const i of order) {
-    let best = -1;
-    let bestIou = IOU_MATCH;
-    for (let g = 0; g < gts.length; g++) {
-      if (gtTaken[g]) continue;
-      const v = iou(dets[i].box, gts[g]);
-      if (v >= bestIou) {
-        bestIou = v;
-        best = g;
-      }
-    }
-    if (best >= 0) {
-      detMatch[i] = best;
-      gtTaken[best] = true;
-    }
-  }
-  return { det: detMatch, gt: gtTaken };
-}
 
 // ── Inferência sobre o fixture (uma passada, dets a 0.25) ────────────────────
 async function runFixture(worker) {
@@ -152,20 +76,16 @@ async function runFixture(worker) {
 
 // P/R/F1 (bucket "all") num dado threshold sobre as positivas.
 function prfAt(perImage, thr) {
-  let tp = 0;
-  let fp = 0;
-  let fn = 0;
+  const acc = { tp: 0, fp: 0, fn: 0 };
   for (const im of manifest.positives) {
     const dets = perImage.get(im.id).filter((d) => d.score >= thr);
     const m = matchGreedy(dets, im.gt);
     for (let i = 0; i < dets.length; i++)
-      if (m.det[i] >= 0) tp++;
-      else fp++;
-    for (let g = 0; g < im.gt.length; g++) if (!m.gt[g]) fn++;
+      if (m.det[i] >= 0) acc.tp++;
+      else acc.fp++;
+    for (let g = 0; g < im.gt.length; g++) if (!m.gt[g]) acc.fn++;
   }
-  const p = tp + fp ? tp / (tp + fp) : 1;
-  const r = tp + fn ? tp / (tp + fn) : 0;
-  return { tp, fp, fn, p, r, f1: p + r ? (2 * p * r) / (p + r) : 0 };
+  return prf(acc);
 }
 
 // FP total nas cenas vazias num dado threshold (qualquer det person é FP).
@@ -190,7 +110,7 @@ function measure(perImage) {
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
-const worker = startWorker();
+const worker = startWorker(MODEL, { fatalExitCode: 2 });
 const info = await worker.ready;
 console.error(
   `[eval] worker pronto (modelo ${info.model}) — fixture ${manifest.positives.length} positivas + ${manifest.negatives.length} vazias, modo squash`,
