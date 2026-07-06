@@ -9,15 +9,33 @@
 //     antigo jogava fora!) recuperam tracks que ficaram SEM par na 1ª passada
 //     (oclusão parcial, alvo distante que pontua menos). Score baixo SUSTENTA
 //     um track existente; NUNCA cria track novo (nascimento exige score alto).
-//   • PREDIÇÃO LINEAR: o gate de associação usa a posição PREDITA do track
-//     (delta das 2 últimas OBSERVAÇÕES, escalado pelo dt). Em rodadas lentas
-//     (perfil LR full: ~0,5–1,3s entre rodadas) o deslocamento real quebra o
-//     IoU com a última bbox observada; a predição o recupera e o id sobrevive.
+//   • PREDIÇÃO LINEAR dt-AWARE: o gate de associação usa a posição PREDITA do
+//     track (delta das 2 últimas OBSERVAÇÕES, escalado pelo dt REAL desde a
+//     última observação). Em rodadas lentas (perfil LR full: ~0,5–1,3s) o
+//     deslocamento real quebra o IoU com a última bbox observada; a predição o
+//     recupera e o id sobrevive.
+//   • RE-ASSOCIAÇÃO 2º ESTÁGIO: stream que SALTA (stall/gap) desloca o alvo além
+//     de qualquer IoU — as caixas nem se tocam. Detecção ALTA sem par por IoU
+//     tenta casar com track sem par pela DISTÂNCIA do centro da det ao centro
+//     PREVISTO (raio = reassocDist + |v|·gap; gap ≤ reassocMaxGapMs; tamanho
+//     compatível). ANTI-TROCA: só re-associa par INEQUÍVOCO (1 track ↔ 1 det
+//     plausível); qualquer ambiguidade → id novo, NUNCA troca de pessoa.
 //   • MORTE POR TTL: track sem associação por mais que ttlMs é removido.
+//   • POLÍTICA LOST: track sem match há > lostAfterMisses rodadas ANALISADAS vira
+//     LOST — segue vivo INTERNAMENTE (re-associável até o TTL) mas FORA do
+//     retorno de update(): não vira desenho/ocupação/contagem (mata o RASTRO de
+//     caixas congeladas até o TTL — bug de campo). Se re-associar, volta a ser
+//     emitido com o MESMO id.
 //   • GUARDA DE NASCIMENTO (birthIouThreshold, default 0.55): detecção alta sem
 //     par que sobrepõe um track ativo além do limiar NÃO nasce — atualiza o track
 //     livre (associação recuperada) ou é descartada (duplicata). Evita que UMA
 //     pessoa com associação perdida vire DUAS por até ttlMs (bug de campo).
+//
+// PARIDADE HUB↔FRONT (doutrina): a POLÍTICA deste arquivo espelha
+// server/analysis/bytetrack.js (F1) — mesmos knobs, mesmos defaults, mesma
+// semântica de emissão. Mudança de comportamento é feita em PAR. Diferença
+// declarada: o hub expõe stats() (telemetria de re-associações) — extensão
+// server-only, fora do contrato espelhado.
 //
 // LIMITAÇÃO DECLARADA (sem re-ID por aparência): em cruzamento denso, ids podem
 // trocar de pessoa — o tracker segue GEOMETRIA (IoU), não aparência. Ver o
@@ -72,6 +90,30 @@ export type ByteTrackerOptions = {
    * entre duas pessoas reais), a segunda só nasce quando se separarem.
    */
   birthIouThreshold?: number;
+  /**
+   * RE-ASSOCIAÇÃO 2º ESTÁGIO (bug de campo "stream salta"): FOLGA do raio de
+   * aceitação (norm.; raio = folga + |v|·gap) p/ casar detecção ALTA sem par por
+   * IoU a um track sem par pela distância do centro da det ao centro PREVISTO —
+   * o salto zera o IoU (as caixas nem se tocam), mas a distância curta + tamanho
+   * compatível + par INEQUÍVOCO (1 track ↔ 1 det plausível) acusam "mesma
+   * pessoa". Qualquer ambiguidade → id novo, NUNCA troca de pessoa. 0 desliga o
+   * estágio. Default 0.12 — folga apertada de propósito: o termo |v|·gap já
+   * cobre o deslocamento plausível de quem se move; a folga só absorve o erro de
+   * predição. Trade-off declarado (sem re-ID por aparência): pessoa nova surgindo
+   * dentro do raio de um track sumido pode herdar o id — mitigado por raio
+   * apertado + inequívoco + tamanho compatível.
+   */
+  reassocDist?: number;
+  /** Gap máximo desde lastSeen p/ tentar o 2º estágio (ms). Default 2500. */
+  reassocMaxGapMs?: number;
+  /**
+   * POLÍTICA LOST (bug de campo "rastro de caixas até o TTL"): rodadas ANALISADAS
+   * sem match antes do track sair da EMISSÃO (some do desenho/ocupação/contagem);
+   * vive internamente até o ttlMs p/ re-associação com o MESMO id. Default 1 =
+   * 1 rodada de GRAÇA: flicker de 1 rodada do detector é comum — segurar a caixa
+   * 1 rodada evita presença/ocupação piscando; na falta seguinte o rastro some.
+   */
+  lostAfterMisses?: number;
 };
 
 export type ByteTracker = {
@@ -79,10 +121,13 @@ export type ByteTracker = {
    * Chamar 1x por RODADA DE DETECÇÃO (não por frame de vídeo: realimentar o
    * mesmo resultado stale zeraria a velocidade e mataria a predição).
    * `highScore` opcional sobrepõe o da criação (perfil longo alcance em runtime).
-   * Retorna os tracks ativos (inclui os em oclusão dentro do TTL).
+   * Retorna SÓ os tracks EMITÍVEIS (ativos + oclusão em graça ≤ lostAfterMisses;
+   * a graça é SUSPENSA em rodada de realocação — ver política de emissão no corpo);
+   * tracks LOST vivem internamente até o TTL, invisíveis ao consumidor — quem
+   * desenha/conta ocupação não precisa filtrar nada.
    */
   update: (dets: ReadonlyArray<TrackerDet>, now: number, highScore?: number) => ByteTrack[];
-  /** Snapshot dos tracks ativos (sem avançar o estado). */
+  /** Snapshot INTERNO (inclui LOST ocultos; a emissão é o retorno de update()). */
   tracks: () => ByteTrack[];
   /** Descarta todos os tracks (não reseta a sequência de ids). */
   reset: () => void;
@@ -109,6 +154,8 @@ type InternalTrack = ByteTrack & {
   /** Velocidade (unid. normalizada / ms) do canto do bbox, das 2 últimas observações. */
   vx: number;
   vy: number;
+  /** Rodadas ANALISADAS consecutivas sem par. > lostAfterMisses ⇒ LOST (vivo, não emitido). */
+  misses: number;
 };
 
 /** Cria um ByteTracker-lite. Estado encapsulado; determinístico dado o histórico. */
@@ -117,6 +164,9 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
   const iouThr = opts.iouThreshold ?? 0.25;
   const ttlMs = opts.ttlMs ?? 1500;
   const birthIouThr = opts.birthIouThreshold ?? 0.55;
+  const reassocDist = opts.reassocDist ?? 0.12;
+  const reassocMaxGapMs = opts.reassocMaxGapMs ?? 2500;
+  const lostAfterMisses = opts.lostAfterMisses ?? 1;
 
   let seq = 0;
   let tracks: InternalTrack[] = [];
@@ -141,6 +191,19 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
     t.foot = { x: clamp01(t.cx), y: clamp01(d.bbox[1] + d.bbox[3]) };
     t.score = d.score;
     t.lastSeen = now;
+    t.misses = 0; // observação zera a contagem — LOST re-identificado volta a ser emitido
+  }
+
+  // Tamanho compatível p/ o 2º estágio: nenhuma dimensão dobra/cai à metade entre
+  // duas observações próximas no tempo — pessoa não muda de escala tão rápido;
+  // det de escala muito diferente perto da posição prevista é OUTRA coisa.
+  function sizeCompatible(
+    a: readonly [number, number, number, number],
+    b: readonly [number, number, number, number],
+  ): boolean {
+    const rw = a[2] >= b[2] ? a[2] / b[2] : b[2] / a[2];
+    const rh = a[3] >= b[3] ? a[3] / b[3] : b[3] / a[3];
+    return rw <= 2 && rh <= 2;
   }
 
   function newTrack(d: TrackerDet, now: number): InternalTrack {
@@ -157,6 +220,7 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
       lastSeen: now,
       vx: 0,
       vy: 0,
+      misses: 0,
     };
   }
 
@@ -172,6 +236,7 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
     const pred = tracks.map((t) => predictBBox(t, now));
     const detUsed = new Set<number>();
     const trkUsed = new Set<number>();
+    let relocated = false; // rodada teve NASCIMENTO ou RE-ASSOCIAÇÃO (ver política de emissão)
 
     // Matching GULOSO por IoU: pares (track livre × det livre) com IoU ≥ limiar,
     // atribuídos do maior IoU pro menor. Determinístico (sort estável).
@@ -196,6 +261,48 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
 
     associate(high); // 1ª passada: score alto × todos os tracks
     associate(low); // 2ª passada: score baixo RECUPERA os tracks que sobraram
+
+    // 2º ESTÁGIO — RE-ASSOCIAÇÃO POR DISTÂNCIA (salto de fonte/stall): quando o gap entre
+    // rodadas analisadas cresce, a predição erra mais que o próprio bbox e o IoU zera — a
+    // MESMA pessoa viraria id novo a cada salto. Det ALTA sem par tenta então o track sem
+    // par (inclusive LOST) pela distância do centro da det ao centro PREVISTO; o raio
+    // cresce com a incerteza da extrapolação (|v|·gap) + folga fixa (reassocDist). Gates:
+    // gap ≤ reassocMaxGapMs (salto extremo/oclusão longa → id novo, aceito) e tamanho de
+    // bbox compatível. ANTI-TROCA: só casa par INEQUÍVOCO — det com exatamente 1 track
+    // plausível E track com exatamente 1 det plausível; ambiguidade → id novo, nunca troca
+    // de pessoa (mesma classe de risco declarado do "sem re-ID por aparência").
+    if (reassocDist > 0) {
+      const cand: { ti: number; di: number }[] = [];
+      const perTrack = new Map<number, number>(); // ti → nº de dets plausíveis
+      const perDet = new Map<number, number>(); // di → nº de tracks plausíveis
+      for (let ti = 0; ti < tracks.length; ti++) {
+        if (trkUsed.has(ti)) continue;
+        const t = tracks[ti];
+        const gap = now - t.lastSeen;
+        if (gap <= 0 || gap > reassocMaxGapMs) continue;
+        const radius = reassocDist + Math.hypot(t.vx, t.vy) * gap;
+        const pcx = pred[ti][0] + pred[ti][2] / 2;
+        const pcy = pred[ti][1] + pred[ti][3] / 2;
+        for (const di of high) {
+          if (detUsed.has(di)) continue;
+          const d = dets[di];
+          const dcx = d.bbox[0] + d.bbox[2] / 2;
+          const dcy = d.bbox[1] + d.bbox[3] / 2;
+          if (Math.hypot(dcx - pcx, dcy - pcy) > radius) continue;
+          if (!sizeCompatible(t.bbox, d.bbox)) continue;
+          cand.push({ ti, di });
+          perTrack.set(ti, (perTrack.get(ti) || 0) + 1);
+          perDet.set(di, (perDet.get(di) || 0) + 1);
+        }
+      }
+      for (const c of cand) {
+        if (perTrack.get(c.ti) !== 1 || perDet.get(c.di) !== 1) continue; // ambíguo → não re-associa
+        trkUsed.add(c.ti);
+        detUsed.add(c.di);
+        applyObservation(tracks[c.ti], dets[c.di], now); // v vira o deslocamento REAL do gap (dt-aware)
+        relocated = true;
+      }
+    }
 
     // Nascimento: SÓ detecção de score alto sem par (baixa sem par é descartada).
     // GUARDA DE NASCIMENTO (birthIouThr): detecção sem par que sobrepõe demais um
@@ -228,11 +335,25 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
       }
       tracks.push(newTrack(d, now));
       trkUsed.add(tracks.length - 1); // recém-nascido conta como "ocupado" p/ as próximas dets
+      relocated = true;
     }
+
+    // Contabiliza rodadas ANALISADAS sem match (matcheado zera em applyObservation/
+    // newTrack). Base em RODADAS, não tempo: robusto ao dt variável entre rodadas.
+    for (let ti = 0; ti < tracks.length; ti++) if (!trkUsed.has(ti)) tracks[ti].misses += 1;
 
     // Morte por TTL (tracks sem par ficam com a última posição OBSERVADA até morrer).
     tracks = tracks.filter((t) => now - t.lastSeen <= ttlMs);
-    return tracks;
+    // POLÍTICA DE EMISSÃO (anti-rastro):
+    //   • LOST (misses > lostAfterMisses) fica FORA do retorno — vive internamente
+    //     (tracks()/2º estágio) até o TTL, sem alimentar desenho/ocupação/contagem.
+    //   • GRAÇA (0 < misses ≤ lostAfterMisses): emitido p/ oclusão/miss de 1 rodada
+    //     não piscar overlay/presença (recall do detector é intermitente)…
+    //   • …EXCETO em rodada de REALOCAÇÃO (nascimento/re-associação): a det da
+    //     pessoa foi p/ outro lugar — o sem-match congelado é o próprio rastro.
+    //     Custo declarado: pessoa A oclusa na exata rodada em que B entra pisca 1
+    //     rodada (raro; barato perto do rastro de até TTL por salto).
+    return tracks.filter((t) => t.misses === 0 || (!relocated && t.misses <= lostAfterMisses));
   }
 
   return {

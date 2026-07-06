@@ -74,8 +74,10 @@ export const APP_CONFIG = {
     dwellMinMs: 800, // ignora aparições muito curtas (flicker)
     // ByteTrack-lite (Onda 2 do plano-contagem-pessoas): associação em 2 PASSADAS por IoU —
     // score alto associa/nasce; score BAIXO (minScore..scoreThreshold, antes descartado) só
-    // SUSTENTA tracks existentes. Substitui o greedy por distância do caminho antigo (o antigo
-    // trackMaxDist/trackTimeoutMs foi removido). Consumido por vision/bytetrack.ts + counter.
+    // SUSTENTA tracks existentes — + 2º ESTÁGIO de re-associação por distância à posição
+    // PREVISTA e estado LOST (espelho da política do motor do hub, F1↔F2). Substitui o greedy
+    // por distância do caminho antigo (o antigo trackMaxDist/trackTimeoutMs foi removido).
+    // Consumido por vision/bytetrack.ts + counter.
     track: {
       iouThreshold: 0.25, // IoU mínimo p/ associar detecção×track (contra a bbox PREDITA)
       ttlMs: 1500, // morte do track sem associação (ms)
@@ -84,6 +86,24 @@ export const APP_CONFIG = {
       // o bug de campo "2 pessoas onde há 1". 0.55 conservador: pessoas realmente lado a lado
       // ficam em IoU ~0.2–0.3; só sobreposição de "mesma pessoa" passa disso.
       birthIouThreshold: 0.55,
+      // Re-associação de 2º ESTÁGIO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts,
+      // bloco "stream que SALTA" · espelho F1: server/analysis/bytetrack.js + precision.js):
+      // stream com stall/gap desloca a pessoa além de qualquer IoU (as caixas nem se tocam) →
+      // antes virava id novo + rastro. Detecção ALTA sem par re-associa ao track sem par pela
+      // distância do centro ao centro PREVISTO, dentro do raio reassocDist + |v|·gap, com
+      // tamanho compatível e SÓ em par INEQUÍVOCO (1 candidato de cada lado; ambiguidade não
+      // troca id). Folga 0.12 apertada de propósito: o termo |v|·gap já cobre o deslocamento
+      // plausível de quem se move; a folga só absorve erro de predição. 0 desliga o estágio.
+      reassocDist: 0.12,
+      reassocMaxGapMs: 2500, // gap máximo desde a última observação p/ tentar o 2º estágio
+      // Política LOST (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts · espelho F1):
+      // track sem par por MAIS de N rodadas analisadas some do retorno do tracker (desenho/
+      // ocupação/contagem) mas vive internamente até ttlMs p/ re-identificação com o MESMO id
+      // — mata o "rastro de caixas até o TTL" do stream que salta. 1 = uma rodada de GRAÇA:
+      // flicker de 1 rodada do detector é comum; segurar a caixa 1 rodada evita presença/
+      // ocupação piscando; na falta seguinte o rastro some. Em rodada de REALOCAÇÃO
+      // (nascimento/re-associação) a graça é suspensa: o sem-par congelado É o rastro.
+      lostAfterMisses: 1,
       // Counter de linha (dono: vision/counting.ts · sensor: counting.test.ts + replay):
       counterMinMove: 0.01, // deslocamento mínimo (norm.) p/ avaliar cruzamento — filtra micro-jitter
       counterTtlMs: 1500, // gap sem update além disto = continuidade perdida → re-ancora sem contar

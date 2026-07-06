@@ -509,8 +509,10 @@ export function CameraWorkspace({
 
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
   // ByteTrack-lite (vision/bytetrack.ts): 2 passadas por IoU — score alto associa/nasce; score
-  // baixo só SUSTENTA tracks; predição linear mantém o id vivo em rodadas lentas.
-  // Contrato downstream: tracks alimentam presença/zona/counter/heatmap.
+  // baixo só SUSTENTA tracks; predição linear dt-aware mantém o id vivo em rodadas lentas;
+  // salto de stream re-associa por distância à posição prevista (2º estágio). O tracker devolve
+  // SÓ os emitíveis — track LOST (sem par por N rodadas) não chega aqui: não desenha nem conta
+  // ocupação/contagem. Contrato downstream: tracks alimentam presença/zona/counter/heatmap.
   function updateTracks(dets: Detection[], ativ: Zone[], vidW: number, vidH: number, now: number) {
     const T = APP_CONFIG.people.track;
     const tracker =
@@ -519,7 +521,10 @@ export function CameraWorkspace({
         highScore: APP_CONFIG.people.scoreThreshold,
         iouThreshold: T.iouThreshold,
         ttlMs: T.ttlMs,
-        birthIouThreshold: T.birthIouThreshold, // dono do knob: config.people.track
+        birthIouThreshold: T.birthIouThreshold, // dono dos knobs: config.people.track
+        reassocDist: T.reassocDist,
+        reassocMaxGapMs: T.reassocMaxGapMs,
+        lostAfterMisses: T.lostAfterMisses,
       }));
     // Longo alcance: limiar de "person" mais baixo (alvos distantes pontuam menos) — vira o
     // corte da 1ª passada/nascimento; abaixo dele a detecção ainda entra na 2ª passada.

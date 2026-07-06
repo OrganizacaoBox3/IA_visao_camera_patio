@@ -73,12 +73,16 @@ describe("createByteTracker — associação (1ª passada, IoU)", () => {
     expect(tk.tracks()).toHaveLength(1); // associou — não nasceu segundo track
   });
 
-  it("SEM histórico de movimento, salto grande vira id novo (sem fallback por distância)", () => {
-    const tk = createByteTracker({ ttlMs: 1500 });
+  it("SEM histórico de movimento, salto além do raio de re-associação vira id novo", () => {
+    const tk = createByteTracker({ ttlMs: 1500, reassocDist: 0.12 });
     tk.update([det(0.2, 0.5, 0.6)], 0); // 1 observação: velocidade desconhecida (0)
-    const out = tk.update([det(0.6, 0.5, 0.6)], 350); // IoU 0 com a última bbox
-    expect(out).toHaveLength(2); // o antigo segue vivo (TTL) + nasceu o novo
-    expect(out.map((t) => t.id).sort()).toEqual([1, 2]);
+    // IoU 0 com a última bbox E distância 0.4 > raio (0.12 + 0·gap) → nem o 2º estágio casa.
+    const out = tk.update([det(0.6, 0.5, 0.6)], 350);
+    // Rodada de REALOCAÇÃO (nascimento): a graça é suspensa — o antigo congelado seria o
+    // próprio rastro, então só o novo é emitido; o antigo segue vivo INTERNAMENTE (TTL).
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(2);
+    expect(tk.tracks().map((t) => t.id).sort()).toEqual([1, 2]);
   });
 });
 
@@ -182,6 +186,134 @@ describe("createByteTracker — oclusão curta", () => {
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe(1);
     expect(out[0].firstSeen).toBe(0); // dwell/permanência não reinicia
+  });
+});
+
+describe("createByteTracker — stream que SALTA (espelho F1: re-assoc 2º estágio + LOST)", () => {
+  it("salto MODERADO (dentro do raio folga+|v|·gap) re-associa: MESMO id", () => {
+    // Pessoa parada; o stream trava e salta: a det reaparece deslocada 0.10 — IoU 0 com a
+    // bbox predita (as caixas só se tocam na borda), mas cabe na FOLGA do raio (0.12, v=0)
+    // e o par é inequívoco → 2º estágio re-associa (antes: id novo + rastro do antigo).
+    const tk = createByteTracker({ iouThreshold: 0.25, ttlMs: 1500, reassocDist: 0.12 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350); // parada: v = 0 → previsto = última observada
+    const out = tk.update([det(0.4, 0.5, 0.6)], 700); // salto: IoU 0, dist 0.10 ≤ 0.12
+    expect(out).toHaveLength(1); // NÃO nasceu segundo track
+    expect(out[0].id).toBe(1);
+    expect(out[0].cx).toBeCloseTo(0.4, 6);
+    expect(out[0].firstSeen).toBe(0); // continuidade real (dwell preservado)
+    expect(out[0].lastSeen).toBe(700);
+  });
+
+  it("o raio CRESCE com |v|·gap: engasgo de stream no meio de uma caminhada re-associa", () => {
+    // Caminhada com velocidade estabelecida (+0.03/500ms) e engasgo de 1.5s. A det volta a
+    // 0.13 do centro PREVISTO — além da folga parada (0.12), mas dentro do raio dt-aware
+    // 0.12 + |v|·gap = 0.12 + 0.09 = 0.21. É o cenário "salto moderado ≤2.5s" do eval (F1).
+    const tk = createByteTracker({ iouThreshold: 0.25, ttlMs: 8000, reassocMaxGapMs: 2500 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.33, 0.5, 0.6)], 500); // v = +0.03/500ms
+    const out = tk.update([det(0.55, 0.5, 0.6)], 2000); // previsto cx≈0.42; dist 0.13; IoU 0
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1);
+    expect(out[0].cx).toBeCloseTo(0.55, 6);
+  });
+
+  it("gap além de reassocMaxGapMs NÃO tenta o 2º estágio (salto velho demais → id novo)", () => {
+    const tk = createByteTracker({ ttlMs: 8000, reassocDist: 0.12, reassocMaxGapMs: 2500 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350);
+    // dist 0.08 caberia na folga, mas gap = 3000ms > 2500 → não re-associa; nasce id novo
+    // (rodada de realocação: só o novo é emitido; o antigo segue interno até o TTL).
+    const out = tk.update([det(0.38, 0.5, 0.6)], 3350);
+    expect(out.map((t) => t.id)).toEqual([2]);
+    expect(out[0].cx).toBeCloseTo(0.38, 6);
+    expect(tk.tracks().map((t) => t.id).sort()).toEqual([1, 2]); // id 1 vivo internamente
+  });
+
+  it("tamanho INCOMPATÍVEL (dimensão >2×) não re-associa — escala não muda tão rápido", () => {
+    const tk = createByteTracker({ ttlMs: 1500, reassocDist: 0.12 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350);
+    // dist 0.11 ≤ 0.12 (e IoU 0.23 < 0.25 — 1ª passada falha), mas a det tem w 2.5× a do
+    // track → é OUTRA coisa, não a pessoa: nasce id novo (emitido só ele, realocação).
+    const out = tk.update([det(0.41, 0.5, 0.6, 0.25, 0.2)], 700);
+    expect(out.map((t) => t.id)).toEqual([2]);
+    const internal = tk.tracks();
+    expect(internal.map((t) => t.id).sort()).toEqual([1, 2]);
+    expect(internal.find((t) => t.id === 1)!.cx).toBeCloseTo(0.3, 6); // id 1 não foi puxado
+  });
+
+  it("salto EXTREMO → id NOVO na hora e SEM rastro: o antigo sai da emissão já na rodada do salto", () => {
+    const tk = createByteTracker({ ttlMs: 1500, reassocDist: 0.12, lostAfterMisses: 1 });
+    tk.update([det(0.2, 0.5, 0.6)], 0);
+    const r2 = tk.update([det(0.7, 0.5, 0.6)], 350); // dist 0.5 > raio → não re-associa
+    // Rodada de REALOCAÇÃO (nascimento): a graça é suspensa — o antigo congelado em 0.2 é
+    // exatamente o rastro do bug de campo, então NÃO é emitido (antes: 2 caixas até o TTL).
+    expect(r2).toHaveLength(1);
+    expect(r2[0].id).toBe(2);
+    const r3 = tk.update([det(0.7, 0.5, 0.6)], 700); // 2ª falta consecutiva do antigo → LOST
+    expect(r3).toHaveLength(1);
+    expect(r3[0].id).toBe(2);
+    expect(tk.tracks()).toHaveLength(2); // snapshot INTERNO: o LOST segue vivo p/ re-identificar
+  });
+
+  it("oclusão SEM realocação mantém a GRAÇA: 1 rodada sem par ainda é emitida", () => {
+    // O contraponto do teste acima: em rodada SEM nascimento/re-associação, 1 falta é
+    // flicker comum do detector — a caixa segura 1 rodada p/ presença/ocupação não piscar.
+    const tk = createByteTracker({ ttlMs: 1500, lostAfterMisses: 1 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    expect(tk.update([], 350)).toHaveLength(1); // graça
+    expect(tk.update([], 700)).toHaveLength(0); // 2ª falta: LOST
+  });
+
+  it("AMBIGUIDADE (1 det plausível p/ 2 tracks) NÃO re-associa — não troca id", () => {
+    // Dois tracks sem par e uma det equidistante dos dois centros previstos (0.1 de cada,
+    // dentro do raio de ambos): re-associar seria chute de identidade → nasce id novo e os
+    // antigos seguem onde foram vistos (internos na rodada da realocação). Id errado é pior
+    // que id novo.
+    const tk = createByteTracker({ iouThreshold: 0.25, reassocDist: 0.12 });
+    tk.update([det(0.3, 0.5, 0.6), det(0.5, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6), det(0.5, 0.5, 0.6)], 350); // paradas (v = 0)
+    const out = tk.update([det(0.4, 0.5, 0.6)], 700); // IoU 0 com ambos; dist 0.1 p/ ambos
+    expect(out.map((t) => t.id)).toEqual([3]); // NASCEU (realocação: antigos não emitidos)
+    expect(out[0].cx).toBeCloseTo(0.4, 6);
+    const internal = tk.tracks();
+    expect(internal).toHaveLength(3);
+    expect(internal.find((t) => t.id === 1)!.cx).toBeCloseTo(0.3, 6); // ninguém teletransportado
+    expect(internal.find((t) => t.id === 2)!.cx).toBeCloseTo(0.5, 6);
+  });
+
+  it("re-associação RESTAURA track LOST: mesmo id/firstSeen, volta a ser emitido", () => {
+    const tk = createByteTracker({ ttlMs: 1500, reassocDist: 0.12, lostAfterMisses: 1 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350);
+    expect(tk.update([], 700)).toHaveLength(1); // 1ª falta: graça, ainda emitido
+    expect(tk.update([], 1050)).toHaveLength(0); // 2ª falta: LOST — some do desenho/ocupação…
+    expect(tk.tracks()).toHaveLength(1); // …mas vive INTERNAMENTE dentro do TTL
+    const out = tk.update([det(0.38, 0.5, 0.6)], 1400); // dist 0.08 ≤ folga; gap 1050 ≤ 2500
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1); // MESMO id — não nasceu track novo
+    expect(out[0].firstSeen).toBe(0); // permanência não reinicia
+    expect(out[0].cx).toBeCloseTo(0.38, 6);
+  });
+
+  it("score BAIXO não re-associa por distância (continuidade através de salto exige score alto)", () => {
+    const tk = createByteTracker({ highScore: 0.4, reassocDist: 0.12 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350);
+    const out = tk.update([det(0.4, 0.5, 0.3)], 700); // dist 0.10 caberia, mas score baixo
+    expect(out).toHaveLength(1);
+    expect(out[0].cx).toBeCloseTo(0.3, 6); // track intocado (não foi puxado pelo salto fraco)
+    expect(out[0].lastSeen).toBe(350);
+  });
+
+  it("reassocDist: 0 DESLIGA o 2º estágio (salto moderado volta a virar id novo)", () => {
+    const tk = createByteTracker({ ttlMs: 1500, reassocDist: 0 });
+    tk.update([det(0.3, 0.5, 0.6)], 0);
+    tk.update([det(0.3, 0.5, 0.6)], 350);
+    const out = tk.update([det(0.4, 0.5, 0.6)], 700); // mesmo salto do 1º teste do bloco
+    expect(out.map((t) => t.id)).toEqual([2]); // sem estágio → nasceu id novo (realocação)
+    expect(tk.tracks().map((t) => t.id).sort()).toEqual([1, 2]);
   });
 });
 
