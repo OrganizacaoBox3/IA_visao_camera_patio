@@ -21,6 +21,11 @@ export type InterpTrack = {
   /** score real da detecção 0..1 (passthrough p/ o desenho: a CÂMERA FOCADA atenua pelo slider de
    *  confiança; a GRADE ignora). Ausente = hub antigo → sample devolve undefined (consumidor trata 1). */
   score?: number;
+  /** VELOCIDADE do Kalman do tracker (contrato aditivo do hub): normalizada 0..1 por SEGUNDO, mesma
+   *  convenção do bbox. Presente → DEAD-RECKONING (posição = bbox + v×dt, extrapola já no 1º keyframe).
+   *  Ausente (hub antigo) → fallback à estimativa por 2 keyframes (retrocompat). */
+  vx?: number;
+  vy?: number;
 };
 
 /** Um payload do hub (contrato `analysis-tracks`, só o que interessa aqui). */
@@ -47,6 +52,9 @@ export type InterpConfig = {
   maxIntervalMs: number;
   /** Não prever mais que isto ALÉM do último keyframe (limita overshoot quando a pessoa para). */
   maxExtrapMs: number;
+  /** Janela do EASING de correção: quando o payload novo corrige a predição (dead-reckoning), a caixa
+   *  transita da posição exibida p/ a nova reta ao longo de `snapMs` em vez de teleportar. */
+  snapMs: number;
   /** Idade a partir da qual a caixa começa a sumir (deve ser > intervalo do payload p/ não piscar). */
   fadeStartMs: number;
   /** Idade em que a caixa some de vez (removida do estado). */
@@ -61,9 +69,15 @@ export const DEFAULT_INTERP: InterpConfig = {
   minIntervalMs: 150,
   maxIntervalMs: 2000,
   maxExtrapMs: 500,
+  snapMs: 180,
   fadeStartMs: 1500,
   expireMs: 2600,
 };
+
+/** Clamp escalar (sem alocar), usado no hot-path do dead-reckoning. */
+function clampNum(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
 /** Interpolação linear de bbox: t=0 → a, t=1 → b, t>1 extrapola na direção a→b. Pura. */
 export function lerpBbox(a: Bbox, b: Bbox, t: number): [number, number, number, number] {
@@ -75,11 +89,20 @@ export function lerpBbox(a: Bbox, b: Bbox, t: number): [number, number, number, 
   ];
 }
 
-type Keyframe = { bbox: Bbox; zone: string | null; score?: number; t: number };
-type Entry = { prev: Keyframe | null; last: Keyframe };
+type Keyframe = { bbox: Bbox; zone: string | null; score?: number; vx?: number; vy?: number; t: number };
+// snapFrom/snapT: origem do EASING de correção (posição EXIBIDA no instante do payload novo), capturada
+// no ingest a partir do keyframe ANTIGO. Só populada no ramo dead-reckoning (vx/vy); undefined no legacy.
+type Entry = {
+  prev: Keyframe | null;
+  last: Keyframe;
+  snapFrom?: [number, number, number, number];
+  snapT?: number;
+};
 
-// Estado por id: 2 keyframes (o penúltimo e o último payload que citaram o id). A velocidade
-// vem de (last - prev)/(last.t - prev.t); o desenho amostra essa reta na hora corrente.
+// Estado por id: 2 keyframes (o penúltimo e o último payload que citaram o id). A VELOCIDADE, quando o
+// hub a emite (vx/vy do Kalman), vem do PRÓPRIO track — DEAD-RECKONING a partir do último bbox (preciso
+// e já move no 1º keyframe). Sem vx/vy (hub antigo), cai no fallback: velocidade estimada de 2 keyframes
+// (last - prev)/(last.t - prev.t). O desenho amostra a posição resultante na hora corrente.
 export class TrackInterpolator {
   private readonly cfg: InterpConfig;
   private readonly entries = new Map<number, Entry>();
@@ -99,9 +122,27 @@ export class TrackInterpolator {
     if (snap.ts === this.lastTs) return;
     this.lastTs = snap.ts;
     for (const tr of snap.tracks) {
-      const kf: Keyframe = { bbox: tr.bbox, zone: tr.zone, score: tr.score, t: recvT };
+      const kf: Keyframe = {
+        bbox: tr.bbox,
+        zone: tr.zone,
+        score: tr.score,
+        vx: tr.vx,
+        vy: tr.vy,
+        t: recvT,
+      };
       const e = this.entries.get(tr.id);
       if (e) {
+        // Dead-reckoning: captura a posição ATUALMENTE exibida (predita pelo keyframe antigo) p/
+        // suavizar a correção da próxima reta (não teleporta). Ancorada em `recvT - delayMs` para
+        // que, no instante do payload, o easing comece exatamente onde a caixa está (k=0).
+        if (tr.vx !== undefined && tr.vy !== undefined) {
+          const snapT = recvT - this.cfg.delayMs;
+          e.snapFrom = this.boxAt(e, snapT); // usa o keyframe ANTIGO (ainda em e.last)
+          e.snapT = snapT;
+        } else {
+          e.snapFrom = undefined; // legacy (sem vx/vy) → sem easing, mantém a estimativa por 2 kf
+          e.snapT = undefined;
+        }
         e.prev = e.last;
         e.last = kf;
       } else {
@@ -143,9 +184,35 @@ export class TrackInterpolator {
 
   private boxAt(e: Entry, renderT: number): [number, number, number, number] {
     const c = this.cfg;
+    const last = e.last;
+    // ── DEAD-RECKONING (velocidade REAL do Kalman) ────────────────────────────────────────────────
+    // posição = último bbox + v × dt (dt em segundos desde o keyframe), w/h do keyframe (não escala).
+    // dt clampado a [-maxExtrap, +maxExtrap]: à frente limita o overshoot (pessoa que PAROU tem v≈0 do
+    // Kalman → não dispara; e mesmo com v alto a previsão não foge além de meio intervalo); atrás cobre
+    // o atraso de reprodução (delayMs). Move já no 1º keyframe (não precisa do penúltimo).
+    if (last.vx !== undefined && last.vy !== undefined) {
+      const dtSec = clampNum(renderT - last.t, -c.maxExtrapMs, c.maxExtrapMs) / 1000;
+      const bx = last.bbox[0] + last.vx * dtSec;
+      const by = last.bbox[1] + last.vy * dtSec;
+      // EASING no snap: enquanto k<1, transita da posição exibida no payload (snapFrom) p/ a nova reta.
+      const s = e.snapFrom;
+      if (s && e.snapT !== undefined) {
+        const k = clampNum((renderT - e.snapT) / c.snapMs, 0, 1);
+        if (k < 1) {
+          return [
+            s[0] + (bx - s[0]) * k,
+            s[1] + (by - s[1]) * k,
+            s[2] + (last.bbox[2] - s[2]) * k,
+            s[3] + (last.bbox[3] - s[3]) * k,
+          ];
+        }
+      }
+      return [bx, by, last.bbox[2], last.bbox[3]];
+    }
+    // ── LEGACY (sem vx/vy — hub antigo): estimativa por 2 keyframes, comportamento de antes ──────────
     // Sem penúltimo (id recém-visto): 1 amostra só → caixa estática (nada a interpolar).
-    if (!e.prev) return [e.last.bbox[0], e.last.bbox[1], e.last.bbox[2], e.last.bbox[3]];
-    const dt = e.last.t - e.prev.t;
+    if (!e.prev) return [last.bbox[0], last.bbox[1], last.bbox[2], last.bbox[3]];
+    const dt = last.t - e.prev.t;
     const interval = Math.min(c.maxIntervalMs, Math.max(c.minIntervalMs, dt));
     if (renderT <= e.prev.t) {
       return [e.prev.bbox[0], e.prev.bbox[1], e.prev.bbox[2], e.prev.bbox[3]];
@@ -153,7 +220,7 @@ export class TrackInterpolator {
     // alpha em unidades de intervalo: 1 = no último keyframe; >1 extrapola (limitado por maxExtrap).
     const maxAlpha = 1 + c.maxExtrapMs / interval;
     const alpha = Math.min(maxAlpha, (renderT - e.prev.t) / interval);
-    return lerpBbox(e.prev.bbox, e.last.bbox, alpha);
+    return lerpBbox(e.prev.bbox, last.bbox, alpha);
   }
 }
 

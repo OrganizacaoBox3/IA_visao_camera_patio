@@ -71,6 +71,10 @@ export function applyHubAnalysis(
           // Score real p/ o DESENHO: o slider (confRef) atenua/apaga fantasmas pontuais.
           // Retrocompat: hub antigo não envia score → 1 (nunca atenuado, como antes).
           score: t.score ?? 1,
+          // Velocidade do Kalman (0..1/s) — passthrough do payload p/ o DEAD-RECKONING do overlay
+          // (não descartar). undefined no hub antigo → interpolador cai no fallback de 2 keyframes.
+          vx: t.vx,
+          vy: t.vy,
         };
       });
       seen.forEach((_, id) => {

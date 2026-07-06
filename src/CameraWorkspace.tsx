@@ -153,6 +153,11 @@ export type HubTrack = {
   zone: string | null;
   /** score real da detecção 0..1 (Fase 4). Ausente = hub antigo → trata como 1 (retrocompat). */
   score?: number;
+  /** VELOCIDADE do Kalman do tracker (contrato aditivo): normalizada 0..1 por SEGUNDO, mesma convenção
+   *  do bbox. Alimenta o DEAD-RECKONING do overlay (extrapolação DISPLAY-ONLY entre payloads). Ausente
+   *  = hub antigo → interpolação por 2 keyframes (retrocompat). */
+  vx?: number;
+  vy?: number;
 };
 export type HubZone = { id: string; label: string; people: number; occupied: boolean };
 export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
@@ -244,6 +249,10 @@ export type Track = {
   lastSeen: number;
   zone: string | null;
   score: number;
+  /** VELOCIDADE do Kalman (0..1 por segundo), passthrough do HubTrack — DISPLAY-ONLY. Ausente = hub
+   *  antigo. A contagem/zonas NÃO usam (a posição extrapolada é só p/ desenho). */
+  vx?: number;
+  vy?: number;
 };
 // TimelineItem (evento da sessão) mora com a aba que o exibe → ./camera/tabs/TimelineTab.
 

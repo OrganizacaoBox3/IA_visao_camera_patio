@@ -15,10 +15,17 @@ import {
 const box = (x: number, y: number, w = 0.1, h = 0.2): Bbox => [x, y, w, h];
 const snap = (
   ts: number,
-  tracks: Array<{ id: number; bbox: Bbox; score?: number }>,
+  tracks: Array<{ id: number; bbox: Bbox; score?: number; vx?: number; vy?: number }>,
 ): Snapshot => ({
   ts,
-  tracks: tracks.map((t) => ({ id: t.id, bbox: t.bbox, zone: null, score: t.score })),
+  tracks: tracks.map((t) => ({
+    id: t.id,
+    bbox: t.bbox,
+    zone: null,
+    score: t.score,
+    vx: t.vx,
+    vy: t.vy,
+  })),
 });
 
 describe("lerpBbox", () => {
@@ -89,6 +96,68 @@ describe("TrackInterpolator — interpolação linear por id", () => {
     expect(it0.sample(1500)[0].bbox[0]).toBeCloseTo(0.15, 6);
     // 5000ms além → clampado ao teto (maxExtrap 500ms = +0.05), não dispara
     expect(it0.sample(6000)[0].bbox[0]).toBeCloseTo(0.15, 6);
+  });
+});
+
+describe("TrackInterpolator — dead-reckoning por velocidade do Kalman (vx/vy)", () => {
+  it("move a caixa por vx/vy JÁ no 1º keyframe (nasce se movendo, sem penúltimo)", () => {
+    // maxExtrap alto p/ isolar o dead-reckoning da clampagem; delay 0 amostra na hora pedida.
+    const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    it0.ingest(snap(1, [{ id: 7, bbox: box(0, 0), vx: 0.2, vy: 0.1 }]), 0); // 1 keyframe só + velocidade
+    // 500ms depois → +v×0.5s: x = 0.2×0.5 = 0.1 ; y = 0.1×0.5 = 0.05 (extrapolação sem penúltimo)
+    const d = it0.sample(500);
+    expect(d).toHaveLength(1);
+    expect(d[0].bbox[0]).toBeCloseTo(0.1, 6);
+    expect(d[0].bbox[1]).toBeCloseTo(0.05, 6);
+    // w/h não escalam com a velocidade (só posição)
+    expect(d[0].bbox[2]).toBeCloseTo(0.1, 6);
+    expect(d[0].bbox[3]).toBeCloseTo(0.2, 6);
+  });
+
+  it("CLAMP por maxExtrapMs: a previsão para quando a pessoa para (não dispara)", () => {
+    // expire/fade altos p/ isolar a clampagem da extrapolação da expiração por idade.
+    const it0 = new TrackInterpolator({
+      delayMs: 0,
+      maxExtrapMs: 500,
+      expireMs: 1e6,
+      fadeStartMs: 1e6,
+    });
+    it0.ingest(snap(1, [{ id: 5, bbox: box(0, 0), vx: 0.1, vy: 0 }]), 0); // v = 0.1/s
+    // 500ms além → +0.05 (v × 0.5s)
+    expect(it0.sample(500)[0].bbox[0]).toBeCloseTo(0.05, 6);
+    // 6000ms além → dt clampado a maxExtrap (500ms) → +0.05, NÃO foge (o corpo "parou")
+    expect(it0.sample(6000)[0].bbox[0]).toBeCloseTo(0.05, 6);
+  });
+
+  it("vx/vy = 0 (parado): caixa fica no bbox detectado, sem drift", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    it0.ingest(snap(1, [{ id: 6, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), 0);
+    expect(it0.sample(900)[0].bbox).toEqual([0.3, 0.3, 0.1, 0.2]);
+  });
+
+  it("FALLBACK sem vx/vy: usa a estimativa por 2 keyframes (retrocompat, hub antigo)", () => {
+    // Sem velocidade no payload → o ramo de dead-reckoning NÃO é tomado; anima do penúltimo ao último.
+    const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    it0.ingest(snap(1, [{ id: 8, bbox: box(0, 0) }]), 0); // sem vx/vy
+    it0.ingest(snap(2, [{ id: 8, bbox: box(0.2, 0) }]), 1000);
+    // meio do intervalo → meio do caminho (prova que é 2-keyframe, não dead-reckoning)
+    expect(it0.sample(500)[0].bbox[0]).toBeCloseTo(0.1, 6);
+  });
+
+  it("EASING no snap: a correção do payload novo transita suave, não teleporta", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000, snapMs: 200 });
+    it0.ingest(snap(1, [{ id: 1, bbox: box(0, 0), vx: 0.1, vy: 0 }]), 0); // reta A: prevê x=0.1 em t=1000
+    // Nova detecção corrige p/ x=0.2 (erro de predição de 0.1) — a caixa NÃO deve saltar p/ 0.2.
+    it0.ingest(snap(2, [{ id: 1, bbox: box(0.2, 0), vx: 0.1, vy: 0 }]), 1000);
+
+    // no instante do payload: começa onde a caixa ESTAVA (predição A ≈ 0.1), não em 0.2
+    expect(it0.sample(1000)[0].bbox[0]).toBeCloseTo(0.1, 6);
+    // no meio da janela de snap (t=1100, k=0.5): entre a predição antiga e a nova reta
+    const midX = it0.sample(1100)[0].bbox[0];
+    expect(midX).toBeGreaterThan(0.1);
+    expect(midX).toBeLessThan(0.21);
+    // após snapMs (t=1200, k=1): totalmente na nova reta de dead-reckoning (0.2 + 0.1×0.2s = 0.22)
+    expect(it0.sample(1200)[0].bbox[0]).toBeCloseTo(0.22, 6);
   });
 });
 
