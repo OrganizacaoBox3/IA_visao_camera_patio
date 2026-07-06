@@ -1,0 +1,310 @@
+name: Deploy Homolog
+
+# CD do HOMOLOG (VPS Ubuntu / DigitalOcean) — automatiza o runbook manual
+# docs/deploy-atualizacao-2026-07.md. Setup completo: docs/ci-cd-github-actions.md.
+#
+# Disparo MANUAL (workflow_dispatch) — humano no loop, NUNCA auto-on-push.
+# CLAUDE.md §8: gate determinístico antes de ação irreversível = teste-verde OU aprovação
+# humana. Aqui há os dois: o job `build` roda `npm run verify` (o gate, DENTRO do deploy)
+# e o job `deploy` só executa depois, sob o environment "homolog" (required reviewers
+# opcionais aprovam ENTRE o build verde e o toque no servidor).
+#
+# Segredos esperados (cadastrar no environment "homolog" — ver doc §2):
+#   HOMOLOG_SSH_HOST         IP/hostname do VPS
+#   HOMOLOG_SSH_USER         usuário SSH de deploy (sudoers RESTRITO NOPASSWD — ver doc §2.3)
+#   HOMOLOG_SSH_KEY          chave PRIVADA OpenSSH dedicada (ed25519, sem passphrase)
+#   HOMOLOG_SSH_PORT         (opcional) porta SSH; default 22
+#   HOMOLOG_SSH_KNOWN_HOSTS  (opcional, hardening) linha(s) known_hosts do VPS — quando
+#                            presente, PINA a host key (sem TOFU/ssh-keyscan); doc §2.5
+#
+# O que sobe / o que NUNCA sobe espelha o runbook §5 — ver o step "Empacotar release".
+# Falha no health-check NÃO faz rollback automático: o backup fica no servidor e o log
+# do run imprime as instruções de reversão (runbook §9).
+#
+# VPS COMPARTILHADA — menor raio de explosão (contrato do script remoto):
+#   - nenhum `rm -rf` fora do staging PRÓPRIO com caminho hardcoded (/tmp/visao-deploy-staging);
+#   - NUNCA rm/wildcard sobre /var/www/visao-patio — backup é cp -a e a cópia nova é
+#     cp ADITIVO (sem --delete): estado de runtime preservado como o runbook manda;
+#   - systemctl só toca o unit visao-hub (nginx e demais serviços NÃO são tocados);
+#   - chown/chmod só em /var/www/visao-patio e subcaminhos explícitos;
+#   - rollback é só INSTRUÇÃO textual no log — nunca executado automaticamente.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Um deploy por vez; um segundo disparo espera (não cancela) o que está no ar.
+concurrency:
+  group: deploy-homolog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build + gate (verify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      # Gate determinístico DENTRO do deploy (CLAUDE.md §8):
+      # lint + typecheck + build + test + audit. Vermelho aqui = deploy nem começa.
+      # O `build` do verify já gera o dist/ desta release — não há step de build separado.
+      - name: Verify (gate determinístico)
+        run: npm run verify
+
+      # go2rtc LINUX empacotado no release (runbook §4.1): download com verificação de
+      # sha256 e escrita atômica em bin/go2rtc (+x). O binário nunca é versionado
+      # (bin/ é gitignored) — é artefato de release, gerado aqui no runner.
+      - name: go2rtc linux-amd64 (sha256 verificado)
+        run: node scripts/fetch-go2rtc.mjs --platform linux-amd64
+
+      # SOBE (runbook §5): dist/ server/ bin/go2rtc package.json package-lock.json scripts/
+      # NUNCA SOBE: node_modules (nativas do runner ≠ servidor; reinstala lá),
+      # server/models/ (o hub baixa no boot com sha) e QUALQUER estado/segredo de runtime
+      # (cameras/alarms/camcfg/alarm-shelves/data-hist/users/recipients/notif-settings/
+      # rtsp.sources/wa-auth/go2rtc.yaml/.env). Esses runtime são todos gitignored — não
+      # existem no checkout; os --exclude abaixo são trava defensiva (defesa em
+      # profundidade) caso algum step passe a criá-los no workspace do runner.
+      - name: Empacotar release (só o que sobe)
+        run: |
+          tar -czf release.tar.gz \
+            --exclude='server/models' \
+            --exclude='server/wa-auth' \
+            --exclude='server/cameras.json' \
+            --exclude='server/alarms.json' \
+            --exclude='server/camcfg.json' \
+            --exclude='server/alarm-shelves.json' \
+            --exclude='server/data-hist.json' \
+            --exclude='server/data-hist.json.tmp' \
+            --exclude='server/users.json' \
+            --exclude='server/recipients.json' \
+            --exclude='server/notif-settings.json' \
+            --exclude='server/rtsp.sources.json' \
+            --exclude='server/go2rtc.yaml' \
+            --exclude='*.gen.yaml' \
+            dist server bin/go2rtc package.json package-lock.json scripts
+
+      # Trava auditável sobre o ARTEFATO real: se qualquer arquivo proibido aparecer no
+      # tar, o run falha antes de qualquer toque no servidor (LGPD/segredos — ADR-002).
+      - name: Auditar pacote (nada de runtime/segredo no tar)
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          file bin/go2rtc | grep -q 'ELF 64-bit'   # binário LINUX (não o .exe do Windows)
+          FORBIDDEN='server/(models/|wa-auth/|cameras\.json|alarms\.json|camcfg\.json|alarm-shelves\.json|data-hist\.json|users\.json|recipients\.json|notif-settings\.json|rtsp\.sources\.json|go2rtc\.yaml)|node_modules/|\.env|\.gen\.yaml'
+          if tar -tzf release.tar.gz | grep -E "$FORBIDDEN"; then
+            echo "::error::release.tar.gz contém arquivo proibido (estado/segredo de runtime) — abortando"
+            exit 1
+          fi
+          echo "sha256: $(sha256sum release.tar.gz)"
+          echo "conteúdo (amostra):"
+          tar -tzf release.tar.gz | head -n 25
+
+      - name: Publicar artefato p/ o job de deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: homolog-release
+          path: release.tar.gz
+          retention-days: 3
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy no VPS (homolog)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A aprovação (required reviewers, se configurados) acontece AQUI — depois do gate
+    # verde, antes de tocar o servidor. Os secrets HOMOLOG_* vivem neste environment.
+    environment:
+      name: homolog
+      # url: https://visao.SEU-DOMINIO.com   # descomente com a URL pública do homolog
+    steps:
+      - name: Baixar artefato do build
+        uses: actions/download-artifact@v4
+        with:
+          name: homolog-release
+
+      - name: Preparar SSH (chave + known_hosts)
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?secret HOMOLOG_SSH_KEY não configurado no environment homolog}"
+          : "${SSH_HOST:?secret HOMOLOG_SSH_HOST não configurado no environment homolog}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            # Hardening: host key PINADA via secret (fingerprint conferida por humano — doc §2.5).
+            printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+            echo "known_hosts pinado via HOMOLOG_SSH_KNOWN_HOSTS (sem TOFU)"
+          else
+            # TOFU: confia na chave apresentada agora (1º contato). Para eliminar,
+            # cadastre HOMOLOG_SSH_KNOWN_HOSTS — ver doc §2.5.
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "known_hosts via ssh-keyscan (TOFU — hardening disponível: doc §2.5)"
+          fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio ($SSH_HOST:$SSH_PORT inalcançável?)"; exit 1; }
+
+      # Envia para o HOME do usuário de deploy (não /tmp: em VPS compartilhada, /tmp é
+      # gravável por todos — caminho previsível seria superfície de symlink/troca).
+      - name: Enviar release (scp)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          : "${SSH_USER:?secret HOMOLOG_SSH_USER não configurado no environment homolog}"
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            release.tar.gz "$SSH_USER@$SSH_HOST:visao-release.tar.gz"
+
+      # Script remoto idempotente = runbook §§3,5,7,8 automatizados:
+      # backup → posiciona preservando estado de runtime → npm install --omit=dev →
+      # chmod/chown → restart → health-check com retry. O heredoc é 'quoted': nada do
+      # runner é interpolado no script (sem superfície de injeção); tudo roda no VPS.
+      - name: Deploy remoto (idempotente) + health-check
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          # VPS COMPARTILHADA — contrato de menor raio de explosão:
+          #  (a) único `rm -rf`: o staging PRÓPRIO, caminho absoluto HARDCODED (readonly);
+          #      jamais sobre /var/www/visao-patio nem com wildcard;
+          #  (b) backup = cp -a (aditivo); cópia nova = cp SEM --delete (nada é apagado
+          #      do app — estado de runtime preservado, como o runbook §5 manda);
+          #  (c) systemctl SÓ no unit visao-hub (nginx/demais serviços intocados);
+          #  (d) chown/chmod só em /var/www/visao-patio e subcaminhos explícitos;
+          #  (e) set -euo pipefail + echo de cada passo (auditável no log do Actions);
+          #      rollback = INSTRUÇÃO textual para o humano, nunca executado daqui.
+
+          readonly APP=/var/www/visao-patio
+          readonly SERVICE=visao-hub
+          readonly TAR="$HOME/visao-release.tar.gz"
+          readonly STAGE=/tmp/visao-deploy-staging
+          STAMP="$(date +%F-%H%M%S)"
+          readonly BACKUP="$APP.bak-$STAMP"
+
+          # sudo -n: falha alto se pedir senha (requisito: NOPASSWD — ver doc §2),
+          # em vez de pendurar o runner esperando input.
+          if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+          cleanup() { rm -rf "$STAGE" 2>/dev/null || true; rm -f "$TAR"; }
+          trap cleanup EXIT
+
+          echo "== [1/7] pré-checagens (o CD atualiza; NÃO faz o setup inicial) =="
+          test -f "$TAR" || { echo "ERRO: release não encontrado em $TAR"; exit 1; }
+          test -d "$APP" || { echo "ERRO: $APP não existe — rode o setup inicial (docs/deploy-digitalocean.md)"; exit 1; }
+          $SUDO systemctl cat "$SERVICE" >/dev/null || { echo "ERRO: unit $SERVICE não instalada"; exit 1; }
+          echo "pré-checagens OK · node $(node -v) · npm $(npm -v)"
+
+          echo "== [2/7] backup ADITIVO (cp -a) =="
+          $SUDO cp -a "$APP" "$BACKUP"
+          echo "backup criado: $BACKUP"
+          echo "(sem poda automática — backups antigos são removidos MANUALMENTE; ver doc §6)"
+
+          echo "== [3/7] staging + posicionar (cópia ADITIVA, preserva estado de runtime) =="
+          # Único rm -rf do script: staging próprio e hardcoded (restos de run anterior).
+          $SUDO rm -rf "$STAGE"
+          mkdir "$STAGE"   # sem -p: se sobrou algo no caminho (ex.: symlink), falha aqui
+          tar -xzf "$TAR" -C "$STAGE"
+          echo "release extraído em $STAGE"
+          # Cópias SEM --delete e sem rm: sobrescrevem código, nunca apagam nada do app.
+          # Estado de runtime (cameras/alarms/camcfg/alarm-shelves/data-hist/users/
+          # recipients/notif-settings/rtsp.sources/wa-auth/ e server/models/) NÃO vem
+          # no pacote e permanece intocado. Chunks antigos em dist/ podem acumular
+          # (inofensivo — o index.html novo só referencia os novos; igual ao runbook).
+          $SUDO mkdir -p "$APP/dist" "$APP/bin" "$APP/scripts"
+          $SUDO cp -r "$STAGE/dist/." "$APP/dist/"
+          echo "dist/ posicionado"
+          $SUDO cp -r "$STAGE/server/." "$APP/server/"
+          echo "server/ posicionado (runtime preservado)"
+          # go2rtc pode estar EM EXECUÇÃO (sidecar do hub): cp direto daria ETXTBSY
+          # ("text file busy") — por isso cp para nome temporário + mv (rename atômico;
+          # o processo antigo segue com o inode antigo até o restart).
+          $SUDO cp "$STAGE/bin/go2rtc" "$APP/bin/go2rtc.new"
+          $SUDO mv -f "$APP/bin/go2rtc.new" "$APP/bin/go2rtc"
+          echo "bin/go2rtc posicionado (swap atômico)"
+          $SUDO cp -r "$STAGE/scripts/." "$APP/scripts/"
+          $SUDO cp "$STAGE/package.json" "$STAGE/package-lock.json" "$APP/"
+          echo "scripts/ + package.json + package-lock.json posicionados"
+
+          echo "== [4/7] npm install --omit=dev (nativas Linux: onnxruntime-node/sharp) =="
+          cd "$APP"
+          $SUDO npm install --omit=dev --no-audit --no-fund
+          echo "deps de produção instaladas"
+
+          echo "== [5/7] permissões (runbook §5 — só em $APP e subcaminhos) =="
+          $SUDO chmod +x "$APP/bin/go2rtc"
+          $SUDO chown -R visao:visao "$APP"
+          echo "chmod +x bin/go2rtc e chown -R visao:visao aplicados"
+
+          echo "== [6/7] restart do hub (SÓ o unit $SERVICE — nginx/demais intocados) =="
+          $SUDO systemctl restart "$SERVICE"
+          echo "restart emitido"
+
+          echo "== [7/7] health-check (retry) =="
+          # (a) HTTP: endpoint socket.io do hub no loopback (não exige auth) — até ~2min
+          #     (1º boot pode baixar o modelo ONNX ~40MB antes do listen).
+          HTTP_OK=0
+          for _ in $(seq 1 24); do
+            if curl -fsS -m 5 "http://127.0.0.1:8091/socket.io/?EIO=4&transport=polling" >/dev/null 2>&1; then
+              HTTP_OK=1; break
+            fi
+            sleep 5
+          done
+          # (b) Log de boot: "ouvindo em" sai sempre; "motor ATIVO" quando o motor liga.
+          LOG_OK=0
+          for _ in $(seq 1 12); do
+            if $SUDO journalctl -u "$SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null \
+               | grep -qE "motor ATIVO|ouvindo em"; then
+              LOG_OK=1; break
+            fi
+            sleep 5
+          done
+
+          if [ "$HTTP_OK" -eq 1 ] && [ "$LOG_OK" -eq 1 ]; then
+            echo "HEALTH OK — hub respondendo na 8091 e log de boot presente."
+            $SUDO systemctl status "$SERVICE" --no-pager | sed -n '1,8p' || true
+            echo "Backup desta release: $BACKUP (remoção de backups antigos é manual — doc §6)."
+            exit 0
+          fi
+
+          echo "=================================================================="
+          echo "HEALTH FALHOU (http=$HTTP_OK, log=$LOG_OK) — deploy marcado VERMELHO."
+          echo "SEM rollback automático (decisão deliberada): o backup está intacto."
+          echo "Para reverter (runbook docs/deploy-atualizacao-2026-07.md §9), no servidor:"
+          echo ""
+          echo "  sudo systemctl stop $SERVICE"
+          echo "  sudo rm -rf $APP"
+          echo "  sudo mv $BACKUP $APP"
+          echo "  sudo systemctl start $SERVICE"
+          echo ""
+          echo "Diagnóstico: sudo journalctl -u $SERVICE -n 80 --no-pager"
+          echo "=================================================================="
+          $SUDO journalctl -u "$SERVICE" -n 40 --no-pager || true
+          exit 1
+          REMOTE

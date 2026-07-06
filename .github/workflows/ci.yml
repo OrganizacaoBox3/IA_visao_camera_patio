@@ -1,16 +1,34 @@
 name: CI
 
-# Gate de verificação na nuvem (reforço do pre-push local). Ver CLAUDE.md §6.
-# Vermelho não entra: roda lint + typecheck + build + test em cada push/PR.
+# Gate completo na nuvem (reforço do pre-push local). Doutrina: CLAUDE.md §6 — vermelho não entra.
+# Três sensores, mesmos que rodamos na máquina:
+#   verify — lint + typecheck + build + unit + audit (gate primário, rápido; barra os outros dois)
+#   e2e    — fluxo real no navegador (hub isolado + vite dev + Chromium headless com webcam fake)
+#   eval   — acurácia: gate de detecção sobre o modelo ONNX real + contagem fim-a-fim sintética
+#
+# SEM paths-ignore de propósito: analises/*.md e ADRs acompanham código no mesmo PR (mudar uma
+# invariante muda comportamento esperado), e um filtro por path cria o falso-verde do commit
+# "só docs" que carrega um thresholds.json junto. Rodar tudo sempre é barato; falso-verde não é.
+
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: ["**"]
 
+# Um run por ref: push novo cancela o run do HEAD anterior — feedback sempre do estado atual.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nenhum job escreve em repo/PR/issues — menor privilégio possível.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,5 +42,94 @@ jobs:
       - name: Install (npm ci)
         run: npm ci
 
-      - name: Verify (lint + typecheck + build + test)
+      - name: Verify (lint + typecheck + build + test + audit)
         run: npm run verify
+
+  e2e:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      # Chromium keyed no lockfile: a versão do browser segue @playwright/test, que vive ali.
+      # As libs de SO (apt) não entram no cache — instalam-se sempre, nos dois ramos abaixo.
+      - name: Cache do Chromium (Playwright)
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Instalar Chromium + libs de SO (cache frio)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Instalar libs de SO (cache quente)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # playwright.config.ts + e2e/global-setup.ts já isolam tudo: hub e2e na 4100 SEM Postgres
+      # e com ANALYSIS_ENABLED=0 (não baixa modelo no boot), vite na 5180 (VITE_HUB_URL),
+      # go2rtc apontado p/ porta morta (força o caminho MJPEG que o e2e testa) e webcam fake
+      # no Chromium. Nenhum env extra aqui — se o CI precisar divergir do local, é bug do config.
+      - name: E2E (app + mobile)
+        run: npx playwright test e2e/app.spec.ts e2e/mobile.spec.ts
+
+      # trace: retain-on-failure → só existe artefato quando falha; é o único momento em que
+      # ele paga o upload. Retenção curta: trace serve p/ depurar o run, não p/ arquivo.
+      - name: Upload de traces (só em falha)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-traces
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  eval:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      # Modelo D-FINE-S (~40 MB, HuggingFace) keyed no catálogo: model.js carrega file+sha256,
+      # então trocar de modelo muda a key e força download novo; senão restaura do cache.
+      - name: Cache do modelo ONNX
+        uses: actions/cache@v4
+        with:
+          path: server/models
+          key: onnx-model-${{ hashFiles('server/analysis/model.js') }}
+
+      # Download DIRETO (modelOk/downloadModel), não ensureModel: ensureModel tem fallback
+      # S→N que aqui seria um gate medindo o modelo errado ou um exit 2 ambíguo do eval.
+      # HF fora do ar em cache frio → este step FALHA, claro e cedo. sha256 verificado sempre.
+      - name: Garantir modelo (download + sha256 se cache frio)
+        run: node -e "const m=require('./server/analysis/model.js');(m.modelOk()?(console.log('[ci] modelo no disco, sha256 ok'),Promise.resolve()):m.downloadModel()).catch(e=>{console.error('[ci] download do modelo FALHOU:',e.message);process.exit(1)})"
+
+      - name: Eval — gate de acurácia (detecção sobre fixture)
+        run: npm run eval
+
+      - name: Eval — contagem fim-a-fim (tracker + tripwire)
+        run: npm run eval:counting
