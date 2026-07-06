@@ -1,0 +1,188 @@
+{
+  "runDir": "C:/Users/crist/AppData/Local/Temp/claude/C--Users-crist-grendene-cd-inovacao-visao-computacional-mvp/4d25e2e4-e55e-413d-b81b-a5979604c8ef/scratchpad/frente2/runs/stagger-hash",
+  "scenario": "hash",
+  "windowMs": [
+    1783366947797,
+    1783367070013
+  ],
+  "windowS": 122.2,
+  "workersReadyAfterMs": [
+    1882,
+    1905
+  ],
+  "frameCount": {
+    "camA-bench": 1340,
+    "camB-jumpy": 1260,
+    "camC-bench2": 1341
+  },
+  "dispatchesInWindow": 368,
+  "cpuSource": "ext",
+  "pool": {
+    "cpuPct": {
+      "n": 1222,
+      "mean": 175.7,
+      "sd": 140.1,
+      "min": 0,
+      "p5": 0,
+      "p25": 25.4,
+      "p50": 168.8,
+      "p75": 311.2,
+      "p95": 382.1,
+      "max": 440.5
+    },
+    "sawtoothIdx": 75.7,
+    "fracBinsBelow25pct": 0.248,
+    "fracBinsAbove300pct": 0.274
+  },
+  "hubProcPct": {
+    "n": 1222,
+    "mean": 4.9,
+    "sd": 8.3,
+    "min": 0,
+    "p5": 0,
+    "p25": 0,
+    "p50": 0,
+    "p75": 8,
+    "p95": 21.4,
+    "max": 70.8
+  },
+  "machineBusyPctOf800": {
+    "n": 242,
+    "mean": 663.3,
+    "sd": 148.8,
+    "min": 220.2,
+    "p5": 343.6,
+    "p25": 582.9,
+    "p50": 701,
+    "p75": 800,
+    "p95": 800,
+    "max": 800
+  },
+  "dispatchAlignment": {
+    "perCamera": {
+      "camA-bench": {
+        "n": 123,
+        "modalPhaseMs": 950,
+        "phases": {
+          "n": 123,
+          "mean": 686.3,
+          "sd": 442.9,
+          "min": 0,
+          "p5": 3,
+          "p25": 14,
+          "p50": 966,
+          "p75": 982,
+          "p95": 996,
+          "max": 999
+        }
+      },
+      "camB-jumpy": {
+        "n": 123,
+        "modalPhaseMs": 900,
+        "phases": {
+          "n": 123,
+          "mean": 950,
+          "sd": 15.8,
+          "min": 922,
+          "p5": 926,
+          "p25": 936,
+          "p50": 947,
+          "p75": 965,
+          "p95": 974,
+          "max": 981
+        }
+      },
+      "camC-bench2": {
+        "n": 122,
+        "modalPhaseMs": 200,
+        "phases": {
+          "n": 122,
+          "mean": 252.7,
+          "sd": 18.2,
+          "min": 224,
+          "p5": 228,
+          "p25": 239,
+          "p50": 248,
+          "p75": 267,
+          "p95": 279,
+          "max": 344
+        }
+      }
+    },
+    "roundSpreadMs": {
+      "n": 123,
+      "mean": 779.4,
+      "sd": 134.3,
+      "min": 1,
+      "p5": 671,
+      "p25": 703,
+      "p50": 726,
+      "p75": 938,
+      "p95": 974,
+      "max": 989
+    },
+    "roundsWith3Cams": 96,
+    "roundsWith3CamsWithin100ms": 0,
+    "nearestNeighborGapMs": {
+      "n": 246,
+      "mean": 153.4,
+      "sd": 123.5,
+      "min": 0,
+      "p5": 0,
+      "p25": 53,
+      "p50": 176,
+      "p75": 274,
+      "p95": 297,
+      "max": 736
+    }
+  },
+  "latency": {
+    "inferMs": {
+      "n": 366,
+      "mean": 209,
+      "sd": 33.7,
+      "min": 144,
+      "p5": 160,
+      "p25": 185,
+      "p50": 210,
+      "p75": 228,
+      "p95": 251,
+      "max": 386
+    },
+    "decodeMs": {
+      "n": 366,
+      "mean": 24.9,
+      "sd": 5,
+      "min": 13,
+      "p5": 17,
+      "p25": 22,
+      "p50": 24,
+      "p75": 28,
+      "p95": 34,
+      "max": 44
+    },
+    "waitOutsideInferMs": {
+      "n": 366,
+      "mean": 1.7,
+      "sd": 6.6,
+      "min": 0,
+      "p5": 0,
+      "p25": 1,
+      "p50": 1,
+      "p75": 1,
+      "p95": 2,
+      "max": 77
+    },
+    "dropped": 0,
+    "errors": 0
+  },
+  "gate": {
+    "enabled": true,
+    "ratio": 0.005,
+    "probeMs": 6000,
+    "probeFocusMs": 2000,
+    "thumb": "64x48",
+    "skipped1m": 0,
+    "skippedTotal": 0
+  }
+}
