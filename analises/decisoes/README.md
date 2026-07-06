@@ -12,6 +12,9 @@ Contexto → Decisão → Consequências. Status: aceito salvo indicação.
 | [005](ADR-005-persistencia-json-postgres.md) | Persistência: cache + Postgres com fallback JSON | aceito |
 | [006](ADR-006-live-sync-last-write-wins.md) | Sincronização ao vivo last-write-wins via socket | aceito |
 | [007](ADR-007-adocao-radix-ui.md) | Adoção de Radix como camada de UI (exceção: canvas fullscreen) | aceito |
+| [008](ADR-008-adocao-tailwind.md) | Adoção de Tailwind (tokens `--state-*`/`--cam-*`/`--sp-*`) | aceito |
+| [009](ADR-009-analise-server-side.md) | Análise de visão server-side (motor D-FINE no hub) | aceito |
+| [010](ADR-010-conector-de-site-edge-gateway.md) | Conector de site (edge gateway) p/ câmeras de clientes remotos | proposto |
 
 > Convenção: novas decisões de peso ganham um ADR aqui. Mudanças que revertem um ADR
 > criam um novo ADR com status "substitui ADR-XXX".
