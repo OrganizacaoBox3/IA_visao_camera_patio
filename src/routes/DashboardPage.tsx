@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Video } from "lucide-react";
+import { Bell, BellRing, ChevronLeft, ChevronRight, Video } from "lucide-react";
 import { APP_CONFIG } from "../config";
 import { setInferencePriority } from "../vision/scheduler";
 import { CameraWorkspace } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { useAuth } from "../auth";
-import { Button, Tooltip, Badge, useToast } from "../ui";
+import { Button, IconButton, Tooltip, Badge, useToast } from "../ui";
 import { type Camera } from "./dashboard/types";
 import { CameraTile } from "./dashboard/CameraTile";
 import { AlarmDrawer } from "./dashboard/AlarmDrawer";
@@ -179,30 +179,37 @@ export function DashboardPage() {
             className="inline-flex items-center gap-1 text-[12px] text-text-dim"
             aria-label="Paginação de feeds"
           >
-            <Tooltip content="Página anterior">
-              <Button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page <= 0}>
-                ‹
-              </Button>
-            </Tooltip>
+            <IconButton
+              label="Página anterior"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page <= 0}
+            >
+              <ChevronLeft size={16} strokeWidth={1.75} aria-hidden />
+            </IconButton>
             <span className="muted">
               {page + 1}/{pageCount}
             </span>
-            <Tooltip content="Próxima página">
-              <Button
-                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                disabled={page >= pageCount - 1}
-              >
-                ›
-              </Button>
-            </Tooltip>
+            <IconButton
+              label="Próxima página"
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+              disabled={page >= pageCount - 1}
+            >
+              <ChevronRight size={16} strokeWidth={1.75} aria-hidden />
+            </IconButton>
           </span>
         )}
         <Tooltip content="Fila de alarmes (eventos acionáveis)">
+          {/* Ícone Lucide + rótulo (NN/g: icon+label) — BellRing quando há novos, Bell em repouso. */}
           <Button onClick={() => setAlarmsOpen((o) => !o)} active={alarmsOpen}>
-            ▦ Alarmes
+            {newCount > 0 ? (
+              <BellRing size={16} strokeWidth={1.75} aria-hidden />
+            ) : (
+              <Bell size={16} strokeWidth={1.75} aria-hidden />
+            )}
+            Alarmes
             {newCount > 0 && (
               <span
-                className="alarm-badge"
+                className="alarm-count-badge"
                 data-prio={topNewPriority}
                 aria-label={`${newCount} novos`}
               >
