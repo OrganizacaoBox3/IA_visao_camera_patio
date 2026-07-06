@@ -9,9 +9,12 @@
 // worker com backoff se ele morrer.
 //
 // PRÉ/PÓS-PROCESSAMENTO — reaproveitado DO SPIKE VALIDADO (spike-dfine/infer.mjs):
-//   • decode JPEG via sharp → resize 640×640 "squash" (fit:fill — o
+//   • decode JPEG via sharp → resize SIZE×SIZE "squash" (fit:fill — o
 //     preprocessor_config do modelo usa RTDetrImageProcessor com do_pad:false,
 //     NÃO letterbox) → rescale 1/255, SEM mean/std → tensor CHW fp32.
+//     SIZE = 640 (default de treino); configurável por ANALYSIS_INPUT (eixo dinâmico
+//     do ONNX → múltiplo de 32 sem re-exportar; menor = mais rápido, menos recall
+//     de pessoa pequena — tradeoff medido em analises/perf-input-size-dfine.md).
 //   • saídas: logits [1,300,80] + pred_boxes [1,300,4] (cxcywh NORMALIZADO) →
 //     sigmoid + argmax por query + corte de score + NMS leve por classe (a
 //     D-FINE-N emite queries duplicadas no mesmo alvo na faixa 0.25-0.5 —
@@ -51,7 +54,22 @@ const path = require("node:path");
 
 const MODEL =
   process.env.ANALYSIS_MODEL_PATH || path.join(__dirname, "..", "models", "dfine_n_coco.onnx");
-const SIZE = 640; // input nativo do D-FINE-N
+
+// INPUT DO RESIZE (configurável — perf 2026-07). O D-FINE tem EIXO DINÂMICO no ONNX,
+// então roda em qualquer múltiplo de 32 SEM re-exportar; input menor corta inferência
+// (medido no tier S: 640→512 = -23% infer; 640→416 = -40% — analises/perf-input-size-dfine.md).
+// Default 640 (input de treino): a MEDIÇÃO mandou MANTER. No full-set (591 GT), 512 custa
+// ~7-8pp de recall de pessoa PEQUENA (o gargalo que o tiling existe p/ tratar) por só -23% de
+// CPU — trade ruim p/ pé-direito alto. 512 fica como escape hatch CPU-bound (passa o gate do
+// fixture); 416 é rejeitado (reprova o gate). Deve ser múltiplo de 32 (stride do backbone);
+// valores fora disso são arredondados p/ o múltiplo de 32 mais próximo.
+function resolveInputSize() {
+  const raw = Number(process.env.ANALYSIS_INPUT);
+  if (!Number.isFinite(raw) || raw <= 0) return 640; // default: input nativo do treino
+  const snapped = Math.round(raw / 32) * 32; // eixo dinâmico exige múltiplo do stride 32
+  return Math.max(160, Math.min(1024, snapped)); // limites sãos (evita OOM / grafo degenerado)
+}
+const SIZE = resolveInputSize(); // alvo do resize squash (H=W); tiles usam o MESMO input
 const SCORE_MIN = Number(process.env.ANALYSIS_SCORE_MIN ?? 0.25); // só devolve dets ≥ isto
 const NMS_IOU = Number(process.env.ANALYSIS_NMS_IOU ?? 0.6);
 const INTRA_THREADS = Number(process.env.ANALYSIS_INTRA_THREADS ?? 2);
@@ -334,7 +352,7 @@ async function drain() {
     await session.run({
       pixel_values: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]),
     });
-    send({ type: "ready", model: path.basename(MODEL), cpu: process.cpuUsage() });
+    send({ type: "ready", model: path.basename(MODEL), input: SIZE, cpu: process.cpuUsage() });
     void drain(); // pedidos que chegaram durante o load
   } catch (e) {
     send({ type: "fatal", error: e && e.message ? e.message : String(e) });
