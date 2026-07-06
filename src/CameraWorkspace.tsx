@@ -137,6 +137,19 @@ const TILE_HEAVY_INTERVAL_MS = 4000; // OWL-ViT (objetos) · ZXing (leitura) · 
 // NÃO é afetado — throttle não se aplica. Leitura/objetos/fadiga seguem 100% locais e intactos.
 const HUB_MOTION_INTERVAL_MS = 500;
 
+// ── (P0 fluidez browser/webcam) piso de cadência da LUMA no modo LOCAL ──
+// O bloco de luma (drawImage + getImageData O(pw·ph) + loop RGBA→luma) é o maior custo SÍNCRONO
+// do rAF por frame analisado. No modo local/full ele rodava a CADA frame novo (~15fps; feeds mais
+// rápidos, mais ainda). Este piso o limita a ~10fps — mesmo mecanismo do gate do modo hub (o dt
+// pulado segue ACUMULADO em activityDtRef e entra inteiro no frame analisado; tempo real intacto).
+// SEGURANÇA (mesmo argumento do (3.4) na grade, que já roda a ~7fps com os MESMOS limiares): a
+// máquina de estado confirma transições em stateConfirmationMs=900ms ≫ 100ms e o alarme é
+// minuto-escala — nenhuma mudança de estado observável se perde. Diff mais espaçado (~100ms vs
+// ~66ms) muda o ratio de motion marginalmente PARA CIMA (movimento anda mais entre amostras),
+// direção conservadora p/ o alarme de ociosidade. Na grade o parity (3.4) já espaça ≥133ms a
+// 15fps → este piso só protege feeds de fps alto.
+const LOCAL_MOTION_MIN_INTERVAL_MS = 100;
+
 // Contadores de sessão "vazios" p/ o HUD no modo hub (constante única — sem alocar por frame).
 // Espelho do hub (refs + "hoje" servido + applyHubAnalysis) vive em ./camera/useHubAnalysis.
 const EMPTY_TW_COUNTS: Record<string, TripwireCounts> = {};
@@ -168,6 +181,16 @@ export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
 // da câmera aberta) via bucket de tempo no gate de "frame novo" do rAF. O vídeo NÃO depende disto
 // — só o trabalho de análise/desenho, que assim não re-carrega a main-thread no rAF (~60fps).
 const WEBRTC_TICK_MS = 66;
+
+// (P1 fluidez) rVFC como GATE de "frame novo" do WebRTC: o bucket de WEBRTC_TICK_MS acima é só
+// TEMPO — com o vídeo a menos de ~15fps (cena parada, fonte lenta, rede), o tick reprocessava o
+// MESMO quadro várias vezes. requestVideoFrameCallback (padrão da casa — CameraPage.tsx) marca
+// quando o <video> APRESENTOU um quadro novo; o rAF continua DONO do loop/desenho (ADR-007) e só
+// consulta o contador. Os dois gates compõem: processa no máx. a cada WEBRTC_TICK_MS E só com
+// quadro novo. VÁLVULA DE SEGURANÇA: rVFC "suportado" mas mudo há > este prazo (vídeo pausado,
+// aba estrangulada, bug de plataforma) → volta ao bucket puro = comportamento atual (nunca pior).
+// Sem suporte a rVFC ou no MJPEG: caminho idêntico ao de hoje, byte-a-byte.
+const WEBRTC_VFC_STALE_MS = 1000;
 
 // Tripwires (linhas de contagem com direção): estado/ciclo de vida em ./camera/useTripwires.
 
@@ -323,13 +346,20 @@ export function CameraWorkspace({
   const lumaSizeRef = useRef(0);
   const lastFrameElRef = useRef<unknown>(null); // identidade do último frame processado (gate de "frame novo")
   const lastFrameTsRef = useRef(0);
+  // (P1 fluidez) rVFC no transporte WebRTC (ver WEBRTC_VFC_STALE_MS): seq de quadros APRESENTADOS
+  // pelo <video> + último consumido pelo loop; a corrente rVFC é armada por elemento (vfcVideoRef).
+  const vfcSeqRef = useRef(0); // incrementa a cada requestVideoFrameCallback (quadro real novo)
+  const vfcSeenSeqRef = useRef(-1); // último seq consumido por um tick processado
+  const vfcLastAtRef = useRef(0); // performance.now() do último callback (válvula anti-congelamento)
+  const vfcVideoRef = useRef<HTMLVideoElement | null>(null); // elemento com a corrente armada
+  const vfcHandleRef = useRef(0); // handle p/ cancelVideoFrameCallback no cleanup/troca
   const detsRef = useRef<Detection[]>([]);
   const lastObjAtRef = useRef(0);
   const objInFlightRef = useRef(false); // P0: na grade, pula a detecção coco enquanto já há uma em voo
   const lastHeavyAtRef = useRef<Map<string, number>>(new Map()); // P2: última inferência PESADA por zona (gate de tile)
   const lastFrameAtRef = useRef(0);
   const gridParityRef = useRef(false); // (3.4) alterna a análise de atividade na GRADE (frame sim, frame não)
-  const lastHubMotionAtRef = useRef(0); // Fase 0.3: último frame com readback de motion no MODO HUB (throttle)
+  const lastMotionAtRef = useRef(0); // último readback de luma/motion (piso: hub 500ms · local 100ms)
   const activityDtRef = useRef(0); // (3.4) dt acumulado dos frames pulados → entregue inteiro no frame analisado
   const lastFlowAtRef = useRef(0);
   const lastRecAtRef = useRef(0);
@@ -812,6 +842,33 @@ export function CameraWorkspace({
 
   useEffect(() => {
     let stopped = false;
+    // ── (P1 fluidez) corrente rVFC do transporte WebRTC (ver WEBRTC_VFC_STALE_MS) ──
+    // Arma UMA corrente auto-re-agendada por elemento <video>; o callback SÓ incrementa contadores
+    // (nenhum trabalho, nenhum desenho — o rAF segue dono do loop, ADR-007). Troca de elemento
+    // cancela a corrente antiga; o cleanup do efeito zera vfcVideoRef p/ o próximo efeito re-armar.
+    const supportsVfc =
+      typeof HTMLVideoElement !== "undefined" &&
+      "requestVideoFrameCallback" in HTMLVideoElement.prototype;
+    const armVfc = (video: HTMLVideoElement) => {
+      if (vfcVideoRef.current === video) return; // já armada neste elemento (idempotente por tick)
+      const prevVideo = vfcVideoRef.current;
+      if (prevVideo && vfcHandleRef.current) {
+        try {
+          prevVideo.cancelVideoFrameCallback(vfcHandleRef.current);
+        } catch {
+          /* corrente antiga já solta */
+        }
+      }
+      vfcVideoRef.current = video;
+      vfcLastAtRef.current = performance.now(); // referência da válvula começa AGORA (não em 0)
+      const onFrame = () => {
+        vfcSeqRef.current++;
+        vfcLastAtRef.current = performance.now();
+        if (!stopped && vfcVideoRef.current === video)
+          vfcHandleRef.current = video.requestVideoFrameCallback(onFrame);
+      };
+      vfcHandleRef.current = video.requestVideoFrameCallback(onFrame);
+    };
     const loop = () => {
       if (stopped) return;
       rafRef.current = requestAnimationFrame(loop);
@@ -830,6 +887,18 @@ export function CameraWorkspace({
       if (webrtcRef.current) {
         const video = videoStreamRef.current?.video;
         if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+        // (P1) GATE rVFC: sem quadro NOVO apresentado desde o último tick processado → nada a
+        // analisar/desenhar (o <video> por HW já mostra o mesmo quadro). A válvula reabre o
+        // caminho do bucket quando o rVFC fica mudo > WEBRTC_VFC_STALE_MS (pausa/estrangulamento
+        // /plataforma sem callback) — pior caso = comportamento atual. MJPEG: intocado.
+        if (supportsVfc) {
+          armVfc(video);
+          if (
+            vfcSeqRef.current === vfcSeenSeqRef.current &&
+            performance.now() - vfcLastAtRef.current < WEBRTC_VFC_STALE_MS
+          )
+            return;
+        }
         f = {
           el: video,
           w: video.videoWidth,
@@ -848,6 +917,7 @@ export function CameraWorkspace({
         return;
       lastFrameElRef.current = f.el;
       lastFrameTsRef.current = f.ts ?? 0;
+      vfcSeenSeqRef.current = vfcSeqRef.current; // (P1) tick processado consome o quadro rVFC corrente
       const now = performance.now();
       meterRef.current.tick(now);
       // CINE: alimenta o ring buffer com o MESMO frame que já passou pelo gate (sem decode extra).
@@ -868,14 +938,18 @@ export function CameraWorkspace({
       // caminho — só passa a ser produzida na cadência que sobra (a dos frames analisados).
       gridParityRef.current = !gridParityRef.current;
       let analyzeActivity = mode === "full" || gridParityRef.current;
-      // Fase 0.3: no MODO HUB rebaixa o readback de motion local a HUB_MOTION_INTERVAL_MS (2fps) —
-      // corta o getImageData por-frame (jank) mantendo o estado/alarme de ociosidade local vivo
-      // (ver constante). O dt dos frames pulados segue ACUMULADO (activityDtRef) e entra inteiro
-      // no frame analisado, então idle/tempo real não perdem nada. `analysisEngineRef` é lido antes
-      // do `hubActive` de baixo (mesmo valor; aquele é reusado no resto do tick). Modo local: inerte.
-      if (analysisEngineRef.current === "hub" && analyzeActivity) {
-        if (now - lastHubMotionAtRef.current < HUB_MOTION_INTERVAL_MS) analyzeActivity = false;
-        else lastHubMotionAtRef.current = now;
+      // Piso de cadência do readback de luma/motion (getImageData é o maior custo síncrono do
+      // tick): MODO HUB a HUB_MOTION_INTERVAL_MS (2fps — Fase 0.3, o motor do hub já cobre a
+      // análise; o local só mantém vivo o alarme de ociosidade) e MODO LOCAL a
+      // LOCAL_MOTION_MIN_INTERVAL_MS (~10fps — P0 fluidez browser/webcam; ver constante). O dt
+      // dos frames pulados segue ACUMULADO (activityDtRef) e entra inteiro no frame analisado,
+      // então idle/tempo real não perdem nada. `analysisEngineRef` é lido antes do `hubActive`
+      // de baixo (mesmo valor; aquele é reusado no resto do tick).
+      if (analyzeActivity) {
+        const motionMinMs =
+          analysisEngineRef.current === "hub" ? HUB_MOTION_INTERVAL_MS : LOCAL_MOTION_MIN_INTERVAL_MS;
+        if (now - lastMotionAtRef.current < motionMinMs) analyzeActivity = false;
+        else lastMotionAtRef.current = now;
       }
       activityDtRef.current += frameDt;
       const activityDt = activityDtRef.current;
@@ -1309,6 +1383,17 @@ export function CameraWorkspace({
     return () => {
       stopped = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      // (P1) solta a corrente rVFC e zera o dono — o próximo efeito (remontagem/troca de câmera)
+      // re-arma no elemento vivo; sem isto, armVfc veria o MESMO <video> e nunca re-armaria.
+      const vfcVideo = vfcVideoRef.current;
+      if (vfcVideo && vfcHandleRef.current) {
+        try {
+          vfcVideo.cancelVideoFrameCallback(vfcHandleRef.current);
+        } catch {
+          /* já solta */
+        }
+      }
+      vfcVideoRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getFrame, mode, cameraId, label]);

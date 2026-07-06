@@ -52,11 +52,23 @@ self.onmessage = async (e: MessageEvent<InitMsg | DetMsg | DetBitmapMsg>) => {
 
   if (m.type === "init") {
     try {
-      await ensure(m.base);
-      // Telemetria de backend (plano-performance-bit 1.9): o tfjs cai SILENCIOSAMENTE p/ CPU
-      // quando WebGL não está disponível no worker — ordem de magnitude mais lento. Informa o
-      // backend real no `ready` p/ o cliente alertar/expor (fallback invisível vira visível).
+      // (P0 fluidez) Backend EXPLÍCITO, ANTES de carregar o modelo: deixado sozinho, o tfjs
+      // escolhe o backend na 1ª operação e cai SILENCIOSAMENTE p/ CPU quando o WebGL do worker
+      // falha (sem OffscreenCanvas/WebGL, driver, blacklist) — modo catastrófico, ~10× mais
+      // lento. Forçamos WebGL; só se a INICIALIZAÇÃO falhar caímos p/ CPU DECLARADAMENTE (o
+      // backend real segue no `ready` → console.warn + badge "detecção: CPU ⚠" no cliente).
+      // Selecionar antes do load garante que pesos/warmup já nascem no backend definitivo.
+      let webglOk = false;
+      try {
+        webglOk = await tf.setBackend("webgl"); // false = backend registrado mas falhou ao iniciar
+      } catch {
+        webglOk = false;
+      }
+      if (!webglOk) await tf.setBackend("cpu");
       await tf.ready();
+      await ensure(m.base);
+      // Telemetria de backend (plano-performance-bit 1.9): informa o backend real no `ready`
+      // p/ o cliente alertar/expor (fallback invisível vira visível).
       post({ type: "ready", backend: tf.getBackend() });
     } catch (err) {
       post({ type: "error", error: String(err) });

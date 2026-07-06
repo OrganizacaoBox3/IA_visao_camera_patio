@@ -53,7 +53,12 @@ export async function createHandLandmarker(): Promise<HandLandmarker> {
     HandLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: APP_CONFIG.fadiga.handModelAssetUrl, delegate },
       runningMode: "VIDEO",
-      numHands: 2,
+      // (P0 fluidez) 2→1: o caso de uso é o operador com o celular — UMA mão basta p/ o gesto e
+      // p/ o boost adaptativo do celular (fadiga.ts usa a mão mais forte / qualquer interseção).
+      // Metade do custo do HandLandmarker por inferência (66–90ms de cadência na câmera aberta).
+      // TRADE-OFF DECLARADO: gesto simultâneo com as DUAS mãos deixa de ver a segunda (o pipeline
+      // já usava só o sinal mais forte; `handCount` no HUD passa a exibir no máx. 1).
+      numHands: 1,
     }),
   );
 }
