@@ -6,7 +6,9 @@
 // usuário. Hoje `ANALYSIS_MODEL=n|s|m` era escolha manual; aqui ela vira AUTOMÁTICA:
 //   • PICK DE STARTUP — o melhor tier que o orçamento (cores × câmeras) comporta.
 //   • VÁLVULA DE RUNTIME — desce um tier (downgrade-only) quando o worker está
-//     comprovadamente AFOGADO (cadência muito abaixo do alvo E CPU sustentada alta),
+//     comprovadamente AFOGADO (cadência muito abaixo do alvo E CPU sustentada alta)
+//     OU LATENCY-BOUND (cadência ≪ alvo com workers TRABALHANDO — a inferência do tier
+//     é lenta demais p/ o alvo, sem nunca bater o teto de CPU; bug real de produção),
 //     com histerese FORTE (N janelas consecutivas) + cooldown pós-troca (anti-flap).
 //     Sobe só CONSERVADOR (folga sustentada por MUITO mais tempo + orçamento comporta).
 //
@@ -48,6 +50,11 @@ const DEFAULTS = {
   cooldownMs: 120_000, // silêncio pós-troca (não reavalia p/ trocar) — anti-oscilação
   downFpsRatio: 0.6, // cadência alcançada < 60% do alvo = está atrás
   downCpuPct: 150, // worker usando ≥1,5 core (2 intra-threads perto do teto) = afogado
+  // LATENCY-BOUND (bug real: homolog 4 cores/3 câmeras, tier M ~600–840ms/frame → 0,3–0,4fps
+  // com alvo 1fps; workers a ~70–85% de UM core — NUNCA batem downCpuPct porque o gargalo é a
+  // LATÊNCIA da inferência, não o teto de CPU → o motor ficava PRESO no M entregando mal).
+  latFpsRatio: 0.5, // estritamente < metade do alvo (na fronteira EXATA vale só a regra 'afogado')
+  latCpuPct: 40, // piso modesto POR worker: há inferência ACONTECENDO (≠ fome de frames, ~10–20%)
   upFpsRatio: 0.95, // batendo ~100% do alvo
   upCpuPct: 60, // worker usando <60% de UM core = muita folga (só então cogita subir)
   startupHeadroom: 1.2, // no boot exige orçamento FOLGADO p/ escolher um tier (ainda sem medição)
@@ -102,7 +109,7 @@ function initState(tier) {
  * SEGURANÇA: só transita entre TIERS válidos e nunca abaixo do PISO N.
  *
  * @param {{tier,choked,idle,lastSwitchAt}} state
- * @param {{now,tier,cpuPct,achievedFps,targetFps,cameras,cores}} sample
+ * @param {{now,tier,cpuPct,achievedFps,targetFps,cameras,cores,workers}} sample
  * @param {object} [cfg]  overrides de DEFAULTS (usado nos testes)
  */
 function decideRuntime(state, sample, cfg = {}) {
@@ -138,24 +145,40 @@ function decideRuntime(state, sample, cfg = {}) {
   // Sem `workers` (compat): escala 1 (comportamento pré-pool).
   const cpuScale = Math.max(1, sample.workers || 1);
   const chokedNow = fpsRatio <= c.downFpsRatio && sample.cpuPct >= c.downCpuPct * cpuScale;
+  // LATENCY-BOUND: MUITO atrás do alvo (estritamente < latFpsRatio — o caso exatamente-na-
+  // metade com folga de pool fica com a regra conservadora de 'afogado') E workers
+  // comprovadamente TRABALHANDO (cpuPct ≥ piso modesto POR worker). O piso de CPU separa o
+  // falso-positivo "câmera SEM FONTE" (pull falhando): lá o fps também despenca, mas os
+  // workers estão OCIOSOS (sem inferência → cpuPct ~10–20%) e rebaixar não traria frame
+  // nenhum de volta. SINAL ESCOLHIDO: cpuPct (e não inferMs médio) porque o inferMs por
+  // câmera (st.lastMs) é o valor da ÚLTIMA inferência — fica ESTALE alto quando a fonte
+  // morre (exatamente o falso-positivo a evitar) — enquanto cpuPct é medido em janela
+  // rolante (worker-host.sampleCpu) e CAI junto com a demanda real.
+  const latencyBoundNow =
+    !chokedNow && fpsRatio < c.latFpsRatio && sample.cpuPct >= c.latCpuPct * cpuScale;
   const idleNow = fpsRatio >= c.upFpsRatio && sample.cpuPct <= c.upCpuPct * cpuScale;
 
-  // ── DOWNGRADE: afogado (atrás na cadência E CPU alta) por downWindows consecutivas.
+  // ── DOWNGRADE: afogado (atrás na cadência E CPU alta) OU latency-bound (cadência ≪ alvo
+  // com workers trabalhando) por downWindows consecutivas — MESMA máquina de estados/
+  // contador/cooldown (ambos são pressão p/ descer; janelas mistas também acumulam).
   // Só desce se há p/ onde (idx>0) — no PISO N não há downgrade (nunca cego).
-  if (chokedNow && idx > 0) {
+  if ((chokedNow || latencyBoundNow) && idx > 0) {
     s.choked += 1;
     s.idle = 0;
     if (s.choked >= c.downWindows) {
       const to = clampTier(idx - 1);
+      const why = chokedNow
+        ? `afogado ${s.choked}× (fps ${fpsRatio.toFixed(2)}≤${c.downFpsRatio} · cpu ${sample.cpuPct}%≥${c.downCpuPct}%)`
+        : `latency-bound ${s.choked}× (fps ${fpsRatio.toFixed(2)}<${c.latFpsRatio} · cpu ${sample.cpuPct}%≥${c.latCpuPct}%/worker)`;
       return {
         state: { tier: to, choked: 0, idle: 0, lastSwitchAt: sample.now },
         action: "downgrade",
         from: tier,
         to,
-        reason: `afogado ${s.choked}× (fps ${fpsRatio.toFixed(2)}≤${c.downFpsRatio} · cpu ${sample.cpuPct}%≥${c.downCpuPct}%)`,
+        reason: why,
       };
     }
-    return hold(`afogando ${s.choked}/${c.downWindows}`);
+    return hold(`${chokedNow ? "afogando" : "latência"} ${s.choked}/${c.downWindows}`);
   }
 
   // ── UPGRADE (conservador): folga sustentada por upWindows E o orçamento comporta o

@@ -1,5 +1,7 @@
 // Testes da DECISÃO PURA de auto-dimensionamento (Onda 5). Provam o contrato de segurança:
 //   • afogado por N janelas consecutivas → DOWNGRADE (histerese forte); <N → segura.
+//   • LATENCY-BOUND (fps ≪ alvo com workers TRABALHANDO, CPU moderada) por N janelas →
+//     DOWNGRADE; fome de frames (fps baixo com workers OCIOSOS) NUNCA rebaixa.
 //   • folga sustentada + orçamento comporta → UPGRADE conservador; teto → mantém.
 //   • cooldown pós-troca desliga a decisão (anti-flap).
 //   • NUNCA desce abaixo do PISO N (nunca cego).
@@ -125,6 +127,105 @@ describe("decideRuntime — DOWNGRADE com histerese forte", () => {
     let d;
     for (let i = 0; i < CFG.downWindows + 1; i++) {
       d = decideRuntime(st, { now: at(i), tier: "s", cpuPct: 20, achievedFps: 1, targetFps: 8, cameras: 8, cores: 4 }, CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("hold");
+    expect(st.choked).toBe(0);
+  });
+});
+
+describe("decideRuntime — DOWNGRADE latency-bound (fps ≪ alvo com workers TRABALHANDO)", () => {
+  // BUG REAL de produção (homolog, 4 cores, 3 câmeras): tier M com inferência ~600–840ms/
+  // frame → 0,3–0,4fps por câmera com alvo 1fps; workers a ~70–85% de UM core cada — NUNCA
+  // batem o teto de 'afogado' (150%/worker), então o motor ficava PRESO no M entregando mal.
+  const latBound = (tier, now) => ({
+    now,
+    tier,
+    cpuPct: 160, // 2 workers × ~80% de um core — ≥ latCpuPct(40)×2, mas ≪ downCpuPct(150)×2
+    achievedFps: 1.2, // 0,4× do alvo (3 câmeras @1fps)
+    targetFps: 3,
+    cameras: 3,
+    cores: 4,
+    workers: 2,
+  });
+  // Fome de frames (câmera SEM FONTE, ex.: pull das whatsupcams falhando): fps também
+  // despenca, mas os workers estão OCIOSOS (sem inferência acontecendo → CPU ~10%/worker).
+  const starved = (tier, now) => ({
+    now,
+    tier,
+    cpuPct: 20, // 2 workers × ~10% — abaixo do piso latCpuPct(40)×2
+    achievedFps: 0.3,
+    targetFps: 3,
+    cameras: 3,
+    cores: 4,
+    workers: 2,
+  });
+
+  it("latency-bound sustentado por downWindows → desce um tier (m→s)", () => {
+    let st = initState("m");
+    let d;
+    for (let i = 0; i < CFG.downWindows; i++) {
+      d = decideRuntime(st, latBound("m", at(i)), CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("downgrade");
+    expect(d.from).toBe("m");
+    expect(d.to).toBe("s");
+    expect(d.reason).toContain("latency-bound");
+    expect(st.lastSwitchAt).toBeGreaterThan(0);
+  });
+
+  it("fome de frames (fps baixo, workers OCIOSOS) → NÃO rebaixa, nem acumula", () => {
+    let st = initState("m");
+    let d;
+    for (let i = 0; i < CFG.downWindows + 2; i++) {
+      d = decideRuntime(st, starved("m", at(i)), CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("hold");
+    expect(st.tier).toBe("m");
+    expect(st.choked).toBe(0);
+  });
+
+  it("histerese: UMA janela boa zera o contador latency-bound", () => {
+    let st = initState("m");
+    st = decideRuntime(st, latBound("m", at(0)), CFG).state;
+    st = decideRuntime(st, latBound("m", at(1)), CFG).state;
+    expect(st.choked).toBe(2);
+    // Janela saudável (fps ~87% do alvo — nem afogado, nem latency-bound, nem folga) zera…
+    st = decideRuntime(st, { now: at(2), tier: "m", cpuPct: 160, achievedFps: 2.6, targetFps: 3, cameras: 3, cores: 4, workers: 2 }, CFG).state;
+    expect(st.choked).toBe(0);
+    // …e a próxima latency-bound recomeça do 1 (não dispara).
+    const d = decideRuntime(st, latBound("m", at(3)), CFG);
+    expect(d.action).toBe("hold");
+    expect(d.state.choked).toBe(1);
+  });
+
+  it("cooldown pós-troca segura mesmo latency-bound (anti-flap)", () => {
+    const st = { tier: "m", choked: 2, idle: 0, lastSwitchAt: T0 };
+    const d = decideRuntime(st, latBound("m", T0 + 1000), CFG);
+    expect(d.action).toBe("hold");
+    expect(d.reason).toBe("cooldown");
+    expect(d.state.choked).toBe(0);
+  });
+
+  it("NUNCA desce abaixo do PISO N — latency-bound no N só segura (nunca cego)", () => {
+    let st = initState("n");
+    let d;
+    for (let i = 0; i < CFG.downWindows + 2; i++) {
+      d = decideRuntime(st, latBound("n", at(i)), CFG);
+      st = d.state;
+    }
+    expect(d.action).toBe("hold");
+    expect(st.tier).toBe("n");
+  });
+
+  it("fronteira EXATA (fps = 50% do alvo) com folga de pool NÃO é latency-bound (fica com a regra 'afogado')", () => {
+    // Espelha o caso pool-aware existente: fps 4/8=0,50 com 4 workers a ~1 core cada.
+    let st = initState("m");
+    let d;
+    for (let i = 0; i < CFG.downWindows + 1; i++) {
+      d = decideRuntime(st, { now: at(i), tier: "m", cpuPct: 400, achievedFps: 4, targetFps: 8, cameras: 12, cores: 8, workers: 4 }, CFG);
       st = d.state;
     }
     expect(d.action).toBe("hold");
