@@ -1,6 +1,5 @@
-// Shed de câmeras por audiência (2.1). Extraído de index.js (Onda C do retrofit).
-// Estado + lógica de rebaixamento/religamento de câmeras SEM espectador, encapsulados e
-// injetados com { io, cameras, socketById, rtsp } — index.js só chama a API pública abaixo.
+// Shed de câmeras por audiência: estado + lógica de rebaixamento/religamento de câmeras SEM
+// espectador, com dependências injetadas — index.js só chama a API pública abaixo.
 //
 // ESPECTADOR de uma câmera = socket em `cam:<id>` OU em `dash-legacy`. Sem espectador por
 // SHED_IDLE_MS (debounce — paginar não derruba stream), a câmera é REBAIXADA: RTSP entra em

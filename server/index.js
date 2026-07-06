@@ -14,8 +14,6 @@ const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
-// Helpers HTTP/auth (json/bearer/requireAuth/requireSuper/requireConfigurer) e shed por audiência
-// extraídos deste arquivo (Onda C do retrofit): index.js é composição/bootstrap.
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
 
@@ -42,12 +40,10 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 
 // API HTTP do hub (login etc.). socket.io anexa a este server e intercepta /socket.io/;
 // as demais rotas caem aqui. Em produção o nginx faz proxy de /api/ e /socket.io/ → hub.
-// R2: a Promise SEMPRE resolve/rejeita — nunca fica pendurada (antes, o `destroy()` no overflow
-// travava o handler p/ sempre). Overflow → rejeita (marcado `.tooLarge` p/ o dispatch responder
-// 413); `close` sem `end` (conexão abortada) → resolve com o que chegou; `error` → rejeita.
-// NÃO destruímos o socket no overflow: removemos só o listener de `data` (para de acumular — sem
-// crescimento de memória; o TCP faz backpressure) para que o dispatch AINDA consiga enviar a
-// resposta 413 pelo mesmo socket. Destruir aqui derrubaria a conexão antes da resposta.
+// INVARIANTE: a Promise SEMPRE resolve/rejeita. Overflow → rejeita (`.tooLarge` p/ o dispatch
+// responder 413); `close` sem `end` (conexão abortada) → resolve com o que chegou; `error` →
+// rejeita. No overflow NÃO destruímos o socket: só removemos o listener de `data` (o TCP faz
+// backpressure) para que o dispatch ainda consiga responder 413 pela mesma conexão.
 function readBody(req, limit = 10_000) {
   return new Promise((resolve, reject) => {
     let b = "";
@@ -82,7 +78,7 @@ const httpServer = createServer(async (req, res) => {
     return res.end();
   }
 
-  // Fase 1 (go2rtc): reverse-proxy same-origin /go2rtc/* -> 127.0.0.1:1984 (WebRTC/MSE/HLS/MJPEG).
+  // go2rtc: reverse-proxy same-origin /go2rtc/* -> 127.0.0.1:1984 (WebRTC/MSE/HLS/MJPEG).
   // Antes do dispatch de rotas: o front fala /go2rtc/api/... na MESMA origem (CSP quase intacto).
   // Inerte quando o flag/binário estão ausentes (proxyRequest responde 503 — o front usa MJPEG).
   if (req.url && (req.url === "/go2rtc" || req.url.startsWith("/go2rtc/"))) {
@@ -105,8 +101,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeConfig.handle(req, res, ctx)) return;
     if (await routeAnalysis.handle(req, res, ctx)) return;
   } catch (err) {
-    // R3: distingue erro do CLIENTE (corpo grande/malformado → 4xx) de erro INTERNO (bug → 500),
-    // em vez de 400 cego p/ tudo. E LOGA — antes, um defeito de server virava 400 silencioso.
+    // Distingue erro do CLIENTE (corpo grande/malformado → 4xx) de erro INTERNO (bug → 500 + log).
     if (err && err.tooLarge) {
       console.warn(`[http] corpo grande demais: ${req.method} ${req.url}`);
       return json(res, 413, { error: "corpo grande demais" });
@@ -122,9 +117,11 @@ const httpServer = createServer(async (req, res) => {
   res.writeHead(404);
   res.end();
 });
+// maxHttpBufferSize 8e6 = teto SILENCIOSO do frame de webcam (JPEG > 8MB é dropado pelo
+// engine.io) — na prática limita a resolução máxima que o motor de análise vê de webcam.
 const io = new Server(httpServer, { cors: { origin: "*" }, maxHttpBufferSize: 8e6 });
 
-// Fase 1 (go2rtc): proxy do upgrade WebSocket da SINALIZAÇÃO WebRTC (/go2rtc/api/ws).
+// go2rtc: proxy do upgrade WebSocket da SINALIZAÇÃO WebRTC (/go2rtc/api/ws).
 // Coexiste com o socket.io: só tratamos /go2rtc/* — os upgrades de /socket.io/ seguem para o
 // engine.io (que ignora paths que não são dele). Inerte quando o flag/binário estão ausentes.
 httpServer.on("upgrade", (req, socket, head) => {
@@ -153,7 +150,7 @@ function analysisTee(target) {
 const ioAnalysis = analysisTee(io);
 
 // Acesso restrito (multi-usuário): todo socket precisa de token de sessão válido.
-// Câmeras (dispositivos) também aceitam CAMERA_TOKEN quando definido (F4 — token de dispositivo).
+// Câmeras (dispositivos) também aceitam CAMERA_TOKEN quando definido (token de dispositivo).
 io.use((socket, next) => {
   const token = socket.handshake.auth && socket.handshake.auth.token;
   const role = socket.handshake.query.role;
@@ -172,21 +169,16 @@ const socketById = new Map();
 const cameraList = () => [...cameras.values()];
 const broadcast = () => {
   io.to("dashboards").emit("cameras", cameraList());
-  // Fase 1 (go2rtc): a lista de câmeras mudou → regenera o go2rtc.yaml (debounced, no-op se OFF).
-  // broadcast() é chamado por rtsp.addSource/removeSource/restartSource (CRUD via routes/cameras),
-  // então qualquer alteração de câmera IP re-sincroniza os streams do go2rtc sem hook extra.
+  // Lista de câmeras mudou → regenera o go2rtc.yaml (debounced, no-op se OFF). broadcast() é
+  // chamado pelo CRUD de câmera IP (rtsp.add/remove/restartSource), então qualquer alteração
+  // re-sincroniza os streams do go2rtc sem hook extra.
   go2rtc.sync();
 };
 
-// ── 2.1 — Assinatura por câmera (rooms) + shed de câmeras sem espectador ─────────────────────
-// Contrato ADITIVO: dashboard NOVO emite `watch { ids }` (conjunto COMPLETO do que quer receber)
-// e entra nas rooms `cam:<id>`; dashboard ANTIGO nunca emite `watch` e permanece na room
-// `dash-legacy`, recebendo TODOS os frames (comportamento atual preservado). Só o evento `frame`
-// é filtrado por room — `cameras`/`camera-status`/`alarm-*`/`camcfg-updated` seguem em "dashboards".
-//
-// A LÓGICA de rebaixamento/religamento por audiência vive em ./shed.js (extraída na Onda C do
-// retrofit). Aqui só instanciamos com as dependências e chamamos a API pública (sweepShed/
-// setLastCapture/onCameraConnected) nos pontos do fluxo de socket abaixo.
+// Shed por audiência: rebaixa/religa câmeras SEM espectador (lógica em ./shed.js; aqui só a
+// instância com dependências). Contrato de rooms: só o evento `frame` é filtrado por room
+// (`cam:<id>`/`dash-legacy`) — `cameras`/`camera-status`/`alarm-*`/`camcfg-updated` seguem
+// na room "dashboards".
 // analysisViewer: câmera analisada conta como espectador (ADR-009) — o shed nunca a rebaixa.
 const shed = createShed({ io, cameras, socketById, rtsp, analysisViewer: analysis.isAnalyzing });
 
@@ -211,9 +203,9 @@ io.on("connection", (socket) => {
     camcfg.init(),
   ]);
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
-  // Motor de análise no hub (F1/ADR-009): D-FINE-N em worker process, ingest direto no pgstore.
+  // Motor de análise no hub (ADR-009): D-FINE em worker process, ingest direto no pgstore.
   // Liga/desliga por ANALYSIS_ENABLED (ver server/analysis/engine.js). Câmera analisada conta
-  // como ESPECTADOR p/ o shed: o ffmpeg de RTSP não é pausado enquanto o motor estiver ativo.
+  // como ESPECTADOR p/ o shed (guard no shed E no rtsp.idleSource — defesa em profundidade).
   await analysis.init({ io, cameras });
   rtsp.setAnalysisViewer(analysis.isAnalyzing);
   httpServer.listen(PORT, HOST, () => {
@@ -229,8 +221,8 @@ io.on("connection", (socket) => {
         : "[whatsapp] desligado (defina WHATSAPP_ENABLED=1 para ligar)",
     );
     whatsapp.init();
-    // Fase 1 (go2rtc): supervisor do sidecar de vídeo WebRTC. DESLIGADO por default —
-    // só sobe com GO2RTC_ENABLED=1 + GO2RTC_BIN presente. getSources espelha o que o rtsp.js
+    // Supervisor do sidecar go2rtc (WebRTC): AUTO-ON pela presença de bin/go2rtc[.exe];
+    // GO2RTC_ENABLED=0 força off (ver server/go2rtc.js). getSources espelha o que o rtsp.js
     // ingere: fontes LEGADAS (rtsp.sources.json/env, ids rtsp-N) + DINÂMICAS (cameras.json).
     // O NOME de cada stream = ID da câmera (contrato com o front: /go2rtc/api/ws?src=<id>).
     go2rtc.init({

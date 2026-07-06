@@ -1,30 +1,17 @@
-// ============================================================================
-// Eventos de alarme com acknowledge (Onda B, item 7) — espinha dorsal.
-// ----------------------------------------------------------------------------
-// Store dos EVENTOS DE ALARME que a política (alarmPolicy.js) decide enviar.
-// Transforma o stream "fire-and-forget" do Andon/WhatsApp numa FILA ACIONÁVEL,
-// com estados (new → acknowledged → forwarded) para a central operar.
+// Store dos EVENTOS DE ALARME que a política decide enviar: transforma o stream
+// "fire-and-forget" do Andon/WhatsApp numa FILA ACIONÁVEL (new → acknowledged → forwarded).
+// Persistência: cache em memória + Postgres se configurado, senão server/alarms.json.
+// LGPD (ADR-002): persistimos SOMENTE METADADOS (texto/ids/timestamps) — nunca imagem/frame.
 //
-// PADRÃO DE PERSISTÊNCIA (espelha recipients.js/settings.js):
-//   cache em memória + Postgres se db.configured(); senão fallback em
-//   server/alarms.json. A decisão é tomada no init() (flag usingPg).
-//
-// LGPD (OBRIGATÓRIO): persistimos SOMENTE METADADOS — nada de imagens/frames.
-//   Todos os campos são texto/identificadores/timestamps. NÃO há snapshot por
-//   padrão. Espelha o princípio do schema.sql ("só indicadores, nunca imagens").
-//
-// MODELO DE UM EVENTO:
-//   { id, ts, cameraId?, cameraLabel?, zona?, tipo, priority, text,
-//     state, ackBy?, ackAt? }
+// MODELO DE UM EVENTO (contrato com routes/alarms e o front):
+//   { id, ts, cameraId?, cameraLabel?, zona?, tipo, priority, text, state, ackBy?, ackAt? }
 //   - priority ∈ advisory | high | critical   (já calculada pela política)
 //   - state    ∈ new | acknowledged | forwarded
 //
 // RETENÇÃO (configurável):
 //   ALARM_EVENTS_RETENTION       (default 1000) Nº máx. de eventos guardados.
-//   ALARM_EVENTS_RETENTION_DAYS  (default 0=off) Descarta eventos mais antigos
-//                                que X dias (0 desliga o corte por idade).
+//   ALARM_EVENTS_RETENTION_DAYS  (default 0=off) Descarta eventos mais antigos que X dias.
 //   ALARM_LOG_LEVEL              (default "info") Nível do logger pino.
-// ============================================================================
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");

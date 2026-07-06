@@ -1,4 +1,4 @@
-// Rota do motor de análise no hub (F1/ADR-009): GET /api/analysis/status —
+// Rota do motor de análise no hub (ADR-009): GET /api/analysis/status —
 // { enabled, model, worker:{ready,pid,respawns,cpuPct}, perCamera:{fps,queue,lastMs,dets1m} }.
 // Aditivo: observabilidade do motor sem tocar em nenhum contrato existente.
 const engine = require("../analysis/engine");

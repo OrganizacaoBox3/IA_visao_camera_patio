@@ -7,7 +7,7 @@ async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireConfigurer, io } = ctx;
   const path0 = req.url ? req.url.split("?")[0] : "";
 
-  // Fila acionável (Onda B). Qualquer usuário autenticado lê/opera.
+  // Fila acionável. Qualquer usuário autenticado lê/opera.
   if (path0 === "/api/alarms" && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
     const q = new URL(req.url, "http://x").searchParams;
@@ -54,7 +54,7 @@ async function handle(req, res, ctx) {
     return true;
   }
 
-  // Saúde de alarmes (Onda C, item 14) — lógica EM MEMÓRIA de alarmPolicy.js.
+  // Saúde de alarmes — lógica EM MEMÓRIA de alarmPolicy.js.
   // metrics()/listShelved() são leitura; shelve/unshelve são configuração (requireConfigurer).
   // Estas rotas vêm ANTES das de :id (ack/forward usam [\w-]+ e não casam "metrics"/"shelves").
   if (path0 === "/api/alarms/metrics" && req.method === "GET") {

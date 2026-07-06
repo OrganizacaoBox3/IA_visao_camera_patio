@@ -88,7 +88,7 @@ let ctx = null; // { io, cameras, broadcast }
 /** id -> stream handle */
 const streams = new Map();
 
-// ── Análise no hub (F1/ADR-009): câmera analisada conta como ESPECTADOR ─────────────────────
+// ── Análise no hub (ADR-009): câmera analisada conta como ESPECTADOR ────────────────────────
 // Predicado injetado pelo index.js (analysis.isAnalyzing). Enquanto o motor de análise estiver
 // ativo para uma câmera, o shed NÃO pausa o ffmpeg dela (idleSource vira no-op): o motor
 // precisa do stream vivo mesmo sem nenhum dashboard aberto — é o requisito central da ADR-009.
@@ -98,17 +98,18 @@ function setAnalysisViewer(fn) {
 }
 
 /**
- * Defaults globais de captura (env), sobrescritos POR CÂMERA quando informado (campos fps/width/quality
- * no cadastro). P1 (plano-performance-imagem.md): revertida a super-compressão — o gargalo é
- * CPU/main-thread, não banda (rede é LAN). Trade-off: +decode/+banda, aceitável.
- * Obs.: a qualidade final depende do STREAM da câmera IP — prefira um sub-stream de boa qualidade
- * (ou o main-stream) na URL cadastrada; estes valores só reamostram/re-encodam o que a câmera entrega.
+ * Defaults globais de captura (env), sobrescritos POR CÂMERA quando informado (campos fps/width/
+ * quality no cadastro). Estes valores são a RESOLUÇÃO/COMPRESSÃO da única imagem que o motor de
+ * análise vê nas câmeras RTSP — eixo nº 1 de precisão de pessoa deste domínio. Trade-off dos
+ * defaults: gargalo é CPU/main-thread, não banda (LAN) → +decode/+banda aceitável (evidência:
+ * analises/plano-performance-imagem.md). A qualidade final depende do STREAM da câmera IP —
+ * prefira um sub-stream de boa qualidade na URL; o ffmpeg só reamostra/re-encoda o que chega.
  */
 function defaultCfg() {
   return {
-    fps: Number(process.env.RTSP_FPS ?? 10), // era 8 — mais fluidez (câmera pode sobrescrever)
-    width: Number(process.env.RTSP_WIDTH ?? 720), // era 480 — mais nitidez p/ câmera IP
-    quality: Number(process.env.RTSP_QUALITY ?? 4), // -q:v do ffmpeg: MENOR = MELHOR (era 7)
+    fps: Number(process.env.RTSP_FPS ?? 10),
+    width: Number(process.env.RTSP_WIDTH ?? 720),
+    quality: Number(process.env.RTSP_QUALITY ?? 4), // -q:v do ffmpeg: MENOR = MELHOR
   };
 }
 
@@ -141,7 +142,7 @@ function loadSources() {
 
 // Redige credenciais embutidas em URL (`//user:pass@host`). GLOBAL (todas as ocorrências) e
 // aplicável a texto livre (log do ffmpeg), não só à URL — a userinfo pode aparecer em qualquer
-// posição de uma linha de stderr. Segurança (R1): tudo que vira `lastError` é BROADCAST a todos
+// posição de uma linha de stderr. SEGURANÇA: tudo que vira `lastError` é BROADCAST a todos
 // os painéis via `camera-status`; nenhuma senha pode escapar por aí.
 function redact(s) {
   return String(s).replace(/\/\/[^/@\s]+@/g, "//***@");
@@ -203,7 +204,7 @@ function setState(st, state) {
 }
 
 function spawnFfmpeg(st) {
-  if (st.stopped || st.idle) return; // idle (shed 2.1): não (re)spawnar sem espectador
+  if (st.stopped || st.idle) return; // idle (shed): não (re)spawnar sem espectador
   st.lastStderr = ""; // diagnóstico é por tentativa: não misturar erro de um spawn anterior
   const args = [
     // Globais: sem stats de progresso; stderr só com erros REAIS (viabiliza o lastStderr abaixo).
@@ -250,9 +251,8 @@ function spawnFfmpeg(st) {
   });
   proc.stderr.on("data", (d) => {
     // Com -loglevel error o stderr só traz erros reais (raro). Guardamos a ÚLTIMA linha
-    // para diagnosticar a queda no "close" — antes era drenado e descartado (morte cega).
-    // R1 (segurança): REDIGIMOS a linha AQUI, na fonte — assim `lastStderr` já nasce sem
-    // credencial e todo consumidor (lastError broadcast, logs, msg de "desistiu") herda seguro.
+    // para diagnosticar a queda no "close". SEGURANÇA: a linha é REDIGIDA AQUI, na fonte —
+    // `lastStderr` nasce sem credencial e todo consumidor (broadcast/log/"desistiu") herda seguro.
     const line = String(d).trim().split(/\r?\n/).pop();
     if (line) st.lastStderr = redact(line);
   });
@@ -269,7 +269,7 @@ function spawnFfmpeg(st) {
       // JPEG binário (mesmo formato dos nós webcam) — socket.io entrega como ArrayBuffer no cliente.
       // VOLATILE (último-vence, como o relé de webcam em index.js): dashboard lento DESCARTA o
       // frame em vez de enfileirar — vídeo prefere o frame mais novo a acumular latência/backlog.
-      // Rooms (2.1): dashboards novos assistem por câmera (`cam:<id>`); antigos, pela `dash-legacy`.
+      // Rooms: dashboards novos assistem por câmera (`cam:<id>`); antigos, pela `dash-legacy`.
       ctx.io
         .to(`cam:${st.id}`)
         .to("dash-legacy")
@@ -355,7 +355,7 @@ function addSource(src) {
     },
     proc: null,
     stopped: false,
-    idle: false, // shed (2.1): pausada por falta de espectador (≠ stopped: religável via wakeSource)
+    idle: false, // shed: pausada por falta de espectador (≠ stopped: religável via wakeSource)
     buf: Buffer.alloc(0),
     attempt: 0,
     lastFrameAt: 0,
@@ -411,14 +411,16 @@ function restartSource(src) {
   return addSource(src);
 }
 
-// ── Shed por audiência (2.1) — chamado pelo hub (index.js), que conta espectadores por room ──
+// ── Shed por audiência — chamado pelo shed.js, que conta espectadores por room ──────────────
 
 /** Pausa uma fonte SEM espectador: mata o ffmpeg e congela a reconexão, SEM contar como erro
  *  (attempt não incrementa; estado vira "idle" via camera-status p/ transparência). Idempotente. */
 function idleSource(id) {
   const st = streams.get(String(id));
   if (!st || st.stopped || st.idle) return false;
-  // Análise conta como espectador (F1/ADR-009): motor ativo → stream fica vivo p/ ele.
+  // Análise conta como espectador (ADR-009): motor ativo → stream fica vivo p/ ele.
+  // Defesa em profundidade: o guard primário mora no shed (shedCamera); este cobre
+  // qualquer chamador futuro de idleSource.
   if (analysisViewer && analysisViewer(String(id))) return false;
   st.idle = true;
   if (st.reconnectTimer) {
@@ -506,7 +508,7 @@ module.exports = {
   setAnalysisViewer,
   statuses,
   loadSources,
-  redact, // exposto p/ teste (R1): é o controle de segurança que impede credencial no camera-status
+  redact, // exposto p/ teste: é o controle de segurança que impede credencial no camera-status
   FFMPEG_BIN,
   resolveFfmpegBin,
 };

@@ -2,15 +2,9 @@
 // persistidas: um shelve é uma decisão DELIBERADA do operador (silenciar durante
 // manutenção programada) que precisa sobreviver a deploy/restart/crash — do
 // contrário um restart no meio da manutenção ressuscitaria a enxurrada de alertas.
-//
-// Robustez: escrita atômica (grava .tmp e renomeia por cima), shelves expiradas
-// podadas ANTES de gravar, toda I/O em try/catch (uma falha de disco NUNCA pode
-// derrubar a política de alarmes; apenas loga via pino). A restauração é
-// preguiçosa/idempotente (init(), chamada no require de alarmPolicy.js — não
-// exige mudança em index.js; também exportada p/ inicialização explícita).
-//
-// Arquivo (server/alarm-shelves.json por default) é conteúdo de RUNTIME (efêmero,
-// específico da instância). DEVE estar no .gitignore (ADR-005). Não versionar.
+// INVARIANTE: uma falha de disco NUNCA derruba a política de alarmes (toda I/O em
+// try/catch, apenas loga). Arquivo (server/alarm-shelves.json) é RUNTIME —
+// gitignored, nunca versionar (ADR-005).
 const fs = require("node:fs");
 const { log, SHELVES_FILE } = require("./config");
 const { shelved } = require("./state");

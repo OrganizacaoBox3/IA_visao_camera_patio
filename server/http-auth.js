@@ -1,8 +1,6 @@
-// Helpers HTTP de resposta e autenticação/RBAC do hub.
-// Extraído de index.js (Onda C do retrofit): index.js vira composição/bootstrap.
-// Contrato: estas funções são passadas aos grupos de rotas via `ctx` (json/bearer/requireAuth/
-// requireSuper/requireConfigurer) — a forma do ctx NÃO muda, então nenhuma rota precisa saber
-// de onde vêm. `readBody` fica no index.js (é parte do servidor HTTP, não da auth).
+// Helpers HTTP de resposta e autenticação/RBAC do hub. CONTRATO: passadas aos grupos de
+// rotas via `ctx` (json/requireAuth/requireSuper/requireConfigurer) — a forma do ctx não
+// muda. `readBody` fica no index.js (é parte do servidor HTTP, não da auth).
 const users = require("./users");
 
 function json(res, code, obj) {
@@ -36,8 +34,8 @@ function requireSuper(req, res) {
   return u;
 }
 
-// RBAC Setup × Live (Onda C item 12): devolve o usuário que PODE configurar (superadmin OU
-// engenheiro), ou responde 401/403. Usado pelos endpoints de saúde de alarmes (shelve/unshelve).
+// RBAC Setup × Live: devolve o usuário que PODE configurar (superadmin OU engenheiro),
+// ou responde 401/403. Usado pelos endpoints de configuração (zonas/tripwires/shelves).
 function requireConfigurer(req, res) {
   const u = requireAuth(req, res);
   if (!u) return null;

@@ -2,7 +2,7 @@
 // em todo request). Escrita persiste no Postgres (se configurado) OU em users.json (fallback dev/PG off).
 // Senha: scrypt. Sessão: token HMAC assinado. Bootstrap do superadmin no 1º boot.
 //
-// PAPÉIS (RBAC Setup × Live — Onda C item 12):
+// PAPÉIS (RBAC Setup × Live):
 //   - "superadmin": acesso total — gestão de usuários, câmeras, notificações E configuração (thresholds/zonas).
 //   - "engenheiro": equipe de engenharia/setup — PODE configurar (thresholds/zonas), mas NÃO gerencia usuários.
 //   - "usuario":    operador em modo só-visualização/operação — NÃO configura nem gerencia usuários.

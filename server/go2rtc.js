@@ -1,10 +1,12 @@
-// Sidecar go2rtc — transporte de vídeo WebRTC/MSE/HLS (Fase 1 do retrofit de performance).
+// Sidecar go2rtc — transporte de vídeo WebRTC/MSE/HLS.
 //
 // go2rtc (Apache-2.0, 1 binário Go) faz codec-copy (0 re-encode) das câmeras RTSP/HLS e serve
 // WebRTC ao navegador. Este módulo NÃO substitui o relé MJPEG do rtsp.js — os dois vivem em
 // paralelo (rollback). O front escolhe o transporte por câmera (camcfg.transport).
+// NOTA de precisão: go2rtc é SÓ visualização — o motor de análise come o MJPEG do ffmpeg
+// (rtsp.js); otimizar detecção aqui é o lugar errado.
 //
-// AUTO-ON POR PRESENÇA (Onda 2): o binário go2rtc é EMPACOTADO no release em <root>/bin/ (baixado
+// AUTO-ON POR PRESENÇA: o binário go2rtc é EMPACOTADO no release em <root>/bin/ (baixado
 // no BUILD por scripts/fetch-go2rtc.mjs, NUNCA versionado). Se o binário existe, o sidecar LIGA
 // sozinho — o cliente não seta flag nenhuma. GO2RTC_ENABLED=0 é o escape hatch (força off); binário
 // ausente = off silencioso (nada gera, nenhum processo sobe, o hub segue idêntico no MJPEG).

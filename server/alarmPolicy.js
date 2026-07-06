@@ -1,36 +1,12 @@
-// ============================================================================
-// Política de alarmes (ISA-18.2 / EEMUA 191) — Onda A, item 2 + Onda C, item 14
-// ----------------------------------------------------------------------------
-// Filtro/agregador aplicado ANTES do envio aos canais (Andon webhook em
-// alerts.js e WhatsApp em dispatch.js). O objetivo é tratar o Andon/WhatsApp
-// como um SISTEMA DE ALARME (acionável, priorizado, sem inundação) e não como
-// um stream cru de eventos — o antídoto contra "alerta falso em massa".
-//
-// O ponto de entrada é evaluate(p). Ele recebe o mesmo payload do socket
-// "alert" ({ text, ts, [cameraId], [zona], [tipo] }) e devolve UMA decisão:
-//   • null                        → alerta suprimido (não envia a nenhum canal)
-//   • { text, ts, priority, ... } → alerta a enviar (texto pode ser um RESUMO
-//                                    de causa-raiz quando houve inundação)
-// A decisão é tomada UMA vez e roteada para os dois canais, garantindo que os
-// contadores de inundação não sejam contados em dobro.
-//
-// Este arquivo é um ÍNDICE fino: compõe os submódulos de server/alarm/ e expõe
-// a API pública estável. Mecanismos (uma responsabilidade por módulo):
-//   • alarm/config   — envs/defaults + logger compartilhado.
-//   • alarm/state    — estado em memória compartilhado (dedup/flood/flap/…).
-//   • alarm/keys     — derivação/normalização de chaves a partir do payload.
-//   • alarm/priority — priorização em 3 níveis + construção da decisão.
-//   • alarm/flood    — supressão de inundação por câmera (colapso em resumo).
-//   • alarm/flap     — anti-flapping (chattering) com cooldown/off-delay.
-//   • alarm/shelve   — shelving (ISA-18.2): silêncio temporário com expiração.
-//   • alarm/persist  — persistência resiliente das shelves (alarm-shelves.json).
-//   • alarm/metrics  — métricas de taxa/racionalização (EEMUA 191).
-//
-// ALARM_POLICY_ENABLED="0"/"false" degrada evaluate() para só classificar e
-// repassar (sem dedup/colapso/flap); shelving e métricas continuam ativos. Toda
-// supressão/colapso é logada (pino). Ver alarm/config.js p/ as variáveis de
-// ambiente e alarm/persist.js p/ a semântica de persistência das shelves.
-// ============================================================================
+// Política de alarmes (ISA-18.2 / EEMUA 191) — decide ANTES dos canais (ADR-004): trata o
+// Andon/WhatsApp como SISTEMA DE ALARME (acionável, priorizado, sem inundação), não como
+// stream cru de eventos. evaluate(p) recebe o payload do socket "alert" e devolve UMA decisão
+// (null = suprimido; texto pode virar RESUMO de causa-raiz em inundação), roteada uma única
+// vez a todos os canais. Este arquivo é um ÍNDICE fino sobre server/alarm/ (um mecanismo por
+// módulo; envs em alarm/config.js).
+// ALARM_POLICY_ENABLED="0"/"false": evaluate só classifica e repassa (sem dedup/colapso/
+// flap) — nesse modo o dedup vira responsabilidade dos canais (rede de segurança); shelving
+// e métricas continuam ativos. Toda supressão/colapso é logada (pino).
 const { classify } = require("./alarm/classify");
 
 const { log, ENABLED, DEDUP_MS, FLOOD_WINDOW_MS, FLAP_WINDOW_MS } = require("./alarm/config");

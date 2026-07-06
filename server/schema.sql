@@ -90,7 +90,7 @@ create table if not exists app_settings (
   data jsonb not null
 );
 
--- ── EVENTOS DE ALARME (fila acionável com acknowledge — Onda B) ──────────────
+-- ── EVENTOS DE ALARME (fila acionável com acknowledge) ───────────────────────
 -- LGPD: SÓ METADADOS — nada de imagens/frames. Campos são texto/ids/timestamps.
 -- priority: advisory | high | critical (calculada pela política em alarmPolicy.js).
 -- state:    new | acknowledged | forwarded (ciclo de vida na central).

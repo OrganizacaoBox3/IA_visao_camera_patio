@@ -2,7 +2,7 @@
 //  • TRIPWIRES — linhas de contagem POR CÂMERA: { id, a:{x,y}, b:{x,y} } (coords normalizadas 0..1).
 //  • ZONES — zonas (ROIs + modo/config) POR CÂMERA: array de Zone (formato de src/zones.ts).
 //  • CAMCONFIG — config de câmera POR CÂMERA: objeto CameraCfg (formato de src/cameraConfig.ts).
-// Antes viviam no localStorage de cada operador; agora ficam centralizadas para serem partilhadas.
+// Centralizadas no hub para serem partilhadas entre operadores/turnos (não no localStorage).
 // Espelha o padrão de recipients.js/settings.js: cache em memória + Postgres (se configurado) ou
 // camcfg.json (fallback). LGPD: SÓ geometria/ids/config — nunca imagem, frame ou PII.
 const fs = require("node:fs");
@@ -23,8 +23,8 @@ const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && 
 // modo aqui, cleanZone rebaixaria a zona de exclusão p/ "atividade" ao persistir (calibração).
 const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao"]);
 const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
-// Transporte de vídeo do tile (Fase 1/go2rtc): "mjpeg" (relé socket.io atual, default/rollback)
-// ou "webrtc" (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
+// Transporte de vídeo do tile: "mjpeg" (relé socket.io, default/rollback) ou "webrtc"
+// (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
 const TRANSPORTS = new Set(["auto", "mjpeg", "webrtc"]);
 const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
 const clamp01 = (v, d) => {
@@ -96,13 +96,10 @@ function cleanCamConfig(c) {
     modo: ZONE_MODES.has(c.modo) ? c.modo : "atividade",
     pontoLeitura: str(c.pontoLeitura),
     capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "maxima",
-    // Transporte de vídeo (Fase 1/go2rtc): default "mjpeg" (comportamento atual/rollback).
-    // Só "webrtc" muda o tile p/ <video-stream> servido pelo go2rtc — feature-flag por câmera.
     transport: TRANSPORTS.has(c.transport) ? c.transport : "auto",
     selectedClasses: strList(c.selectedClasses),
-    // Perfil "Longo alcance/Panorâmica" (CameraCfg.longRange): o front persiste e o
-    // MOTOR de análise lê p/ ligar o tiling 2×2 (F3/ADR-009). Sem esta linha o flag
-    // era descartado no save e o longo alcance server-side ficava inerte.
+    // longRange liga o tiling 2×2 no motor de análise (ADR-009). INVARIANTE desta allowlist:
+    // campo NOVO de config TEM que ser adicionado aqui, senão é descartado MUDO no save.
     longRange: c.longRange === true,
   };
 }
