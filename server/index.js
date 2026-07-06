@@ -8,8 +8,6 @@ const cameraStore = require("./cameras");
 const alerts = require("./alerts");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
-const dispatch = require("./dispatch");
-const alarmPolicy = require("./alarmPolicy");
 const recipients = require("./recipients");
 const camcfg = require("./camcfg");
 const events = require("./events");
@@ -31,6 +29,11 @@ const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
 const routeAnalysis = require("./routes/analysis");
+
+// Camada socket (espelha o padrão de routes/): protocolo de nó-câmera e de dashboard em
+// módulos próprios; cada um expõe attach(socket, ctx). index.js só compõe.
+const socketCamera = require("./sockets/camera");
+const socketDashboard = require("./sockets/dashboard");
 
 const PORT = Number(process.env.PORT ?? 4000);
 // HOST: em dev fica 0.0.0.0 (celular aponta p/ o IP do laptop). Em produção, atrás do
@@ -185,131 +188,12 @@ const broadcast = () => {
 // setLastCapture/onCameraConnected) nos pontos do fluxo de socket abaixo.
 const shed = createShed({ io, cameras, socketById, rtsp });
 
+// Contexto da camada socket. O pipeline de alarme (alert → política → canais → events →
+// "alarm-event") vive em alarm/pipeline.js; aqui só se injeta as dependências.
+const socketCtx = { io, cameras, cameraList, socketById, shed, analysis, rtsp };
 io.on("connection", (socket) => {
-  const role = socket.handshake.query.role;
-
-  if (role === "camera") {
-    const id = String(socket.handshake.query.id || socket.id);
-    const label = String(socket.handshake.query.label || `Câmera ${id.slice(0, 4)}`);
-    cameras.set(id, { id, label });
-    socketById.set(id, socket);
-    socket.data.cameraId = id;
-    shed.onCameraConnected(id); // nó (re)conectou no perfil default — estado de shed anterior não vale mais
-    io.to("dashboards").emit("cameras", cameraList());
-    io.to("dashboards").emit("camera-status", { id, state: "online", label, kind: "browser" });
-    console.log(`[camera+] ${label} (${id}) · total=${cameras.size}`);
-
-    // Relé de frames (payload: { buf, w, h, ts }). VOLATILE: se um dashboard está lento, o frame
-    // é DESCARTADO em vez de enfileirar — vídeo prefere o frame mais novo a acumular latência/backlog.
-    // Rooms (2.1): dashboards novos assistem por câmera (`cam:<id>`, via `watch`); antigos recebem
-    // tudo pela `dash-legacy`. União de rooms — socket.io deduplica destinos.
-    socket.on("frame", (payload) => {
-      // Motor de análise (F1): o hub JÁ possui o frame — amostragem @1fps acontece no engine
-      // (último-vence); aqui é só entregar a referência (custo ~zero por frame).
-      if (payload && payload.buf) analysis.onFrame(id, payload.buf, payload.ts);
-      io.to(`cam:${id}`).to("dash-legacy").volatile.emit("frame", { id, ...payload });
-    });
-
-    socket.on("disconnect", () => {
-      cameras.delete(id);
-      socketById.delete(id);
-      io.to("dashboards").emit("cameras", cameraList());
-      io.to("dashboards").emit("camera-status", { id, state: "stopped", label, kind: "browser" });
-      console.log(`[camera-] ${label} (${id}) · total=${cameras.size}`);
-    });
-  } else {
-    // dashboard
-    socket.join("dashboards");
-    // Retrocompat (2.1): todo dashboard começa na room LEGADA (recebe TODOS os frames, como hoje).
-    // Um dashboard novo emite `watch` e migra para rooms por câmera; um antigo segue recebendo tudo.
-    socket.join("dash-legacy");
-    shed.sweepShed(); // espectador legado chegou — religa imediatamente câmeras que estavam em shed
-    socket.emit("cameras", cameraList());
-    // Estado inicial por câmera p/ este dashboard (RTSP: do ingestor; navegador: já conectadas = online).
-    for (const s of rtsp.statuses()) socket.emit("camera-status", s);
-    for (const c of cameraList())
-      if (c.kind !== "rtsp")
-        socket.emit("camera-status", {
-          id: c.id,
-          state: "online",
-          label: c.label,
-          kind: "browser",
-        });
-    // Anti-duplicação (F1/ADR-009): snapshot do "analysis-status" por câmera analisada
-    // ({ cameraId, engine: "hub" }) — o dashboard novo desliga o ingest local dessas câmeras.
-    analysis.snapshotTo(socket);
-    console.log(`[dashboard+] ${socket.id}`);
-
-    // 2.1 — assinatura por câmera (contrato ADITIVO): o dashboard anuncia o conjunto COMPLETO de
-    // câmeras que quer receber (`{ ids }` substitui o anterior — idempotente, sem unwatch). O
-    // socket sai da room legada e das `cam:*` que não quer mais, e entra nas pedidas. A partir do
-    // 1º `watch`, este dashboard só recebe `frame` das câmeras assistidas; os demais eventos
-    // (cameras/camera-status/alarm-*/camcfg-updated) continuam chegando pela room "dashboards".
-    socket.on("watch", (p) => {
-      const ids = p && Array.isArray(p.ids) ? p.ids.map(String) : [];
-      socket.data.usesWatch = true;
-      socket.leave("dash-legacy");
-      const want = new Set(ids.map((id) => `cam:${id}`));
-      for (const room of [...socket.rooms]) {
-        if (room.startsWith("cam:") && !want.has(room)) socket.leave(room);
-      }
-      for (const room of want) socket.join(room);
-      shed.sweepShed(); // religa NA HORA câmeras que ganharam espectador (o debounce só vale p/ shed)
-    });
-
-    // Foco do operador (contrato ADITIVO `analysis-focus`): o dashboard anuncia qual câmera
-    // está aberta em TELA CHEIA — o motor dedica MAIS cadência (FPS_FOCUS) a ela. `{ id }` foca;
-    // `{ id: null }` libera. A câmera focada = UNIÃO entre todos os dashboards (por socket); no
-    // disconnect abaixo a contribuição deste socket some. Não toca em watch/frame/analysis-*.
-    socket.on("analysis-focus", (p) => {
-      const id = p && p.id != null && p.id !== "" ? String(p.id) : null;
-      socket.data.focusId = id;
-      analysis.setFocus(socket.id, id);
-    });
-
-    // Dashboard saiu: remove sua contribuição à união de foco (evita foco órfão prendendo o boost).
-    socket.on("disconnect", () => {
-      analysis.clearFocus(socket.id);
-    });
-
-    // Central define o perfil de captura por câmera (ex.: leitura = alta resolução).
-    // payload: { id, width, quality, fps }
-    socket.on("set-capture", (cfg) => {
-      if (!cfg || !cfg.id) return;
-      // Guarda o último perfil pedido pelo operador: o shed (2.1) restaura ESTE perfil ao religar,
-      // não o default — o rebaixamento automático nunca sobrescreve uma intenção manual.
-      shed.setLastCapture(cfg.id, { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
-      const target = socketById.get(String(cfg.id));
-      if (target) target.emit("capture", { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
-    });
-
-    // Andon: alerta do painel → política de alarme (dedup/inundação/prioridade) → webhook + WhatsApp.
-    // A política decide UMA vez e roteia a mesma decisão p/ os dois canais; null = suprimido.
-    socket.on("alert", (p) => {
-      const d = alarmPolicy.evaluate(p);
-      if (!d) return;
-      alerts.notify(d);
-      if (d.text) dispatch.dispatchAlert(d.text, d.ts, d.priority);
-      // Onda B: grava o evento de alarme (SÓ METADADOS — LGPD) na fila acionável,
-      // reusando a MESMA decisão da política (priority já calculada). Aditivo:
-      // emite "alarm-event" aos painéis ao vivo sem tocar em frame/cameras/alert.
-      const cam = d.cameraId && d.cameraId !== "_" ? cameras.get(d.cameraId) : null;
-      events
-        .record({
-          ts: d.ts,
-          cameraId: d.cameraId,
-          cameraLabel: cam ? cam.label : undefined,
-          zona: d.zona,
-          tipo: d.tipo,
-          priority: d.priority,
-          text: d.text,
-        })
-        .then((ev) => {
-          if (ev) io.to("dashboards").emit("alarm-event", ev);
-        })
-        .catch((e) => console.error("[alarm-events] falha ao gravar:", e.message));
-    });
-  }
+  if (socket.handshake.query.role === "camera") socketCamera.attach(socket, socketCtx);
+  else socketDashboard.attach(socket, socketCtx);
 });
 
 // Bootstrap: garante o schema do Postgres e carrega os caches (users/recipients/settings) ANTES de
