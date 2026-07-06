@@ -222,3 +222,25 @@ intra-LAN.
 - [ ] `curl -sS http://127.0.0.1:1984/api/streams` no servidor lista as câmeras (gateway no ar).
 - [ ] No dashboard, um tile abre em **WebRTC** (fluido, sem "trava-e-pula"); DevTools sem erro de CSP.
 - [ ] Renomeie `bin/go2rtc` e `restart` do hub → os tiles voltam a **MJPEG** sozinhos (prova do fallback).
+
+## 12. Delta da release de otimização (jul/05) — pool, gate de movimento, foco
+
+**Nada a configurar** (tudo automático, defaults sensatos) — este delta só documenta o que MUDA
+no comportamento e os escape hatches novos:
+
+| Novidade | Comportamento | Escape hatch |
+|---|---|---|
+| **Pool de N workers** | N = `min(cores/2, câmeras)`; respawn por-worker; RAM ~200-240MB × N | `ANALYSIS_WORKERS=<n>` fixa |
+| **Gate de movimento** | Pula a inferência em cena estática (thumbnail 64×48 + diff); probe-piso 6s (2s focada); nunca-cego | `ANALYSIS_MOTION_GATE=0` desliga; `ANALYSIS_MOTION_RATIO` (0.005), `ANALYSIS_MOTION_PROBE_MS` (6000) |
+| **Boost de foco** | Câmera aberta em tela cheia analisa a ~6fps (evento `analysis-focus`) | `ANALYSIS_FPS_FOCUS` (clamp [FPS,8]) |
+| **Autoscale latency-bound** | Rebaixa o tier também quando a LATÊNCIA afoga (fps<50% do alvo com workers ocupados) — corrige o "preso no M" | `ANALYSIS_MODEL=n\|s\|m` pina (desliga o auto) |
+| **Input configurável** | Default **640** (mantido por evidência — ver `analises/perf-input-size-dfine.md`) | `ANALYSIS_INPUT=512` p/ hub apertado SEM pessoa distante |
+| **vx/vy no `analysis-tracks`** | Aditivo — o front novo faz dead-reckoning (overlay desliza); front antigo ignora | — |
+| **Front**: WebGL explícito no worker, luma com teto, rVFC | Transparente (é o novo `dist/`) | — |
+
+**Validação do delta no servidor:**
+- [ ] Boot: `pool de N worker(s)` com N esperado (ex.: 2 num 4-core) e `auto-máscara=hide`.
+- [ ] `journalctl … | grep "pulos/gate"` → cenas paradas acumulam pulos (o corte de CPU real).
+- [ ] Tier: se o boot escolher M num box pequeno, em ~90s de carga o log mostra `latency-bound 3×` e desce p/ S sozinho.
+- [ ] `status().motionGate.skipped1m` > 0 com câmeras estáticas; câmera com gente NÃO pula.
+- [ ] Bancada determinística (opcional, recomendado): MediaMTX na porta **8556** + loop CFTV — ver `analises/plano-teste-camera-real.md` (tier 2, seção HOMOLOG).
