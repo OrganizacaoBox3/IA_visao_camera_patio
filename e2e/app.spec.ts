@@ -171,6 +171,35 @@ test("Select aberto: ESC fecha só o Select, não a câmera fullscreen (config d
   await expect(page.locator(".cam")).toBeVisible();
 });
 
+// BUG PRÉ-EXISTENTE (achado pela U2): com o Dialog de config de zona aberto, ESC fechava o
+// Dialog E TAMBÉM a casca fullscreen da câmera. Causa: o Radix dismissa no CAPTURE do document
+// e o React 19 flusha o setState + passive effects num microtask ENTRE os listeners do mesmo
+// keydown — quando o bubble do trap manual rodava, cfgOpenRef já era false. O fix checa
+// e.defaultPrevented (o DismissableLayer marca o evento ao dismissar) — síncrono, por-evento.
+// Seletores: o Radix Dialog é `.ui-dialog` (a casca da câmera também tem role="dialog", então
+// getByRole("dialog") seria ambíguo depois que o aria-hidden do Radix sai).
+test("ESC com o Dialog de config de zona aberto fecha SÓ o Dialog; 2º ESC fecha a câmera", async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await drawZone(page);
+  await page.getByRole("button", { name: "Configurar zona" }).first().click();
+  await expect(page.locator(".ui-dialog")).toBeVisible();
+
+  // 1º ESC: fecha só o Dialog — a câmera fullscreen permanece aberta
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ui-dialog")).toHaveCount(0); // dialog fechou
+  await expect(page.locator(".cam")).toBeVisible(); // câmera continua aberta
+
+  // 2º ESC: agora sim fecha a câmera (volta à Central)
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cam")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+});
+
 // Tela de câmeras (/cameras) — fluxo NOVO que unifica "+ Nó de câmera" e "+ Câmera IP" numa ação
 // só. O e2e loga como "admin", que É superadmin, então vê a seção de câmeras IP. Cobre: o botão
 // único do header da Central navega p/ /cameras; a tela é alcançável pelo MENU; o form de cadastro

@@ -28,6 +28,13 @@ export function useFocusTrap(
     const onKey = (e: KeyboardEvent) => {
       if (cfgOpenRef.current) return; // diálogo aberto → Radix trata ESC/Tab
       if (e.key === "Escape") {
+        // cfgOpenRef NÃO basta para o ESC que fecha o diálogo: o Radix (DismissableLayer)
+        // dismissa no CAPTURE do document, e o React 19 flusha o setState discreto + passive
+        // effects num microtask ENTRE os listeners do MESMO keydown (evento trusted) — quando
+        // este bubble roda, cfgOpenRef já virou false e o Dialog já saiu do DOM. A marca
+        // síncrona e por-evento é o próprio evento: toda camada Radix que dismissa por ESC
+        // chama event.preventDefault() antes (dismissable-layer). ESC já consumido → ignora.
+        if (e.defaultPrevented) return;
         e.preventDefault();
         onCloseRef.current?.();
         return;
