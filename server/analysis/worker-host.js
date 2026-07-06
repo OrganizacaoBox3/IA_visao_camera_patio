@@ -135,8 +135,10 @@ function dispatchReady(st, now, defaultRoundMs) {
  * @param {(st, dets, now) => void} deps.onDets  pipeline por rodada (=processDets do engine)
  * @param {() => boolean} deps.isStopping  true quando o engine encerra (não respawna)
  * @param {() => number} deps.getSize      nº de workers a subir (resolvido no spawn — env/cores/câmeras)
+ * @param {Function} [deps.fork]           SEAM de teste: injeta um fork fake (default = child_process.fork)
  */
-function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize }) {
+function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, fork: forkFn }) {
+  const spawn = forkFn || fork; // produção usa o fork real; o teste injeta um fake (sem subir processo)
   const workers = []; // registros por worker, índice estável (0..N-1)
   let rr = 0; // ponteiro round-robin do roteamento
 
@@ -158,13 +160,21 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize })
 
   function spawnOne(w) {
     w.ready = false;
-    w.proc = fork(path.join(__dirname, "worker.js"), [], {
+    w.proc = spawn(path.join(__dirname, "worker.js"), [], {
       serialization: "advanced", // Buffers de JPEG viajam como binário, sem base64
       env: { ...process.env, ANALYSIS_MODEL_PATH: getModelPath() },
     });
     w.pid = w.proc.pid;
     w.proc.on("message", (msg) => onWorkerMessage(w, msg));
     w.proc.on("exit", (code, signal) => onWorkerExit(w, code, signal));
+    // NUNCA-CEGO, NÍVEL HUB: o canal IPC emite 'error' quando um send corre com o worker
+    // morrendo (ex.: ERR_IPC_CHANNEL_CLOSED sob sobrecarga). SEM este handler o 'error' vira
+    // exceção não-tratada e DERRUBA O HUB INTEIRO — um worker cair jamais pode matar o hub.
+    // Só marcamos not-ready + logamos; o respawn é do onWorkerExit (o 'error' precede o 'exit').
+    w.proc.on("error", (err) => {
+      w.ready = false;
+      console.warn(`[analysis] worker#${w.id} erro de IPC: ${err && err.message} — respawn via exit`);
+    });
   }
 
   function onWorkerExit(w, code, signal) {
@@ -255,23 +265,48 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize })
     console.log(`[analysis] pool de ${size} worker(s) de inferência iniciando`);
   }
 
-  /** Pronto p/ despachar? (≥1 worker pronto E vivo — usado pelo tick.) */
+  /** Pronto p/ despachar? (≥1 worker pronto, vivo E com canal IPC aberto — usado pelo tick.) */
   function ready() {
-    return workers.some((w) => w.ready && !!w.proc);
+    return workers.some((w) => w.ready && !!w.proc && w.proc.connected);
   }
 
   /**
-   * Roteia um pedido ao worker PRONTO de MENOR carga (round-robin no empate) e
-   * registra o job em voo (carga). Lança se NENHUM worker está pronto ou se o send
-   * do IPC falhar (o tick trata: reseta st.busy). NÃO registra inflight em falha.
+   * Reverte um job que o worker NÃO aceitou (send falhou): tira da carga deste worker e
+   * libera a câmera (st.busy/inflight) p/ o tick re-despachar. Usado nos DOIS caminhos de
+   * falha do send — throw síncrono (canal já fechado) e callback assíncrono (fechou na corrida).
+   */
+  function releaseJob(w, msg) {
+    w.inflight.delete(msg.id);
+    const st = states.get(msg.cameraId);
+    if (st && st.inflight === msg.id) {
+      st.busy = false;
+      st.inflight = 0;
+    }
+  }
+
+  /**
+   * Roteia um pedido ao worker PRONTO de MENOR carga (round-robin no empate) e registra o
+   * job em voo (carga). Lança se NENHUM worker está pronto (o tick trata: reseta st.busy).
+   * O send do IPC pode falhar na corrida com o exit de um worker: o `connected` no snapshot
+   * evita escolher um canal já fechado, e o CALLBACK do send desvia o erro assíncrono do
+   * evento 'error' (que mataria o hub) p/ o releaseJob. Throw síncrono também reverte e propaga.
    */
   function send(msg) {
-    const snap = workers.map((w) => ({ ready: w.ready && !!w.proc, load: w.inflight.size }));
+    const snap = workers.map((w) => ({
+      ready: w.ready && !!w.proc && w.proc.connected,
+      load: w.inflight.size,
+    }));
     const i = pickWorker(snap, rr);
     if (i < 0) throw new Error("nenhum worker pronto");
     rr = (i + 1) % workers.length;
-    workers[i].proc.send(msg); // pode lançar (canal fechado) → propaga sem marcar inflight
-    workers[i].inflight.set(msg.id, msg.cameraId);
+    const w = workers[i];
+    w.inflight.set(msg.id, msg.cameraId); // registra a carga ANTES do envio
+    try {
+      w.proc.send(msg, (err) => err && releaseJob(w, msg)); // erro ASSÍNCRONO → callback, não 'error'
+    } catch (err) {
+      releaseJob(w, msg); // erro SÍNCRONO (canal já fechado) — reverte e propaga p/ o chamador
+      throw err;
+    }
   }
 
   /**
