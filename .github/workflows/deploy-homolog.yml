@@ -104,13 +104,17 @@ jobs:
           test -f dist/index.html
           file bin/go2rtc | grep -q 'ELF 64-bit'   # binário LINUX (não o .exe do Windows)
           FORBIDDEN='server/(models/|wa-auth/|cameras\.json|alarms\.json|camcfg\.json|alarm-shelves\.json|data-hist\.json|users\.json|recipients\.json|notif-settings\.json|rtsp\.sources\.json|go2rtc\.yaml)|node_modules/|\.env|\.gen\.yaml'
-          if tar -tzf release.tar.gz | grep -E "$FORBIDDEN"; then
+          # Lista materializada em ARQUIVO: `tar -tzf | head` sob pipefail mata o tar com
+          # SIGPIPE ("stdout: write error" — a falha do run #1). Sem pipe, sem SIGPIPE; e a
+          # auditoria e a amostra leem o MESMO snapshot completo.
+          tar -tzf release.tar.gz > /tmp/release-list.txt
+          if grep -E "$FORBIDDEN" /tmp/release-list.txt; then
             echo "::error::release.tar.gz contém arquivo proibido (estado/segredo de runtime) — abortando"
             exit 1
           fi
           echo "sha256: $(sha256sum release.tar.gz)"
-          echo "conteúdo (amostra):"
-          tar -tzf release.tar.gz | head -n 25
+          echo "conteúdo (amostra de $(wc -l < /tmp/release-list.txt) entradas):"
+          head -n 25 /tmp/release-list.txt
 
       - name: Publicar artefato p/ o job de deploy
         uses: actions/upload-artifact@v4
