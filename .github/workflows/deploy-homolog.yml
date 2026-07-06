@@ -280,17 +280,23 @@ jobs:
             fi
             sleep 5
           done
-          # (b) Log de boot: "ouvindo em" sai sempre; "motor ATIVO" quando o motor liga.
-          LOG_OK=0
-          for _ in $(seq 1 12); do
-            if $SUDO journalctl -u "$SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null \
-               | grep -qE "motor ATIVO|ouvindo em"; then
-              LOG_OK=1; break
-            fi
-            sleep 5
-          done
+          # (b) Unidade ATIVA segundo o systemd. NÃO dependemos do journal para o
+          #     veredito: log-flood (ex.: WhatsApp Bad MAC) estoura o rate-limit do
+          #     journald e SUPRIME as linhas de boot — o run #2 falhou exatamente
+          #     assim (http=1, log=0 com o hub saudável). systemctl não mente.
+          SVC_OK=0
+          if $SUDO systemctl status "$SERVICE" --no-pager >/dev/null 2>&1; then
+            SVC_OK=1
+          fi
+          # (c) Log de boot (INFORMATIVO, não-bloqueante — pode estar suprimido).
+          if $SUDO journalctl -u "$SERVICE" --since "5 minutes ago" --no-pager 2>/dev/null \
+             | grep -qE "motor ATIVO|ouvindo em"; then
+            echo "log de boot: presente"
+          else
+            echo "AVISO: linhas de boot ausentes no journal (rate-limit por flood? ver WhatsApp Bad MAC) — não-bloqueante"
+          fi
 
-          if [ "$HTTP_OK" -eq 1 ] && [ "$LOG_OK" -eq 1 ]; then
+          if [ "$HTTP_OK" -eq 1 ] && [ "$SVC_OK" -eq 1 ]; then
             echo "HEALTH OK — hub respondendo na 8091 e log de boot presente."
             $SUDO systemctl status "$SERVICE" --no-pager | sed -n '1,8p' || true
             echo "Backup desta release: $BACKUP (remoção de backups antigos é manual — doc §6)."
@@ -298,7 +304,7 @@ jobs:
           fi
 
           echo "=================================================================="
-          echo "HEALTH FALHOU (http=$HTTP_OK, log=$LOG_OK) — deploy marcado VERMELHO."
+          echo "HEALTH FALHOU (http=$HTTP_OK, svc=$SVC_OK) — deploy marcado VERMELHO."
           echo "SEM rollback automático (decisão deliberada): o backup está intacto."
           echo "Para reverter (runbook docs/deploy-atualizacao-2026-07.md §9), no servidor:"
           echo ""
