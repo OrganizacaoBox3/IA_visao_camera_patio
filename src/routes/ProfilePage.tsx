@@ -101,15 +101,17 @@ export function ProfilePage() {
             />
           </Field>
 
+          {/* Rótulos enxutos (achado 9.1): 1 linha por checkbox; a menção LGPD permanece
+              por honestidade (é o registro de consentimento), sem parêntese explicativo longo. */}
           <CheckboxRow id="prof-optin" checked={optIn} onCheckedChange={setOptIn}>
-            Autorizo receber alertas operacionais neste número (consentimento — LGPD).
+            Autorizo receber alertas neste número — consentimento (LGPD).
           </CheckboxRow>
           <CheckboxRow
             id="prof-ativo"
             checked={prefs.ativo}
             onCheckedChange={(v) => setPrefs((p) => ({ ...p, ativo: v }))}
           >
-            Receber alertas (pode pausar sem apagar o número).
+            Receber alertas (pausar mantém o número).
           </CheckboxRow>
           <CheckboxRow
             id="prof-crit"

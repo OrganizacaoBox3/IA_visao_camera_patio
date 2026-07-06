@@ -1,4 +1,5 @@
 import { type Dispatch, type SetStateAction } from "react";
+import { Dices } from "lucide-react";
 import { useAuth } from "../../auth";
 import {
   Button,
@@ -138,11 +139,13 @@ export function UsersTab({
               value={novo.senha}
               onChange={(e) => setNovo((n) => ({ ...n, senha: e.target.value }))}
             />
+            {/* Lucide no lugar do emoji 🎲 (padrão do shell: 18px/1.75/currentColor);
+                o nome acessível segue no label do IconButton. */}
             <IconButton
               label="Gerar senha"
               onClick={() => setNovo((n) => ({ ...n, senha: genSenha() }))}
             >
-              🎲
+              <Dices size={18} strokeWidth={1.75} aria-hidden />
             </IconButton>
           </span>
           <Select
@@ -160,7 +163,10 @@ export function UsersTab({
       {/* Lista cresce com a viewport (flex-1 + min-h-0 na cadeia; scroll interno na ScrollArea)
           — nada de max-h fixo em conteúdo (plano de padronização visual). */}
       <section className="panel panel-events flex flex-1 flex-col">
-        <SectionTitle>{loading ? "Carregando…" : `${rows.length} usuário(s)`}</SectionTitle>
+        {/* Pluralização real no lugar de "(s)" (achado 8.3). */}
+        <SectionTitle>
+          {loading ? "Carregando…" : `${rows.length} ${rows.length === 1 ? "usuário" : "usuários"}`}
+        </SectionTitle>
         <ScrollArea orientation="both" className="min-h-[200px] flex-1">
           <table className="rtable">
             <thead>

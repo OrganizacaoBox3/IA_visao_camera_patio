@@ -1,11 +1,12 @@
 // Telemetria lateral "NUNCA NÚMERO CRU" (NASA/HPHMI — P7 de 01-nasa-mission-control.md;
 // north star da síntese: "valor + tendência (sparkline) + faixa-alvo").
-// Componentes puros, SVG, SEM dependências:
+// Componentes puros, SVG (única dependência: ícone Lucide, o padrão da casa):
 //   • <Sparkline>  — a mini-série recente + a faixa-alvo (banda verde/aceitável), com a cor
 //                    da linha ditada pelo estado (ok/warn/critical → tokens --state-*).
 //   • <MetricCell> — embala rótulo + valor atual (colorido pelo estado) + sparkline + legenda
 //                    da faixa-alvo. Realça (cor warn/critical) quando o valor sai da faixa.
 // Toda a coloração consome os tokens da fundação (var(--state-*) / var(--cam-*)).
+import { TriangleAlert } from "lucide-react";
 import "./telemetry.css";
 
 export type Band = { lo: number; hi: number };
@@ -139,9 +140,16 @@ export function MetricCell({
         <span className="metric-value" style={{ color: STATE_VALUE[state] }}>
           {value}
           {out && (
+            // Ícone Lucide no lugar do glifo "⚠" (cor+ícone+texto — nunca cor sozinha).
             <span className="metric-flag" style={{ color: STATE_VALUE[state] }}>
               {" "}
-              ⚠ fora
+              <TriangleAlert
+                size={10}
+                strokeWidth={2}
+                aria-hidden
+                className="inline-block align-[-1px]"
+              />{" "}
+              fora
             </span>
           )}
         </span>

@@ -1,4 +1,5 @@
 import { type Dispatch, type SetStateAction } from "react";
+import { Info } from "lucide-react";
 import {
   Button,
   Input,
@@ -6,6 +7,7 @@ import {
   Switch,
   CheckboxRow,
   ScrollArea,
+  Tooltip,
   useToast,
   SectionTitle,
 } from "../../ui";
@@ -31,6 +33,22 @@ const TIPO_LABEL: Record<string, string> = {
 };
 
 type NovoDest = { nome: string; numero: string; somenteCriticos: boolean };
+
+// "(?)" da casa: detalhe que não precisa morar na tela vira Tooltip num gatilho focável
+// (regra de ouro do plano de simplificação: prosa/jargão nunca renderiza no JSX visível).
+function HelpTip({ tip, label }: { tip: string; label: string }) {
+  return (
+    <Tooltip content={tip}>
+      <button
+        type="button"
+        aria-label={label}
+        className="ml-1 inline-flex cursor-help rounded-[var(--radius-sm)] border-0 bg-transparent p-0 align-middle text-text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Info size={13} strokeWidth={1.75} aria-hidden />
+      </button>
+    </Tooltip>
+  );
+}
 
 type Props = {
   wa: WaStatus | null;
@@ -169,20 +187,23 @@ export function NotificacoesTab({
       <section className="panel shrink-0">
         <SectionTitle>
           WhatsApp (andon){" "}
-          {wa && (
-            <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />
-          )}
+          {wa && <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />}
         </SectionTitle>
         {!wa || !wa.enabled ? (
+          // Linguagem de PRODUTO na tela (achado #5 da auditoria): env var/systemd/lib são
+          // detalhe de infra e vivem SÓ no tooltip técnico, nunca no texto visível.
           <p className="muted">
-            Desligado. Defina <code>WHATSAPP_ENABLED=1</code> no hub (systemd) e pareie aqui. Use um
-            número dedicado (Baileys é não-oficial).
+            Notificações por WhatsApp não estão ativas neste servidor — fale com o administrador.
+            <HelpTip
+              label="Detalhe técnico da ativação"
+              tip="Ativação (feita pelo administrador do servidor): definir WHATSAPP_ENABLED=1 no ambiente do hub e parear um número dedicado nesta tela."
+            />
           </p>
         ) : wa.connected ? (
           <div>
             <p>
-              <b className="text-ok">Conectado.</b> Os alertas elegíveis serão enviados aos
-              usuários com WhatsApp ativo.
+              <b className="text-ok">Conectado.</b> Os alertas elegíveis serão enviados aos usuários
+              com WhatsApp ativo.
             </p>
             <div className="wa-test">
               <Input
@@ -224,27 +245,36 @@ export function NotificacoesTab({
                 onChange={(e) => setNotif({ ...notif, marca: e.target.value })}
               />
             </Field>
-            <CheckboxRow
-              id="chk-local"
-              checked={notif.incluirLocal}
-              onCheckedChange={(v) => setNotif({ ...notif, incluirLocal: v })}
+            {/* Grupo rotulado (achado 8.5): os 3 toggles deixam de flutuar soltos à direita
+                do input — uma linha própria com rótulo diz o que eles incluem. */}
+            <div
+              className="flex flex-wrap items-center gap-[var(--sp-2)]"
+              role="group"
+              aria-label="Incluir na mensagem"
             >
-              local
-            </CheckboxRow>
-            <CheckboxRow
-              id="chk-hora"
-              checked={notif.incluirHora}
-              onCheckedChange={(v) => setNotif({ ...notif, incluirHora: v })}
-            >
-              data/hora
-            </CheckboxRow>
-            <CheckboxRow
-              id="chk-rodape"
-              checked={notif.incluirRodape}
-              onCheckedChange={(v) => setNotif({ ...notif, incluirRodape: v })}
-            >
-              rodapé
-            </CheckboxRow>
+              <span className="text-label text-text-dim">Incluir na mensagem:</span>
+              <CheckboxRow
+                id="chk-local"
+                checked={notif.incluirLocal}
+                onCheckedChange={(v) => setNotif({ ...notif, incluirLocal: v })}
+              >
+                local
+              </CheckboxRow>
+              <CheckboxRow
+                id="chk-hora"
+                checked={notif.incluirHora}
+                onCheckedChange={(v) => setNotif({ ...notif, incluirHora: v })}
+              >
+                data/hora
+              </CheckboxRow>
+              <CheckboxRow
+                id="chk-rodape"
+                checked={notif.incluirRodape}
+                onCheckedChange={(v) => setNotif({ ...notif, incluirRodape: v })}
+              >
+                rodapé
+              </CheckboxRow>
+            </div>
           </div>
 
           {/* items-stretch + h-full: os 4 cards de mensagem alinham a altura na mesma linha. */}
@@ -298,9 +328,13 @@ export function NotificacoesTab({
       {/* Lista de destinatários cresce com a viewport (flex-fill; sem max-h fixo). */}
       <section className="panel flex flex-1 flex-col">
         <SectionTitle>Destinatários do WhatsApp ({dests.length})</SectionTitle>
+        {/* Prosa >1 linha vira tooltip (regra de ouro): a tela fica com 1 linha essencial. */}
         <p className="meta-text muted">
-          Números avulsos que recebem os alertas (além dos usuários que cadastram o próprio número
-          em "Meu perfil"). Você é responsável pelo consentimento (LGPD).
+          Números avulsos que também recebem os alertas — colha o consentimento (LGPD).
+          <HelpTip
+            label="Mais sobre destinatários"
+            tip="Além destes números, cada usuário pode cadastrar o próprio WhatsApp em “Meu perfil”. Quem cadastra número de terceiros responde pelo consentimento (LGPD)."
+          />
         </p>
         <form className="users-new" onSubmit={onAddDest}>
           <Input

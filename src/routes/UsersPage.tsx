@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { useAuth } from "../auth";
 import {
   Button,
@@ -97,7 +98,7 @@ export function UsersPage() {
     <div className="page">
       <PageHeader title="Usuários">
         <IconButton label="Recarregar" onClick={refresh}>
-          ↻
+          <RefreshCw size={18} strokeWidth={1.75} aria-hidden />
         </IconButton>
       </PageHeader>
 

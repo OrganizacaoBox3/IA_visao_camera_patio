@@ -401,6 +401,12 @@
   .rail--app .rail-head {
     display: none;
   }
+  /* Pílula de privacidade NÃO ocupa slot no bottom-nav (o index.css já a
+     esconde, mas .rail--app .rail-foot {display:flex} acima re-exibia por
+     especificidade). A informação vive no rail desktop/tablet. */
+  .rail--app .rail-foot {
+    display: none;
+  }
   .rail--app .rail-group {
     display: contents;
   }
@@ -409,7 +415,11 @@
     flex-direction: column;
     justify-content: center;
     gap: 2px;
-    padding: var(--sp-1) var(--sp-2);
+    /* Padding lateral mínimo (--sp-1): com dedup ("Meu perfil"→menu Conta) e
+       rótulo curto ("Saúde"), os até 6 itens do superadmin exibem o rótulo
+       INTEIRO em 390px — sem "Cent…/Saú…". Ellipsis segue como rede de
+       segurança p/ viewports menores. */
+    padding: var(--sp-1);
     min-height: 44px;
     /* Cada item divide a largura por igual (flex:1 + min-width:0): 3–6 itens
        (operador → superadmin) cabem em 390px sem estourar a barra. O rótulo

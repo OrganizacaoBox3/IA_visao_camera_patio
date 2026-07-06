@@ -78,7 +78,17 @@ const PAPEL_LABEL: Record<Papel, string> = {
   usuario: "Operador",
 };
 
-type NavItem = { to: string; end?: boolean; icon: LucideIcon; label: string };
+// `short`: rótulo compacto para o bottom-nav (≤640px) — o aria-label continua sendo `label`
+// (nome acessível estável p/ e2e/leitores; WCAG 2.5.3: o texto visível está contido no nome).
+// `mobileHide`: item some do bottom-nav quando já tem outro lar no mobile (dedup, não perda).
+type NavItem = {
+  to: string;
+  end?: boolean;
+  icon: LucideIcon;
+  label: string;
+  short?: string;
+  mobileHide?: boolean;
+};
 type NavGroup = { id: string; title: string; items: NavItem[] };
 // Resultado da busca: item de menu ou câmera. Câmera navega p/ a Central ("/") — não há
 // deep-link de câmera aberta hoje; quando houver, troque o `to` aqui.
@@ -100,6 +110,8 @@ export function AppShell() {
   // desktop (>900px): entra o colapso manual expandida ↔ rail.
   const compact = useMediaQuery("(min-width: 641px) and (max-width: 900px)");
   const desktop = useMediaQuery("(min-width: 901px)");
+  // sm (≤640px): rail vira bottom-nav — itens com rótulo curto e dedup (ver `groups`).
+  const mobile = useMediaQuery("(max-width: 640px)");
   useEffect(() => {
     mainRef.current?.focus();
   }, [pathname]);
@@ -196,7 +208,10 @@ export function AppShell() {
   // Grupos com micro-headers (padrão Grafana/Datadog: zonear por frequência de uso).
   // RBAC preservado: Saúde alarmes só canConfigure; Usuários só superadmin. Grupo vazio
   // (ex.: Administração p/ operador) não renderiza nem o header.
-  const groups: NavGroup[] = [
+  // Mobile (≤640px): "Meu perfil" sai do bottom-nav — é DUPLICADO do item "Meu perfil" do
+  // menu de conta (avatar), então o dedup corta 1 slot sem perder navegação. Com rótulos
+  // curtos ("Saúde"), os até 6 itens restantes cabem em 390px sem truncar.
+  const allGroups: NavGroup[] = [
     {
       id: "op",
       title: "Operação",
@@ -212,7 +227,9 @@ export function AppShell() {
       id: "adm",
       title: "Administração",
       items: [
-        ...(canConfigure ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes" }] : []),
+        ...(canConfigure
+          ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes", short: "Saúde" }]
+          : []),
         ...(user.papel === "superadmin"
           ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
           : []),
@@ -221,9 +238,12 @@ export function AppShell() {
     {
       id: "conta",
       title: "Conta",
-      items: [{ to: "/perfil", icon: CircleUser, label: "Meu perfil" }],
+      items: [{ to: "/perfil", icon: CircleUser, label: "Meu perfil", mobileHide: true }],
     },
-  ].filter((g) => g.items.length > 0);
+  ];
+  const groups: NavGroup[] = allGroups
+    .map((g) => (mobile ? { ...g, items: g.items.filter((i) => !i.mobileHide) } : g))
+    .filter((g) => g.items.length > 0);
 
   // Resultados: itens do menu (sempre) + câmeras (quando carregadas), acento-insensível.
   const q = norm(query.trim());
@@ -445,7 +465,8 @@ export function AppShell() {
                   <span className="ri-ic" aria-hidden>
                     <Icon {...NAV_ICON} />
                   </span>
-                  <span className="ri-lb">{it.label}</span>
+                  {/* Bottom-nav usa o rótulo curto quando existir; o aria-label (acima) segue o nome completo. */}
+                  <span className="ri-lb">{mobile && it.short ? it.short : it.label}</span>
                 </NavLink>
               );
               // No modo só-ícones o Tooltip revela o rótulo; fora dele seria redundante.
@@ -468,13 +489,16 @@ export function AppShell() {
           trigger={
             <button
               type="button"
-              className="rail-item rail-user"
+              // No bottom-nav este item também é o caminho p/ "Meu perfil" (dedup): rótulo
+              // vira "Conta" (nome curto e estável — username truncaria) e acende quando
+              // a rota ativa é /perfil (o link dedicado só existe fora do mobile).
+              className={`rail-item rail-user ${mobile && pathname.startsWith("/perfil") ? "on" : ""}`}
               aria-label={`Conta de ${user.usuario} (${PAPEL_LABEL[user.papel]}) — abrir menu`}
             >
               <span className="ri-ic rail-avatar" aria-hidden>
                 {user.usuario.charAt(0).toUpperCase()}
               </span>
-              <span className="ri-lb">{user.usuario}</span>
+              <span className="ri-lb">{mobile ? "Conta" : user.usuario}</span>
               <span className="ri-caret" aria-hidden>
                 <ChevronDown size={14} strokeWidth={2} />
               </span>
