@@ -66,8 +66,10 @@
 
 const path = require("node:path");
 const os = require("node:os");
+const sharp = require("sharp"); // decode do THUMBNAIL de luma p/ o gate de movimento (shrink-on-load)
 
 const camcfg = require("../camcfg");
+const motion = require("./motion"); // Onda-Motion: gate de movimento PURO (pula o dispatch em cena estática)
 const pgstore = require("../pgstore");
 const go2rtc = require("../go2rtc"); // Fase 3: fonte alternativa de frames (pull frame.jpeg)
 const { createByteTracker } = require("./bytetrack");
@@ -114,8 +116,23 @@ const ROUNDS = { normal: ROUND_MS, line: ROUND_MS_LINE, focus: ROUND_MS_FOCUS };
 // que alimenta a 2ª passada do ByteTrack (score baixo SUSTENTA track, não nasce).
 const HIGH_SCORE = Number(process.env.ANALYSIS_HIGH_SCORE ?? 0.35);
 const AGG_MS = Math.max(1000, Number(process.env.ANALYSIS_AGG_MS ?? 3000));
+// ── Gate de movimento (Onda-Motion — ver motion.js) ──────────────────────────
+// Config lida do módulo puro. O engine só orquestra: decodifica o thumbnail, chama o gate PURO
+// e pula ou despacha. Limiares/probe/máscara documentados em motion.js (norte "zero config").
+const MOTION_GATE_ON = motion.GATE_ON;
+const MOTION_W = motion.THUMB_W;
+const MOTION_H = motion.THUMB_H;
+const MOTION_PROBE_MS = motion.PROBE_MS;
+const MOTION_PROBE_FOCUS_MS = motion.PROBE_FOCUS_MS;
 // TTL escala com a cadência (a 1fps, o 1500ms do front mataria o track numa rodada perdida).
-const TTL_MS = Math.max(1500, Math.round(ROUND_MS * 3.5));
+// COM GATE: o track precisa SOBREVIVER ao maior intervalo entre inferências = o piso de PROBE
+// (cena estática só roda a cada PROBE_MS). Sem esse chão, a pessoa parada sumiria entre 2 probes
+// e renasceria com id novo (nunca-cego quebrado). Margem de +2s p/ o jitter da cadência.
+const TTL_MS = Math.max(
+  1500,
+  Math.round(ROUND_MS * 3.5),
+  MOTION_GATE_ON ? MOTION_PROBE_MS + 2000 : 0,
+);
 const PRUNE_MS = 5 * 60_000; // câmera sem frame há tanto tempo sai do estado/status
 // Resolução do tick baseada na cadência MAIS RÁPIDA (foco > linha) p/ o dispatch honrar o boost.
 const TICK_MS = Math.min(
@@ -195,6 +212,19 @@ function ativZonesOf(cameraId) {
 // Contrato compartilhado com o front: modo "exclusao" no camcfg.
 function exclZonesOf(cameraId) {
   return camcfg.getZones(cameraId).filter((z) => z.modo === "exclusao");
+}
+
+// Máscara de HOTSPOT do gate de movimento (Onda-Motion): reaproveita as MESMAS zonas de
+// exclusão como mapa de ignore do thumbnail (relógio/galho/timestamp queimado não disparam o
+// gate). Rebuild só quando as zonas mudam (createState + camcfg-updated). null = sem exclusão
+// (caminho rápido no motionRatio). Recomputada a cada mudança — barata (64×48).
+function buildMotionIgnore(zonesExcl) {
+  if (!MOTION_GATE_ON || !zonesExcl || !zonesExcl.length) return null;
+  return motion.buildIgnoreMask(
+    MOTION_W,
+    MOTION_H,
+    zonesExcl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h })),
+  );
 }
 
 // Perfil "Longo alcance/Panorâmica" da câmera (CameraCfg.longRange — src/cameraConfig.ts).
@@ -288,6 +318,14 @@ function createState(id) {
     }),
     zonesAtiv: ativZonesOf(id),
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
+    // ── Gate de movimento (Onda-Motion) ──
+    prevLuma: null, // thumbnail de luma anterior (dims fixas MOTION_W×MOTION_H); null = sem baseline ainda
+    motionIgnore: null, // mapa de ignore (hotspots das zonas de exclusão) — montado após states.set
+    motionRatio: 0, // último ratio de movimento medido (diagnóstico/status)
+    lastInferAt: 0, // última rodada REALMENTE despachada ao worker (base do piso de PROBE)
+    gating: false, // decode de thumbnail em voo → o tick não reentra nesta câmera
+    skipped: 0, // total de inferências PULADAS pelo gate (prova do ganho no status)
+    skipLog: [], // timestamps dos pulos (janela 60s → skipped1m)
     longRange: longRangeOf(id), // F3: true → pedido ao worker leva tiles 2×2 (LR_TILES)
     fadiga: isFadiga(id), // F4: câmera modo=fadiga NÃO é analisada no hub (roda no cliente)
     // Cadência efetiva: FOCO > LINHA > normal. Se o operador já focou esta câmera antes do
@@ -302,6 +340,7 @@ function createState(id) {
     detsLog: [], // { t, n } pessoas por rodada (p/ dets1m)
     lastMs: 0,
   };
+  st.motionIgnore = buildMotionIgnore(st.zonesExcl); // hotspots do gate (reuso das zonas de exclusão)
   states.set(id, st);
   // Fadiga: o hub não cobre PESSOA nessa câmera → anuncia engine:null (front mantém o modo
   // especializado local, não liga o ingest de pessoa). Demais câmeras: engine:"hub".
@@ -427,6 +466,12 @@ function emitTracks(st, tracks, zoneByTrack, perLabel, ts) {
       bbox: [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], // normalizado 0..1
       cx: t.cx,
       cy: t.cy,
+      // Onda-Motion (B) — ADITIVO ao contrato analysis-tracks: VELOCIDADE do track p/ o cliente
+      // EXTRAPOLAR entre rodadas (fluidez de graça, sem inferir). Unidade: fração NORMALIZADA do
+      // frame por SEGUNDO (mesma base 0..1 do bbox). O ByteTrack estima em unid/ms → ×1000 aqui.
+      // Extrapolação no cliente: x(t+Δs) ≈ x + vx·Δs, y(t+Δs) ≈ y + vy·Δs (Δs em segundos).
+      vx: t.vx * 1000,
+      vy: t.vy * 1000,
       // F4 (ADITIVO ao contrato analysis-tracks): score REAL (0..1) da detecção que sustenta o
       // track nesta rodada — antes era descartado no emit. O front usa p/ o slider de confiança
       // no modo hub (hoje forçado a 1). Sustentado por det de score baixo → reflete o piso 0.25.
@@ -463,36 +508,112 @@ function flushAtiv() {
   }
 }
 
-// ── Amostragem: tick escolhe o último frame por câmera e manda ao worker ─────
+// ── Amostragem: tick escolhe o último frame por câmera, GATA por movimento e despacha ─
 function tick() {
   if (!workerHost.ready()) return;
   const now = Date.now();
   for (const st of states.values()) {
+    if (st.gating) continue; // decode de thumbnail em voo → não reentra (evita despacho duplo)
     // Guarda de despacho PURA (worker-host.dispatchReady): fadiga (roda no cliente),
     // coalescência (≤1 job em voo por câmera via busy), último-vence (latest) e cadência
     // (F4: câmera com linha @ROUND_MS_LINE ≥2fps; sem linha @ROUND_MS 1fps). Único choke
     // point — pega relé E pull go2rtc. O roteamento ao worker de menor carga é do pool.send.
     if (!dispatchReady(st, now, ROUND_MS)) continue;
-    const frame = st.latest;
-    st.latest = null;
-    st.busy = true;
-    st.lastSentAt = now;
-    st.inflight = ++seq;
-    try {
-      // cópia no envio: o buf do relé pode ser view de um buffer maior (RTSP) — a cópia
-      // acontece só 1×/rodada (não por frame do relé) e serializa enxuto no IPC.
-      // F3: câmera longRange leva `tiles` — o worker recorta/reprojeta/funde (4× inferência).
-      workerHost.send({
-        type: "detect",
-        id: st.inflight,
-        cameraId: st.id,
-        jpeg: Buffer.from(frame.buf),
-        ...(st.longRange ? { tiles: LR_TILES } : {}),
-      });
-    } catch {
-      st.busy = false;
-      st.inflight = 0;
+    // GATE DE MOVIMENTO (Onda-Motion): decodifica um thumbnail barato e PULA a inferência em
+    // cena estática. Async (o decode não bloqueia o tick); o guard st.gating serializa por câmera.
+    // .catch defensivo: o finally já reabre o gate; aqui só evitamos unhandled rejection floating.
+    gateAndDispatch(st, now).catch((e) => {
+      st.gating = false;
+      if (st.errors < 3) console.warn(`[analysis:${st.id}] gate de movimento falhou: ${e.message}`);
+    });
+  }
+}
+
+// Thumbnail de luma single-channel (0..255, length MOTION_W*MOTION_H) a partir do JPEG do relé.
+// sharp faz shrink-on-load (decodifica o JPEG já em escala reduzida via DCT) → sub-ms. `greyscale`
+// + 1º canal: robusto ao nº de canais que o raw devolver.
+async function decodeThumb(jpeg) {
+  const { data, info } = await sharp(jpeg)
+    .resize(MOTION_W, MOTION_H, { fit: "fill" })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const n = MOTION_W * MOTION_H;
+  const ch = info.channels || 1;
+  if (ch === 1 && data.length === n) return data; // já single-channel
+  const out = new Uint8Array(n); // greyscale → R=G=B; pega o 1º canal de cada pixel
+  for (let i = 0; i < n; i++) out[i] = data[i * ch];
+  return out;
+}
+
+// Despacho efetivo ao worker (extraído do tick p/ o gate reusar). Marca busy/inflight e
+// registra lastInferAt (base do piso de PROBE). Cópia no envio: o buf do relé pode ser view de
+// um buffer maior (RTSP) — a cópia sai só 1×/rodada e serializa enxuto no IPC. F3: câmera
+// longRange leva `tiles` (o worker recorta/reprojeta/funde, 4× inferência).
+function dispatchToWorker(st, frame, now) {
+  st.busy = true;
+  st.inflight = ++seq;
+  st.lastInferAt = now;
+  try {
+    workerHost.send({
+      type: "detect",
+      id: st.inflight,
+      cameraId: st.id,
+      jpeg: Buffer.from(frame.buf),
+      ...(st.longRange ? { tiles: LR_TILES } : {}),
+    });
+  } catch {
+    st.busy = false;
+    st.inflight = 0;
+  }
+}
+
+// GATE + despacho de UMA câmera. Consome o frame (último-vence), mede o movimento no thumbnail e
+// decide (motion.gateDecision, PURO). NUNCA-CEGO: baseline (1º frame), piso de PROBE (cena estática
+// ainda roda a cada PROBE_MS; focada a PROBE_FOCUS_MS) e FAIL-OPEN (erro de decode → despacha).
+// A cadência (lastSentAt) conta do momento da AVALIAÇÃO — pular NÃO acelera a próxima medição.
+async function gateAndDispatch(st, now) {
+  const frame = st.latest;
+  if (!frame) return;
+  st.latest = null; // consome (um frame mais novo chega depois — último-vence)
+  st.lastSentAt = now; // a medição do gate JÁ conta como "rodada" p/ a cadência
+  st.gating = true;
+  try {
+    if (!MOTION_GATE_ON) {
+      dispatchToWorker(st, frame, now); // gate desligado (escape hatch) → comportamento original
+      return;
     }
+    let ratio = 1;
+    let decodeOk = true;
+    const hasPrev = !!st.prevLuma;
+    try {
+      const thumb = await decodeThumb(frame.buf);
+      const m = motion.motionRatio(thumb, st.prevLuma, st.motionIgnore);
+      ratio = m.ratio;
+      st.motionRatio = ratio;
+      st.prevLuma = thumb;
+    } catch {
+      decodeOk = false; // FAIL-OPEN (nunca-cego): não conseguiu medir → NÃO pula, despacha
+    }
+    const focused = focusedCams.has(st.id);
+    const dec = decodeOk
+      ? motion.gateDecision({
+          ratio,
+          sinceMs: now - st.lastInferAt,
+          probeMs: focused ? MOTION_PROBE_FOCUS_MS : MOTION_PROBE_MS,
+          hasPrev,
+        })
+      : { infer: true, reason: "decode-error" };
+    if (!dec.infer) {
+      st.skipped += 1; // PULA a inferência — economiza os 130-650ms de session.run
+      st.skipLog.push(now);
+      const cutoff = now - 60_000;
+      while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
+      return;
+    }
+    dispatchToWorker(st, frame, now);
+  } finally {
+    st.gating = false;
   }
 }
 
@@ -514,7 +635,9 @@ function logMinute() {
   for (const [id, st] of states) {
     const fps = Math.round((st.rounds.length / 60) * 100) / 100;
     const src = st.source === "go2rtc" ? "[g2r]" : "";
-    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms`);
+    // Onda-Motion: pulos do gate em 60s (prova do ganho direto no log operacional).
+    const skips = MOTION_GATE_ON && st.skipLog.length ? ` (${st.skipLog.length} pulos/gate)` : "";
+    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}`);
   }
   const w = workerHost.stats();
   const perW = w.workers.map((x) => `#${x.id}${x.ready ? "" : "!"}:${x.cpuPct}%`).join(" ");
@@ -603,6 +726,7 @@ function onCamcfgUpdated(p) {
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
     st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
+    st.motionIgnore = buildMotionIgnore(st.zonesExcl); // e o mapa de hotspot do gate (mesmas zonas)
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // F3: liga/desliga o tiling na PRÓXIMA rodada
@@ -648,7 +772,10 @@ function clearFocus(socketId) {
 
 /** GET /api/analysis/status — métricas por câmera (aditivo). */
 function status() {
+  const now = Date.now();
   const perCamera = {};
+  let skipped1mAll = 0; // Onda-Motion: prova do ganho — inferências puladas pelo gate (60s, todas as câmeras)
+  let skippedAll = 0; // idem, acumulado desde o boot
   for (const [id, st] of states) {
     let dets1m = 0;
     let excluded1m = 0;
@@ -658,11 +785,19 @@ function status() {
       excluded1m += d.x || 0;
       automasked1m += d.a || 0;
     }
+    // Onda-Motion (aditivo): inferências puladas pelo gate + último ratio de movimento (prova/diagnóstico).
+    const cutoff = now - 60_000;
+    while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
+    skipped1mAll += st.skipLog.length;
+    skippedAll += st.skipped;
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
       targetFps: targetFpsOf(st), // cadência efetiva (foco > linha > normal); 0 se fadiga
       focused: focusedCams.has(id), // Flow-Focus (aditivo): câmera aberta em tela cheia por ≥1 dashboard
       queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
+      skipped1m: st.skipLog.length, // Onda-Motion (aditivo): rodadas puladas pelo gate nos últimos 60s
+      skippedTotal: st.skipped, // Onda-Motion (aditivo): total pulado desde o boot
+      motion: Math.round(st.motionRatio * 10000) / 10000, // Onda-Motion (aditivo): último ratio de movimento (0..1)
       lastMs: st.lastMs,
       dets1m,
       excluded1m, // aditivo: dets de pessoa suprimidas por zona de exclusão em 60s
@@ -701,6 +836,16 @@ function status() {
     focusFps: FPS_FOCUS, // Flow-Focus (aditivo): cadência da câmera em foco (tela cheia)
     focused: [...focusedCams], // Flow-Focus (aditivo): ids das câmeras focadas (união entre dashboards)
     autoMask: { mode: AUTOMASK_MODE }, // F4 (aditivo): modo global da auto-máscara ("off"|"suggest"|"hide")
+    // Onda-Motion (aditivo): gate de movimento — config + PROVA DO GANHO (inferências puladas).
+    motionGate: {
+      enabled: MOTION_GATE_ON,
+      ratio: motion.MOTION_RATIO, // limiar de movimento p/ rodar
+      probeMs: MOTION_PROBE_MS, // piso: cena estática ainda roda a cada tanto (nunca-cego)
+      probeFocusMs: MOTION_PROBE_FOCUS_MS, // idem, câmera focada (tela cheia)
+      thumb: `${MOTION_W}x${MOTION_H}`, // resolução do thumbnail de luma do gate
+      skipped1m: skipped1mAll, // inferências puladas no último minuto (todas as câmeras)
+      skippedTotal: skippedAll, // inferências puladas desde o boot
+    },
     // Onda 5 (aditivo): auto-dimensionamento do modelo — tier ativo, modo e histerese (diagnóstico).
     autoscale: {
       mode: AUTOSCALE_OFF ? "pin" : "auto", // "pin"=fixo (ANALYSIS_MODEL/PATH) · "auto"=dimensiona sozinho
