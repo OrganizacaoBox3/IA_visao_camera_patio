@@ -1,7 +1,7 @@
 // Cascas comuns dos painéis do Relatório: a "lente" (recorte atual) e o rodapé de histórico.
 // Extraídos p/ eliminar a repetição idêntica entre os modos (Atividade/Leitura/Objetos/Fadiga).
 
-import type { Shift } from "../../report/mock";
+import type { Shift } from "../../report/calc";
 
 // Título de seção do padrão da casa (átomo de src/ui). Re-exportado aqui para os painéis do
 // Relatório seguirem importando de "./chrome" sem alteração (troca de origem 1:1, A1 concluída).
@@ -11,6 +11,11 @@ export { SectionTitle } from "../../ui";
 // "fluxo" só existe no modo Atividade (e só quando o hub expõe o kind "flow"); ao trocar de
 // modo o ReportPage devolve o estado para "quando".
 export type RepTab = "quando" | "onde" | "tendencia" | "eventos" | "fluxo";
+
+// Nível de cômputo de um view-model de modo (useAtividadeVM & irmãos): "off" = modo inativo,
+// nada computa; "summary" = Resumo executivo, só janela+KPIs+insights; "full" = modo aberto,
+// tudo (gráficos/eventos). Os hooks são sempre CHAMADOS (ordem estável) — o gate é interno.
+export type VmView = "off" | "summary" | "full";
 
 // Classe padrão dos tabpanels do Relatório: além do .rep-tabpanel (cadeia de scroll no CSS),
 // vira coluna flex p/ as seções internas PREENCHEREM a altura útil (flex-1 nos filhos) em vez

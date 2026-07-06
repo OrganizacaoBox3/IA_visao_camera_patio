@@ -1,12 +1,9 @@
-// Persistência de HISTÓRICO — agora CENTRALIZADA no Postgres via API do hub (antes era IndexedDB
-// por-navegador). Somente INDICADORES (LGPD: nunca imagens). As funções e shapes públicos são as
-// MESMAS de antes — só a fonte mudou — então o relatório/telas não precisaram mudar.
-// record* = POST /api/ingest (fire-and-forget). load* = GET /api/data/*. clearAll = clear.
+// Persistência de HISTÓRICO do Relatório — I/O contra a API do hub (Postgres/JSON).
+// Somente INDICADORES (LGPD: nunca imagens). record* = POST /api/ingest (fire-and-forget).
+// load* = GET /api/data/*. clearAll = clear. Agregações puras vivem em ./calc.
 import { apiGet, apiSend, listAlarms } from "../api";
 import {
   shiftOf,
-  type Period,
-  type Shift,
   type Dataset,
   type Cell,
   type EventRow,
@@ -19,7 +16,9 @@ import {
   type FadigaDataset,
   type FadigaCell,
   type FadigaEventRow,
-} from "./mock";
+  type FlowDataset,
+  type FlowCell,
+} from "./calc";
 
 const DAY = 86_400_000;
 const shiftFor = (ts: number) => shiftOf(new Date(ts).getHours());
@@ -47,9 +46,9 @@ export function cellTime(hourStart: number, startMs: number): { dayIndex: number
   };
 }
 
-// Telemetria de falha do ingest (plano 1.2): antes o erro era 100% engolido e "gravando" era
-// indistinguível de "perdendo dados". Contador módulo-nível de falhas CONSECUTIVAS + warn 1×
-// por sequência de falhas (sem toast global: o ingest roda no dashboard, não no relatório).
+// Telemetria de falha do ingest: contador módulo-nível de falhas CONSECUTIVAS + warn 1× por
+// sequência — "gravando" precisa ser distinguível de "perdendo dados" (sem toast global: o
+// ingest roda no dashboard, não no relatório).
 let ingestFailures = 0;
 let ingestLastError: string | null = null;
 
@@ -68,8 +67,8 @@ function ingest(kind: string, op: string, payload: unknown): Promise<void> {
         );
     });
 }
-// Leitura do histórico: o erro é PROPAGADO (antes era engolido com `.catch(() => [])`, o que
-// fazia "API fora do ar" parecer "sem dados"). Quem chama (ReportPage) distingue erro de vazio.
+// Leitura do histórico: o erro é PROPAGADO — quem chama (ReportPage) distingue erro de vazio
+// ("API fora do ar" nunca pode parecer "sem dados").
 function fetchBuckets<T>(kind: string): Promise<T[]> {
   return apiGet<T[]>(`/api/data/${kind}/buckets`);
 }
@@ -117,8 +116,8 @@ export function recordAlert(a: AlertPayload): Promise<void> {
   return ingest("ativ", "alert", { ...a, shift: shiftFor(a.ts) });
 }
 
-// Extensão ADITIVA de Cell (plano 2.6): o tipo canônico vive em report/calc/atividade.ts (fora
-// desta frente) e segue intocado — pessoas entram como campo opcional só p/ quem quiser ler.
+// Extensão ADITIVA de Cell: o tipo canônico (calc/atividade) segue intocado — pessoas entram
+// como campo opcional só p/ quem quiser ler.
 export interface AtivCell extends Cell {
   peoplePeak?: number;
 }
@@ -146,7 +145,7 @@ export async function loadDataset(): Promise<Dataset> {
       alerts: b.alerts,
       activePct: b.samples ? Math.round((b.activeSamples / b.samples) * 100) : 0,
       atividade: b.atividade,
-      // people_peak JÁ era persistido e vinha ignorado; o SELECT do hub o expõe como "peoplePeak"
+      // o SELECT do hub expõe people_peak como "peoplePeak" (campo aditivo — hub antigo omite)
       peoplePeak: typeof b.peoplePeak === "number" ? b.peoplePeak : 0,
     };
   });
@@ -233,23 +232,8 @@ export async function loadFlowToday(
   }
   return acc;
 }
-// ── Fluxo no RELATÓRIO (plano 1.3) — dataset + agregações puras (tudo ADITIVO). ──
-// Os cálculos ficam AQUI (calc/ é de outra frente). Filtros suportados: PERÍODO e TURNO —
-// mesma geometria de janela de calc/windows(). O filtro de ÁREA do modo Atividade NÃO se
-// aplica: os buckets de flow são hora×câmera×linha, sem noção de área.
-export type FlowCell = {
-  cameraId: string;
-  cameraLabel: string;
-  tripwireId: string;
-  dayIndex: number;
-  hour: number;
-  in: number;
-  out: number;
-};
-export type FlowDataset = { days: number; cells: FlowCell[]; startMs: number };
-
-// periodDays é interno ao pacote calc/ (não re-exportado por mock) — espelho local.
-const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
+// Agregações do fluxo (flowWindow/flowKpis/flowByHour/flowByLine) vivem em ./calc/flow —
+// aqui fica só o I/O que monta o dataset.
 
 /** Buckets de flow → dataset (mesmo padrão de loadDataset/loadReadingDataset). Erro PROPAGA:
  *  num hub antigo sem o kind "flow" o GET falha e quem chama oculta a seção (graceful). */
@@ -266,76 +250,6 @@ export async function loadFlowDataset(): Promise<FlowDataset> {
     out: b.out,
   }));
   return { days, cells, startMs };
-}
-
-/** Recorte "current" do período/turno (janela idêntica à de calc/windows — sem previous:
- *  o fluxo não exibe delta vs. período anterior). Pura. */
-export function flowWindow(ds: FlowDataset, period: Period, shift: Shift | "Todos"): FlowCell[] {
-  const W = PERIOD_DAYS[period];
-  const lo = ds.days - W;
-  const hi = ds.days - 1;
-  return ds.cells.filter(
-    (c) =>
-      c.dayIndex >= lo &&
-      c.dayIndex <= hi &&
-      (shift === "Todos" || shiftOf(c.hour) === shift),
-  );
-}
-
-/** Totais do recorte: entradas, saídas e nº de linhas distintas com cruzamento. Pura. */
-export function flowKpis(cells: FlowCell[]): { in: number; out: number; lines: number } {
-  let inSum = 0;
-  let outSum = 0;
-  const lines = new Set<string>();
-  for (const c of cells) {
-    inSum += c.in;
-    outSum += c.out;
-    lines.add(`${c.cameraId}|${c.tripwireId}`);
-  }
-  return { in: inSum, out: outSum, lines: lines.size };
-}
-
-/** Série por hora do dia (0..23) com in/out somados + máximo p/ escala das barras. Pura. */
-export function flowByHour(cells: FlowCell[]): {
-  hours: { in: number; out: number }[];
-  max: number;
-} {
-  const hours = Array.from({ length: 24 }, () => ({ in: 0, out: 0 }));
-  for (const c of cells) {
-    hours[c.hour].in += c.in;
-    hours[c.hour].out += c.out;
-  }
-  const max = Math.max(1, ...hours.map((h) => Math.max(h.in, h.out)));
-  return { hours, max };
-}
-
-export type FlowLineRow = {
-  cameraId: string;
-  cameraLabel: string;
-  tripwireId: string;
-  in: number;
-  out: number;
-};
-/** Agregado por linha×câmera, ordenado por movimento total (ranking). Pura. */
-export function flowByLine(cells: FlowCell[]): { rows: FlowLineRow[]; max: number } {
-  const m = new Map<string, FlowLineRow>();
-  for (const c of cells) {
-    const key = `${c.cameraId}|${c.tripwireId}`;
-    const r = m.get(key) ?? {
-      cameraId: c.cameraId,
-      cameraLabel: c.cameraLabel,
-      tripwireId: c.tripwireId,
-      in: 0,
-      out: 0,
-    };
-    r.in += c.in;
-    r.out += c.out;
-    if (c.cameraLabel) r.cameraLabel = c.cameraLabel; // label mais recente vence o vazio
-    m.set(key, r);
-  }
-  const rows = [...m.values()].sort((a, b) => b.in + b.out - (a.in + a.out));
-  const max = Math.max(1, ...rows.map((r) => r.in + r.out));
-  return { rows, max };
 }
 
 export function recordReads(r: ReadRecord): Promise<void> {
@@ -486,15 +400,12 @@ export async function loadFadigaEvents(): Promise<FadigaEventRow[]> {
   return fetchEvents<FadigaEventRow>("fad");
 }
 
-// Erro PROPAGADO (antes era engolido) → a UI confirma sucesso ou avisa a falha de "limpar histórico".
+// Erro PROPAGA → a UI confirma sucesso ou avisa a falha de "limpar histórico".
 export async function clearAll(): Promise<void> {
   await apiSend("POST", "/api/data/clear");
 }
 
 // ── EVENTOS DE ALARME (consome contrato B1: GET /api/alarms) ──────────────────
-// SÓ METADADOS (sem imagens, LGPD). Erro é PROPAGADO (mesmo padrão dos load* acima):
-// o ReportPage distingue erro de "sem alarmes" no estado da página.
-// FONTE ÚNICA: `loadAlarms` era cópia byte-a-byte de `listAlarms` de api.ts — agora REUSA o cliente
-// de api.ts (um só ponto de manutenção do contrato). O nome público daqui é preservado (alias) para
-// o ReportPage seguir importando via store.
+// SÓ METADADOS (sem imagens, LGPD). Erro PROPAGA (mesmo padrão dos load* acima).
+// FONTE ÚNICA: alias do cliente de api.ts — nome público preservado p/ quem importa via store.
 export const loadAlarms = listAlarms;

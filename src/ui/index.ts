@@ -10,19 +10,11 @@ export { SegmentedControl, type SegOption } from "./SegmentedControl";
 export { Tooltip, TooltipProvider } from "./Tooltip";
 export { Dialog } from "./Dialog";
 export { ToastProvider, useToast, type ToastTone } from "./Toast";
-export {
-  Badge,
-  Spinner,
-  Skeleton,
-  SkeletonText,
-  Alert,
-  EmptyState,
-  KpiCard,
-  type Tone,
-} from "./misc";
+// KPI: o átomo da casa é o Kpi/KpiRow de routes/report/KpiRow.tsx (o antigo KpiCard daqui
+// era duplicata sem consumidor).
+export { Badge, Spinner, Skeleton, SkeletonText, Alert, EmptyState, type Tone } from "./misc";
 export { SectionTitle } from "./SectionTitle";
 export { PageHeader } from "./PageHeader";
-// ── Wrappers Radix adicionados na Fase 0 ──
 export { Tabs, TabsContent, type TabItem } from "./Tabs";
 export { ScrollArea, type ScrollAreaProps } from "./ScrollArea";
 export { DropdownMenu, type DropdownItem } from "./DropdownMenu";

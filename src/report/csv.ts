@@ -2,7 +2,7 @@
 // detalhamento e eventos) num único arquivo auto-descritivo. Separador ';' + BOM → abre direto
 // no Excel pt-BR com acentos corretos. Sem imagens/identificação (LGPD) — só números agregados.
 
-import type { AlarmEvent } from "../types/alarm";
+import { ALARM_PRIORITY_LABEL, ALARM_STATE_LABEL, type AlarmEvent } from "../types/alarm";
 
 export type CsvSection = { title?: string; headers?: string[]; rows: (string | number)[][] };
 
@@ -38,16 +38,7 @@ export function dateStamp(d: Date): string {
 
 // ── Export dos EVENTOS DE ALARME (metadados, LGPD: sem imagens) ──
 // Reusa o padrão de seções; o ReportPage só anexa o bloco retornado às demais seções.
-const ALARM_PRIORITY_PT: Record<string, string> = {
-  advisory: "Informativo",
-  high: "Alta",
-  critical: "Crítica",
-};
-const ALARM_STATE_PT: Record<string, string> = {
-  new: "Novo",
-  acknowledged: "Reconhecido",
-  forwarded: "Encaminhado",
-};
+// Rótulos pt-BR: fonte única em types/alarm.ts (com fallback ao valor cru p/ tipos futuros).
 
 export function alarmSection(events: AlarmEvent[]): CsvSection {
   return {
@@ -68,8 +59,8 @@ export function alarmSection(events: AlarmEvent[]): CsvSection {
       e.cameraLabel ?? e.cameraId ?? "—",
       e.zona ?? "—",
       e.tipo,
-      ALARM_PRIORITY_PT[e.priority] ?? e.priority,
-      ALARM_STATE_PT[e.state] ?? e.state,
+      ALARM_PRIORITY_LABEL[e.priority] ?? e.priority,
+      ALARM_STATE_LABEL[e.state] ?? e.state,
       e.text,
       e.ackBy ?? "—",
       e.ackAt ? new Date(e.ackAt).toLocaleString("pt-BR") : "—",

@@ -17,7 +17,8 @@ import {
   useToast,
   SectionTitle,
 } from "../../ui";
-import { getCameraCfg, setCameraCfg, type CameraCfg } from "../../cameraConfig";
+import { setCameraCfg, type CameraCfg } from "../../cameraConfig";
+import { useCamCfgs } from "../useCamCfgs";
 import { type Camera } from "../dashboard/types";
 import {
   listCameras,
@@ -116,22 +117,7 @@ export function CamerasList() {
   }, [load]);
 
   // camcfg por câmera (papel/transporte). setCameraCfg persiste; este estado reflete no mesmo tick.
-  const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
-  useEffect(() => {
-    setCfgs((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const c of connected)
-        if (!next[c.id]) {
-          next[c.id] = getCameraCfg(c.id);
-          changed = true;
-        }
-      return changed ? next : prev;
-    });
-  }, [connected]);
-  function cfgOf(id: string): CameraCfg {
-    return cfgs[id] ?? getCameraCfg(id);
-  }
+  const { setCfgs, cfgOf } = useCamCfgs(connected);
   function setKind(id: string, fadiga: boolean) {
     setCfgs((prev) => {
       const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" };

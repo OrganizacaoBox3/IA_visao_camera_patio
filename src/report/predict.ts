@@ -15,7 +15,7 @@
 //     o limite atual entra apenas como sinalização textual na UI (ex.: modo demo).
 //  4. Sem células históricas para a área ⇒ status "no-data" ("sem dados suficientes").
 
-import { type Dataset } from "./mock";
+import { type Dataset } from "./calc";
 import { sensitivityFactor } from "../processors/atividade";
 
 export type AlertPrediction =

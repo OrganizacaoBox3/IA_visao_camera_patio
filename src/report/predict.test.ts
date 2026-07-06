@@ -8,7 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { predictAlertsPerDay } from "./predict";
 import { sensitivityFactor } from "../processors/atividade";
-import type { Dataset, Cell } from "./mock";
+import type { Dataset, Cell } from "./calc";
 
 function cell(over: Partial<Cell>): Cell {
   return {

@@ -3,11 +3,11 @@
 //  • byShift: agregação de uma métrica por turno (antes repetido 2×: idleMin e boxes).
 // Puros e determinísticos (só dependem dos args) → cobertos por Vitest (aggregate.test.ts).
 
-import { shiftOf, type Period, type Shift } from "../../report/mock";
+import { shiftOf, periodDays, type Period, type Shift } from "../../report/calc";
 
-// periodDays é interno ao pacote calc/ (não re-exportado por mock) — espelho local, mesmo
-// padrão de store.ts. Nº de dias de cada período; base da janela "current".
-export const PERIOD_DAYS: Record<Period, number> = { hoje: 1, "7d": 7, "30d": 30 };
+// Nº de dias de cada período (fonte única: calc/common, via barrel) — base da janela "current".
+// Alias mantém o nome público local (usado também pelo teste).
+export const PERIOD_DAYS: Record<Period, number> = periodDays;
 
 const DAY_MS = 86_400_000;
 

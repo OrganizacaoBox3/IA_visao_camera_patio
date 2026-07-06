@@ -6,7 +6,7 @@ import {
   evolution,
   fmtMin,
   type EventRow,
-} from "../../report/mock";
+} from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
 import {
   RepLens,
@@ -23,12 +23,12 @@ import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
 import { TrendChart } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
-import type { FlowLineRow } from "../../report/store";
+import type { FlowLineRow } from "../../report/calc";
 
 type Kpis = ReturnType<typeof kpis>;
 type ByAtiv = { rows: { atividade: string; idleMin: number; alerts: number }[]; max: number };
 
-// Fluxo de pessoas (plano 1.3) já agregado pelo ReportPage (store.flow*): recorte período/turno.
+// Fluxo de pessoas já agregado pelo view-model (calc/flow): recorte período/turno.
 // `null` no prop = hub antigo sem o kind "flow" → a seção inteira some (graceful).
 export type FlowView = {
   hasAny: boolean; // existe ALGUM cruzamento no histórico (independente do recorte)
@@ -58,7 +58,7 @@ export function AtividadePanel({
   lens: string;
   k: Kpis;
   kPrev: Kpis;
-  peoplePeak: number; // pico de pessoas no recorte (plano 2.6) — 0 = sem detecção no período
+  peoplePeak: number; // pico de pessoas no recorte — 0 = sem detecção no período
   tips: string[];
   hm: ReturnType<typeof heatmap>;
   rank: ReturnType<typeof ranking>;
@@ -114,7 +114,7 @@ export function AtividadePanel({
           { value: "onde", label: "Onde para" },
           { value: "tendencia", label: "Tendência" },
           { value: "eventos", label: `Eventos (${evt.length})` },
-          // Fluxo de pessoas (plano 1.3) DENTRO do fluxo rolável: aba própria em vez de bloco
+          // Fluxo de pessoas DENTRO do fluxo rolável: aba própria em vez de bloco
           // fixo abaixo das tabs (que espremia o tabpanel a ~60px em 1920 e clipava em 1366).
           ...(flow ? [{ value: "fluxo", label: "Fluxo de pessoas" }] : []),
         ]}
@@ -213,7 +213,7 @@ export function AtividadePanel({
             )}
           />
         </TabsContent>
-        {/* Fluxo de pessoas (plano 1.3) — parte da história de atividade, não um modo novo.
+        {/* Fluxo de pessoas — parte da história de atividade, não um modo novo.
             Vive como ABA (dentro do painel rolável) p/ nunca espremer as demais seções. */}
         {flow && (
           <TabsContent value="fluxo" className={REP_TABPANEL_CLS}>
@@ -227,7 +227,7 @@ export function AtividadePanel({
 }
 
 // ── Fluxo (linhas de contagem) — in/out agregados dos buckets persistidos no hub ──
-// Respeita período/turno (recorte feito no ReportPage via store.flowWindow). O filtro de
+// Respeita período/turno (recorte feito no view-model via calc/flow). O filtro de
 // ÁREA não se aplica: cruzamentos são registrados por câmera×linha, sem área.
 const pad2 = (h: number) => String(h).padStart(2, "0");
 

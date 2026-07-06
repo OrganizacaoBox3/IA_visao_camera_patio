@@ -1,13 +1,12 @@
-// EVENTOS DE ALARME (Onda B, item 8 — ligação RELATÓRIO↔EVENTOS).
+// EVENTOS DE ALARME — ligação RELATÓRIO↔EVENTOS.
 // Consome o contrato B1 (GET /api/alarms): SÓ METADADOS, sem imagens (LGPD).
 // O relatório lê os eventos e os cruza com a própria timeline (jump-to-time +
 // destaque bidirecional). As funções abaixo são puras (agregação/filtro em memória).
 
 import { type Period, periodDays } from "./common";
 
-// Tipo do evento de alarme: fonte ÚNICA em src/types/alarm.ts (R2.2 — antes era redefinido aqui,
-// com risco de drift vs. a cópia de api.ts). Re-exportado daqui para RETROCOMPATIBILIDADE:
-// report/csv.ts, report/store.ts e ReportPage importam estes tipos via `./mock` sem alteração.
+// Tipo do evento de alarme: fonte ÚNICA em src/types/alarm.ts. Re-exportado daqui para
+// retrocompatibilidade dos consumidores que importam via o barrel calc.
 export type { AlarmEvent, AlarmPriority, AlarmState, AlarmTipo } from "../../types/alarm";
 import type { AlarmEvent, AlarmPriority, AlarmState } from "../../types/alarm";
 

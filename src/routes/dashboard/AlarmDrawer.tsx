@@ -1,32 +1,14 @@
 import { useMemo, useState } from "react";
 import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea } from "../../ui";
 import { type AlarmEvent, type AlarmPriority, type AlarmState } from "../../api";
-
-// Prioridade → token de cor (going-gray): advisory=info(azul), high=warn(amarelo), critical=critical(vermelho).
-function prioColor(p: AlarmPriority): string {
-  return p === "critical"
-    ? "var(--state-critical)"
-    : p === "high"
-      ? "var(--state-warn)"
-      : "var(--state-info)";
-}
-function prioBorder(p: AlarmPriority): string {
-  return p === "critical"
-    ? "var(--state-critical-border)"
-    : p === "high"
-      ? "var(--state-warn-border)"
-      : "var(--state-info-border)";
-}
-const PRIO_LABEL: Record<AlarmPriority, string> = {
-  advisory: "informativo",
-  high: "alta",
-  critical: "crítico",
-};
-const STATE_LABEL: Record<AlarmState, string> = {
-  new: "novo",
-  acknowledged: "reconhecido",
-  forwarded: "encaminhado",
-};
+// Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts (o CSS do card
+// uppercasa os rótulos — .alarm-card__prio/__state).
+import {
+  ALARM_PRIORITY_LABEL,
+  ALARM_STATE_LABEL,
+  alarmPriorityColor,
+  alarmPriorityBorder,
+} from "../../types/alarm";
 
 type AlarmDrawerProps = {
   open: boolean;
@@ -36,7 +18,7 @@ type AlarmDrawerProps = {
   onAct: (a: AlarmEvent, kind: "ack" | "forward") => void;
 };
 
-// Fila de alarmes acionável (Onda B · item 7) — drawer/sheet via Dialog (Radix):
+// Fila de alarmes acionável — drawer/sheet via Dialog (Radix):
 // foco preso, ESC e portal "de graça"; o .ui-dialog é reposicionado como sheet
 // lateral (e bottom-sheet no mobile) em alarms.css, escopado por :has(.alarm-drawer__list)
 // para não afetar os demais diálogos. Filtros de exibição (prioridade/estado/ocultar
@@ -72,12 +54,12 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
         key={a.id}
         className="alarm-card"
         data-done={done ? 1 : 0}
-        style={{ borderLeftColor: prioBorder(a.priority) }}
+        style={{ borderLeftColor: alarmPriorityBorder(a.priority) }}
       >
         <div className="alarm-card__top">
-          <span className="alarm-card__dot" style={{ background: prioColor(a.priority) }} />
-          <span className="alarm-card__prio" style={{ color: prioColor(a.priority) }}>
-            {PRIO_LABEL[a.priority]}
+          <span className="alarm-card__dot" style={{ background: alarmPriorityColor(a.priority) }} />
+          <span className="alarm-card__prio" style={{ color: alarmPriorityColor(a.priority) }}>
+            {ALARM_PRIORITY_LABEL[a.priority]}
           </span>
           <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}>
             <span className="alarm-card__time">{when}</span>
@@ -93,7 +75,7 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
           )}
           <span>{a.tipo}</span>
           <span className="alarm-card__state">
-            {STATE_LABEL[a.state]}
+            {ALARM_STATE_LABEL[a.state]}
             {a.ackBy ? ` · ${a.ackBy}` : ""}
           </span>
         </div>

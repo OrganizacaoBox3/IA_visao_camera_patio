@@ -6,7 +6,6 @@ import { setInferencePriority } from "../vision/scheduler";
 import { CameraWorkspace } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
-import { getCameraCfg, type CameraCfg } from "../cameraConfig";
 import { useAuth } from "../auth";
 import { Button, Tooltip, Badge, useToast } from "../ui";
 import { type Camera } from "./dashboard/types";
@@ -16,6 +15,7 @@ import { useFrameRelay } from "./dashboard/useFrameRelay";
 import { useDashboardSocket } from "./dashboard/useDashboardSocket";
 import { useVideoTransport } from "./dashboard/useVideoTransport";
 import { useAlarms } from "./dashboard/useAlarms";
+import { useCamCfgs } from "./useCamCfgs";
 import "./alarms.css";
 import "./dash-grid.css";
 
@@ -25,24 +25,23 @@ function colsFor(n: number): number {
 }
 
 // ── Central de câmeras: ORQUESTRAÇÃO ──────────────────────────────────────────────────────────
-// O god-component foi quebrado em hooks por domínio (auditoria §S1 · R2): relé de frames
-// (useFrameRelay), socket (useDashboardSocket), transporte de vídeo (useVideoTransport) e alarmes
-// (useAlarms). Aqui ficam só a cola entre as frentes, a paginação/feeds ativos e o JSX. A grade
-// mostra SEMPRE todas as câmeras conectadas, paginadas por feedsPerPage.
+// Hooks por domínio: relé de frames (useFrameRelay), socket (useDashboardSocket), transporte de
+// vídeo (useVideoTransport) e alarmes (useAlarms). Aqui ficam só a cola entre as frentes, a
+// paginação/feeds ativos e o JSX. A grade mostra SEMPRE todas as câmeras conectadas, paginadas
+// por feedsPerPage.
 export function DashboardPage() {
   const { token, user, logout } = useAuth();
   const { toast } = useToast();
 
   // Estado próprio da orquestração (feeds/paginação/overlay). O demais é dos hooks abaixo.
   const [cameras, setCameras] = useState<Camera[]>([]);
-  const [cfgs, setCfgs] = useState<Record<string, CameraCfg>>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
   // Relé de frames (decode fora da main-thread, getters estáveis, poda de câmeras removidas).
   // Desestruturado em membros ESTÁVEIS (refs + useCallbacks): usá-los direto (em vez do objeto
   // `relay`, recriado a cada render) mantém as deps dos efeitos estáveis (efeito de feeds ativos
-  // só re-roda em pageCameras/openId, como no original).
+  // só re-roda em pageCameras/openId).
   const relay = useFrameRelay(cameras);
   const { framesRef, activeIdsRef, openIdRef, drainDecode, getterFor, hubGetterFor } = relay;
   // Alarmes: criados ANTES do socket (que empurra os eventos ao vivo para os seus setters).
@@ -51,7 +50,7 @@ export function DashboardPage() {
   const socket = useDashboardSocket({
     token,
     logout,
-    // A1-focus (ADR-009): a câmera aberta em tela cheia; o hook pede foco ao hub quando ela é "hub".
+    // Foco (ADR-009): a câmera aberta em tela cheia; o hook pede foco ao hub quando ela é "hub".
     openId,
     framesRef,
     activeIdsRef,
@@ -66,23 +65,9 @@ export function DashboardPage() {
   const { alarms, alarmsOpen, setAlarmsOpen, newCount, topNewPriority, actOnAlarm } = alarmsApi;
 
   // Config por câmera (default = atividade → retrocompatível); leitor síncrono usado no transporte.
-  const cfgOf = useCallback((id: string): CameraCfg => cfgs[id] ?? getCameraCfg(id), [cfgs]);
+  const { cfgOf } = useCamCfgs(cameras);
   // Transporte de vídeo no painel (go2rtc/WebRTC vs relé MJPEG) + auto-fallback WebRTC→MJPEG.
   const { transportOf, handleWebrtcFail } = useVideoTransport(cfgOf);
-
-  // garante uma config carregada por câmera (default = atividade → retrocompatível)
-  useEffect(() => {
-    setCfgs((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const c of cameras)
-        if (!next[c.id]) {
-          next[c.id] = getCameraCfg(c.id);
-          changed = true;
-        }
-      return changed ? next : prev;
-    });
-  }, [cameras]);
 
   // ── Paginação dos feeds: só os feeds da página atual são montados (CameraWorkspace) → só eles
   //    processam inferência. A grade mostra SEMPRE todas as câmeras conectadas; a paginação recorta
@@ -101,13 +86,13 @@ export function DashboardPage() {
   // Conjunto ativo = feeds visíveis (página) + câmera aberta. Decodifica os recém-ativos e libera
   // o ImageBitmap dos que saíram (memória); feeds inativos param de ser decodificados (ver `frame`).
   //
-  // 0.2 — PAUSAR A GRADE QUANDO UMA CÂMERA ESTÁ ABERTA: com `openId` setado, o conjunto ativo
-  // encolhe para SÓ a câmera aberta. Os tiles de fundo (até 5) deixam de ser decodificados aqui E
-  // param rAF/motion/draw (CameraTile vira placeholder leve — prop `paused`). O `watch` reanuncia
-  // só a aberta → o hub para de RELAYAR os frames de vídeo dos ocultos (banda/CPU do relé). O
-  // plano de controle (`analysis-tracks`, broadcast à room, não filtrado por watch) segue chegando.
-  // Reversível: ao fechar (openId=null), este efeito reroda, o conjunto volta à página inteira e o
-  // watch/decoder retomam. O cine-loop e o decode NATIVO da aberta seguem intactos (ela é a ativa).
+  // PAUSA DE FUNDO: com `openId` setado, o conjunto ativo encolhe para SÓ a câmera aberta. Os
+  // tiles de fundo deixam de ser decodificados aqui E param rAF/motion/draw (CameraTile vira
+  // placeholder leve — prop `paused`). O `watch` reanuncia só a aberta → o hub para de RELAYAR os
+  // frames de vídeo dos ocultos (banda/CPU do relé). O plano de controle (`analysis-tracks`,
+  // broadcast à room, não filtrado por watch) segue chegando. Reversível: ao fechar (openId=null),
+  // este efeito reroda e o conjunto volta à página inteira. O cine-loop e o decode NATIVO da
+  // aberta seguem intactos (ela é a ativa).
   useEffect(() => {
     const active = new Set<string>();
     if (openId) active.add(openId);
@@ -115,8 +100,8 @@ export function DashboardPage() {
     openIdRef.current = openId; // ref lida pelo drainDecode (aberta = decode nativo, sem resize)
     const prev = activeIdsRef.current;
     activeIdsRef.current = active;
-    // 2.1 — assinatura por câmera (contrato ADITIVO): anuncia ao hub o conjunto COMPLETO que este
-    // dashboard quer receber; o hub passa a filtrar o evento `frame` por room (`cam:<id>`).
+    // Assinatura por câmera (contrato ADITIVO): anuncia ao hub o conjunto COMPLETO que este
+    // dashboard quer receber; o hub filtra o evento `frame` por room (`cam:<id>`).
     // O (re)connect reanuncia no handler "connect" (reconexão perde as rooms no servidor).
     socketRef.current?.emit("watch", { ids: [...active] });
     prev.forEach((id) => {
@@ -136,7 +121,7 @@ export function DashboardPage() {
     });
   }, [pageCameras, openId, framesRef, activeIdsRef, openIdRef, drainDecode, socketRef]);
 
-  // Eleva a prioridade da câmera ABERTA na fila do scheduler de inferência (A1). As tiles pedem
+  // Eleva a prioridade da câmera ABERTA na fila do scheduler de inferência. As tiles pedem
   // "low" e a câmera aberta (full) já pede "high"; aqui reforçamos a key na transição de abertura.
   useEffect(() => {
     if (openId) setInferencePriority(`${openId}:atividade`, "high");
@@ -146,7 +131,7 @@ export function DashboardPage() {
     return cfgOf(id).modo === "fadiga";
   }
 
-  // ── 0.6 (ADR-009): PREFERIR O PIPELINE DO HUB por default ──
+  // ── PREFERIR O PIPELINE DO HUB por default (ADR-009) ──
   // O hub emite `analysis-status {engine:"hub"}` por câmera analisada; com o MOTOR LIGADO ele
   // cria estado e analisa TODA câmera relayada, logo qualquer "hub" observado significa "motor
   // ativo". Nesse caso o default EFETIVO de uma câmera ainda sem status explícito passa a ser "hub"
@@ -161,7 +146,7 @@ export function DashboardPage() {
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
 
   // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado).
-  // useCallback (1.6): identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável).
+  // useCallback: identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável).
   const handleAlert = useCallback(
     (msg: string) => {
       toast(msg, msg.includes("⚠") ? "alert" : "default");
@@ -170,7 +155,7 @@ export function DashboardPage() {
     [toast, socketRef],
   );
 
-  // Abertura de câmera (1.6): callback único e estável; o tile chama com o próprio id.
+  // Abertura de câmera: callback único e estável; o tile chama com o próprio id.
   const handleOpen = useCallback((id: string) => setOpenId(id), []);
 
   return (
@@ -178,9 +163,8 @@ export function DashboardPage() {
       <header className="page-head">
         <h1 className="page-title">Central de câmeras</h1>
         <div className="spacer" />
-        {/* Ação ÚNICA de câmeras (substitui "+ Nó de câmera" e "+ Câmera IP"): leva à tela
-            /cameras, que adiciona/gerencia tanto câmera IP (só superadmin lá dentro, como o
-            botão antigo) quanto o nó local (webcam) — visível a todos, como o botão antigo. */}
+        {/* Ação ÚNICA de câmeras: leva à tela /cameras, que adiciona/gerencia tanto câmera IP
+            (superadmin) quanto o nó local (webcam) — visível a todos. */}
         <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
           <Button asChild variant="primary">
             <Link to="/cameras">
@@ -188,8 +172,8 @@ export function DashboardPage() {
             </Link>
           </Button>
         </Tooltip>
-        {/* Paginação: réplica do .switch em utilities (gap 4px, como o inline anterior): utility
-            em layer não vence o gap:6px do .switch (index.css não-layered) — por isso sem a classe. */}
+        {/* Paginação: réplica do .switch em utilities — utility em layer não vence o gap:6px
+            do .switch (index.css não-layered), por isso sem a classe. */}
         {pageCount > 1 && (
           <span
             className="inline-flex items-center gap-1 text-[12px] text-text-dim"
@@ -227,9 +211,8 @@ export function DashboardPage() {
             )}
           </Button>
         </Tooltip>
-        {/* Going-gray: os chips informativos "hub ok · câmeras N · online N" foram removidos
-            (ruído — a grade já mostra as câmeras e o estado de cada uma). Só o caso ANORMAL
-            permanece: hub desconectado é informação crítica e ganha cor saturada. */}
+        {/* Going-gray: só o caso ANORMAL ganha chip — hub desconectado é informação crítica
+            e leva cor saturada; a operação normal fica sem badge (a grade já conta a história). */}
         {!connected && (
           <span aria-live="polite">
             <Badge tone="alert">hub desconectado</Badge>
@@ -261,7 +244,7 @@ export function DashboardPage() {
                 key={`wrap-${c.id}`}
                 camera={c}
                 isOpen={c.id === openId}
-                // 0.2 — tile de FUNDO (outra câmera aberta) pausa: vira placeholder leve e desmonta
+                // Tile de FUNDO (outra câmera aberta) pausa: vira placeholder leve e desmonta
                 // o CameraWorkspace (para rAF/motion/draw). Só a câmera aberta segue processando.
                 paused={openId != null && c.id !== openId}
                 isFadiga={isFadiga(c.id)}
@@ -302,18 +285,16 @@ export function DashboardPage() {
                 label={open.label}
                 getFrame={getterFor(open.id)}
                 mode="full"
-                // Transporte de VÍDEO na câmera ABERTA (tela cheia): MESMA resolução "auto/melhor
+                // Transporte de VÍDEO na câmera ABERTA (tela cheia): mesma decisão "auto/melhor
                 // disponível" da grade (transportOf). go2rtc serve a câmera → WebRTC estável
-                // (<video-stream>); go2rtc fora / stream ausente → MJPEG (relé JPEG, atual). Sem a
-                // prop o full seguia sempre MJPEG. `open` é não-nulo neste ramo → open.id é seguro.
+                // (<video-stream>); go2rtc fora / stream ausente → MJPEG (relé JPEG).
                 transport={transportOf(open.id)}
                 // Auto-fallback: a câmera aberta avisa se o WebRTC não estabelecer vídeo → MJPEG.
                 onWebrtcFail={handleWebrtcFail}
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
                 analysisEngine={analysisEngines[open.id] ?? defaultEngine}
-                // F2: passado também no full por simetria/F3; a decisão da F2 (comentário no
-                // rAF do CameraWorkspace) mantém o pipeline local na câmera aberta — o getter
-                // só é consumido na grade (mode≠full).
+                // Simetria com o tile; a câmera aberta mantém o pipeline local (decisão no rAF
+                // do CameraWorkspace) — o getter só é consumido na grade (mode≠full).
                 getHubAnalysis={hubGetterFor(open.id)}
                 onClose={() => setOpenId(null)}
                 onAlert={handleAlert}
@@ -322,10 +303,7 @@ export function DashboardPage() {
           </div>
         )}
 
-        {/* O antigo modal "⚙ Câmeras" (papel + vídeo no painel por câmera) foi INCORPORADO à
-            tela /cameras ("Ajustes desta câmera") — fim da fragmentação da config por-câmera. */}
-
-        {/* Fila de alarmes acionável (Onda B · item 7) */}
+        {/* Fila de alarmes acionável */}
         <AlarmDrawer
           open={alarmsOpen}
           onOpenChange={setAlarmsOpen}

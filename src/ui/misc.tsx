@@ -1,4 +1,4 @@
-import { type ReactNode, type CSSProperties } from "react";
+import { type ReactNode } from "react";
 import { cx } from "./cx";
 
 // Tailwind v4 (tokens mapeados no @theme; hex/token-não-mapeado = arbitrary value var(--...)).
@@ -114,28 +114,6 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 p-6 text-center text-text-dim">
       {children}
-    </div>
-  );
-}
-
-// ── KpiCard ────────────────────────────────────────────────
-// Valor no papel kpi (24px, ÚNICO tamanho de número de KPI — padrão da casa).
-export function KpiCard({
-  value,
-  label,
-  color,
-}: {
-  value: ReactNode;
-  label: ReactNode;
-  color?: string;
-}) {
-  const style: CSSProperties | undefined = color ? { color } : undefined;
-  return (
-    <div className="flex flex-col gap-0.5 rounded-[var(--radius)] border border-border bg-panel p-3">
-      <div className="[font-family:var(--mono)] text-kpi font-semibold text-text" style={style}>
-        {value}
-      </div>
-      <div className="text-label uppercase tracking-[0.3px] text-text-muted">{label}</div>
     </div>
   );
 }

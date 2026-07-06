@@ -98,6 +98,27 @@ export function ranking(cells: Cell[], areas: string[]) {
   return { rows, max };
 }
 
+/** Ranking por ATIVIDADE (rótulo da zona): idleMin/alertas somados, só linhas com
+ *  ociosidade, ordenado por tempo parado. Célula sem atividade agrega em "Indefinida". */
+export function byAtividade(cells: Cell[]): {
+  rows: { atividade: string; idleMin: number; alerts: number }[];
+  max: number;
+} {
+  const m = new Map<string, { idleMin: number; alerts: number }>();
+  for (const c of cells) {
+    const a = c.atividade ?? "Indefinida";
+    const e = m.get(a) ?? { idleMin: 0, alerts: 0 };
+    e.idleMin += c.idleMin;
+    e.alerts += c.alerts;
+    m.set(a, e);
+  }
+  const rows = [...m.entries()]
+    .map(([atividade, v]) => ({ atividade, ...v }))
+    .filter((r) => r.idleMin > 0)
+    .sort((a, b) => b.idleMin - a.idleMin);
+  return { rows, max: Math.max(1, ...rows.map((r) => r.idleMin)) };
+}
+
 /** Tendência: idleMin por dia nos últimos N dias (respeita filtros de área/turno). */
 export function evolution(ds: Dataset, f: Filters, lastN = 14) {
   const lo = Math.max(0, ds.days - lastN);

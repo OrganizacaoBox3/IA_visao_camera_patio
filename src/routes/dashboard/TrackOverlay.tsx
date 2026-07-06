@@ -4,15 +4,15 @@ import type { HubAnalysis } from "../../CameraWorkspace";
 import { getContentRect, cssVar } from "../../camera/draw";
 import { TrackInterpolator } from "../../camera/interpolate";
 
-// ── Fase 2 (plano-retrofit-performance.md §Fase 2): overlay de caixas SOBRE o <video-stream> ──────
-// Um <canvas> transparente exatamente sobre o vídeo WebRTC do tile (go2rtc). Desenha as caixas de
-// pessoa vindas do hub (`analysis-tracks`, ~1fps) INTERPOLADAS no tempo real (interpolate.ts) — a
-// caixa ACOMPANHA a pessoa a ~30fps em vez de congelar+teleportar (o "fantasma+miss" de detecção
-// correta). Sem tracks (câmera sem análise) → não desenha, sem erro. rAF próprio; para ao desmontar
-// (tile pausado/fora de tela desmonta o tile inteiro → pausa de fundo da Fase 0).
+// ── Overlay de caixas SOBRE o <video-stream> (tiles WebRTC/go2rtc) ────────────────────────────────
+// Um <canvas> transparente exatamente sobre o vídeo do tile. Desenha as caixas de pessoa vindas do
+// hub (`analysis-tracks`, ~1fps) INTERPOLADAS no tempo real (interpolate.ts) — a caixa ACOMPANHA a
+// pessoa a ~30fps em vez de congelar+teleportar. Sem tracks (câmera sem análise) → não desenha, sem
+// erro. rAF próprio; para ao desmontar (tile pausado/fora de tela desmonta o tile inteiro).
 
 // Payload do hub mais velho que isto = motor reiniciando/rede caída: deixa a caixa expirar (fade)
-// em vez de ancorar keyframe em dado morto. Igual ao HUB_TRACKS_STALE_MS do CameraWorkspace.
+// em vez de ancorar keyframe em dado morto. Valor duplicado do HUB_TRACKS_STALE_MS do
+// CameraWorkspace (dono do gate) — unificar quando o contrato migrar p/ types/analysis.ts (F4).
 const HUB_TRACKS_STALE_MS = 5000;
 
 type TrackOverlayProps = {
@@ -36,6 +36,19 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
     const interp = new TrackInterpolator();
     let raf = 0;
     let cancelled = false;
+
+    // Hot-path: cores lidas 1× por mount (getComputedStyle é caro p/ rodar por frame; troca de
+    // tema no meio da sessão só reflete ao remontar o tile — custo aceito, tema é quase-estático).
+    // Going-gray: mesma paleta do overlay MJPEG (drawTracks) → pessoa = --state-info (advisory,
+    // não-alarme); os tiles ficam consistentes entre transportes. Saturaria só se houvesse sinal
+    // de anormalidade por track (o motor do hub não expõe um hoje).
+    const stroke = cssVar("--state-info", "#38bdf8");
+    const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
+    const fg = cssVar("--state-info-fg", "#bae6fd");
+    // Hot-path: measureText por track TODO frame é evitável — o rótulo "Pessoa <id>" é estável
+    // por track e a fonte é fixa; cacheia a largura por rótulo (limpa se crescer demais: ids de
+    // track crescem indefinidamente ao longo de horas).
+    const labelWidth = new Map<string, number>();
 
     const tick = () => {
       if (cancelled) return;
@@ -68,12 +81,6 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
       // Letterbox: o <video> usa object-fit:contain; a caixa normalizada (0..1) é do FRAME, então
       // mapeia-se no retângulo de conteúdo (frame ajustado na caixa do vídeo), não na caixa toda.
       const cr = getContentRect(cw, ch, video.videoWidth, video.videoHeight);
-      // Going-gray: mesma paleta do overlay MJPEG (drawTracks) → pessoa = --state-info (advisory,
-      // não-alarme); os tiles ficam consistentes entre transportes. Saturaria só se houvesse sinal
-      // de anormalidade por track (o motor do hub não expõe um hoje).
-      const stroke = cssVar("--state-info", "#38bdf8");
-      const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
-      const fg = cssVar("--state-info-fg", "#bae6fd");
       ctx.lineWidth = 1.5;
       ctx.font = "10px monospace";
       for (const t of drawn) {
@@ -85,7 +92,12 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
         ctx.strokeStyle = stroke;
         ctx.strokeRect(x, y, w, h);
         const tag = `Pessoa ${t.id}`;
-        const tw = ctx.measureText(tag).width + 8;
+        let tw = labelWidth.get(tag);
+        if (tw === undefined) {
+          if (labelWidth.size > 512) labelWidth.clear();
+          tw = ctx.measureText(tag).width + 8;
+          labelWidth.set(tag, tw);
+        }
         ctx.fillStyle = scrim;
         ctx.fillRect(x, y - 15, tw, 14);
         ctx.fillStyle = fg;

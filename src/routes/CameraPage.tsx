@@ -3,13 +3,13 @@ import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
 import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera/whip";
+import { startNodeRelay, type NodeRelay } from "./camera/nodeRelay";
 import { Tooltip } from "../ui";
 
-// Fase 5 (plano-retrofit-performance.md §Fase 5 + plano-fase1-go2rtc.md): transmite o vídeo do nó
-// por WebRTC/WHIP ao go2rtc em vez do loop JPEG→socket. Onda 1 da simplificação de config: a decisão
-// é em RUNTIME por PROBE (não mais um gate build-time). Por default o nó TENTA WHIP; se não
-// estabelecer dentro do probe (go2rtc ausente/timeout/erro), CAI SOZINHO p/ o JPEG-socket legado —
-// fallback automático, sem flag. VITE_WEBCAM_WHIP=0 é o único escape hatch (força JPEG, sem probe).
+// O nó transmite vídeo por WebRTC/WHIP ao go2rtc quando disponível; a decisão é em RUNTIME por
+// PROBE. Se o WHIP não estabelecer dentro da janela (go2rtc ausente/timeout/erro), CAI SOZINHO
+// p/ o relé JPEG-socket (nodeRelay) — fallback automático, sem flag. VITE_WEBCAM_WHIP=0 é o
+// único escape hatch (força JPEG, sem probe).
 const WHIP_ATTEMPT = APP_CONFIG.webcam.whip.enabled; // default true; só "0" desliga
 const WHIP_PROBE_TIMEOUT_MS = APP_CONFIG.webcam.whip.probeTimeoutMs;
 
@@ -40,7 +40,7 @@ export function CameraPage() {
 
   const [status, setStatus] = useState<Status>("connecting");
   const [hubConnected, setHubConnected] = useState(false); // estado REAL do socket (transmissão ao hub)
-  const [whipState, setWhipState] = useState<WhipState>("idle"); // estado da publicação WebRTC (Fase 5)
+  const [whipState, setWhipState] = useState<WhipState>("idle"); // estado da publicação WebRTC/WHIP
   // Caminho de vídeo resolvido em runtime pelo probe: começa "probing" se vamos tentar WHIP,
   // senão já "jpeg" (escape hatch VITE_WEBCAM_WHIP=0). Só um dos pipelines roda (nunca os dois).
   const [transport, setTransport] = useState<Transport>(WHIP_ATTEMPT ? "probing" : "jpeg");
@@ -58,13 +58,8 @@ export function CameraPage() {
 
   useEffect(() => {
     let alive = true;
-    let timer: number | null = null;
-    let rvfcHandle: number | null = null;
-    let rvfcVideo: HTMLVideoElement | null = null; // elemento onde o rVFC foi registrado (p/ cancelar no cleanup)
-    let audioCtx: AudioContext | null = null; // keep-alive de 2º plano (ver ensureKeepAlive)
-    let onVisibility: (() => void) | null = null;
-    let unlockAudio: (() => void) | null = null; // destrava o AudioContext no 1º gesto (autoplay policy)
-    let whipPublisher: WhipPublisher | null = null; // publicação WebRTC/WHIP (Fase 5; null se OFF)
+    let relay: NodeRelay | null = null; // relé JPEG (nodeRelay.ts; null enquanto WHIP/probe)
+    let whipPublisher: WhipPublisher | null = null; // publicação WebRTC/WHIP (null se OFF)
 
     (async () => {
       try {
@@ -104,7 +99,7 @@ export function CameraPage() {
         }
       });
 
-      // ── Fase 5: PROBE de runtime — tenta WHIP; cai p/ JPEG sozinho se não estabelecer ──────────
+      // ── PROBE de runtime — tenta WHIP; cai p/ JPEG sozinho se não estabelecer ──────────────────
       // Publica o vídeo direto ao go2rtc por RTCPeerConnection (não estrangula em 2º plano → some a
       // "câmera lenta ao minimizar"). O socket ACIMA segue vivo só como REGISTRO/controle (o hub
       // sabe que a câmera existe, status/camcfg). Nome do stream = id da câmera (contrato com o
@@ -153,166 +148,32 @@ export function CameraPage() {
       if (!alive) return; // idem: não instala o JPEG num componente já desmontado
       setTransport("jpeg"); // escape hatch (=0) ou fallback do probe: segue no caminho legado
 
-      // Perfil de captura — pode ser elevado pela central (modo leitura = alta resolução).
-      let frameWidth: number = APP_CONFIG.net.frameWidth;
-      let frameFps: number = APP_CONFIG.net.frameFps;
-      let jpegQuality: number = APP_CONFIG.net.jpegQuality;
-
-      let encoding = false; // descarta frame se o encode anterior ainda não terminou (evita backlog)
-      // Contexto 2D hoisted (criado 1×): alpha:false — JPEG não tem alfa; canvas opaco evita
-      // composição/limpeza de canal alfa a cada drawImage.
-      let ctx: CanvasRenderingContext2D | null = null;
-      const sendFrame = () => {
-        const v = videoRef.current,
-          c = canvasRef.current;
-        if (!v || !c || v.readyState < 2 || !v.videoWidth || encoding) return;
-        const w = frameWidth,
-          h = Math.round((frameWidth * v.videoHeight) / v.videoWidth);
-        if (c.width !== w || c.height !== h) {
-          c.width = w;
-          c.height = h;
-        }
-        ctx ??= c.getContext("2d", { alpha: false })!;
-        ctx.drawImage(v, 0, 0, w, h);
-        encoding = true;
-        // JPEG BINÁRIO (não base64): ~⅓ menor e sem custo de string no transporte.
-        c.toBlob(
-          (blob) => {
-            if (!blob) {
-              encoding = false;
-              return;
-            }
-            blob
-              .arrayBuffer()
-              .then((buf) => {
-                // VOLATILE: o socket.io-client bufferiza emits enquanto offline (sendBuffer) e
-                // despeja TUDO no reconnect — frames velhos não interessam; volatile descarta
-                // quando o transporte não está pronto (semântica "último-vence" do vídeo).
-                socket.volatile.emit("frame", { buf, w, h, ts: Date.now() });
-              })
-              .finally(() => {
-                encoding = false;
-              });
-          },
-          "image/jpeg",
-          jpegQuality,
-        );
-      };
-      // Captura alinhada a frames REAIS da câmera: requestVideoFrameCallback dispara só quando
-      // o vídeo entrega um frame novo — webcam a 8fps em cena escura/estática deixa de ser
-      // re-encodada 12×/s. O gate de fps alvo lê `frameFps` (mutável) a cada callback, então o
-      // evento `capture` (presets de leitura E o shed a 2fps) muda a cadência sem re-registrar nada.
-      // rVFC é one-shot: re-agendamos a cada callback. Honestidade: com a aba em segundo plano o
-      // browser estrangula tanto rVFC quanto timers — o requisito operacional segue sendo aba
-      // visível (limitação de plataforma, igual ao setInterval anterior).
-      const video = videoRef.current!;
-      const useRvfc = typeof video.requestVideoFrameCallback === "function"; // feature-detect 1×
-      // Modo de captura: "rvfc" (aba VISÍVEL — alinhado a frames reais, eficiente) ou "timer"
-      // (aba OCULTA/minimizada — o rVFC PARA em 2º plano; o timer segue enviando p/ a câmera não morrer).
-      let mode: "rvfc" | "timer" = useRvfc ? "rvfc" : "timer";
-      let lastSent = 0;
-      const rvfcLoop = (now: DOMHighResTimeStamp) => {
-        if (!alive || mode !== "rvfc") return; // deixa de re-armar quando trocamos p/ timer (2º plano)
-        rvfcHandle = video.requestVideoFrameCallback(rvfcLoop); // re-agenda ANTES de processar
-        const interval = 1000 / frameFps;
-        if (now - lastSent >= interval - 1) {
-          // -1ms de folga: absorve jitter do timestamp p/ não pular frames no fps alvo exato
-          lastSent = now;
-          sendFrame();
-        }
-      };
-      const startTimer = () => {
-        if (timer) clearInterval(timer);
-        timer = window.setInterval(sendFrame, Math.round(1000 / frameFps));
-      };
-      const stopTimer = () => {
-        if (timer) {
-          clearInterval(timer);
-          timer = null;
-        }
-      };
-      // KEEP-ALIVE de 2º plano: Chrome/Edge estrangulam timers de aba oculta (1/s, e 1/min após
-      // ~5min) e PARAM o rVFC — a webcam "morre" ao minimizar. Uma aba que está TOCANDO ÁUDIO é
-      // isenta desse estrangulamento; então mantemos um oscilador INAUDÍVEL (ganho ~0) tocando
-      // enquanto a captura roda. Efeito: minimizar mantém a câmera online e perto da taxa normal.
-      // Sem WebAudio (ou bloqueado): degrada p/ o timer estrangulado — câmera ~1fps, mas não morre.
-      const ensureKeepAlive = () => {
-        try {
-          const Ctx =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (!Ctx) return;
-          if (!audioCtx) {
-            audioCtx = new Ctx();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            gain.gain.value = 0.0001; // > 0 (conta como "tocando"), muito abaixo do audível
-            osc.connect(gain).connect(audioCtx.destination);
-            osc.start();
-          }
-          if (audioCtx.state === "suspended") void audioCtx.resume();
-        } catch {
-          /* WebAudio indisponível/bloqueado — segue só com o timer */
-        }
-      };
-      if (useRvfc) {
-        rvfcVideo = video;
-        rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
-      } else startTimer(); // sem rVFC: timer é o único caminho
-
-      // Inicia o keep-alive JÁ (não só ao minimizar): o AudioContext precisa estar RODANDO antes
-      // de a aba ficar oculta — criá-lo no visibilitychange nasce suspenso (sem gesto) e não isenta.
-      // Se a política de autoplay o deixar suspenso, destrava no 1º gesto do usuário na página.
-      ensureKeepAlive();
-      unlockAudio = () => ensureKeepAlive();
-      window.addEventListener("pointerdown", unlockAudio);
-      window.addEventListener("keydown", unlockAudio);
-
-      // Alterna rVFC↔timer pela visibilidade e liga o keep-alive quando a aba/janela some de vista.
-      onVisibility = () => {
-        if (document.hidden) {
-          ensureKeepAlive(); // isenta o timer do estrangulamento agressivo
-          if (mode !== "timer") {
-            mode = "timer";
-            if (rvfcHandle !== null) {
-              rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
-              rvfcHandle = null;
-            }
-            startTimer(); // envia frames mesmo minimizada
-          }
-        } else if (useRvfc && mode !== "rvfc") {
-          stopTimer(); // voltou a ficar visível: retoma o rVFC (mais eficiente/alinhado ao frame real)
-          mode = "rvfc";
-          lastSent = 0;
-          rvfcVideo = video;
-          rvfcHandle = video.requestVideoFrameCallback(rvfcLoop);
-        }
-      };
-      document.addEventListener("visibilitychange", onVisibility);
-      if (document.hidden) onVisibility(); // já abriu em 2º plano? entra em modo timer na hora
+      // Relé JPEG (hot-path do nó): captura+encode+keep-alive vivem em ./camera/nodeRelay.ts.
+      relay = startNodeRelay({
+        video: videoRef.current!,
+        canvas: canvasRef.current!,
+        // Perfil de captura — pode ser elevado pela central (modo leitura = alta resolução).
+        profile: {
+          width: APP_CONFIG.net.frameWidth,
+          fps: APP_CONFIG.net.frameFps,
+          quality: APP_CONFIG.net.jpegQuality,
+        },
+        // VOLATILE: o socket.io-client bufferiza emits enquanto offline (sendBuffer) e despeja
+        // TUDO no reconnect — frames velhos não interessam; volatile descarta quando o transporte
+        // não está pronto (semântica "último-vence" do vídeo).
+        send: (frame) => socket.volatile.emit("frame", frame),
+      });
 
       // A central pode pedir um perfil de captura (ex.: leitura de código → alta resolução).
       socket.on("capture", (cfg: { width?: number; quality?: number; fps?: number }) => {
-        if (cfg?.width) frameWidth = cfg.width;
-        if (cfg?.quality) jpegQuality = cfg.quality;
-        if (cfg?.fps && cfg.fps !== frameFps) {
-          frameFps = cfg.fps;
-          if (mode === "timer") startTimer(); // rVFC lê frameFps a cada callback; no timer, re-cria com o novo fps
-        }
-        setProfile(`${frameWidth}px · q${Math.round(jpegQuality * 100)}`);
+        const p = relay?.setProfile(cfg ?? {});
+        if (p) setProfile(`${p.width}px · q${Math.round(p.quality * 100)}`);
       });
     })();
 
     return () => {
       alive = false;
-      if (onVisibility) document.removeEventListener("visibilitychange", onVisibility);
-      if (unlockAudio) {
-        window.removeEventListener("pointerdown", unlockAudio);
-        window.removeEventListener("keydown", unlockAudio);
-      }
-      if (timer) clearInterval(timer);
-      if (rvfcHandle !== null) rvfcVideo?.cancelVideoFrameCallback(rvfcHandle);
-      audioCtx?.close().catch(() => {});
+      relay?.stop(); // encerra captura/keep-alive do relé JPEG (no-op no caminho WebRTC)
       whipPublisher?.stop(); // encerra a publicação WebRTC (no-op se OFF)
       socketRef.current?.disconnect();
       streamRef.current?.getTracks().forEach((t) => t.stop());

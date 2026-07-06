@@ -10,10 +10,10 @@ import { TrackOverlay } from "./TrackOverlay";
 import { type Camera, type CameraStatus } from "./types";
 import "./go2rtc-tile.css";
 
-// ── Fase 1 (plano-fase1-go2rtc.md): transporte de vídeo via WebRTC do go2rtc ────────────────────
-// OPT-IN por câmera (camcfg `transport:"webrtc"`; default "mjpeg" = tile atual, byte-a-byte). Quando
-// ligado, o tile exibe o vídeo por `<video-stream>` (WebRTC/MSE/HLS/MJPEG auto-negociado, decode por
-// HW fora da main-thread) em vez do canvas alimentado pelo relé socket.io. Overlay de caixas é Fase 2.
+// ── Tile da grade: vídeo via WebRTC do go2rtc OU canvas MJPEG do relé ───────────────────────────
+// Transporte por câmera (camcfg `transport`): "webrtc" exibe por `<video-stream>` (WebRTC/MSE/HLS/
+// MJPEG auto-negociado, decode por HW fora da main-thread); "mjpeg" usa o canvas alimentado pelo
+// relé socket.io. As caixas do hub entram por cima no TrackOverlay.
 //
 // Registro do custom element: `video-stream.js` é vendorizado (self-host, sem CDN) e importado
 // DINAMICAMENTE 1× — só quando o 1º tile WebRTC monta (câmeras em "mjpeg" nunca carregam o JS).
@@ -37,7 +37,7 @@ function Go2rtcVideoTile({
   onWebrtcFail,
 }: {
   camId: string;
-  // Fase 2: getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
+  // Getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
   // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
   getHubAnalysis?: () => HubAnalysis | null;
   // Detecção de fonte caída (go2rtc sem frames p/ esta câmera): chamado UMA vez com o id quando o
@@ -126,14 +126,14 @@ function Go2rtcVideoTile({
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
-      {/* Fase 2: caixas do hub interpoladas, num <canvas> transparente exatamente sobre o vídeo. */}
+      {/* Caixas do hub interpoladas, num <canvas> transparente exatamente sobre o vídeo. */}
       <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} />
     </div>
   );
 }
 
-// Estado de conexão por câmera (contrato A4). Sem evento `camera-status` → assume "online".
-// "Going gray" (Onda A): base neutra/cinza; cor saturada SÓ para anormalidade. Mapa de tokens
+// Estado de conexão por câmera (evento `camera-status`; ausente → assume "online").
+// "Going gray": base neutra/cinza; cor saturada SÓ para anormalidade. Mapa de tokens
 // (src/index.css · estado→token): online→neutral (operação normal, evita "árvore de natal");
 // connecting→info (azul, advisory não-crítico); error→critical (vermelho); stopped→neutral-dim
 // (cinza apagado). dot = realce; border = borda discreta por estado (glanceable à distância).
@@ -173,7 +173,7 @@ function statusInfo(s: CameraStatus | undefined): {
 type CameraTileProps = {
   camera: Camera;
   isOpen: boolean; // câmera já aberta no painel (overlay full)
-  // 0.2 — PAUSA DE FUNDO: outra câmera está aberta no painel, então este tile (de fundo) para o
+  // PAUSA DE FUNDO: outra câmera está aberta no painel, então este tile (de fundo) para o
   // trabalho pesado. Renderiza um placeholder leve e DESMONTA o CameraWorkspace/FadigaView →
   // encerra o rAF/motion/decode-draw daquele feed. Reversível: ao fechar a aberta, volta ao vivo.
   // Primitiva → amigável ao React.memo (só os tiles cujo `paused` muda re-renderizam).
@@ -182,23 +182,22 @@ type CameraTileProps = {
   getFrame: () => FrameSource | null;
   tripwiresRev: number;
   status: CameraStatus | undefined;
-  // F1-C (ADR-009): fonte da análise da câmera. "hub" = motor server-side grava os indicadores
+  // Fonte da análise da câmera (ADR-009). "hub" = motor server-side grava os indicadores
   // (o CameraWorkspace suprime os ingests locais). OPCIONAL/retrocompatível (default "local");
   // primitiva → amigável ao React.memo abaixo (só o tile da câmera afetada re-renderiza).
   analysisEngine?: "hub" | "local";
-  // F2 (ADR-009): getter estável (cache por id na central — memo-friendly) do último
-  // `analysis-tracks` do hub; o CameraWorkspace desenha esses tracks na grade em vez de
-  // rodar inferência local. OPCIONAL/retrocompatível (ausente → pipeline local).
+  // Getter estável (cache por id na central — memo-friendly) do último `analysis-tracks` do
+  // hub; o CameraWorkspace desenha esses tracks na grade em vez de rodar inferência local.
+  // OPCIONAL/retrocompatível (ausente → pipeline local). (ADR-009)
   getHubAnalysis?: () => HubAnalysis | null;
-  // Fase 1 (go2rtc): transporte de vídeo do tile. "webrtc" → exibe via <video-stream> (go2rtc);
-  // "mjpeg"/ausente → tile atual (canvas + relé socket.io), INALTERADO. OPT-IN por câmera (camcfg),
-  // OFF por default. Primitiva → amigável ao React.memo abaixo.
+  // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
+  // canvas + relé socket.io. Por câmera (camcfg). Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
   // Fonte caída no caminho WebRTC: o tile chama UMA vez com o próprio id quando o <video-stream>
   // não estabelece vídeo (go2rtc sem frames p/ a câmera). O DashboardPage cai o tile pra MJPEG.
   // Estável/por id (memo-friendly, como onOpen); ausente → sem fallback (segue tentando WebRTC).
   onWebrtcFail?: (cameraId: string) => void;
-  // Callback ÚNICO e estável do dashboard (1.6): o tile chama com o próprio id. Assinatura por id
+  // Callback ÚNICO e estável do dashboard: o tile chama com o próprio id. Assinatura por id
   // (em vez de closure por câmera) para o React.memo abaixo valer — todos os tiles recebem a
   // MESMA função e só re-renderizam quando os próprios dados mudam.
   onOpen: (id: string) => void;
@@ -206,9 +205,9 @@ type CameraTileProps = {
 };
 
 // Renderiza um tile da grade: frame (fadiga/atividade) + pílula de status/fps sobreposta.
-// React.memo (1.6): o `camera-status` (a cada ~5s POR câmera) troca só `statuses[id]` da câmera
-// afetada; com memo + callbacks estáveis, apenas o tile daquela câmera re-renderiza (antes: a
-// grade inteira ×N tiles). Demais props são primitivas ou estáveis (getFrame vem de cache por id).
+// React.memo: o `camera-status` (a cada ~5s POR câmera) troca só `statuses[id]` da câmera
+// afetada; com memo + callbacks estáveis, apenas o tile daquela câmera re-renderiza (sem o memo,
+// a grade inteira ×N tiles). Demais props são primitivas ou estáveis (getFrame é cache por id).
 export const CameraTile = memo(function CameraTile({
   camera,
   isOpen,
@@ -231,13 +230,12 @@ export const CameraTile = memo(function CameraTile({
   const inner = isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
   ) : paused ? (
-    // 0.2 — outra câmera aberta: placeholder leve; o feed processador fica DESMONTADO (sem rAF).
+    // Outra câmera aberta: placeholder leve; o feed processador fica DESMONTADO (sem rAF).
     // No caminho WebRTC isto também DESMONTA o <video-stream> → solta o stream (pausa de fundo).
     <div className="tile tile-open">em pausa</div>
   ) : transport === "webrtc" ? (
-    // Fase 1: vídeo fluido via go2rtc. Só entra com a flag ligada; substitui o canvas MJPEG. Sem
-    // inferência local aqui; as caixas do hub vêm interpoladas por cima (TrackOverlay, Fase 2).
-    // Clique abre a câmera, como nos demais.
+    // Vídeo fluido via go2rtc, sem inferência local aqui; as caixas do hub vêm interpoladas
+    // por cima (TrackOverlay). Clique abre a câmera, como nos demais.
     <div className="tile" onClick={openSelf}>
       <Go2rtcVideoTile
         key={`rtc-${camera.id}`}

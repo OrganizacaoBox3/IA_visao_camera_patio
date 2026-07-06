@@ -6,7 +6,7 @@ import {
   objectByClass,
   objectEvolution,
   type ObjectEventRow,
-} from "../../report/mock";
+} from "../../report/calc";
 import { objClass } from "../../objects/catalog";
 import { Tabs, TabsContent, ScrollArea } from "../../ui";
 import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";

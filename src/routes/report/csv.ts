@@ -1,26 +1,34 @@
-// Builders de seções CSV do Relatório, por modo (resumo/atividade/leitura/objetos/fadiga/
-// alarmes). Extraídos do downloadCSV do ReportPage (antes ~205 linhas): a página passa a só
-// ORQUESTRAR — monta a lista de seções e dispara o download. Reusam as primitivas de
-// "../../report/csv" (buildCSV/downloadCSVFile/alarmSection), re-exportadas aqui p/ a página
-// importar tudo de um só módulo. LGPD: só indicadores agregados, nunca imagens.
+// CSV do Relatório: builders de seção por modo (resumo/atividade/leitura/objetos/fadiga/
+// alarmes) + a MONTAGEM do recorte atual a partir dos view-models (reportSections). A página
+// só dispara o download. Reusam as primitivas de "../../report/csv" (buildCSV/downloadCSVFile/
+// alarmSection), re-exportadas aqui p/ a página importar tudo de um só módulo.
+// LGPD: só indicadores agregados, nunca imagens.
 
-import { fmtMin } from "../../report/mock";
+import { fmtMin } from "../../report/calc";
 import type {
   Shift,
+  Period,
   Kpis,
   ReadingKpis,
   ObjectKpis,
   FadigaKpis,
+  ObjectDataset,
   EventRow,
   ReadingEventRow,
   ObjectEventRow,
   FadigaEventRow,
-} from "../../report/mock";
-import type { FlowLineRow } from "../../report/store";
+  AlarmKpis,
+} from "../../report/calc";
+import type { FlowLineRow } from "../../report/calc";
 import type { AlarmEvent } from "../../types/alarm";
 import { alarmSection, type CsvSection } from "../../report/csv";
 import { classLabel } from "./ObjetosPanel";
 import { SHIFTS } from "./chrome";
+import { MODE_LABEL, PERIOD_LABEL, type Mode } from "./labels";
+import type { AtividadeSummary, AtividadeDetails } from "./useAtividadeVM";
+import type { LeituraSummary, LeituraDetails } from "./useLeituraVM";
+import type { ObjetosSummary, ObjetosDetails } from "./useObjetosVM";
+import type { FadigaSummary } from "./useFadigaVM";
 
 // Primitivas re-exportadas: a página monta/serializa/baixa importando só deste módulo.
 export { buildCSV, downloadCSVFile, dateStamp, type CsvSection } from "../../report/csv";
@@ -302,4 +310,98 @@ export function alarmesSections(p: {
     },
     alarmSection(alarmsView),
   ];
+}
+
+// ── MONTAGEM do recorte atual: metadados + seções do modo ativo, a partir dos view-models ──
+// No modo ativo o summary/details correspondente sempre existe (o hook computa "full"); os
+// guards de nulidade abaixo são só narrowing do TypeScript.
+export function reportSections(p: {
+  mode: Mode;
+  period: Period;
+  shift: Shift | "Todos";
+  filtroLabel: string;
+  now: Date;
+  atividade: { summary: AtividadeSummary | null; details: AtividadeDetails | null };
+  leitura: { summary: LeituraSummary | null; details: LeituraDetails | null };
+  objetos: {
+    dataset: ObjectDataset;
+    summary: ObjetosSummary | null;
+    details: ObjetosDetails | null;
+  };
+  fadiga: { summary: FadigaSummary | null };
+  alarmes: { ak: AlarmKpis; alarmsView: AlarmEvent[] };
+}): CsvSection[] {
+  const { mode, atividade, leitura, objetos, fadiga, alarmes } = p;
+  const sections: CsvSection[] = [
+    metaSection({
+      modeLabel: MODE_LABEL[mode],
+      periodLabel: PERIOD_LABEL[p.period],
+      shift: p.shift === "Todos" ? "Todos" : p.shift,
+      filtroLabel: p.filtroLabel,
+      now: p.now,
+    }),
+  ];
+  if (
+    mode === "resumo" &&
+    atividade.summary &&
+    fadiga.summary &&
+    leitura.summary &&
+    objetos.summary
+  ) {
+    sections.push(
+      resumoSection({
+        k: atividade.summary.k,
+        fk: fadiga.summary.fk,
+        fOccFadiga: fadiga.summary.fOccFadiga,
+        fOccCelular: fadiga.summary.fOccCelular,
+        rk: leitura.summary.rk,
+        ok: objetos.summary.ok,
+      }),
+    );
+  } else if (mode === "atividade" && atividade.summary && atividade.details) {
+    const { summary, details } = atividade;
+    sections.push(
+      ...atividadeSections({
+        k: summary.k,
+        peoplePeak: summary.kPeople,
+        rankRows: details.rank.rows,
+        byAtivRows: details.byAtiv.rows,
+        byShiftA: details.byShiftA.m,
+        // Fluxo só quando o hub expõe o kind "flow" (hub antigo → omite).
+        flow: details.flowView
+          ? { k: details.flowView.k, lineRows: details.flowView.byLine.rows }
+          : null,
+        evt: details.evt,
+      }),
+    );
+  } else if (mode === "leitura" && leitura.summary && leitura.details) {
+    sections.push(
+      ...leituraSections({
+        rk: leitura.summary.rk,
+        rrankRows: leitura.details.rrank.rows,
+        byCamRows: leitura.details.byCam.rows,
+        byShiftR: leitura.details.byShiftR.m,
+        revt: leitura.details.revt,
+      }),
+    );
+  } else if (mode === "objetos" && objetos.summary && objetos.details) {
+    sections.push(
+      ...objetosSections({
+        ok: objetos.summary.ok,
+        oLoads: objetos.summary.oLoads,
+        classes: objetos.dataset.classes,
+        presSetores: objetos.details.presSetores,
+        opres: objetos.details.opres,
+        orankRows: objetos.details.orank.rows,
+        obyClassRows: objetos.details.obyClass.rows,
+        oevt: objetos.summary.oevt,
+      }),
+    );
+  } else if (mode === "fadiga" && fadiga.summary) {
+    const { fk, fOccFadiga, fOccCelular, fBocejos, fevt } = fadiga.summary;
+    sections.push(...fadigaSections({ fk, fOccFadiga, fOccCelular, fBocejos, fevt }));
+  } else if (mode === "alarmes") {
+    sections.push(...alarmesSections(alarmes));
+  }
+  return sections;
 }

@@ -6,7 +6,7 @@ import {
   readingByCamera,
   readingEvolution,
   type ReadingEventRow,
-} from "../../report/mock";
+} from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
 import {
   RepLens,

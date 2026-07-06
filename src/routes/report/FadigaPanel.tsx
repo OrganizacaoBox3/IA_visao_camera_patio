@@ -3,7 +3,7 @@ import {
   fadigaHeatmap,
   fadigaEvolution,
   type FadigaEventRow,
-} from "../../report/mock";
+} from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
 import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";

@@ -1,28 +1,24 @@
 import { type RefObject } from "react";
-import { alarmKpis, alarmTrend, alarmHeatmap, type AlarmWindow } from "../../report/mock";
-import type { AlarmEvent, AlarmPriority, AlarmState } from "../../types/alarm";
+import { alarmKpis, alarmTrend, alarmHeatmap, type AlarmWindow } from "../../report/calc";
+import {
+  ALARM_PRIORITY_LABEL,
+  ALARM_STATE_LABEL,
+  alarmPriorityColor,
+  type AlarmEvent,
+  type AlarmPriority,
+  type AlarmState,
+} from "../../types/alarm";
 import { ScrollArea } from "../../ui";
 import { Insight, SectionTitle } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
 
-export const PRIORITY_LABEL: Record<AlarmPriority, string> = {
-  advisory: "Informativo",
-  high: "Alta",
-  critical: "Crítica",
-};
-export const STATE_LABEL: Record<AlarmState, string> = {
-  new: "Novo",
-  acknowledged: "Reconhecido",
-  forwarded: "Encaminhado",
-};
-
+// Rampa do heatmap sobre o TOKEN da prioridade (sem RGB cru): intensidade 18%..100%
+// via color-mix — célula vazia fica transparente (mesma leitura do heatColor comum).
 function alarmHeatColor(priority: AlarmPriority, v: number, max: number): string {
   if (v <= 0) return "transparent";
   const t = 0.18 + Math.min(1, v / max) * 0.82;
-  const rgb =
-    priority === "critical" ? "239, 68, 68" : priority === "high" ? "234, 179, 8" : "56, 189, 248";
-  return `rgba(${rgb}, ${t})`;
+  return `color-mix(in srgb, ${alarmPriorityColor(priority)} ${Math.round(t * 100)}%, transparent)`;
 }
 
 export function AlarmesPanel({
@@ -72,8 +68,8 @@ export function AlarmesPanel({
     <>
       <div className="rep-lens">
         Alarmes · <b>{periodLabel}</b>
-        {alarmPriority !== "Todas" ? <> · {PRIORITY_LABEL[alarmPriority]}</> : null}
-        {alarmState !== "Todos" ? <> · {STATE_LABEL[alarmState]}</> : null}
+        {alarmPriority !== "Todas" ? <> · {ALARM_PRIORITY_LABEL[alarmPriority]}</> : null}
+        {alarmState !== "Todos" ? <> · {ALARM_STATE_LABEL[alarmState]}</> : null}
       </div>
       {alarms.length === 0 ? (
         <div className="dash-empty">
@@ -152,13 +148,13 @@ export function AlarmesPanel({
               <Heatmap
                 rows={aHeat.rows.map((row) => ({
                   key: row.priority,
-                  label: PRIORITY_LABEL[row.priority],
-                  title: PRIORITY_LABEL[row.priority],
+                  label: ALARM_PRIORITY_LABEL[row.priority],
+                  title: ALARM_PRIORITY_LABEL[row.priority],
                   hours: row.hours,
                 }))}
                 cellColor={(row, v) => alarmHeatColor(row.key as AlarmPriority, v, aHeat.max)}
                 cellTitle={(row, v, h) =>
-                  `${PRIORITY_LABEL[row.key as AlarmPriority]} · ${String(h).padStart(2, "0")}h · ${v} alarme(s)`
+                  `${ALARM_PRIORITY_LABEL[row.key as AlarmPriority]} · ${String(h).padStart(2, "0")}h · ${v} alarme(s)`
                 }
                 legendLeft="menos"
                 legendRight="mais alarmes"
@@ -214,9 +210,11 @@ export function AlarmesPanel({
                     </span>
                     <span className="alarm-badges">
                       <span className={`alarm-badge b-${e.priority}`}>
-                        {PRIORITY_LABEL[e.priority]}
+                        {ALARM_PRIORITY_LABEL[e.priority]}
                       </span>
-                      <span className={`alarm-badge s-${e.state}`}>{STATE_LABEL[e.state]}</span>
+                      <span className={`alarm-badge s-${e.state}`}>
+                        {ALARM_STATE_LABEL[e.state]}
+                      </span>
                     </span>
                   </button>
                 ))}
