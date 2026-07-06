@@ -17,3 +17,16 @@
     grid-template-columns: repeat(4, 1fr);
   }
 }
+
+/* TILE MÍNIMO (Onda A · U1 · referência Genetec/Frigate): por default o tile da Central
+   mostra só vídeo + nome + dot de status; a metadata secundária do rodapé ("N zona(s) ·
+   N alerta", .tile-meta do CameraWorkspace/FadigaView em modo tile) aparece no hover.
+   Escopo ESTRITO à grade da Central (.dash-grid) — não altera index.css nem o markup do
+   CameraWorkspace (propriedade de outra frente). O estado de alerta continua glanceable
+   sem hover: borda .tile.alerting + chips .tile-badges seguem visíveis. */
+.dash-grid .tile .tile-meta {
+  display: none;
+}
+.dash-grid .tile:hover .tile-meta {
+  display: block;
+}

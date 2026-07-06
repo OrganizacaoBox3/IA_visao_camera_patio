@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
+import { MapPin } from "lucide-react";
 import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea } from "../../ui";
 import { type AlarmEvent, type AlarmPriority, type AlarmState } from "../../api";
 // Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts (o CSS do card
-// uppercasa os rótulos — .alarm-card__prio/__state).
+// uppercasa os rótulos — .alarm-drawer__card-prio/-state).
 import {
   ALARM_PRIORITY_LABEL,
   ALARM_STATE_LABEL,
@@ -52,35 +53,39 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
     return (
       <div
         key={a.id}
-        className="alarm-card"
+        className="alarm-drawer__card"
         data-done={done ? 1 : 0}
         style={{ borderLeftColor: alarmPriorityBorder(a.priority) }}
       >
-        <div className="alarm-card__top">
-          <span className="alarm-card__dot" style={{ background: alarmPriorityColor(a.priority) }} />
-          <span className="alarm-card__prio" style={{ color: alarmPriorityColor(a.priority) }}>
+        <div className="alarm-drawer__card-top">
+          <span
+            className="alarm-drawer__card-dot"
+            style={{ background: alarmPriorityColor(a.priority) }}
+          />
+          <span className="alarm-drawer__card-prio" style={{ color: alarmPriorityColor(a.priority) }}>
             {ALARM_PRIORITY_LABEL[a.priority]}
           </span>
           <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}>
-            <span className="alarm-card__time">{when}</span>
+            <span className="alarm-drawer__card-time">{when}</span>
           </Tooltip>
         </div>
-        <div className="alarm-card__text">{a.text}</div>
-        <div className="alarm-card__meta">
+        <div className="alarm-drawer__card-text">{a.text}</div>
+        <div className="alarm-drawer__card-meta">
           {local && (
-            <span>
-              📍 {local}
+            <span className="alarm-drawer__card-loc">
+              <MapPin size={12} strokeWidth={1.75} aria-hidden />
+              {local}
               {a.zona && a.zona !== local ? ` · ${a.zona}` : ""}
             </span>
           )}
           <span>{a.tipo}</span>
-          <span className="alarm-card__state">
+          <span className="alarm-drawer__card-state">
             {ALARM_STATE_LABEL[a.state]}
             {a.ackBy ? ` · ${a.ackBy}` : ""}
           </span>
         </div>
         {!done && (
-          <div className="alarm-card__actions">
+          <div className="alarm-drawer__card-actions">
             <Tooltip content="Reconhecer (assumir o alarme)">
               <Button size="sm" variant="primary" onClick={() => onAct(a, "ack")}>
                 Reconhecer
@@ -103,10 +108,13 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
       onOpenChange={onOpenChange}
       title={
         <>
-          Fila de alarmes{" "}
-          <span className="alarm-drawer__count" data-zero={newCount === 0 ? 1 : 0}>
-            {newCount} novo(s)
-          </span>
+          Fila de alarmes
+          {/* Pluralização real; zero novos = sem contador (auditoria 3.3). */}
+          {newCount > 0 && (
+            <span className="alarm-drawer__count">
+              {newCount === 1 ? "1 novo" : `${newCount} novos`}
+            </span>
+          )}
         </>
       }
     >

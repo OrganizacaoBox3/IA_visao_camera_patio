@@ -141,6 +141,7 @@ function statusInfo(s: CameraStatus | undefined): {
   text: string;
   dot: string;
   border: string;
+  normal: boolean;
   fps?: number;
 } {
   const state = s?.state ?? "online";
@@ -167,7 +168,8 @@ function statusInfo(s: CameraStatus | undefined): {
       : state === "error"
         ? "var(--state-critical-border)"
         : "var(--state-neutral-border)";
-  return { text, dot, border, fps: s?.fps };
+  // normal = operação sem anormalidade → o tile pode ficar mínimo (só o dot; texto no hover).
+  return { text, dot, border, normal: state === "online", fps: s?.fps };
 }
 
 type CameraTileProps = {
@@ -271,16 +273,25 @@ export const CameraTile = memo(function CameraTile({
     />
   );
   return (
-    <div className="relative grid min-h-0">
+    <div className="cam-tile relative grid min-h-0">
       {inner}
       <Tooltip content={status?.lastError || st.text}>
         {/* Pílula de status (.cam-status-pill em go2rtc-tile.css): estático na classe; só a COR da
-            borda é dinâmica (token por estado, going-gray) e fica no style. */}
-        <span className="cam-status-pill" style={{ borderColor: st.border }}>
+            borda é dinâmica (token por estado, going-gray) e fica no style.
+            TILE MÍNIMO (U1): estado normal (data-quiet) mostra só o dot; o texto/fps (metadado
+            secundário) aparece no hover do tile. Anormalidade (erro/conectando/parada) mantém
+            o texto SEMPRE visível — going-gray: cor+texto só quando há o que agir. */}
+        <span
+          className="cam-status-pill"
+          data-quiet={st.normal ? 1 : 0}
+          style={{ borderColor: st.border }}
+        >
           {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
           <span className="dot-status" aria-hidden="true" style={{ background: st.dot }} />
-          {st.text}
-          {st.fps != null ? ` · ${st.fps}fps` : ""}
+          <span className="cam-status-pill__text">
+            {st.text}
+            {st.fps != null ? ` · ${st.fps}fps` : ""}
+          </span>
         </span>
       </Tooltip>
     </div>

@@ -36,6 +36,16 @@
   border-radius: 9999px;
   padding: 2px 7px;
 }
+/* TILE MÍNIMO (U1 · referência Genetec/Frigate): em operação NORMAL (data-quiet) a pílula
+   colapsa para só o dot de status; o texto/fps (metadado secundário) aparece no hover do
+   tile inteiro (.cam-tile é o wrapper do CameraTile). Estados anormais (erro/conectando/
+   parada) não recebem data-quiet e mantêm o texto sempre visível (going-gray). */
+.cam-status-pill[data-quiet="1"] .cam-status-pill__text {
+  display: none;
+}
+.cam-tile:hover .cam-status-pill[data-quiet="1"] .cam-status-pill__text {
+  display: inline;
+}
 
 /* Fase 2: overlay de caixas do hub (interpoladas) — <canvas> transparente exatamente sobre o
    vídeo. pointer-events:none → o clique atravessa e abre a câmera (como no tile sem overlay). */
