@@ -1,11 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// bytetrack.js — PORT de src/vision/bytetrack.ts + EXTENSÕES server-side
-// (re-associação 2º estágio e política LOST — marcadas abaixo; re-portar ao TS é
-// pendência declarada). Mudanças no NÚCLEO portado devem ser feitas LÁ e
-// re-portadas; os testes (bytetrack.test.js) garantem a paridade do núcleo.
-// CommonJS, JS puro, SEM dependências. Em cena ESTÁVEL (match toda rodada) o
-// comportamento é idêntico ao port original; as extensões só agem em salto/gap.
-// Em produção o engine injeta os knobs do painel (precision.js).
+// bytetrack.js — tracker do HUB. Espelho de PAR com src/vision/bytetrack.ts:
+// mesma política, mesmos knobs, mesma semântica de emissão. Mudança de
+// comportamento é feita nos DOIS arquivos, no MESMO PR — sem source-of-truth
+// unilateral: o núcleo ByteTrack-lite nasceu no TS (Onda 2); as extensões
+// (re-associação 2º estágio + política LOST + guarda de nascimento) nasceram AQUI
+// no hub e JÁ foram portadas ao TS (f1ad355). PARIDADE: bytetrack.test.js cobre o
+// comportamento DESTE lado; NÃO há teste cross-language TS↔JS (residual honesto —
+// paridade mantida por revisão em par, não por sensor). CommonJS, JS puro, SEM
+// dependências. Em produção o engine injeta os knobs do painel (precision.js).
 //
 // ByteTrack-lite (Zhang et al. 2022), reduzido ao nosso caso:
 //   • 1ª PASSADA: detecções de score ALTO (≥ highScore) associam com os tracks
@@ -16,15 +18,15 @@
 //   • PREDIÇÃO LINEAR dt-AWARE: o gate de associação usa a posição PREDITA do
 //     track (delta das 2 últimas OBSERVAÇÕES em unid/ms, escalado pelo dt REAL
 //     desde lastSeen) — id sobrevive a rodadas lentas/gate/probe (dt variável).
-//   • RE-ASSOCIAÇÃO 2º ESTÁGIO (EXTENSÃO do port — ainda não existe no TS de
-//     origem; re-portar é pendência declarada): det ALTA sem par por IoU tenta
+//   • RE-ASSOCIAÇÃO 2º ESTÁGIO (nasceu no hub; espelhada no TS — f1ad355):
+//     det ALTA sem par por IoU tenta
 //     casar com track sem par pela DISTÂNCIA do centro da det ao centro PREVISTO
 //     (raio = reassocDist + |v|·gap; gap ≤ reassocMaxGapMs; tamanho compatível).
 //     Recupera a identidade quando a fonte/gate SALTA (gap entre rodadas
 //     analisadas). ANTI-TROCA: só re-associa par INEQUÍVOCO (1 track ↔ 1 det
 //     plausível); qualquer ambiguidade → id novo, NUNCA troca de pessoa.
 //   • MORTE POR TTL: track sem associação por mais que ttlMs é removido.
-//   • POLÍTICA LOST (EXTENSÃO, idem): track sem match há > lostAfterMisses
+//   • POLÍTICA LOST (nasceu no hub; espelhada no TS — f1ad355): track sem match há > lostAfterMisses
 //     rodadas ANALISADAS vira LOST — segue vivo INTERNAMENTE (re-associável até
 //     o TTL) mas FORA do retorno de update(): não vira overlay/ocupação/contagem
 //     (mata o RASTRO de máscaras congeladas até o TTL — bug de campo). Se

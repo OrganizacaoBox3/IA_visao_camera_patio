@@ -27,10 +27,10 @@
 // em analises/acuracia-modelos.md §3/Onda 2; bancada VISUAL do salto:
 // scripts/make-jumpy-clip.mjs).
 //
-// Knobs: espelho dos DEFAULTS de produção — dono canônico:
-// server/analysis/precision.js (+ cadência de câmera COM linha ANALYSIS_FPS_LINE=2
-// e TTL derivado trackTtlMs: max(1500, 3.5·round, probe 6s+2s)). Fixos de
-// propósito (sem env): sensor determinístico. Mudou o default lá → atualize AQUI.
+// Knobs: DERIVADOS de server/analysis/precision.js (fonte ÚNICA — o MESMO painel
+// que a produção resolve) + o MESMO trackTtlMs(). Cadência (roundMs) fica local
+// (knob de CUSTO, fora do painel — ANALYSIS_FPS_LINE=2). Fixos (sem env): sensor
+// determinístico. NÃO copie valores à mão — mudou o painel, o sensor segue junto.
 //
 // Uso: npm run eval:counting  (ou node eval/counting.mjs) — PASS exit 0, FAIL exit 1.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,18 +42,26 @@ const require = createRequire(import.meta.url);
 const { createByteTracker } = require(path.join(ROOT, "server", "analysis", "bytetrack.js"));
 const { createCounter } = require(path.join(ROOT, "server", "analysis", "counting.js"));
 const { createPipeline } = require(path.join(ROOT, "server", "analysis", "pipeline.js"));
+const { PRECISION, trackTtlMs } = require(path.join(ROOT, "server", "analysis", "precision.js"));
 
-// ── Knobs (espelho de engine.js createState — ver header) ───────────────────
+// ── Knobs: fonte ÚNICA = PRECISION (o MESMO que engine.js createState injeta) ─
+// Antes eram literais espelhados à mão e OMITIAM reassoc/LOST — o sensor só
+// COINCIDIA com produção pelos defaults internos do bytetrack.js (paridade frágil).
+// Agora deriva do painel: mudou o knob lá → o sensor segue. (analises/saude/01-*.)
+const ROUND_MS = 500; // câmera COM tripwire roda a ANALYSIS_FPS_LINE=2 (recall×cadência) — knob de CUSTO, local
 const KNOBS = {
-  roundMs: 500, // câmera COM tripwire roda a ANALYSIS_FPS_LINE=2 (recall×cadência)
-  highScore: 0.35, // nascimento de track / 1ª passada (ANALYSIS_HIGH_SCORE)
-  trackerIou: 0.25, // associação det×track (engine.js → createByteTracker)
-  birthIouThreshold: 0.55, // guarda de nascimento (PRECISION.tracker.birthIouThreshold)
-  ttlMs: 8000, // max(1500, 3.5·1000, 6000+2000) — sobrevive ao piso de PROBE do gate de movimento
-  minMove: 0.01, // filtro de micro-jitter do counter
-  maxDist: 0.35, // gate de teleporte do counter
-  debounceMs: 800,
-  minCrossingFrames: 2, // histerese: lado novo sustentado 2 rodadas
+  roundMs: ROUND_MS,
+  highScore: PRECISION.detector.highScore, // nascimento de track / 1ª passada
+  trackerIou: PRECISION.tracker.iouThreshold, // associação det×track
+  birthIouThreshold: PRECISION.tracker.birthIouThreshold, // guarda de nascimento
+  reassocDist: PRECISION.tracker.reassocDist, // re-associação 2º estágio (anti-rastro/salto) — knob 20
+  reassocMaxGapMs: PRECISION.tracker.reassocMaxGapMs, // gap máx. do 2º estágio — knob 21
+  lostAfterMisses: PRECISION.tracker.lostAfterMisses, // política LOST (anti-rastro) — knob 22
+  ttlMs: trackTtlMs({ roundMs: ROUND_MS, gateOn: true }), // = produção (gate ligado → max(1500,1750,8000)=8000)
+  minMove: PRECISION.counter.minMove, // filtro de micro-jitter do counter
+  maxDist: PRECISION.counter.maxDist, // gate de teleporte do counter
+  debounceMs: PRECISION.counter.debounceMs,
+  minCrossingFrames: PRECISION.counter.minCrossingFrames, // histerese: lado novo sustentado 2 rodadas
 };
 
 // Tripwire vertical no meio do frame, seta a→b p/ CIMA → esquerda→direita = "in".
@@ -220,6 +228,9 @@ function runScenario(sc) {
     iouThreshold: KNOBS.trackerIou,
     birthIouThreshold: KNOBS.birthIouThreshold,
     ttlMs: KNOBS.ttlMs,
+    reassocDist: KNOBS.reassocDist, // sem estes 3, o 2º estágio/LOST caíam nos defaults internos
+    reassocMaxGapMs: KNOBS.reassocMaxGapMs, // do bytetrack.js — o sensor mediria outro tracker
+    lostAfterMisses: KNOBS.lostAfterMisses, // se o painel mudasse (espelha engine.js:227-237)
   });
   const counter = createCounter([WIRE], {
     minMove: KNOBS.minMove,
@@ -316,7 +327,7 @@ console.log(
   `\n[eval/counting] Sensor fim-a-fim de contagem+tracking — dets sintéticas → pipeline.js (bytetrack+counting+payload) de produção`,
 );
 console.log(
-  `  knobs: ${KNOBS.roundMs}ms/rodada (linha@2fps) · highScore ${KNOBS.highScore} · trackerIou ${KNOBS.trackerIou} · birthIou ${KNOBS.birthIouThreshold} · ttl ${KNOBS.ttlMs}ms · minMove ${KNOBS.minMove} · maxDist ${KNOBS.maxDist} · debounce ${KNOBS.debounceMs}ms · histerese ${KNOBS.minCrossingFrames}\n`,
+  `  knobs: ${KNOBS.roundMs}ms/rodada (linha@2fps) · highScore ${KNOBS.highScore} · trackerIou ${KNOBS.trackerIou} · birthIou ${KNOBS.birthIouThreshold} · reassoc ${KNOBS.reassocDist}/${KNOBS.reassocMaxGapMs}ms · lost ${KNOBS.lostAfterMisses} · ttl ${KNOBS.ttlMs}ms · minMove ${KNOBS.minMove} · maxDist ${KNOBS.maxDist} · debounce ${KNOBS.debounceMs}ms · histerese ${KNOBS.minCrossingFrames}\n`,
 );
 
 let failed = 0;

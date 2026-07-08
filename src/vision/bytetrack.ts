@@ -32,10 +32,11 @@
 //     pessoa com associação perdida vire DUAS por até ttlMs (bug de campo).
 //
 // PARIDADE HUB↔FRONT (doutrina): a POLÍTICA deste arquivo espelha
-// server/analysis/bytetrack.js (F1) — mesmos knobs, mesmos defaults, mesma
-// semântica de emissão. Mudança de comportamento é feita em PAR. Diferença
-// declarada: o hub expõe stats() (telemetria de re-associações) — extensão
-// server-only, fora do contrato espelhado.
+// server/analysis/bytetrack.js — mesmos knobs, mesmos defaults, mesma semântica
+// de emissão. Mudança de comportamento é feita em PAR (mesmo PR); NÃO há teste
+// cross-language TS↔JS — a paridade é mantida por revisão em par (residual, não
+// sensor). Diferença declarada: o hub expõe stats() (telemetria de re-associações)
+// — extensão server-only, fora do contrato espelhado.
 //
 // LIMITAÇÃO DECLARADA (sem re-ID por aparência): em cruzamento denso, ids podem
 // trocar de pessoa — o tracker segue GEOMETRIA (IoU), não aparência. Ver o

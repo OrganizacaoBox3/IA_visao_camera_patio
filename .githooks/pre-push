@@ -1,6 +1,6 @@
 #!/bin/sh
 # Gate de verificação local (Onda 0 / R1) — CLAUDE.md §6.
-# Roda `npm run verify` (lint + typecheck + build + test) ANTES de qualquer push.
+# Roda `npm run verify` (lint + typecheck + build + test + audit) ANTES de qualquer push.
 # Vermelho NÃO entra: se algo falhar, o push é abortado.
 #
 # Ativação (uma vez por clone):  git config core.hooksPath .githooks
@@ -11,7 +11,7 @@
 
 set -e
 
-echo "[pre-push] rodando 'npm run verify' (lint + typecheck + build + test)..."
+echo "[pre-push] rodando 'npm run verify' (lint + typecheck + build + test + audit)..."
 npm run verify
 
 echo "[pre-push] verify VERDE — push liberado."

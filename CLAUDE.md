@@ -60,9 +60,10 @@ de implementação: `analises/implementacao-changelog.md`.
 
 Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste projeto:
 
-- **`npm run verify` = `lint` (ESLint) + `typecheck` (`tsc --noEmit`) + `build` (Vite) + `test` (Vitest).** Gate local via **pre-push hook** (`.githooks/pre-push`, `core.hooksPath`) + CI (`.github/workflows/ci.yml`). **Vermelho não entra.** Para mudança que toca o front/fluxo, rode também o e2e: `npx playwright test`.
+- **`npm run verify` = `lint` (ESLint) + `typecheck` (`tsc --noEmit`) + `build` (Vite) + `test` (Vitest) + `audit` (`npm audit`).** Gate local via **pre-push hook** (`.githooks/pre-push`, `core.hooksPath`) + CI (`.github/workflows/ci.yml`). **Vermelho não entra.** Para mudança que toca o front/fluxo, rode também o e2e: `npx playwright test`.
 - **Critérios de aceite viram teste** (ao menos caminhos críticos/invariantes). "Validado manual" é ponto de partida, não chegada. Regressão corrigida → vira teste (ex.: Select-em-Dialog no `e2e/`). Lógicas puras com unit test em Vitest (`*.test.ts`/`*.test.js` ao lado do código).
-- **Onda 0 fechada** (commits R0/R1): ESLint+Prettier, `verify`, pre-push hook, CI e 68 unit tests das lógicas puras existem. **Resíduos a baixar:** ~18 warnings de lint; `npm audit` com 4 vulns transitivas de `@xenova/transformers` (fix é breaking — avaliar). **Pendência de segurança humana:** rotacionar a senha Postgres e o `AUTH_SECRET` que estiveram expostos (já desversionados/purgados do histórico). Próximas ondas do retrofit: R2 (quebrar `CameraWorkspace.tsx`, unificar duplicações) e R3 (acabamento UI) — ver `analises/saude/00-relatorio-saude-e-retrofit.md`.
+- **Sensores de acurácia no gate (CI):** `eval/` (detecção — `gate.mjs`, fixture COCO estratificado) e `eval/counting.mjs` (contagem fim-a-fim) rodam no CI e barram regressão de ML/heurística — toda mudança de knob de `precision.js` passa por eles (fonte única de config espelhada no eval).
+- **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `analises/saude/`.*
 
 ## 7. Definition of Done
 

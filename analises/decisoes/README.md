@@ -15,6 +15,7 @@ Contexto → Decisão → Consequências. Status: aceito salvo indicação.
 | [008](ADR-008-adocao-tailwind.md) | Adoção de Tailwind (tokens `--state-*`/`--cam-*`/`--sp-*`) | aceito |
 | [009](ADR-009-analise-server-side.md) | Análise de visão server-side (motor D-FINE no hub) | aceito |
 | [010](ADR-010-conector-de-site-edge-gateway.md) | Conector de site (edge gateway) p/ câmeras de clientes remotos | proposto |
+| [011](ADR-011-video-webrtc-go2rtc.md) | Vídeo por WebRTC via go2rtc empacotado (ativação por presença, fallback MJPEG) | aceito |
 
 > Convenção: novas decisões de peso ganham um ADR aqui. Mudanças que revertem um ADR
 > criam um novo ADR com status "substitui ADR-XXX".
