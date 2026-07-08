@@ -54,3 +54,19 @@ describe("constantTimeEqual — comparação de token de dispositivo", () => {
     expect(users.constantTimeEqual("x", null)).toBe(false);
   });
 });
+
+describe("bootAbort — só AUTH_SECRET derruba o boot (senha default é deadlock → só avisa)", () => {
+  it("produção + AUTH_SECRET default → ABORTA", () => {
+    expect(users.bootAbort({ authSecret: true, adminPassword: false }, "production")).toBe(true);
+  });
+  it("produção + SÓ senha default → NÃO aborta (rotação exige a UI de pé — evita deadlock)", () => {
+    expect(users.bootAbort({ authSecret: false, adminPassword: true }, "production")).toBe(false);
+  });
+  it("fora de produção nunca aborta (nem com AUTH_SECRET default)", () => {
+    expect(users.bootAbort({ authSecret: true, adminPassword: true }, "development")).toBe(false);
+    expect(users.bootAbort({ authSecret: true, adminPassword: true }, undefined)).toBe(false);
+  });
+  it("nada inseguro → não aborta", () => {
+    expect(users.bootAbort({ authSecret: false, adminPassword: false }, "production")).toBe(false);
+  });
+});

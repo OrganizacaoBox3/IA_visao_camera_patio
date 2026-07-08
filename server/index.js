@@ -236,24 +236,24 @@ io.on("connection", (socket) => {
     events.init(),
     camcfg.init(),
   ]);
-  // Guarda de segurança do boot (auditoria 01, R-A): recusa DEFAULTS INSEGUROS em produção.
-  // Detecta AUTH_SECRET no default (tokens forjáveis) E senha de superadmin ainda 'admin@box3'
-  // (inclui instalação ANTIGA cuja senha foi gravada com o default). SEMPRE avisa; em
-  // NODE_ENV=production, ABORTA (fail-closed — melhor não subir que subir inseguro).
+  // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
+  // produção, ABORTA SÓ pelo AUTH_SECRET default (catastrófico + corrigível por env, sem deadlock).
+  // A senha default 'admin@box3' NÃO derruba — só se troca pela UI (hub de pé), então é AVISO
+  // persistente (users.bootAbort explica). Detecta a senha inclusive JÁ GRAVADA no store.
   {
     const insecure = users.insecureDefaults();
     if (insecure.authSecret || insecure.adminPassword) {
       const itens = [
         insecure.authSecret &&
-          "AUTH_SECRET está no DEFAULT — defina um AUTH_SECRET forte (env do systemd)",
+          "AUTH_SECRET está no DEFAULT — defina um AUTH_SECRET forte (env do systemd) [BLOQUEIA o boot em produção]",
         insecure.adminPassword &&
-          "a senha do superadmin ainda é o DEFAULT 'admin@box3' — troque na UI (ou SUPERADMIN_PASSWORD no 1º boot de um banco limpo)",
+          "a senha do superadmin ainda é o DEFAULT 'admin@box3' — TROQUE NA UI (aviso; não bloqueia o boot)",
       ].filter(Boolean);
       const bar = "═".repeat(72);
       console.error(`\n${bar}\n⚠  SEGURANÇA — DEFAULTS INSEGUROS ATIVOS:\n   • ${itens.join("\n   • ")}\n${bar}\n`);
-      if (process.env.NODE_ENV === "production") {
+      if (users.bootAbort(insecure, process.env.NODE_ENV)) {
         console.error(
-          "[boot] NODE_ENV=production com defaults inseguros → ABORTANDO. Corrija os itens acima e reinicie.",
+          "[boot] NODE_ENV=production com AUTH_SECRET default → ABORTANDO. Defina AUTH_SECRET e reinicie.",
         );
         process.exit(1);
       }

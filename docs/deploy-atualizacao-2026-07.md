@@ -122,13 +122,13 @@ Environment=PGPASSWORD=<SENHA_NOVA>   # ROTACIONAR
 ```
 
 > **⚠ Guarda de boot de segurança (R-A, auditoria 01).** Com `NODE_ENV=production`, o hub **RECUSA
-> subir (exit 1)** se: (a) `AUTH_SECRET` estiver no default, ou (b) a senha do superadmin ainda for
-> o default `admin@box3`. Isto é fail-closed (melhor não subir que subir inseguro). **Ordem correta:**
-> **(1)** defina `AUTH_SECRET` forte; **(2)** entre na UI e **troque a senha do admin** (o
-> `SUPERADMIN_PASSWORD` só vale no 1º boot de um banco LIMPO — num homolog já existente, é pela UI);
-> **(3)** só então ligue `NODE_ENV=production`. Sem `NODE_ENV=production` o hub sobe mas **loga o aviso
-> a cada boot**. O login também ganhou **trava de brute-force** (429 após ~10 tentativas/IP em 15min;
-> tunável por `LOGIN_MAX_ATTEMPTS`/`LOGIN_WINDOW_MS`).
+> subir (exit 1) APENAS se `AUTH_SECRET` estiver no default** (catastrófico — tokens forjáveis — e
+> corrigível por env). A **senha default `admin@box3` NÃO bloqueia o boot** — só **avisa** a cada boot
+> (rotacioná-la exige a UI, que precisa do hub DE PÉ; bloquear seria deadlock). **Ordem:** **(1)** defina
+> `AUTH_SECRET` forte; **(2)** ligue `NODE_ENV=production`; **(3)** entre na UI e **troque a senha do
+> admin** quando puder (o aviso persiste até lá; `SUPERADMIN_PASSWORD` só vale no 1º boot de um banco
+> LIMPO). O login também ganhou **trava de brute-force** (429 após ~10 tentativas/IP em 15min; tunável
+> por `LOGIN_MAX_ATTEMPTS`/`LOGIN_WINDOW_MS`).
 Envs avançadas de tuning do motor (`ANALYSIS_FPS`, `ANALYSIS_HIGH_SCORE`, `ANALYSIS_SCORE_MIN`,
 `ANALYSIS_INTRA_THREADS`, `ANALYSIS_NMS_IOU`, `DATA_HIST_RETENTION_DAYS`) têm defaults sensatos —
 ver `server/analysis/README.md`. Só mexa se o dimensionamento pedir.

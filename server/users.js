@@ -85,6 +85,16 @@ function insecureDefaults({ secret = AUTH_SECRET, list = users } = {}) {
   };
 }
 
+// Veredito PURO do boot (testável): quando ABORTAR por default inseguro.
+// SÓ o AUTH_SECRET default derruba em produção — é catastrófico (tokens forjáveis) E corrigível
+// por ENV (sem deadlock). A senha default NUNCA derruba: rotacioná-la exige a UI (o hub precisa
+// estar DE PÉ), então hard-fail seria deadlock irrecuperável. Ela fica como AVISO persistente.
+// (Lição aprendida na marra: um guard não pode bloquear o boot por algo que só o próprio serviço
+// — de pé — consegue corrigir.)
+function bootAbort(insecure, nodeEnv) {
+  return nodeEnv === "production" && !!(insecure && insecure.authSecret);
+}
+
 // Comparação de string em tempo ~constante p/ tokens de dispositivo (CAMERA_TOKEN, index.js).
 // Comprimentos diferentes já não casam; iguais → timingSafeEqual. (O vazamento de tamanho é
 // aceitável p/ um token compartilhado — coerente com o timingSafeEqual do token de sessão.)
@@ -280,6 +290,7 @@ module.exports = {
   updateProfile,
   hashPassword,
   insecureDefaults,
+  bootAbort,
   constantTimeEqual,
   genId,
   getById,
