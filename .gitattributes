@@ -1,0 +1,5 @@
+# Line endings — scripts que RODAM no Linux (VPS) têm que ser LF, sempre.
+# Sem isto, um commit de máquina com autocrlf poderia gravar CRLF e quebrar o bash no
+# servidor ("bad interpreter: /usr/bin/env bash^M"). Regra mínima e cirúrgica.
+*.sh        text eol=lf
+.githooks/* text eol=lf
