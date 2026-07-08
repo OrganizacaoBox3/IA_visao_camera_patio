@@ -28,7 +28,10 @@ const require = createRequire(import.meta.url);
 const { createByteTracker } = require(path.join(ROOT, "server", "analysis", "bytetrack.js"));
 const { PRECISION, trackTtlMs } = require(path.join(ROOT, "server", "analysis", "precision.js"));
 
-const CADENCES = [1, 4, 8]; // fps de análise a varrer
+// Cadências a varrer (EVAL_FPS=1 fixa 1 fps — p/ o experimento de recall, mais rápido).
+const CADENCES = (process.env.EVAL_FPS ? process.env.EVAL_FPS.split(",") : ["1", "4", "8"]).map(Number);
+// TILES=1/2x2 → detecção com tiling 2×2 (perfil longRange/SAHI: pessoa pequena por bloco, ~4× inferência).
+const TILES = /^(1|on|true|2x2)$/i.test(process.env.TILES ?? "") ? { cols: 2, rows: 2, overlap: 0.1 } : null;
 const HIGH_SCORE = PRECISION.detector.highScore;
 const BENCH = "C:/Users/crist/bench-visao";
 
@@ -109,13 +112,14 @@ async function runCadence(worker, ds, fps) {
   const tracker = makeTracker(roundMs);
   const det = acc(), trk = acc();
   const gtLastTrack = new Map();
-  let idsw = 0, rounds = 0, reqId = 0, gtSeen = 0;
+  let idsw = 0, rounds = 0, reqId = 0, gtSeen = 0, inferSum = 0, inferN = 0;
 
   for (let i = 0; i < ds.frameNums.length; i += step) {
     const f = ds.frameNums[i];
     const file = ds.framePath(f);
     if (!fs.existsSync(file)) continue;
-    const resp = await worker.detect(++reqId, fs.readFileSync(file));
+    const resp = await worker.detect(++reqId, fs.readFileSync(file), TILES);
+    if (resp.inferMs) { inferSum += resp.inferMs; inferN++; }
     const persons = (resp.dets || [])
       .filter((d) => d.class === "person" && Array.isArray(d.bbox))
       .map((d) => ({ box: d.bbox, score: d.score, bbox: d.bbox }));
@@ -144,7 +148,7 @@ async function runCadence(worker, ds, fps) {
     for (let g = 0; g < gtBoxes.length; g++) if (!mt.gt[g]) trk.fn++;
   }
   const durS = (rounds * roundMs) / 1000;
-  return { fps, rounds, det: prf(det), trk: prf(trk), idsw, idswPerS: durS ? idsw / durS : 0, gtSeen };
+  return { fps, rounds, det: prf(det), trk: prf(trk), idsw, idswPerS: durS ? idsw / durS : 0, gtSeen, inferMs: inferN ? Math.round(inferSum / inferN) : 0 };
 }
 
 (async () => {
@@ -157,7 +161,7 @@ async function runCadence(worker, ds, fps) {
   const modelPath = resolveModelPath();
   const worker = startWorker(modelPath, { scoreMin: PRECISION.detector.scoreMin });
   const info = await worker.ready;
-  console.log(`[eval] modelo ${info.model} (input ${info.input}) · cadências ${CADENCES.join("/")} fps\n`);
+  console.log(`[eval] modelo ${info.model} (input ${info.input}) · tiling ${TILES ? "2×2" : "não"} · cadências ${CADENCES.join("/")} fps\n`);
 
   const rows = [];
   for (const fps of CADENCES) {
@@ -167,13 +171,13 @@ async function runCadence(worker, ds, fps) {
   }
   worker.kill();
 
-  console.log(`\n═══ RECONHECIMENTO DE PESSOAS — ${ds.name} (GT à mão) ═══`);
-  console.log("fps | detector R/P     | emitido (track) R/P | ID-sw (tot/seg) | rodadas");
-  console.log("----+------------------+---------------------+-----------------+--------");
+  console.log(`\n═══ RECONHECIMENTO DE PESSOAS — ${ds.name} · ${info.model} in${info.input} tiling:${TILES ? "2×2" : "-"} ═══`);
+  console.log("fps | detector R/P     | emitido (track) R/P | ID-sw (tot/seg) | infer ms | rodadas");
+  console.log("----+------------------+---------------------+-----------------+----------+--------");
   for (const r of rows)
     console.log(
       `${String(r.fps).padStart(3)} | ${pct(r.det.r).padStart(6)}/${pct(r.det.p).padStart(6)}   | ` +
-        `${pct(r.trk.r).padStart(6)}/${pct(r.trk.p).padStart(6)}      | ${String(r.idsw).padStart(5)}/${r.idswPerS.toFixed(2).padStart(5)} | ${r.rounds}`,
+        `${pct(r.trk.r).padStart(6)}/${pct(r.trk.p).padStart(6)}      | ${String(r.idsw).padStart(5)}/${r.idswPerS.toFixed(2).padStart(5)} | ${String(r.inferMs).padStart(8)} | ${r.rounds}`,
     );
   console.log(`\n${nGtTracks} identidades GT. detector R = teto do D-FINE; queda p/ emitido = perda do tracker; precisão<100% = FP ("inventa pessoa").`);
 })();
