@@ -1458,7 +1458,22 @@ export function CameraWorkspace({
       // title (não Tooltip) é intencional: a casca do tile é localizada pelo e2e via
       // `.tile[title='Abrir câmera']` (contrato de seletor, app.spec.ts). Trocar por <Tooltip>
       // remove o atributo e quebra o teste. Mantido como affordance nativa do card.
-      <div className={`tile ${alertCount ? "alerting" : ""}`} onClick={onOpen} title="Abrir câmera">
+      // A11y (R-C): a casca clicável ganha role/tabIndex/teclado — abrir a câmera não pode
+      // ser só-mouse (WCAG). Fica <div role="button"> (não <button>) p/ NÃO herdar chrome
+      // nativo nem exigir reset da .tile compartilhada; o foco visível mora em .tile:focus-visible.
+      <div
+        className={`tile ${alertCount ? "alerting" : ""}`}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen?.(); // onOpen é opcional (espelha onClick={onOpen}, no-op se indefinido)
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        title="Abrir câmera"
+      >
         <div className="viewport tile-vp" ref={viewportRef}>
           <canvas ref={canvasRef} />
           <div className="tile-badges">

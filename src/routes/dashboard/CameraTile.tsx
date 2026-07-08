@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
@@ -9,6 +9,19 @@ import { Tooltip } from "../../ui";
 import { TrackOverlay } from "./TrackOverlay";
 import { type Camera, type CameraStatus } from "./types";
 import "./go2rtc-tile.css";
+
+// a11y (WCAG 2.1.1): o tile clicável é um <button> (não <div onClick>) → foco + Enter/Espaço
+// nativos. Reset só dos defaults de botão que a classe .tile NÃO define (padding/font/cor/
+// alinhamento + chrome nativo); background/border/cursor/flex continuam vindo da .tile, então a
+// aparência do tile não muda. (Cópia local — o tile de fadiga em FadigaView usa a mesma intenção.)
+const TILE_BTN_RESET: CSSProperties = {
+  appearance: "none",
+  WebkitAppearance: "none",
+  padding: 0,
+  font: "inherit",
+  color: "inherit",
+  textAlign: "inherit",
+};
 
 // ── Tile da grade: vídeo via WebRTC do go2rtc OU canvas MJPEG do relé ───────────────────────────
 // Transporte por câmera (camcfg `transport`): "webrtc" exibe por `<video-stream>` (WebRTC/MSE/HLS/
@@ -237,15 +250,17 @@ export const CameraTile = memo(function CameraTile({
     <div className="tile tile-open">em pausa</div>
   ) : transport === "webrtc" ? (
     // Vídeo fluido via go2rtc, sem inferência local aqui; as caixas do hub vêm interpoladas
-    // por cima (TrackOverlay). Clique abre a câmera, como nos demais.
-    <div className="tile" onClick={openSelf}>
+    // por cima (TrackOverlay). Clique/Enter/Espaço abre a câmera, como nos demais. <button>
+    // (teclado-acessível) sem título 'Abrir câmera': o seletor e2e mira só o tile do
+    // CameraWorkspace — este não deve casá-lo. Conteúdo sem interativos → <button> é válido.
+    <button type="button" className="tile" onClick={openSelf} style={TILE_BTN_RESET}>
       <Go2rtcVideoTile
         key={`rtc-${camera.id}`}
         camId={camera.id}
         getHubAnalysis={getHubAnalysis}
         onWebrtcFail={onWebrtcFail}
       />
-    </div>
+    </button>
   ) : isFadiga ? (
     <FadigaView
       key={`fad-${camera.id}`}

@@ -219,6 +219,21 @@
   outline-offset: -2px;
 }
 
+/* a11y (WCAG 2.4.7 · foco visível): as superfícies clicáveis de domínio do Relatório já são
+   <button>, mas herdavam só o anel do agente de usuário. Anel de foco explícito e consistente
+   com o design system (ui.css → var(--accent)) e com os outlines de seleção acima. Regra
+   agrupada; só as variantes clicáveis — .evo-col/.hm-cell "puros" são div/span não-focáveis e
+   nunca casam :focus-visible. (.resumo-card é estilada no index.css; o anel mora aqui, com as
+   demais superfícies do Relatório, para não tocar o CSS global.) */
+.resumo-card:focus-visible,
+.alarm-card:focus-visible,
+.evo-col.clk:focus-visible,
+.hm-cell.clk:focus-visible,
+.linkbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .alarm-toolbar {
   display: flex;
   flex-wrap: wrap;

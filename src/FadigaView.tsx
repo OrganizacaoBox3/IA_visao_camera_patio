@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { RotateCcw, Smartphone } from "lucide-react";
 import { APP_CONFIG } from "./config";
 import { type FrameSource } from "./frame";
@@ -43,6 +43,19 @@ const DETECTORS = [
   ["phone", "Celular"],
   ["risk", "Risco"],
 ] as const;
+
+// a11y (WCAG 2.1.1): o tile da grade é um <button> (não <div onClick>) → foco + Enter/Espaço
+// nativos. Reset só dos defaults de botão que a classe .tile NÃO define (padding/font/cor/
+// alinhamento + chrome nativo); background/border/cursor/flex e a cor de estado (.fadiga-tile.*)
+// continuam vindo do CSS, então a aparência do tile não muda.
+const TILE_BTN_RESET: CSSProperties = {
+  appearance: "none",
+  WebkitAppearance: "none",
+  padding: 0,
+  font: "inherit",
+  color: "inherit",
+  textAlign: "inherit",
+};
 
 type Props = {
   cameraId: string;
@@ -269,7 +282,12 @@ export function FadigaView({
   if (mode === "tile") {
     return (
       <Tooltip content="Abrir monitor do operador">
-        <div className={`tile fadiga-tile ${RISK_CLS[risk]}`} onClick={onOpen}>
+        <button
+          type="button"
+          className={`tile fadiga-tile ${RISK_CLS[risk]}`}
+          onClick={onOpen}
+          style={TILE_BTN_RESET}
+        >
           <div className="viewport tile-vp" ref={viewportRef}>
             <canvas ref={canvasRef} />
             <div className="tile-badges">
@@ -293,7 +311,7 @@ export function FadigaView({
               {signal !== "SEM_SINAL" ? signal : `${handCount} mão(s)`}
             </span>
           </div>
-        </div>
+        </button>
       </Tooltip>
     );
   }
