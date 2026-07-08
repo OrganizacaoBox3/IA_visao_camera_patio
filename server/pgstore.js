@@ -17,7 +17,9 @@ const HOUR = 3_600_000;
 const hourOf = (ts) => Math.floor(ts / HOUR) * HOUR;
 
 // ── FALLBACK JSON: estado + persistência ─────────────────────────────────────
-const FILE = path.join(__dirname, "data-hist.json");
+// DATA_HIST_PATH: override do arquivo do fallback (default = server/data-hist.json). Ops pode
+// relocar (ex.: volume dedicado); o teste de contrato aponta p/ um tmp — não toca o estado real.
+const FILE = process.env.DATA_HIST_PATH || path.join(__dirname, "data-hist.json");
 const KINDS = ["ativ", "read", "obj", "fad", "flow"];
 const RETENTION_DAYS = Math.max(1, Number(process.env.DATA_HIST_RETENTION_DAYS ?? 30));
 const DAY_MS = 86_400_000;
