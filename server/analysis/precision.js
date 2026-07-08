@@ -57,10 +57,13 @@ const PRECISION = Object.freeze({
     //    0.7 conservador: duas pessoas realmente lado a lado não se contêm a 70%.
     //    SENSOR: `node eval/run-eval.mjs --mode tiled`.
     containment: 0.7,
-    // 5. Alvo do resize squash (ANALYSIS_INPUT). 640 = input de treino; a MEDIÇÃO
-    //    mandou manter (512 = -23% CPU MAS -7-8pp recall de pessoa pequena no
-    //    full-set — trade rejeitado; 416 reprova o gate).
-    //    SENSOR: gate + FULL-SET obrigatório (evidência: perf-input-size-dfine.md).
+    // 5. Alvo do resize squash (ANALYSIS_INPUT). 640 = input de treino (default).
+    //    ESCAPE-HATCH MEDIDO (opt-in por deploy): 896 = +5 a +8pp de recall em CENA
+    //    DENSA (multidão), precisão INTACTA, a ~1,87× CPU/frame (≈ metade das câmeras
+    //    por core) — vale onde o HW afona; default fica 640 p/ não dobrar CPU em box
+    //    apertado (homolog 4-core). 512 = -23% CPU mas -7-8pp recall pequena; 416 reprova.
+    //    SENSOR: eval/persons-cftv.mjs (MOT20, GT) + gate. Evidência: reconhecimento-
+    //    pessoas/04-resultado-fullset-capacidade.md + perf-input-size-dfine.md.
     input: resolveInputSize(),
     // 6. Grid do perfil longRange (tiling estilo SAHI): 2×2/0.1 espelha o front
     //    (src/vision/detect.ts). Fixo (YAGNI): grid maior re-quadruplica o custo
