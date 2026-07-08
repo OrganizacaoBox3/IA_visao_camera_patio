@@ -154,7 +154,11 @@ const ioAnalysis = analysisTee(io);
 io.use((socket, next) => {
   const token = socket.handshake.auth && socket.handshake.auth.token;
   const role = socket.handshake.query.role;
-  if (role === "camera" && process.env.CAMERA_TOKEN && token === process.env.CAMERA_TOKEN)
+  if (
+    role === "camera" &&
+    process.env.CAMERA_TOKEN &&
+    users.constantTimeEqual(token, process.env.CAMERA_TOKEN)
+  )
     return next();
   const user = users.verifyToken(token);
   if (!user) return next(new Error("unauthorized"));
@@ -232,6 +236,29 @@ io.on("connection", (socket) => {
     events.init(),
     camcfg.init(),
   ]);
+  // Guarda de segurança do boot (auditoria 01, R-A): recusa DEFAULTS INSEGUROS em produção.
+  // Detecta AUTH_SECRET no default (tokens forjáveis) E senha de superadmin ainda 'admin@box3'
+  // (inclui instalação ANTIGA cuja senha foi gravada com o default). SEMPRE avisa; em
+  // NODE_ENV=production, ABORTA (fail-closed — melhor não subir que subir inseguro).
+  {
+    const insecure = users.insecureDefaults();
+    if (insecure.authSecret || insecure.adminPassword) {
+      const itens = [
+        insecure.authSecret &&
+          "AUTH_SECRET está no DEFAULT — defina um AUTH_SECRET forte (env do systemd)",
+        insecure.adminPassword &&
+          "a senha do superadmin ainda é o DEFAULT 'admin@box3' — troque na UI (ou SUPERADMIN_PASSWORD no 1º boot de um banco limpo)",
+      ].filter(Boolean);
+      const bar = "═".repeat(72);
+      console.error(`\n${bar}\n⚠  SEGURANÇA — DEFAULTS INSEGUROS ATIVOS:\n   • ${itens.join("\n   • ")}\n${bar}\n`);
+      if (process.env.NODE_ENV === "production") {
+        console.error(
+          "[boot] NODE_ENV=production com defaults inseguros → ABORTANDO. Corrija os itens acima e reinicie.",
+        );
+        process.exit(1);
+      }
+    }
+  }
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
   // Motor de análise no hub (ADR-009): D-FINE em worker process, ingest direto no pgstore.
   // Liga/desliga por ANALYSIS_ENABLED (ver server/analysis/engine.js). Câmera analisada conta

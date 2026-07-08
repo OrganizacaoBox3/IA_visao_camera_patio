@@ -112,6 +112,7 @@ Environment=ANALYSIS_ENABLED=1
 Environment=ANALYSIS_MODEL=s          # s=recall (default) · n=leve (CPU apertada) · m=teto
 # Environment=ANALYSIS_MODEL_PATH=/var/www/visao-patio/server/models/dfine_s_obj2coco.onnx  # só offline
 Environment=AUTH_SECRET=<GERE_UM_NOVO_SEGREDO_FORTE>      # ROTACIONAR (esteve exposto)
+Environment=NODE_ENV=production       # LIGA a guarda de boot (fail-closed) — ver aviso abaixo
 # Postgres (recomendado; sem isto usa fallback JSON):
 Environment=PGHOST=127.0.0.1
 Environment=PGPORT=5432
@@ -119,6 +120,15 @@ Environment=PGDATABASE=visao
 Environment=PGUSER=visao
 Environment=PGPASSWORD=<SENHA_NOVA>   # ROTACIONAR
 ```
+
+> **⚠ Guarda de boot de segurança (R-A, auditoria 01).** Com `NODE_ENV=production`, o hub **RECUSA
+> subir (exit 1)** se: (a) `AUTH_SECRET` estiver no default, ou (b) a senha do superadmin ainda for
+> o default `admin@box3`. Isto é fail-closed (melhor não subir que subir inseguro). **Ordem correta:**
+> **(1)** defina `AUTH_SECRET` forte; **(2)** entre na UI e **troque a senha do admin** (o
+> `SUPERADMIN_PASSWORD` só vale no 1º boot de um banco LIMPO — num homolog já existente, é pela UI);
+> **(3)** só então ligue `NODE_ENV=production`. Sem `NODE_ENV=production` o hub sobe mas **loga o aviso
+> a cada boot**. O login também ganhou **trava de brute-force** (429 após ~10 tentativas/IP em 15min;
+> tunável por `LOGIN_MAX_ATTEMPTS`/`LOGIN_WINDOW_MS`).
 Envs avançadas de tuning do motor (`ANALYSIS_FPS`, `ANALYSIS_HIGH_SCORE`, `ANALYSIS_SCORE_MIN`,
 `ANALYSIS_INTRA_THREADS`, `ANALYSIS_NMS_IOU`, `DATA_HIST_RETENTION_DAYS`) têm defaults sensatos —
 ver `server/analysis/README.md`. Só mexa se o dimensionamento pedir.

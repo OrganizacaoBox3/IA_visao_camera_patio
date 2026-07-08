@@ -14,7 +14,10 @@ const crypto = require("node:crypto");
 const db = require("./db");
 
 const FILE = path.join(__dirname, "users.json");
-const AUTH_SECRET = process.env.AUTH_SECRET || "dev-inseguro-troque-AUTH_SECRET-em-producao";
+// Defaults INSEGUROS (só p/ dev/1º boot) — a guarda de boot (insecureDefaults) os recusa em produção.
+const DEFAULT_AUTH_SECRET = "dev-inseguro-troque-AUTH_SECRET-em-producao";
+const DEFAULT_ADMIN_PASSWORD = "admin@box3";
+const AUTH_SECRET = process.env.AUTH_SECRET || DEFAULT_AUTH_SECRET;
 const TOKEN_TTL_MS = Number(process.env.AUTH_TTL_MS ?? 7 * 24 * 3600 * 1000);
 
 let users = []; // cache
@@ -68,6 +71,31 @@ function authenticate(usuario, senha) {
   return { token: signToken(u), user: { id: u.id, usuario: u.usuario, papel: u.papel } };
 }
 
+// Guarda de segurança do boot (auditoria 01, R-A): quais defaults INSEGUROS estão ATIVOS agora.
+//  · authSecret: o segredo de assinatura ainda é o default → tokens forjáveis por quem conhece o repo.
+//  · adminPassword: algum superadmin ATIVO ainda tem a senha default → detecta inclusive instalação
+//    ANTIGA cuja senha foi GRAVADA com o default (o caso do homolog — o env já não a revela).
+// Args injetáveis (secret/list) p/ teste; sem args, lê o estado real do módulo.
+function insecureDefaults({ secret = AUTH_SECRET, list = users } = {}) {
+  return {
+    authSecret: secret === DEFAULT_AUTH_SECRET,
+    adminPassword: list.some(
+      (u) => u.papel === "superadmin" && u.ativo && verifyPassword(u.senhaHash, DEFAULT_ADMIN_PASSWORD),
+    ),
+  };
+}
+
+// Comparação de string em tempo ~constante p/ tokens de dispositivo (CAMERA_TOKEN, index.js).
+// Comprimentos diferentes já não casam; iguais → timingSafeEqual. (O vazamento de tamanho é
+// aceitável p/ um token compartilhado — coerente com o timingSafeEqual do token de sessão.)
+function constantTimeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 // ── persistência (PG ou JSON) ─────────────────────────────────────────────────
 function saveFile() {
   try {
@@ -105,7 +133,7 @@ function newSuperadmin() {
   return {
     id: genId(),
     usuario: process.env.SUPERADMIN_USER || "admin",
-    senhaHash: hashPassword(process.env.SUPERADMIN_PASSWORD || "admin@box3"),
+    senhaHash: hashPassword(process.env.SUPERADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD),
     papel: "superadmin",
     ativo: true,
     whatsapp: "",
@@ -251,6 +279,8 @@ module.exports = {
   getProfile,
   updateProfile,
   hashPassword,
+  insecureDefaults,
+  constantTimeEqual,
   genId,
   getById,
   all: () => users,
