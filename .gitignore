@@ -73,3 +73,6 @@ server/go2rtc.yaml
 eval/data/
 eval/last-results.json
 eval/model-comparison.json
+
+# dataset de eval (MOT20) — não versionar
+archive.zip
