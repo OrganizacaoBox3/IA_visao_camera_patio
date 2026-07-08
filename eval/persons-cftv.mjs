@@ -130,7 +130,7 @@ async function runCadence(worker, ds, fps) {
     rounds++;
 
     const md = matchGreedy(persons, gtBoxes, IOU_MATCH);
-    for (let k = 0; k < persons.length; k++) md.det[k] >= 0 ? det.tp++ : det.fp++;
+    for (let k = 0; k < persons.length; k++) if (md.det[k] >= 0) det.tp++; else det.fp++;
     for (let g = 0; g < gtBoxes.length; g++) if (!md.gt[g]) det.fn++;
 
     const emitted = tracker.update(persons.map((p) => ({ score: p.score, bbox: p.bbox })), now, HIGH_SCORE);
