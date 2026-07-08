@@ -221,6 +221,16 @@ jobs:
           cleanup() { rm -rf "$STAGE" 2>/dev/null || true; rm -f "$TAR"; }
           trap cleanup EXIT
 
+          # [0/7] Poda de backups antigos ANTES do pre-check (libera disco → a checagem passa).
+          # OPT-IN e NÃO-FATAL: se o script root-owned visao-prune-backups não estiver instalado
+          # (setup 1× — doc §2.3.1), pula e segue com a poda manual. Todo o escopo seguro (só
+          # /var/www/visao-patio.bak-*, sem argumentos, mantém o mais recente) vive NO script (dono
+          # root; o deploy só executa), não aqui — o CD não ganha um `rm` genérico.
+          echo "== [0/7] poda de backups antigos (opt-in; mantém o mais recente p/ rollback) =="
+          if $SUDO /usr/local/sbin/visao-prune-backups 2>/dev/null; then :; else
+            echo "[prune] visao-prune-backups ausente/não-autorizado — poda MANUAL (doc §6). Prosseguindo."
+          fi
+
           echo "== [1/7] pré-checagens (o CD atualiza; NÃO faz o setup inicial) =="
           test -f "$TAR" || { echo "ERRO: release não encontrado em $TAR"; exit 1; }
           test -d "$APP" || { echo "ERRO: $APP não existe — rode o setup inicial (docs/deploy-digitalocean.md)"; exit 1; }
@@ -238,8 +248,8 @@ jobs:
           NEED_BYTES=$(( APP_BYTES * 13 / 10 + 1073741824 ))
           fmt_gb() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1073741824 }'; }
           if [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
-            echo "ERRO: Espaço insuficiente: livre $(fmt_gb "$FREE_BYTES") GB, necessário $(fmt_gb "$NEED_BYTES") GB (app $(fmt_gb "$APP_BYTES") GB × 1,3 + 1GB p/ backup+staging+npm) — remova backups antigos (ls -dt $APP.bak-*) ou libere disco."
-            echo "      (o CD NUNCA apaga nada sozinho — a poda de backups é manual, decisão deliberada; doc §6)"
+            echo "ERRO: Espaço insuficiente: livre $(fmt_gb "$FREE_BYTES") GB, necessário $(fmt_gb "$NEED_BYTES") GB (app $(fmt_gb "$APP_BYTES") GB × 1,3 + 1GB p/ backup+staging+npm)."
+            echo "      A poda automática do [0/7] já manteve só o backup mais recente. Se AINDA falta: instale o visao-prune-backups (doc §2.3.1) OU libere disco à mão (ls -dt $APP.bak-*; ou outras apps do VPS compartilhado). O CD só poda os PRÓPRIOS backups — nunca a app viva nem outra app."
             exit 1
           fi
           echo "espaço OK: livre $(fmt_gb "$FREE_BYTES") GB ≥ necessário $(fmt_gb "$NEED_BYTES") GB (app $(fmt_gb "$APP_BYTES") GB)"

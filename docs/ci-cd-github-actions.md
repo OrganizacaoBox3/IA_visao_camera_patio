@@ -142,9 +142,15 @@ Cmnd_Alias VISAO_SVC    = /usr/bin/systemctl cat visao-hub, \
                           /usr/bin/systemctl restart visao-hub, \
                           /usr/bin/systemctl status visao-hub --no-pager
 Cmnd_Alias VISAO_LOGS   = /usr/bin/journalctl -u visao-hub *
+Cmnd_Alias VISAO_PRUNE  = /usr/local/sbin/visao-prune-backups
 
-deploy ALL=(root) NOPASSWD: VISAO_BACKUP, VISAO_STAGE, VISAO_PLACE, VISAO_NPM, VISAO_PERMS, VISAO_SVC, VISAO_LOGS
+deploy ALL=(root) NOPASSWD: VISAO_BACKUP, VISAO_STAGE, VISAO_PLACE, VISAO_NPM, VISAO_PERMS, VISAO_SVC, VISAO_LOGS, VISAO_PRUNE
 ```
+
+> **`VISAO_PRUNE` é seguro por construção:** o comando é o SCRIPT root-owned (§2.3.1), **sem
+> argumentos** — todo o "o quê apagar" (só `/var/www/visao-patio.bak-*`, mantém o mais recente)
+> está codificado NO script, que o `deploy` pode executar mas **não editar**. É o oposto de liberar
+> um `rm` genérico no sudoers.
 
 Teste no VPS, logado como `deploy`: `sudo -n systemctl status visao-hub --no-pager`
 (deve responder sem pedir senha) e `sudo -n ls /` (deve **falhar** — não está na lista).
@@ -165,6 +171,25 @@ assim e aceita o risco explicitamente.
 > **`from=` no authorized_keys** (restringir a chave por IP de origem): só é prático com
 > runner **self-hosted**. Runners GitHub-hosted têm IPs variáveis (ranges enormes em
 > `api.github.com/meta`) — não vale a manutenção agora. Fica como hardening futuro (§8).
+
+### 2.3.1 Poda automática de backups (recomendado neste VPS a ~99% de disco)
+
+O CD cria 1 backup (`cp -a`) por deploy; sem poda eles acumulam e o **pre-check de disco do [1/7]
+passa a BLOQUEAR deploys** (aconteceu 2× em jul/08). O CD agora poda **os próprios backups** no
+passo **[0/7]**, ANTES do pre-check — mas só se este script root-owned estiver instalado (opt-in;
+sem ele o CD segue e a poda é manual). Instale **1× como root**:
+
+```bash
+# do checkout do repo no VPS (ou copie o arquivo por scp):
+sudo install -o root -g root -m 755 deploy/visao-prune-backups.sh /usr/local/sbin/visao-prune-backups
+# valide (não deve pedir senha; loga o que faria):
+sudo -n /usr/local/sbin/visao-prune-backups
+```
+
+O script (`deploy/visao-prune-backups.sh` no repo) mantém o **backup mais recente** (rollback) e
+remove os antigos — escopo **hardcoded** em `/var/www/visao-patio.bak-*`, **sem argumentos**, nunca
+toca a app viva nem outra app. `KEEP=1` por padrão (edite o script como root se quiser guardar mais).
+Depois de instalar, o `[0/7]` do deploy passa a liberar disco sozinho.
 
 ### 2.4 Cadastrar os secrets — **no environment `homolog`** (crie-o antes, §3)
 
