@@ -37,6 +37,33 @@
 - **Medida 3 — 2-3 tags andando diferente:** o teste real da correlação — separa quem se move distinto?
 - Rodar a estação no **TC22** (não o PC) — o RSSI da antena real pode diferir.
 
-## Implicação de design (já aprendida)
-- `bt_tags` por **MAC** (nome é intermitente). ✓
-- A fusão precisa de **mediana/suavização** por janela + **limiar de confiança** ("não sei" > errar).
+## Medida 2 — RSSI × distância (tag andando 1m→2m→4m→6m, 90s)
+
+Tag identificada pelo TREND (as tags são fisicamente indistinguíveis — só o padrão de queda revela qual
+se moveu). `CE:6E` (a carregada): **-66 → -75 dBm = 9 dB** de queda 1m→6m. Estacionárias: 0-3 dB (ruído).
+
+| | valor | implicação |
+|---|---|---|
+| **Sinal** (1m→6m) | ~9 dB | distância REGISTRA, mas modesto |
+| **Ruído em movimento** | 5-9 dB (desvio) | corpo/orientação add muito ruído ao andar |
+| **SNR** | **≈ 1** | separa PERTO×LONGE; NÃO separa 1-4m (dentro do ruído) |
+
+## VEREDITO do spike (Fase 0) — medido
+
+**1 estação + RSSI-only NÃO separa 3-6 pessoas de forma confiável.** O sinal de distância (9 dB) mal
+supera o ruído de movimento (5-9 dB). Distingue extremos, não posições finas. Confirma o alerta do
+`00-*` §9 — agora com número.
+
+**Achado prático:** tags fisicamente indistinguíveis → precisam de **etiqueta física** (MAC/nome); o
+sistema tem que auto-descobrir a associação (não dá pra confiar que o operador sabe qual tag é de quem).
+
+## Bifurcação (decisão do dono, guiada pelo dado)
+| Opção | O que muda | Viabilidade p/ 3-6 |
+|---|---|---|
+| **A — tags com IMU** (upgrade barato) | acelerômetro = sinal de movimento INDEPENDENTE do RSSI | **Sólida** — o de-risco recomendado |
+| **B — 3 estações** (trilateração) | XY por interseção de 3 anéis + homografia | Sólida, mais infra/calibração |
+| **C — seguir com 1 estação (correlação RSSI×distância-da-câmera)** | fusão marginal + "não sei" frequente | **Marginal** — só pessoas bem separadas/movendo diferente |
+| **D — voltar pro facial** | (o que o dono queria evitar por custo) | precisa/preciso mas caro |
+
+**Recomendação:** **A (tags com IMU)** — o menor custo que torna 3-6 pessoas viável de verdade. Se A não
+for possível, **C como piloto honesto** (assumindo poucos acertos com aglomeração), medindo antes de prometer.
