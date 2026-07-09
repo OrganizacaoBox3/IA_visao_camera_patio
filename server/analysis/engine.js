@@ -31,6 +31,7 @@ const go2rtc = require("../go2rtc");
 const { PRECISION, trackTtlMs } = require("./precision");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
+const { createInflightSlots } = require("./inflight");
 const model = require("./model");
 const autoscale = require("./autoscale");
 const telemetry = require("./telemetry");
@@ -182,12 +183,23 @@ function targetFpsOf(st) {
   return FPS;
 }
 
-// (Re)aplica a cadência efetiva ao estado de UMA câmera (foco > linha > normal).
+// Máx. de inferências EM VOO por câmera. Só a FOCADA paraleliza (mais cadência = marcador acompanha
+// giro/entrada, SEM trocar de modelo → recall intacto); as demais seguem serial (1). Teto = poolSize
+// (nunca mais que os workers); default deixa ≥1 worker p/ as outras (poolSize-1). Env: ANALYSIS_FOCUS_INFLIGHT.
+function focusInflight() {
+  const env = Number(process.env.ANALYSIS_FOCUS_INFLIGHT);
+  const k = Number.isFinite(env) && env > 0 ? env : poolSize - 1;
+  return Math.max(1, Math.min(poolSize, Math.round(k)));
+}
+function maxInflightFor(focused) {
+  return focused ? focusInflight() : 1;
+}
+
+// (Re)aplica a cadência efetiva ao estado de UMA câmera (foco > linha > normal) + o limite de paralelismo.
 function applyRoundMs(st) {
-  st.roundMs = pickRoundMs(
-    { focused: focus.has(st.id), hasLine: camcfg.getTripwires(st.id).length > 0 },
-    ROUNDS,
-  );
+  const focused = focus.has(st.id);
+  st.roundMs = pickRoundMs({ focused, hasLine: camcfg.getTripwires(st.id).length > 0 }, ROUNDS);
+  st.maxInflight = maxInflightFor(focused); // foco paraleliza; resto serial
 }
 
 // Reajusta a cadência SÓ das câmeras que entraram/saíram do foco. Câmera focada sem
@@ -213,8 +225,8 @@ function createState(id) {
   const st = {
     id,
     latest: null, // { buf, ts } — último frame recebido (último-vence)
-    busy: false,
-    inflight: 0,
+    slots: createInflightSlots(), // inferências em voo desta câmera (contador + órfã + ordem — inflight.js)
+    maxInflight: maxInflightFor(focus.has(id)), // foco paraleliza; resto serial (recalc em applyRoundMs)
     // Stagger anti-serrote (perf-round3/frente2-serrote-stagger.md): fase áurea por
     // índice de criação + nascer com lastSentAt=AGORA (não 0) → o 1º despacho cai no
     // PRÓXIMO slot do grid próprio da câmera (dispatchReady, slot absoluto), não no
@@ -328,26 +340,25 @@ async function decodeThumb(jpeg) {
 // de PROBE). Cópia no envio: o buf do relé pode ser view de um buffer maior (RTSP) —
 // a cópia sai 1×/rodada e serializa enxuto no IPC. Câmera longRange leva `tiles`.
 function dispatchToWorker(st, frame, now) {
-  st.busy = true;
-  st.inflight = ++seq;
-  st.inflightTs = frame.ts; // ts da CAPTURA do frame despachado — base do latencyMs no payload
-  // (compensação do overlay lag: reconhecimento-pessoas/07-*). Sobrescrito no próximo despacho;
-  // lido pelo pipeline na MESMA rodada (processRound roda antes do próximo dispatch da câmera).
+  const jobId = ++seq;
+  st.slots.begin(jobId); // ocupa um slot de inferência em voo (inflight.js: contador + órfã + ordem)
   st.lastInferAt = now;
   try {
     workerHost.send({
       type: "detect",
-      id: st.inflight,
+      id: jobId,
       cameraId: st.id,
       jpeg: Buffer.from(frame.buf),
+      // ts da CAPTURA — o worker ECHOA de volta → base do latencyMs (07-*) E da guarda de ordem quando
+      // a focada tem várias inferências em voo (resposta de frame mais velho não regride o tracker).
+      ts: frame.ts,
       ...(st.longRange ? { tiles: LR_TILES } : {}),
       // Câmera FOCADA com input de foco configurado (< global) → inferência mais rápida = overlay mais
       // fresco (07-*). Só manda o campo quando difere do global — o caminho default fica idêntico.
       ...(st.roundMs === ROUND_MS_FOCUS && FOCUS_INPUT !== INPUT ? { input: FOCUS_INPUT } : {}),
     });
   } catch {
-    st.busy = false;
-    st.inflight = 0;
+    st.slots.abort(jobId); // send falhou (canal fechado) → libera o slot p/ re-despacho
   }
 }
 

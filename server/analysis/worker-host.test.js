@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { pickWorker, resolveWorkerCount, dispatchReady, staggerPhaseMs } = require("./worker-host");
+const { createInflightSlots } = require("./inflight");
 
 describe("pickWorker — roteamento por MENOR carga + round-robin no empate", () => {
   const ready = (load) => ({ ready: true, load });
@@ -21,7 +22,7 @@ describe("pickWorker — roteamento por MENOR carga + round-robin no empate", ()
     expect(pickWorker(ws, 0)).toBe(1);
   });
 
-  it("nenhum worker pronto → -1 (o caller trata: reseta st.busy)", () => {
+  it("nenhum worker pronto → -1 (o caller trata: st.slots.abort)", () => {
     expect(pickWorker([{ ready: false, load: 0 }, { ready: false, load: 0 }], 0)).toBe(-1);
     expect(pickWorker([], 0)).toBe(-1);
   });
@@ -91,7 +92,8 @@ describe("resolveWorkerCount — N automático (env pin / cores / câmeras)", ()
 describe("dispatchReady — coalescência/≤1-em-voo + cadência por SLOT ABSOLUTO (fase áurea)", () => {
   const base = () => ({
     fadiga: false,
-    busy: false,
+    slots: createInflightSlots(), // vazio → canBegin true
+    maxInflight: 1,
     latest: { buf: {} },
     lastSentAt: 0,
     staggerIndex: 0,
@@ -103,8 +105,16 @@ describe("dispatchReady — coalescência/≤1-em-voo + cadência por SLOT ABSOL
     expect(dispatchReady(base(), now, 1000)).toBe(true); // slot 100 > slot 0
   });
 
-  it("busy (job em voo) → NÃO despacha (garante ≤1 por câmera)", () => {
-    expect(dispatchReady({ ...base(), busy: true }, now, 1000)).toBe(false);
+  it("slot cheio (job em voo, serial max=1) → NÃO despacha (coalescência)", () => {
+    const slots = createInflightSlots();
+    slots.begin(1);
+    expect(dispatchReady({ ...base(), slots, maxInflight: 1 }, now, 1000)).toBe(false);
+  });
+
+  it("FOCADA (maxInflight>1): com 1 em voo AINDA despacha (paralelismo do foco)", () => {
+    const slots = createInflightSlots();
+    slots.begin(1);
+    expect(dispatchReady({ ...base(), slots, maxInflight: 3 }, now, 1000)).toBe(true);
   });
 
   it("sem frame novo (latest null) → NÃO despacha (último-vence: nada a mandar)", () => {
@@ -236,7 +246,8 @@ describe("dispatchReady — slot absoluto NÃO re-alinha sob jitter (a matemáti
   }
   const mkCam = (i, roundMs = 1000) => ({
     fadiga: false,
-    busy: false,
+    slots: createInflightSlots(),
+    maxInflight: 1,
     latest: { buf: {} },
     lastSentAt: 0,
     staggerIndex: i,

@@ -291,9 +291,10 @@ async function drain() {
       // Validado [160,1024]; ausente/inválido → SIZE (input global, comportamento de sempre).
       const size = Number.isFinite(job.input) && job.input >= 160 && job.input <= 1024 ? job.input : SIZE;
       // pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
+      // ts: ECHO do ts de captura (engine → guarda de ordem + latencyMs no worker-host).
       if (job.tiles && (job.tiles.cols > 1 || job.tiles.rows > 1)) {
         const r = await detectTiled(job.jpeg, job.tiles, size);
-        send({ id: job.id, cameraId, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
+        send({ id: job.id, cameraId, ts: job.ts, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
       } else {
         const t0 = performance.now();
         const tensor = await preprocess(job.jpeg, size);
@@ -303,6 +304,7 @@ async function drain() {
         send({
           id: job.id,
           cameraId,
+          ts: job.ts,
           dets: postprocess(outputs),
           decodeMs: Math.round(t1 - t0),
           inferMs: Math.round(t2 - t1),

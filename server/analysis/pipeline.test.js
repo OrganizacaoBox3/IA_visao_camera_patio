@@ -100,17 +100,16 @@ describe("processRound — filtro de entrada", () => {
     expect(Object.keys(payload).sort()).toEqual(["cameraId", "latencyMs", "tracks", "ts", "zones"]);
     expect(payload.cameraId).toBe("cam1");
     expect(payload.ts).toBe(1000);
-    expect(payload.latencyMs).toBe(0); // sem inflightTs (frame não despachado neste unitário) → 0
+    expect(payload.latencyMs).toBe(0); // sem 4º arg (latencyMs) → default 0
     expect(Object.keys(payload.tracks[0]).sort()).toEqual(["bbox", "cx", "cy", "id", "score", "vx", "vy", "zone"]);
     expect(payload.tracks[0]).not.toHaveProperty("firstSeen"); // interno do tracker não vaza
     expect(payload.zones).toEqual([{ id: "z1", label: "Doca", people: 1, occupied: true }]);
   });
 
-  it("latencyMs = emissão(now) − ts da CAPTURA do frame despachado (compensação do overlay lag)", () => {
+  it("latencyMs vem do 4º parâmetro (medido no worker-host: Date.now − ts de captura) — vai no payload", () => {
     const st = makeSt();
-    st.inflightTs = 700; // dispatchToWorker registrou a captura em t=700
-    pipeline.processRound(st, [person(0.5, 0.8)], 1000); // emitido em now=1000
-    expect(deps.emitTracks.mock.calls[0][0].latencyMs).toBe(300); // 1000 − 700
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000, 300); // captura em now=1000, latência 300ms
+    expect(deps.emitTracks.mock.calls[0][0].latencyMs).toBe(300);
   });
 });
 

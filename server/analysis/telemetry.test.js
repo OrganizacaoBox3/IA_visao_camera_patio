@@ -8,12 +8,20 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { buildStatus } = require("./telemetry");
 const { createAutoMask, AM_COLS, AM_ROWS, AUTOMASK_MODE } = require("./automask");
+const { createInflightSlots } = require("./inflight");
 
 const NOW = 100_000;
 
+// slots com N inferências em voo (p/ o campo `queue` do status).
+const slotsWith = (n = 0) => {
+  const s = createInflightSlots();
+  for (let i = 1; i <= n; i++) s.begin(i);
+  return s;
+};
+
 function fakeSt(over = {}) {
   return {
-    busy: false,
+    slots: createInflightSlots(),
     latest: null,
     rounds: [],
     detsLog: [],
@@ -85,7 +93,7 @@ describe("buildStatus — agregação por câmera", () => {
         { t: 95_000, n: 2, x: 1, a: 0 },
         { t: 96_000, n: 3, x: 0, a: 0 },
       ],
-      busy: true,
+      slots: slotsWith(1), // 1 inferência em voo
       latest: { buf: Buffer.alloc(0), ts: 99_000 },
       motionRatio: 0.12345,
       lastMs: 380,
@@ -97,7 +105,7 @@ describe("buildStatus — agregação por câmera", () => {
       fps: 0.1,
       targetFps: 1,
       focused: true,
-      queue: 2, // busy + latest pendente
+      queue: 2, // 1 em voo + latest pendente
       skipped1m: 0,
       skippedTotal: 0,
       motion: 0.1235, // arredondado a 4 casas

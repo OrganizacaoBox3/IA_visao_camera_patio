@@ -44,7 +44,7 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
    * (tracker/counter/janela/logs). Emite overlay ao final (inclusive com 0
    * tracks — o dashboard precisa da rodada vazia p/ apagar caixas).
    */
-  function processRound(st, dets, now) {
+  function processRound(st, dets, now, latencyMs = 0) {
     // Zona de EXCLUSÃO (calibração — acuracia-modelos.md Medida A): pessoa cujo PÉ
     // (bottom-center) cai em zona modo "exclusao" é DESCARTADA AQUI — antes de
     // tracking/contagem/ingest/emit. FP de objeto fixo é espacialmente preso; a
@@ -145,9 +145,10 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
         cameraId: st.id,
         ts: now,
         // Latência captura→emissão (ms): quanto o frame ENVELHECEU no pipeline (fila+decode+inferência)
-        // antes de virar caixa. O cliente ancora o keyframe em `recvT - latencyMs` e extrapola pro AGORA
-        // real → a caixa senta na pessoa em vez de nascer ~meio segundo atrás (07-diagnostico-overlay-lag).
-        latencyMs: st.inflightTs ? Math.max(0, now - st.inflightTs) : 0,
+        // antes de virar caixa. Medida no worker-host (Date.now − ts de captura) e passada por parâmetro.
+        // O cliente ancora o keyframe em `recvT - latencyMs` e extrapola pro AGORA real → a caixa senta
+        // na pessoa em vez de nascer ~meio segundo atrás (07-diagnostico-overlay-lag).
+        latencyMs: Math.max(0, latencyMs),
         tracks: tracks.map((t) => ({
           id: t.id,
           bbox: [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], // normalizado 0..1

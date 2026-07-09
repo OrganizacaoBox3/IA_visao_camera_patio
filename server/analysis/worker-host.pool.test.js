@@ -15,6 +15,14 @@ import { EventEmitter } from "node:events";
 
 const require = createRequire(import.meta.url);
 const { createWorkerPool } = require("./worker-host");
+const { createInflightSlots } = require("./inflight");
+
+// state mock com um job em voo (o releaseJob deve liberar o slot → count 0).
+function stComJob(jobId) {
+  const slots = createInflightSlots();
+  slots.begin(jobId);
+  return { slots };
+}
 
 // Fake de ChildProcess: EventEmitter com send/kill/connected (o que o spawnOne usa).
 function makeFake(i) {
@@ -90,26 +98,26 @@ describe("createWorkerPool — REGRESSÃO: um worker cair não derruba o hub", (
   });
 
   it("erro ASSÍNCRONO do send (callback) reverte o job e libera a câmera — sem lançar", () => {
-    const states = new Map([["camA", { inflight: 7, busy: true }]]);
+    const states = new Map([["camA", stComJob(7)]]);
     const { pool, workers, marcarPronto } = montarPool(1, states);
     marcarPronto(workers[0]);
     // canal aberto no snapshot, mas o send entrega o erro no CALLBACK (corrida com o exit)
     workers[0].send = vi.fn((_msg, cb) => cb(new Error("Channel closed")));
     expect(() => pool.send({ id: 7, cameraId: "camA" })).not.toThrow();
-    // job revertido: câmera liberada p/ o tick re-despachar (never-blind)
-    expect(states.get("camA")).toMatchObject({ inflight: 0, busy: false });
+    // slot revertido: câmera liberada p/ o tick re-despachar (never-blind)
+    expect(states.get("camA").slots.count()).toBe(0);
   });
 
   it("erro SÍNCRONO do send (canal já fechado na corrida) reverte e propaga p/ o chamador", () => {
-    const states = new Map([["camA", { inflight: 8, busy: true }]]);
+    const states = new Map([["camA", stComJob(8)]]);
     const { pool, workers, marcarPronto } = montarPool(1, states);
     marcarPronto(workers[0]);
     workers[0].send = vi.fn(() => {
       throw new Error("ERR_IPC_CHANNEL_CLOSED");
     });
-    // propaga (o dispatchToWorker do engine tem try/catch que zera st.busy)…
+    // propaga (o dispatchToWorker do engine tem try/catch que faz st.slots.abort)…
     expect(() => pool.send({ id: 8, cameraId: "camA" })).toThrow(/CHANNEL_CLOSED/);
-    // …mas ANTES de propagar já reverteu o job (não fica câmera presa em busy)
-    expect(states.get("camA")).toMatchObject({ inflight: 0, busy: false });
+    // …mas ANTES de propagar já reverteu o slot (não fica câmera presa)
+    expect(states.get("camA").slots.count()).toBe(0);
   });
 });

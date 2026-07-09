@@ -7,9 +7,11 @@
 //
 // STATELESS POR FRAME: o worker só faz inferência — sem estado por câmera (o
 // tracking/contagem/zonas vive no ENGINE). Logo QUALQUER worker processa QUALQUER
-// frame → roteamento por MENOR-CARGA (fila mais curta), sem assignment sticky. O
-// engine garante ≤1 job em voo por câmera (st.busy) — nunca há 2 frames da mesma
-// câmera concorrendo nem reordenação; a resposta carrega cameraId+id.
+// frame → roteamento por MENOR-CARGA (fila mais curta), sem assignment sticky. Quantos
+// jobs de uma câmera correm em paralelo é do `st.slots` (inflight.js): serial (1) p/ quase
+// todas, a FOCADA paraleliza p/ mais cadência. Sob paralelismo a resposta pode voltar FORA
+// de ordem → a GUARDA DE ORDEM (slots.settle, por ts de captura) descarta o frame mais velho.
+// A resposta carrega cameraId+id+ts(captura).
 //
 // CUSTO declarado: cada worker carrega SUA cópia do .onnx em RAM (~190-240 MB
 // RSS/worker) — o preço do paralelismo real no Node.
@@ -102,8 +104,9 @@ function staggerPhaseMs(index, roundMs) {
 }
 
 /**
- * COALESCÊNCIA/≤1-EM-VOO POR CÂMERA (guarda de despacho, PURA). A câmera despacha
- * neste tick só se: não é fadiga (roda no cliente), não tem job em voo (busy), tem
+ * COALESCÊNCIA/CONCORRÊNCIA POR CÂMERA (guarda de despacho, PURA). A câmera despacha
+ * neste tick só se: não é fadiga (roda no cliente), cabe mais uma inferência em voo (st.slots —
+ * serial p/ quase todas, paralelo no FOCO), tem
  * frame novo (latest, último-vence) e um SLOT NOVO do seu grid próprio começou.
  *
  * Cadência por SLOT ABSOLUTO (grid k·roundMs + fase áurea), não por tempo relativo:
@@ -120,7 +123,9 @@ function staggerPhaseMs(index, roundMs) {
  */
 function dispatchReady(st, now, defaultRoundMs) {
   if (!st || st.fadiga) return false;
-  if (st.busy || !st.latest) return false;
+  // Coalescência: cabe mais uma inferência em voo? Serial (max=1) p/ quase todas; a FOCADA paraleliza
+  // (max>1) — mais cadência SEM trocar de modelo (inflight.js). Sem frame novo → nada a despachar.
+  if (!st.latest || !st.slots.canBegin(st.maxInflight)) return false;
   const r = st.roundMs || defaultRoundMs || 1;
   const ph = staggerPhaseMs(st.staggerIndex, r);
   return Math.floor((now - ph) / r) > Math.floor((st.lastSentAt - ph) / r);
@@ -184,10 +189,7 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
     // (as dos outros workers seguem). Sem isso a câmera ficaria busy p/ sempre.
     for (const [jobId, cameraId] of w.inflight) {
       const st = states.get(cameraId);
-      if (st && st.inflight === jobId) {
-        st.busy = false;
-        st.inflight = 0;
-      }
+      if (st) st.slots.abort(jobId); // libera SÓ os slots dos jobs que estavam NESTE worker (as outras seguem)
     }
     w.inflight.clear();
     if (isStopping()) return;
@@ -225,18 +227,23 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
     if (msg.cpu) sampleCpu(w, msg.cpu);
     w.inflight.delete(msg.id); // job respondeu → sai da carga deste worker
     const st = states.get(msg.cameraId);
-    if (!st || st.inflight !== msg.id) return; // resposta órfã (respawn/prune) — ignora
-    st.busy = false;
-    st.inflight = 0;
-    if (msg.dropped) return; // substituído na fila do worker (último-vence)
+    if (!st) return;
+    // dropped (último-vence na fila do worker) / erro: libera o slot desta câmera SEM aplicar.
+    if (msg.dropped) return void st.slots.abort(msg.id);
     if (msg.error) {
+      st.slots.abort(msg.id);
       st.errors += 1;
       if (st.errors <= 3 || st.errors % 50 === 0)
         console.warn(`[analysis:${st.id}] falha no frame: ${msg.error}`);
       return;
     }
+    // Sucesso: settle libera o slot e diz se DEVE alimentar o tracker — false = resposta órfã
+    // (respawn/prune) OU frame FORA DE ORDEM (captura ≤ última aplicada; guarda essencial sob o
+    // paralelismo da focada, p/ o tempo do tracker nunca voltar). `now` do pipeline = ts de CAPTURA.
+    const captureTs = msg.ts || Date.now();
+    if (!st.slots.settle(msg.id, captureTs)) return;
     st.lastMs = msg.inferMs || 0;
-    onDets(st, Array.isArray(msg.dets) ? msg.dets : [], Date.now());
+    onDets(st, Array.isArray(msg.dets) ? msg.dets : [], captureTs, Math.max(0, Date.now() - captureTs));
   }
 
   // CPU por worker (amostrada dos process.cpuUsage() de cada resposta). O agregado
@@ -272,21 +279,18 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
 
   /**
    * Reverte um job que o worker NÃO aceitou (send falhou): tira da carga deste worker e
-   * libera a câmera (st.busy/inflight) p/ o tick re-despachar. Usado nos DOIS caminhos de
+   * libera o slot da câmera (st.slots.abort) p/ o tick re-despachar. Usado nos DOIS caminhos de
    * falha do send — throw síncrono (canal já fechado) e callback assíncrono (fechou na corrida).
    */
   function releaseJob(w, msg) {
     w.inflight.delete(msg.id);
     const st = states.get(msg.cameraId);
-    if (st && st.inflight === msg.id) {
-      st.busy = false;
-      st.inflight = 0;
-    }
+    if (st) st.slots.abort(msg.id); // libera o slot desta câmera (send falhou) p/ o tick re-despachar
   }
 
   /**
    * Roteia um pedido ao worker PRONTO de MENOR carga (round-robin no empate) e registra o
-   * job em voo (carga). Lança se NENHUM worker está pronto (o tick trata: reseta st.busy).
+   * job em voo (carga). Lança se NENHUM worker está pronto (o tick trata: st.slots.abort).
    * O send do IPC pode falhar na corrida com o exit de um worker: o `connected` no snapshot
    * evita escolher um canal já fechado, e o CALLBACK do send desvia o erro assíncrono do
    * evento 'error' (que mataria o hub) p/ o releaseJob. Throw síncrono também reverte e propaga.

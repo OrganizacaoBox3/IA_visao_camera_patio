@@ -43,7 +43,7 @@ function buildStatus(snap) {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
       targetFps: targetFpsOf(st), // cadência efetiva (foco > linha > normal); 0 se fadiga
       focused: focusedCams.has(id), // aberta em tela cheia por ≥1 dashboard
-      queue: (st.busy ? 1 : 0) + (st.latest ? 1 : 0),
+      queue: st.slots.count() + (st.latest ? 1 : 0), // inferências em voo (foco pode ter >1) + frame pendente
       skipped1m: st.skipLog.length, // rodadas puladas pelo gate nos últimos 60s
       skippedTotal: st.skipped, // total pulado desde o boot
       motion: Math.round(st.motionRatio * 10000) / 10000, // último ratio de movimento (0..1)
