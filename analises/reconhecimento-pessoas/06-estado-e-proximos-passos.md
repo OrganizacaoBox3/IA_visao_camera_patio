@@ -43,6 +43,25 @@ pessoas provavelmente **não é o recall do detector** (o que o fine-tune resolv
 3. **Fine-tune (B)** — só se o diagnóstico (1) confirmar que é recall do detector no cenário real. Precisa
    GPU externa (Colab/cloud). Plano em `05-*`.
 
+## Teste headless do pipeline AO VIVO (2026-07-08) — servidor OK
+
+Sem o DVR, testei o **lado servidor** do pipeline live com a bancada: MediaMTX loop do clipe CAVIAR
+(RTSP h264 1280×960) → hub (ffmpeg ingest) → motor → `analysis-tracks`. Observador socket.io-client
+(30s, câmera `cam-062b8ac8ea`):
+- **27 `analysis-tracks` em 30s (≈1fps), 27/27 COM pessoa, máx 7, média 5,74 pessoas/evento.**
+- **Veredito: o servidor DETECTA e EMITE pessoas no feed ao vivo — ingest→decode→detecção→emissão OK.**
+
+**Consequência p/ a pista do DVR:** o pipeline server-side live está **saudável** — logo o "não marca com
+1-2 pessoas" no DVR **não é** bug genérico de detecção/ingest do servidor. Restam 2 suspeitos:
+1. **Renderização no cliente** (o navegador não desenha os tracks que o servidor MANDA) — a hipótese do dono.
+2. **Específico do DVR** (decode do H.265, a cena com pessoas longe/pequenas no ângulo real, ou o stream
+   cadastrado) — que a bancada (CAVIAR) não reproduz.
+
+**Próximo teste barato (o dono, no navegador, AGORA):** abrir `localhost:5173` → câmera **"Bancada CFTV
+(CAVIAR loop)"** → **os quadros das pessoas desenham?** Se SIM → o cliente renderiza bem → o problema do
+DVR é específico dele (decode/cena/stream). Se NÃO → o bug é o overlay do cliente. Isola sem o DVR.
+*(MediaMTX + a câmera de bancada ficaram no ar pra esse teste visual.)*
+
 ## O aprendizado (honesto)
 O eval mede o DETECTOR isolado (frames limpos). A experiência do dono mede o **sistema inteiro ao vivo**
 (ingest→decode→análise→overlay→tela). Um pode estar bom e o outro ruim. **Antes de investir no fine-tune
