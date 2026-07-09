@@ -3,6 +3,7 @@
 // CRUD de tags (superadmin, routes/bt-tags.js) — responsabilidade única. Leituras são efêmeras (LGPD).
 const btReadings = require("../bt-readings");
 const btLocations = require("../bt-locations");
+const btTags = require("../bt-tags");
 const users = require("../users");
 
 // Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita
@@ -63,6 +64,33 @@ async function handle(req, res, ctx) {
   if (req.url === "/api/bt/locations" && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
     json(res, 200, btLocations.snapshot());
+    return true;
+  }
+
+  // Estação/app (TC22) → hub: NOMEIA uma tag pelo app (UPSERT por MAC). Mesma auth de device do /reading.
+  // Enriquece bt-readings/mapa via bt-tags.match(mac). LGPD: só cadastro (metadado) é persistido.
+  if (req.url === "/api/bt/tag-name" && req.method === "POST") {
+    if (!tokenOk(req)) {
+      json(res, 401, { error: "token de estação inválido" });
+      return true;
+    }
+    let body;
+    try {
+      body = JSON.parse((await readBody(req)) || "{}");
+    } catch {
+      json(res, 400, { error: "json inválido" });
+      return true;
+    }
+    if (typeof body.mac !== "string" || !body.mac.trim() || typeof body.name !== "string" || !body.name.trim()) {
+      json(res, 400, { error: "mac e name obrigatórios" });
+      return true;
+    }
+    const r = await btTags.upsertByMac(body.mac, body.name);
+    if (r.error) {
+      json(res, 400, { error: r.error });
+      return true;
+    }
+    json(res, 200, { ok: true, tag: r.tag });
     return true;
   }
 

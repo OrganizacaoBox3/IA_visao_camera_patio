@@ -100,4 +100,27 @@ function match(btName) {
   return list.find((t) => t.ativo !== false && key(t.btName) === k) || null;
 }
 
-module.exports = { init, create, update, remove, match, all: () => list };
+// UPSERT por MAC (device-facing, TC22 nomeia a tag pelo app): chave = MAC MAIÚSCULO. Atualiza o rótulo
+// da tag existente ou cria uma nova (MESMO shape do create). Enriquece bt-readings/mapa via match(mac).
+async function upsertByMac(mac, rotulo) {
+  const m = key(mac);
+  if (!m) return { error: "mac obrigatório" };
+  const existente = list.find((t) => key(t.btName) === m);
+  if (existente) {
+    existente.rotulo = norm(rotulo) || existente.rotulo;
+    await persist(existente);
+    return { tag: existente };
+  }
+  const t = {
+    id: "bt" + crypto.randomBytes(5).toString("hex"),
+    btName: m,
+    rotulo: norm(rotulo) || m,
+    ativo: true,
+    criadoEm: Date.now(),
+  };
+  list.push(t);
+  await persist(t);
+  return { tag: t };
+}
+
+module.exports = { init, create, update, remove, match, upsertByMac, all: () => list };

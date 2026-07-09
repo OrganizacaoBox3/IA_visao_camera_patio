@@ -93,8 +93,8 @@ type NavItem = {
   mobileHide?: boolean;
 };
 type NavGroup = { id: string; title: string; items: NavItem[] };
-// Resultado da busca: item de menu ou câmera. Câmera navega p/ a Central ("/") — não há
-// deep-link de câmera aberta hoje; quando houver, troque o `to` aqui.
+// Resultado da busca: item de menu ou câmera. Câmera navega p/ o Monitoramento
+// ("/monitoramento") — não há deep-link de câmera aberta hoje; quando houver, troque o `to` aqui.
 type SearchHit = { id: string; label: string; hint: string; icon: LucideIcon; to: string };
 
 // Busca acento-insensível (relatório/relatorio, câmera/camera).
@@ -219,15 +219,16 @@ export function AppShell() {
       id: "op",
       title: "Operação",
       items: [
-        { to: "/", end: true, icon: LayoutDashboard, label: "Central" },
+        // HOME: o Mapa (estilo AirTag) é a tela principal — última localização de cada tag.
+        { to: "/", end: true, icon: MapPin, label: "Mapa" },
+        // Monitoramento (câmeras ao vivo): o antigo dashboard "Central" agora tem lar próprio.
+        { to: "/monitoramento", icon: LayoutDashboard, label: "Monitoramento", short: "Monitor" },
         // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
         // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
         { to: "/cameras", icon: Video, label: "Câmeras" },
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
         // Tags BLE (identidade aumentada) + Calibração de câmera — Fase 1/1.5 do plano de tags.
         { to: "/tags-ble", icon: Bluetooth, label: "Tags BLE" },
-        // Mapa (estilo AirTag): última localização conhecida de cada tag no OpenStreetMap.
-        { to: "/mapa", icon: MapPin, label: "Mapa" },
         { to: "/calibracao", icon: Ruler, label: "Calibração" },
       ],
     },
@@ -276,7 +277,7 @@ export function AppShell() {
             label: c.label || c.id,
             hint: "Câmera",
             icon: Cctv,
-            to: "/",
+            to: "/monitoramento",
           })),
       ];
   const sel = Math.min(activeIdx, Math.max(hits.length - 1, 0));

@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { MapPin, Radar } from "lucide-react";
-import { PageHeader, Badge, EmptyState, ScrollArea } from "../ui";
+import { MapPin, Radar, Search, X } from "lucide-react";
+import { PageHeader, Badge, EmptyState, ScrollArea, Input } from "../ui";
 import { getBtLocations, type TagLocation } from "../api";
+
+// Busca acento-insensível (rótulo "João" casa "joao"; MAC casa por substring).
+const norm = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
 
 // Mapa OpenStreetMap com a ÚLTIMA localização de cada tag (estilo AirTag). O TC22 é MÓVEL: a
 // posição mostrada é onde o celular estava quando viu a tag por último — não a posição "ao vivo".
@@ -73,6 +80,9 @@ export function TagsMapPage() {
   const [now, setNow] = useState(() => Date.now());
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+  // Busca por nome (rótulo) ou MAC: filtra a lista e destaca no mapa (esmaece o resto).
+  const [search, setSearch] = useState("");
+  const lastAutoFocus = useRef<string | null>(null);
 
   // ── Cria o mapa uma vez (cleanup no unmount) ──────────────────────────────
   useEffect(() => {
@@ -183,15 +193,95 @@ export function TagsMapPage() {
     markersRef.current.get(t.mac)?.marker.openPopup();
   }, []);
 
+  // ── Busca: casa por rótulo OU MAC (acento/caixa-insensível). matchMacs=null → sem busca. ──
+  const q = norm(search.trim());
+  const matchMacs = useMemo(() => {
+    if (!q) return null;
+    const s = new Set<string>();
+    for (const t of rows) {
+      if (norm(t.rotulo ?? "").includes(q) || norm(t.mac).includes(q)) s.add(t.mac);
+    }
+    return s;
+  }, [q, rows]);
+  // Lista lateral filtrada; mapa mantém todos os pinos (os que não casam ficam esmaecidos).
+  const visibleRows = matchMacs ? rows.filter((t) => matchMacs.has(t.mac)) : rows;
+
+  // Destaque no mapa: casa = opaco; não casa = esmaecido. Roda após a sincronia de marcadores
+  // (declarada acima), então os pinos já existem. matchMacs muda a cada poll (novo Set) mas o
+  // efeito é idempotente e barato (contagem de tags é pequena).
+  useEffect(() => {
+    for (const [mac, entry] of markersRef.current) {
+      entry.marker.setOpacity(!matchMacs || matchMacs.has(mac) ? 1 : 0.25);
+    }
+  }, [matchMacs, tags]);
+
+  // Match único (forte) → centraliza e abre o popup uma vez. lastAutoFocus evita recentralizar
+  // a cada poll; some da tela quando a busca esvazia ou deixa de ser único.
+  useEffect(() => {
+    if (matchMacs && matchMacs.size === 1) {
+      const [mac] = matchMacs;
+      if (lastAutoFocus.current !== mac) {
+        const t = rows.find((r) => r.mac === mac);
+        if (t) {
+          focus(t);
+          lastAutoFocus.current = mac;
+        }
+      }
+    } else {
+      lastAutoFocus.current = null;
+    }
+  }, [matchMacs, rows, focus]);
+
   return (
     <div className="page">
       <PageHeader
         title="Mapa de tags"
         subtitle="Última localização conhecida de cada tag (estilo AirTag) — onde o celular a viu por último."
       >
+        {/* Busca por nome/MAC: filtra a lista e destaca no mapa; Enter foca o 1º resultado. */}
+        <div className="relative">
+          <span
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-muted"
+            aria-hidden
+          >
+            <Search size={14} strokeWidth={1.75} />
+          </span>
+          <Input
+            type="text"
+            role="searchbox"
+            aria-label="Buscar tag por nome ou MAC"
+            placeholder="Buscar tag…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && visibleRows[0]) {
+                e.preventDefault();
+                focus(visibleRows[0]);
+              } else if (e.key === "Escape" && search) {
+                e.preventDefault();
+                setSearch("");
+              }
+            }}
+            className="min-w-[160px] pl-7 pr-7"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              aria-label="Limpar busca"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-text-muted hover:text-text"
+            >
+              <X size={14} strokeWidth={1.75} aria-hidden />
+            </button>
+          )}
+        </div>
         <Badge tone={error ? "warn" : undefined}>
           <Radar size={12} strokeWidth={1.75} aria-hidden />
-          {error ? "sem conexão" : `${rows.length} tag${rows.length === 1 ? "" : "s"}`}
+          {error
+            ? "sem conexão"
+            : matchMacs
+              ? `${visibleRows.length}/${rows.length} tag${rows.length === 1 ? "" : "s"}`
+              : `${rows.length} tag${rows.length === 1 ? "" : "s"}`}
         </Badge>
       </PageHeader>
 
@@ -214,9 +304,13 @@ export function TagsMapPage() {
                   aqui no mapa.
                 </EmptyState>
               </div>
+            ) : visibleRows.length === 0 ? (
+              <div className="p-3">
+                <EmptyState>Nenhuma tag casa "{search.trim()}".</EmptyState>
+              </div>
             ) : (
               <ul className="flex flex-col p-2">
-                {rows.map((t) => {
+                {visibleRows.map((t) => {
                   const tier = tierOf(now - t.ts);
                   return (
                     <li key={t.mac}>

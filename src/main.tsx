@@ -31,13 +31,17 @@ const router = createBrowserRouter([
       </AuthProvider>
     ),
     children: [
-      { path: "/", element: <DashboardPage /> },
+      // HOME: o Mapa de tags (estilo AirTag) é a tela principal do produto.
+      { path: "/", element: <TagsMapPage /> },
+      // Monitoramento (câmeras ao vivo): o antigo dashboard de "/" agora tem lar próprio,
+      // continua acessível pela navegação ("Monitoramento").
+      { path: "/monitoramento", element: <DashboardPage /> },
       // Gestão de câmeras (IP + nó local) — ação única de "adicionar câmera" da Central.
       { path: "/cameras", element: <CamerasPage /> },
       { path: "/relatorio", element: <ReportPage /> },
       // Tags BLE (identidade aumentada): tela crua das leituras ao vivo da estação.
       { path: "/tags-ble", element: <BtTagsPage /> },
-      // Mapa de tags (estilo AirTag): última localização conhecida de cada tag no OpenStreetMap.
+      // Alias histórico do mapa (agora a home "/"): mantém deep-links antigos funcionando.
       { path: "/mapa", element: <TagsMapPage /> },
       // Calibração por câmera (homografia → metros no chão; base da posição por tag BLE).
       { path: "/calibracao", element: <CalibrationPage /> },

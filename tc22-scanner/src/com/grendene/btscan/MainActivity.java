@@ -68,6 +68,9 @@ public class MainActivity extends Activity {
     static final String DEFAULT_HUB_URL = "http://127.0.0.1:4000/api/bt/reading";
     static final String PREFS = "btscan";        // SharedPreferences do app
     static final String KEY_HUB = "hub_url";      // chave do endereço do hub (editável em runtime)
+    static final String KEY_NAMES = "tag_names";  // blob de nomes customizados (linhas "mac=nome")
+    static final String SUFFIX_READING = "/api/bt/reading";  // sufixo do ingest — trocado p/ tag-name
+    static final String SUFFIX_TAGNAME = "/api/bt/tag-name"; // endpoint de nomeação (contrato com o hub)
     static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
     static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
     static final long POST_EVERY_MS = 2000;      // envio ao hub
@@ -125,6 +128,10 @@ public class MainActivity extends Activity {
     // Dados das tags (compartilhados: callback do scan escreve, main lê)
     private final Object lock = new Object();
     private final HashMap<String, Tag> tags = new HashMap<String, Tag>();
+
+    // Nomes customizados do operador (mac -> nome). Lock próprio: tocado na main (dialog/redraw) e lido no makeRow.
+    private final Object nameLock = new Object();
+    private final HashMap<String, String> tagNames = new HashMap<String, String>();
 
     // UI
     private LinearLayout listContainer;
@@ -440,6 +447,128 @@ public class MainActivity extends Activity {
         b.show();
     }
 
+    // ---------- Nomes customizados das tags ----------
+
+    /** Carrega o blob de nomes do prefs (linhas "mac=nome") para o cache. Tolerante a linha malformada. */
+    private void loadTagNames() {
+        String blob = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_NAMES, "");
+        if (blob == null || blob.length() == 0) return;
+        String[] lines = blob.split("\n");
+        synchronized (nameLock) {
+            for (int i = 0; i < lines.length; i++) {
+                String ln = lines[i];
+                int eq = ln.indexOf('=');
+                if (eq <= 0) continue; // sem '=' ou mac vazio
+                String mac = ln.substring(0, eq);
+                String nm = ln.substring(eq + 1);
+                if (nm.length() > 0) tagNames.put(mac, nm);
+            }
+        }
+    }
+
+    /** Persiste o cache de nomes como blob simples (StringBuilder, sem lib). Chamado após cada edição. */
+    private void saveTagNames() {
+        StringBuilder sb = new StringBuilder();
+        synchronized (nameLock) {
+            boolean first = true;
+            for (Map.Entry<String, String> e : tagNames.entrySet()) {
+                if (!first) sb.append('\n');
+                first = false;
+                sb.append(e.getKey()).append('=').append(e.getValue());
+            }
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_NAMES, sb.toString()).apply();
+    }
+
+    /** Deriva a URL de nomeação do hubUrl atual: troca o sufixo /reading por /tag-name (ou concatena seguro). */
+    private String tagNameUrl() {
+        String base = hubUrl;
+        if (base.endsWith(SUFFIX_READING)) {
+            StringBuilder sb = new StringBuilder(base.substring(0, base.length() - SUFFIX_READING.length()));
+            return sb.append(SUFFIX_TAGNAME).toString();
+        }
+        StringBuilder sb = new StringBuilder(base);
+        if (base.length() > 0 && base.charAt(base.length() - 1) == '/') sb.setLength(sb.length() - 1);
+        return sb.append(SUFFIX_TAGNAME).toString();
+    }
+
+    /** Escapa o mínimo p/ JSON válido (nome é digitado pelo operador): barra invertida e aspas. */
+    private String jsonEscape(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '\\' || ch == '"') sb.append('\\');
+            sb.append(ch);
+        }
+        return sb.toString();
+    }
+
+    /** POST {mac,name} ao hub numa thread daemon (rede fora da main). Falha só loga — o nome local já foi salvo. */
+    private void postTagName(final String mac, final String name) {
+        final String url = tagNameUrl();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                HttpURLConnection c = null;
+                try {
+                    StringBuilder j = new StringBuilder("{\"mac\":\"").append(jsonEscape(mac))
+                            .append("\",\"name\":\"").append(jsonEscape(name)).append("\"}");
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setRequestProperty("Content-Type", "application/json");
+                    c.setConnectTimeout(3000);
+                    c.setReadTimeout(3000);
+                    c.setDoOutput(true);
+                    byte[] body = j.toString().getBytes("UTF-8");
+                    OutputStream os = c.getOutputStream();
+                    os.write(body);
+                    os.close();
+                    int code = c.getResponseCode();
+                    Log.i(TAG, new StringBuilder("POST tag-name -> ").append(code).toString());
+                } catch (Exception e) {
+                    Log.e(TAG, new StringBuilder("POST tag-name falhou: ").append(e.getMessage()).toString());
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Dialog p/ nomear uma tag: prefill com o nome atual, Salvar grava local + prefs + redesenha + POST ao hub. */
+    private void promptTagName(final String mac) {
+        String current;
+        synchronized (nameLock) {
+            current = tagNames.get(mac);
+        }
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        if (current != null) input.setText(current);
+        input.setPadding(dp(16), dp(12), dp(16), dp(12));
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("Nomear tag");
+        b.setMessage(new StringBuilder("MAC ").append(mac).toString());
+        b.setView(input);
+        b.setPositiveButton("Salvar", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface d, int w) {
+                String v = input.getText().toString().trim();
+                if (v.length() == 0) return;
+                synchronized (nameLock) {
+                    tagNames.put(mac, v);
+                }
+                saveTagNames();
+                refreshUi(adapter != null && adapter.isEnabled()); // redraw imediato com o nome novo
+                postTagName(mac, v);
+            }
+        });
+        b.setNegativeButton("Cancelar", null);
+        b.show();
+    }
+
     // ---------- Ciclo de vida ----------
 
     @Override
@@ -447,6 +576,7 @@ public class MainActivity extends Activity {
         super.onCreate(s);
         density = getResources().getDisplayMetrics().density;
         hubUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HUB, DEFAULT_HUB_URL);
+        loadTagNames();
         buildUi();
 
         BluetoothManager bm = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
@@ -721,8 +851,16 @@ public class MainActivity extends Activity {
         left.setOrientation(LinearLayout.VERTICAL);
         left.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView nameTv = new TextView(this);
+        String custom;
+        synchronized (nameLock) {
+            custom = tagNames.get(mac);
+        }
         String nm = t.name;
-        nameTv.setText(nm != null && nm.length() > 0 ? nm : "(sem nome)");
+        String shown;
+        if (custom != null && custom.length() > 0) shown = custom;       // nome do operador tem prioridade
+        else if (nm != null && nm.length() > 0) shown = nm;              // senão o nome BT
+        else shown = "(sem nome)";
+        nameTv.setText(shown);
         nameTv.setTextColor(C_TXT);
         nameTv.setTextSize(15);
         nameTv.setTypeface(Typeface.DEFAULT_BOLD);
@@ -768,6 +906,16 @@ public class MainActivity extends Activity {
         row.addView(bar);
         row.addView(rssiTv);
         if (stale) row.setAlpha(0.45f);
+
+        // Toque na linha -> nomear a tag (classe anônima; mac precisa ser final p/ o build manual).
+        final String rowMac = mac;
+        row.setClickable(true);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                promptTagName(rowMac);
+            }
+        });
         return row;
     }
 }

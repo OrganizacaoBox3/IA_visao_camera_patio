@@ -6,6 +6,10 @@ async function login(page: Page) {
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
+  // Home agora é o Mapa (estilo AirTag). Confirma o login e segue p/ o Monitoramento
+  // (dashboard de câmeras), onde os testes de câmera operam.
+  await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible();
+  await page.goto("/monitoramento");
   await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
 }
 
@@ -239,7 +243,7 @@ test("Câmeras: botão único leva a /cameras e a validação de url bloqueia ur
 
   // A tela também é alcançável pelo item "Câmeras" do menu lateral.
   await page.keyboard.press("Escape"); // fecha o dialog
-  await page.getByRole("link", { name: "Central" }).click();
+  await page.getByRole("link", { name: "Monitoramento" }).click();
   await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
   await page.getByRole("link", { name: "Câmeras" }).click();
   await expect(page).toHaveURL(/\/cameras/);
