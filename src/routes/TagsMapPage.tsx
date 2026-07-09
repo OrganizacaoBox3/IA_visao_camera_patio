@@ -98,9 +98,11 @@ export function TagsMapPage() {
     if (!containerRef.current || mapRef.current) return;
     const map = L.map(containerRef.current, { center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, zoomControl: true });
     // Satélite (limpo, sem ruído de ruas): Esri World Imagery — grátis, sem chave de API.
+    // Esri só tem imagem até ~z17 nesta região (interior/CE) — z18+ retorna o placeholder "Map data not
+    // yet available". maxNativeZoom:17 amplia o tile z17 no zoom alto em vez de pedir os tiles de z18+.
     L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { attribution: "Tiles © Esri", maxZoom: 19 },
+      { attribution: "Tiles © Esri", maxZoom: 19, maxNativeZoom: 17 },
     ).addTo(map);
     mapRef.current = map;
     const t = window.setTimeout(() => map.invalidateSize(), 0);

@@ -24,6 +24,9 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -94,6 +97,44 @@ public class MainActivity extends Activity {
     static final int C_RED_BG = Color.parseColor("#3A1417");
     static final int C_MUTED_BG = Color.parseColor("#232833");
 
+    // Página do mapa "você está aqui": Leaflet + tiles de satélite Esri. Montada por append de LITERAIS
+    // (sem concat de variáveis em runtime). Carregada UMA vez; o app injeta o GPS via window.setHere(...).
+    static final String MAP_HTML = buildMapHtml();
+
+    private static String buildMapHtml() {
+        StringBuilder h = new StringBuilder();
+        h.append("<!DOCTYPE html><html><head><meta charset=\"utf-8\">");
+        h.append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no\">");
+        h.append("<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">");
+        h.append("<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>");
+        h.append("<style>html,body,#m{height:100%;margin:0;background:#0F1115}</style>");
+        h.append("</head><body><div id=\"m\"></div>");
+        // Botão recentrar (◎): volta pra "você está aqui" e reativa o modo seguir.
+        h.append("<button id=\"rc\" style=\"position:absolute;right:12px;bottom:16px;z-index:1000;width:46px;height:46px;");
+        h.append("border-radius:9999px;border:none;background:#35C46A;color:#0F1115;font-size:22px;font-weight:bold;");
+        h.append("box-shadow:0 2px 6px rgba(0,0,0,.5)\">&#9678;</button>");
+        h.append("<script>");
+        h.append("var map=L.map('m',{zoomControl:true,attributionControl:false}).setView([-3.688,-40.348],17);");
+        // Esri só tem imagem até ~z17 nesta região (interior/CE) — z18+ retorna o placeholder "Map data
+        // not yet available" (~2,5KB, confirmado por diagnóstico). maxNativeZoom:17 → o Leaflet AMPLIA o
+        // tile z17 no zoom alto, sem pedir os tiles inexistentes de z18+.
+        h.append("L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:17}).addTo(map);");
+        h.append("var here=null,acc=null,centered=false,follow=true;");
+        h.append("map.on('dragstart',function(){follow=false;});"); // arrastou → para de seguir
+        h.append("window.setHere=function(lat,lon,a){");
+        h.append("if(here==null){");
+        h.append("here=L.circleMarker([lat,lon],{radius:8,color:'#ffffff',weight:2,fillColor:'#35C46A',fillOpacity:1}).addTo(map);");
+        h.append("here.bindTooltip('Voc\\u00ea est\\u00e1 aqui',{direction:'top'});");
+        h.append("acc=L.circle([lat,lon],{radius:a,color:'#35C46A',weight:1,fillColor:'#35C46A',fillOpacity:0.12}).addTo(map);");
+        h.append("}else{here.setLatLng([lat,lon]);acc.setLatLng([lat,lon]);acc.setRadius(a);}");
+        h.append("if(!centered){centered=true;map.setView([lat,lon],17);}else if(follow){map.panTo([lat,lon]);}");
+        h.append("};");
+        h.append("var rb=document.getElementById('rc');");
+        h.append("if(rb){rb.onclick=function(){if(here){follow=true;map.setView(here.getLatLng(),Math.max(map.getZoom(),17));}};}");
+        h.append("</script></body></html>");
+        return h.toString();
+    }
+
     /** Uma tag vista: nome, último RSSI e quando foi vista (relógio monotônico). */
     static final class Tag {
         String name;
@@ -136,6 +177,8 @@ public class MainActivity extends Activity {
     // UI
     private LinearLayout listContainer;
     private TextView btChip, hubChip, tagChip, detailLine, subLine;
+    private WebView map;                             // mapa "você está aqui" (satélite Esri via Leaflet)
+    private volatile boolean mapReady = false;       // HTML do mapa carregado (onPageFinished)
     private float density = 1f;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean running = true;
@@ -639,6 +682,12 @@ public class MainActivity extends Activity {
         super.onDestroy();
         running = false;
         ui.removeCallbacks(tick);
+        if (map != null) {
+            try {
+                map.destroy();
+            } catch (Exception ignored) {
+            }
+        }
         stopScanSafe();
         if (locationManager != null) {
             try {
@@ -658,6 +707,7 @@ public class MainActivity extends Activity {
             ensureLocation(); // religa a localização assim que a permissão for concedida (sem reabrir)
             pruneStale();
             refreshUi(btOn);
+            pushLocation(); // atualiza o "você está aqui" no mapa (só age quando há fix)
             ui.postDelayed(this, REFRESH_MS);
         }
     };
@@ -669,6 +719,20 @@ public class MainActivity extends Activity {
             while (it.hasNext()) {
                 if (now - it.next().getValue().lastSeen > DROP_MS) it.remove();
             }
+        }
+    }
+
+    /** Injeta o último fix no mapa via JS (main thread). Barato: só move o marcador quando há posição. */
+    private void pushLocation() {
+        if (!mapReady || !hasFix || map == null) return;
+        try {
+            StringBuilder js = new StringBuilder("setHere(");
+            js.append(Double.toString(lastLat)).append(',')
+                    .append(Double.toString(lastLon)).append(',')
+                    .append(Float.toString(lastAcc)).append(')');
+            map.evaluateJavascript(js.toString(), null);
+        } catch (Exception ignored) {
+            // WebView pode estar em transição — ignora; o próximo tick tenta de novo
         }
     }
 
@@ -727,10 +791,23 @@ public class MainActivity extends Activity {
         header.addView(chips);
         header.addView(detailLine);
 
-        // Lista rolável (peso 1)
+        // Mapa "você está aqui" — área PRINCIPAL da tela (peso maior). WebView Leaflet, GPS injetado por JS.
+        map = new WebView(this);
+        WebSettings s = map.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        map.setBackgroundColor(C_BG);
+        map.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                mapReady = true;
+                pushLocation(); // empurra o último fix assim que o HTML termina de carregar
+            }
+        });
+        map.loadDataWithBaseURL("https://appmap.local/", MAP_HTML, "text/html", "utf-8", null);
+
+        // Lista rolável (peso menor, abaixo do mapa)
         ScrollView sv = new ScrollView(this);
-        sv.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
         listContainer.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -738,7 +815,10 @@ public class MainActivity extends Activity {
 
         root.addView(header, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(sv);
+        root.addView(map, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 2.2f));
+        root.addView(sv, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.3f));
         setContentView(root);
     }
 
