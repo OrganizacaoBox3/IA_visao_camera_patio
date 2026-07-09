@@ -135,6 +135,20 @@ describe("TrackInterpolator — dead-reckoning por velocidade do Kalman (vx/vy)"
     expect(it0.sample(900)[0].bbox).toEqual([0.3, 0.3, 0.1, 0.2]);
   });
 
+  it("DEFAULT maxExtrapMs=1000: acompanha o gap INTEIRO (~1s), não congela em 500ms (fix do overlay lag)", () => {
+    // SEM override de maxExtrapMs → usa o DEFAULT (1000). A medição (07-*) mostrou cadência real
+    // ~727ms-1000ms mesmo focada; o cap antigo de 500ms congelava a caixa na 2ª metade do gap.
+    // expire/fade altos p/ isolar a extrapolação da expiração por idade.
+    const it0 = new TrackInterpolator({ delayMs: 0, expireMs: 1e6, fadeStartMs: 1e6 });
+    it0.ingest(snap(1, [{ id: 5, bbox: box(0, 0), vx: 0.1, vy: 0 }]), 0); // v = 0.1/s
+    // 900ms além → +0.09 (segue prevendo; com o cap antigo de 500 estaria congelado em 0.05)
+    expect(it0.sample(900)[0].bbox[0]).toBeCloseTo(0.09, 6);
+    // 1000ms → +0.10 (limite = 1 intervalo-base)
+    expect(it0.sample(1000)[0].bbox[0]).toBeCloseTo(0.1, 6);
+    // 1500ms além → clampado ao DEFAULT (1000ms = +0.10), não dispara quando a pessoa para
+    expect(it0.sample(1500)[0].bbox[0]).toBeCloseTo(0.1, 6);
+  });
+
   it("FALLBACK sem vx/vy: usa a estimativa por 2 keyframes (retrocompat, hub antigo)", () => {
     // Sem velocidade no payload → o ramo de dead-reckoning NÃO é tomado; anima do penúltimo ao último.
     const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });

@@ -28,6 +28,23 @@ visivelmente atrás de quem anda. Quanto mais rápida a pessoa, pior.
 - **idade da caixa** (`interpolate.ts` já expõe `ageMs` no `sample()`): quantos ms atrás a caixa exibida está.
 - **inferMs real na máquina do CD** (não a de dev contida) — define o piso da latência.
 
+## MEDIDO (2026-07-08, frame MOT20 1080p, motor real, cena COM movimento)
+
+Cadência REAL do overlay (analysis-tracks/s emitidos) — `scripts/measure-focus.cjs` adaptado p/ 1080p:
+
+| Modelo | câmera fundo | câmera FOCADA (alvo 6fps) | intervalo da caixa (focada) |
+|---|---|---|---|
+| **S** (produção) | 1,0 fps | **1,4 fps** | **~727ms** |
+| **N** (rápido) | 1,0 fps | **3,9 fps** | **~258ms** |
+
+**Achado central:** mesmo FOCADA, a S entrega só **1,4fps** — o alvo de 6fps é **inalcançável** porque a
+inferência (~640ms/frame em 1080p) **serializa por câmera** (uma em voo por vez → teto ~1/inferMs). A caixa
+nasce a cada ~727ms E ~640ms atrasada. **A latência de inferência é o teto do frescor do overlay.** O
+modelo N (mais leve) quase **triplica** a cadência (1,4→3,9fps; caixa 727→258ms) — prova que aliviar a
+inferência da câmera OLHADA é a maior alavanca do "marcador atrás".
+*(Artefato evitado: alimentar frame ESTÁTICO faz o gate de movimento pular a inferência → sondagem 6s/2s;
+medido com sequência de frames DIFERENTES p/ o gate sempre disparar, como pessoa andando.)*
+
 ## Correções (ranqueadas, todas de baixo/médio custo — front + cadência)
 1. **Compensar a latência na extrapolação** (`interpolate.ts` + contrato aditivo): o hub manda o timestamp
    da CAPTURA (ou o inferMs) no payload; o cliente prevê a caixa p/ o `now` REAL (`dt = now - captura`),

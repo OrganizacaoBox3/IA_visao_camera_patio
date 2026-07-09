@@ -63,12 +63,20 @@ export type InterpConfig = {
 
 // Defaults calibrados p/ payload a ~1fps: fade só depois de 1,5s (não pisca entre payloads),
 // some em 2,6s. delay baixo (extrapolação leve) privilegia latência; subir delayMs troca por
-// suavidade. maxExtrap limita a previsão a meio intervalo (não dispara a caixa quando o corpo para).
+// suavidade.
+// maxExtrapMs=1000 (um intervalo-base inteiro): a MEDIÇÃO (analises/reconhecimento-pessoas/07-*)
+// mostrou que a cadência REAL do overlay é ~727ms-1000ms MESMO com a câmera focada (a inferência
+// ~640ms/1080p serializa por câmera → o alvo de 6fps não é atingido). Com o cap antigo de 500ms
+// (meio intervalo) a caixa CONGELAVA na 2ª metade de cada gap enquanto a pessoa seguia andando =
+// o "marcador atrás" relatado. 1000ms deixa a caixa PREVER o gap inteiro. Seguro contra overshoot
+// quando a pessoa PARA: o Kalman leva vx/vy→0 (teste "parado: sem drift") — o cap de meio-intervalo
+// era redundante com essa proteção. Overshoot em MUDANÇA de direção é limitado ao próximo payload
+// (≤~1s) e suavizado pelo easing do snap.
 export const DEFAULT_INTERP: InterpConfig = {
   delayMs: 100,
   minIntervalMs: 150,
   maxIntervalMs: 2000,
-  maxExtrapMs: 500,
+  maxExtrapMs: 1000,
   snapMs: 180,
   fadeStartMs: 1500,
   expireMs: 2600,
