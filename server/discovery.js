@@ -16,15 +16,48 @@ const PROBE = "VISAO_HUB_DISCOVER";
 
 let socket = null;
 
-// Primeiro IPv4 não-interno (o IP da máquina na LAN). Recalculado a cada resposta: se o hub trocar
-// de rede/IP em runtime, a próxima resposta já leva o endereço novo. Fallback 127.0.0.1 se nada achado.
-function lanIPv4() {
+// "a.b.c.d" -> inteiro 32-bit (ou null se malformado).
+function ip2int(s) {
+  const p = String(s).split(".");
+  if (p.length !== 4) return null;
+  let n = 0;
+  for (const o of p) {
+    const b = Number(o);
+    if (!Number.isInteger(b) || b < 0 || b > 255) return null;
+    n = (n * 256 + b) >>> 0;
+  }
+  return n >>> 0;
+}
+function sameSubnet(a, b, mask) {
+  const ia = ip2int(a),
+    ib = ip2int(b),
+    im = ip2int(mask);
+  if (ia == null || ib == null || im == null) return false;
+  return ((ia & im) >>> 0) === ((ib & im) >>> 0);
+}
+// Faixas RFC1918 (LAN de verdade) — usadas p/ preferir um IP roteável a um link-local.
+function isPrivate(a) {
+  return a.startsWith("192.168.") || a.startsWith("10.") || /^172\.(1[6-9]|2\d|3[01])\./.test(a);
+}
+
+// Melhor IPv4 do hub PARA responder ao `peer` (o TC22): mesma sub-rede do peer > faixa privada >
+// qualquer não-link-local. IGNORA 169.254.x.x (APIPA/link-local de interface sem DHCP — ex.: Ethernet
+// desconectada): responder com esse endereço mandava LIXO INALCANÇÁVEL ao TC22 (bug de campo jul/09).
+// Recalculado a cada resposta: se o hub trocar de rede/IP em runtime, a próxima resposta já leva o novo.
+function lanIPv4(peer) {
+  const cands = [];
   for (const addrs of Object.values(os.networkInterfaces())) {
     for (const a of addrs ?? []) {
-      if (a.family === "IPv4" && !a.internal) return a.address;
+      if (a.family === "IPv4" && !a.internal && !String(a.address).startsWith("169.254.")) cands.push(a);
     }
   }
-  return "127.0.0.1";
+  if (peer) {
+    const m = cands.find((a) => sameSubnet(a.address, peer, a.netmask));
+    if (m) return m.address; // interface na MESMA LAN do TC22 → sempre alcançável
+  }
+  const p = cands.find((a) => isPrivate(a.address));
+  if (p) return p.address; // senão, a primeira faixa privada (LAN comum)
+  return cands.length ? cands[0].address : "127.0.0.1";
 }
 
 function start({ port = 4000, ingestPath = "/api/bt/reading", udpPort = 41234, log = console.log } = {}) {
@@ -45,7 +78,7 @@ function start({ port = 4000, ingestPath = "/api/bt/reading", udpPort = 41234, l
 
   sock.on("message", (msg, rinfo) => {
     if (msg.toString("utf8").trim() !== PROBE) return; // datagrama estranho → ignora em silêncio
-    const ingest = `http://${lanIPv4()}:${port}${ingestPath}`;
+    const ingest = `http://${lanIPv4(rinfo.address)}:${port}${ingestPath}`;
     const reply = Buffer.from(JSON.stringify({ ingest }), "utf8");
     sock.send(reply, rinfo.port, rinfo.address, (err) => {
       if (err) log(`[discovery] falha ao responder ${rinfo.address}:${rinfo.port} (${err.message})`);
@@ -71,4 +104,4 @@ function stop() {
   socket = null;
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, lanIPv4 };
