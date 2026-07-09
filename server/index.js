@@ -10,6 +10,7 @@ const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
 const btTags = require("./bt-tags");
+const btLocations = require("./bt-locations");
 const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
@@ -242,6 +243,7 @@ io.on("connection", (socket) => {
     events.init(),
     camcfg.init(),
     btTags.init(),
+    btLocations.init(), // última localização por tag (modelo AirTag) — persistida, sobrevive a restart
   ]);
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
   // produção, ABORTA SÓ pelo AUTH_SECRET default (catastrófico + corrigível por env, sem deadlock).

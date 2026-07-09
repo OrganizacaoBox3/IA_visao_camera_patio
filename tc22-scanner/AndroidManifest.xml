@@ -9,6 +9,9 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Localização do aparelho (modelo AirTag): o TC22 é móvel; enquanto enxerga a tag, a tag está aqui. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <!-- usesCleartextTraffic: o hub em LAN/USB é HTTP (não-HTTPS); Android 9+ bloqueia sem isto. -->

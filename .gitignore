@@ -77,5 +77,6 @@ eval/model-comparison.json
 # dataset de eval (MOT20) — não versionar
 archive.zip
 server/bt-tags.json
+server/bt-locations.json
 tc22-scanner/build/
 tc22-scanner/debug.keystore

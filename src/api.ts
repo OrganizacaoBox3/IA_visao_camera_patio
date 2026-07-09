@@ -328,6 +328,22 @@ export type BtReading = { mac: string; rotulo: string | null; rssi: number; stat
 // GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
 export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
 
+// ── Última localização por tag (estilo AirTag) — mapa OpenStreetMap ──────────────────────────
+// O TC22 é MÓVEL: a última localização de cada tag = onde o celular estava quando a viu por
+// último (lat/lon + precisão + quando). SÓ metadados/coordenadas (LGPD): nenhum frame. `rotulo` =
+// nome cadastrado ou null; `acc` = raio de precisão em metros (ou null); `ts` = epoch-ms da leitura.
+// Existe também um socket `bt-locations`, mas a página de mapa usa POLLING deste GET (robustez).
+export type TagLocation = {
+  mac: string;
+  rotulo: string | null;
+  lat: number;
+  lon: number;
+  acc: number | null;
+  ts: number;
+};
+// GET /api/bt/locations → TagLocation[] (última localização por tag). Auth: qualquer autenticado.
+export const getBtLocations = () => apiGet<TagLocation[]>("/api/bt/locations");
+
 // ── CADASTRO de tags (definir QUEM é a tag: rótulo/pessoa por nome do BT/MAC) ──────────────────
 // A estação vê a tag pelo MAC/nome; o cadastro liga isso a um rótulo (a pessoa). Persistido (config).
 // Auth de escrita: perfil de configuração (engenharia/superadmin) — coerente com câmeras/zonas.

@@ -12,6 +12,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -107,6 +110,13 @@ public class MainActivity extends Activity {
     private volatile long lastResultMs = 0;        // última leitura de TAG (fora da main)
     private long lastScanStartMs = 0;
 
+    // Localização do aparelho (modelo AirTag): o LocationListener cacheia aqui; o poster lê no buildJson.
+    private LocationManager locationManager;
+    private boolean locActive = false;             // updates já registrados (tocado só na main thread)
+    private volatile double lastLat, lastLon;
+    private volatile float lastAcc;
+    private volatile boolean hasFix = false;
+
     // Estado do hub (escrito pelo poster, lido pela main)
     private volatile String hubUrl = DEFAULT_HUB_URL; // endereço do ingest — descoberto na LAN ou editado à mão; persistido
     private volatile int hubState = 0;             // 0=aguardando 1=ok 2=falha
@@ -167,11 +177,77 @@ public class MainActivity extends Activity {
         }
     };
 
+    // Só cacheia a última posição (nada de rede aqui — o poster leva carona no POST de 2s).
+    private final LocationListener locListener = new LocationListener() {
+        @Override
+        public void onLocationChanged(Location loc) {
+            if (loc == null) return;
+            lastLat = loc.getLatitude();
+            lastLon = loc.getLongitude();
+            lastAcc = loc.hasAccuracy() ? loc.getAccuracy() : 0f;
+            hasFix = true;
+        }
+
+        // Overrides vazios p/ compatibilidade com APIs antigas (evita AbstractMethodError em alguns ROMs).
+        @Override
+        public void onStatusChanged(String provider, int status, Bundle extras) {
+        }
+
+        @Override
+        public void onProviderEnabled(String provider) {
+        }
+
+        @Override
+        public void onProviderDisabled(String provider) {
+        }
+    };
+
     // ---------- Scan (robusto) ----------
 
     private boolean hasScanPerm() {
         if (Build.VERSION.SDK_INT < 31) return true;
         return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasLocationPerm() {
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Liga os updates de localização UMA vez (GPS + rede), quando houver permissão. Baixa frequência
+     * (~4s / ~10m) — a posição leva carona no POST de 2s. Semeia com a última conhecida. Nunca crasha:
+     * SecurityException ou provider ausente são engolidos. Idempotente via locActive (self-heal no tick).
+     */
+    private void ensureLocation() {
+        if (locActive || locationManager == null || !hasLocationPerm()) return;
+        boolean any = false;
+        try {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 4000L, 10f, locListener);
+            any = true;
+        } catch (SecurityException se) {
+            return; // permissão sumiu no meio — tenta de novo no próximo tick
+        } catch (Exception ignored) {
+            // provider inexistente neste device — segue p/ o de rede
+        }
+        try {
+            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 4000L, 10f, locListener);
+            any = true;
+        } catch (Exception ignored) {
+        }
+        // Semeia sem esperar o 1º update (útil logo após abrir o app).
+        try {
+            Location seed = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            if (seed == null) seed = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+            if (seed != null) {
+                lastLat = seed.getLatitude();
+                lastLon = seed.getLongitude();
+                lastAcc = seed.hasAccuracy() ? seed.getAccuracy() : 0f;
+                hasFix = true;
+            }
+        } catch (Exception ignored) {
+        }
+        if (any) locActive = true;
     }
 
     /** Decide, a cada tick, se o scan deve estar ligado; liga, religa (watchdog) ou desliga. Nunca crasha. */
@@ -240,7 +316,14 @@ public class MainActivity extends Activity {
 
     /** Monta o JSON das leituras atuais (contrato: {stationId, readings:[{mac,name,rssi}]}). */
     private String buildJson() {
-        StringBuilder j = new StringBuilder("{\"stationId\":\"").append(STATION_ID).append("\",\"readings\":[");
+        StringBuilder j = new StringBuilder("{\"stationId\":\"").append(STATION_ID).append('"');
+        // Modelo AirTag: com fix, a posição do aparelho vai no objeto raiz (Double/Float.toString = ponto decimal, sem locale).
+        if (hasFix) {
+            j.append(",\"lat\":").append(Double.toString(lastLat))
+                    .append(",\"lon\":").append(Double.toString(lastLon))
+                    .append(",\"acc\":").append(Float.toString(lastAcc));
+        }
+        j.append(",\"readings\":[");
         synchronized (lock) {
             boolean first = true;
             for (Map.Entry<String, Tag> e : tags.entrySet()) {
@@ -368,18 +451,28 @@ public class MainActivity extends Activity {
 
         BluetoothManager bm = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
         adapter = bm != null ? bm.getAdapter() : null;
+        locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         settings = new ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build();
 
+        // Permissões de runtime: BLE scan (Android 12+) + localização do aparelho (modelo AirTag). Pede tudo de uma vez.
+        ArrayList<String> want = new ArrayList<String>();
         if (Build.VERSION.SDK_INT >= 31 && !hasScanPerm()) {
+            want.add(Manifest.permission.BLUETOOTH_SCAN);
+            want.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (!hasLocationPerm()) {
+            want.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            want.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        }
+        if (!want.isEmpty()) {
             try {
-                requestPermissions(new String[]{
-                        Manifest.permission.BLUETOOTH_SCAN,
-                        Manifest.permission.BLUETOOTH_CONNECT}, REQ_PERM);
+                requestPermissions(want.toArray(new String[0]), REQ_PERM);
             } catch (Exception ignored) {
             }
         }
+        ensureLocation(); // liga já se a permissão existir; senão o tick religa após o grant (sem reabrir o app)
 
         // Poster: a cada POST_EVERY_MS envia o snapshot ao hub (rede SEMPRE fora da main thread).
         Thread poster = new Thread(new Runnable() {
@@ -417,6 +510,12 @@ public class MainActivity extends Activity {
         running = false;
         ui.removeCallbacks(tick);
         stopScanSafe();
+        if (locationManager != null) {
+            try {
+                locationManager.removeUpdates(locListener);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     /** Coração vivo: 1x/s reavalia BT+scan, poda tags velhas e redesenha — sem reabrir o app. */
@@ -426,6 +525,7 @@ public class MainActivity extends Activity {
             if (!running) return;
             boolean btOn = adapter != null && adapter.isEnabled();
             ensureScan(btOn);
+            ensureLocation(); // religa a localização assim que a permissão for concedida (sem reabrir)
             pruneStale();
             refreshUi(btOn);
             ui.postDelayed(this, REFRESH_MS);
@@ -570,7 +670,7 @@ public class MainActivity extends Activity {
         StringBuilder tb = new StringBuilder().append(count).append(count == 1 ? " tag" : " tags");
         styleChip(tagChip, tb.toString(), count > 0 ? C_GREEN : C_MUTED, count > 0 ? C_GREEN_BG : C_MUTED_BG);
         detailLine.setTextColor(hs == 2 ? C_RED : C_MUTED);
-        detailLine.setText(hubDetail);
+        detailLine.setText(new StringBuilder(hubDetail).append(hasFix ? "  ·  GPS ✓" : "  ·  GPS …").toString());
 
         listContainer.removeAllViews();
         if (!btOn) {

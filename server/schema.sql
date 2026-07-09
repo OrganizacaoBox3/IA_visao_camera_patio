@@ -102,6 +102,16 @@ create table if not exists bt_tags (
   criado_em bigint
 );
 
+-- ── LOCALIZAÇÃO last-known por tag (modelo AirTag: TC22 móvel congela a última posição) ──
+-- UMA linha por tag (last-wins, sem trilha/histórico). Só metadado: lat/lon/acc/ts — nunca imagem (LGPD).
+create table if not exists bt_tag_locations (
+  mac text primary key,           -- MAC (maiúsculo) da tag vista pela estação
+  lat double precision,
+  lon double precision,
+  acc double precision,           -- precisão em metros (ou null)
+  ts bigint                       -- epoch-ms da última posição conhecida
+);
+
 -- ── EVENTOS DE ALARME (fila acionável com acknowledge) ───────────────────────
 -- LGPD: SÓ METADADOS — nada de imagens/frames. Campos são texto/ids/timestamps.
 -- priority: advisory | high | critical (calculada pela política em alarmPolicy.js).

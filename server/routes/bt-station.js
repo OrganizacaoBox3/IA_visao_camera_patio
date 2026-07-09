@@ -2,6 +2,7 @@
 // (bt-readings) e relaya aos dashboards. Auth de DEVICE por token (espelha o CAMERA_TOKEN), separada da
 // CRUD de tags (superadmin, routes/bt-tags.js) — responsabilidade única. Leituras são efêmeras (LGPD).
 const btReadings = require("../bt-readings");
+const btLocations = require("../bt-locations");
 const users = require("../users");
 
 // Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita
@@ -34,6 +35,19 @@ async function handle(req, res, ctx) {
       ts: Date.now(),
       readings: enriched,
     });
+    // Modelo AirTag: se o batch traz a posição do celular (lat/lon), toda tag vista AGORA está nela.
+    // Guarda a última localização por tag (last-known) e relaya o snapshot ao mapa. LGPD: só metadado.
+    const lat = Number(body.lat);
+    const lon = Number(body.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      const acc = Number(body.acc);
+      for (const rec of enriched) btLocations.update(rec.mac, { lat, lon, acc });
+      io.to("dashboards").volatile.emit("bt-locations", {
+        ts: Date.now(),
+        phone: { lat, lon, acc: Number.isFinite(acc) ? acc : null },
+        tags: btLocations.snapshot(),
+      });
+    }
     json(res, 200, { ok: true, n: enriched.length });
     return true;
   }
@@ -42,6 +56,13 @@ async function handle(req, res, ctx) {
   if (req.url === "/api/bt/readings" && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
     json(res, 200, btReadings.snapshot());
+    return true;
+  }
+
+  // Mapa: última localização conhecida por tag (last-known, persistida). Só metadados (LGPD).
+  if (req.url === "/api/bt/locations" && req.method === "GET") {
+    if (!requireAuth(req, res)) return true;
+    json(res, 200, btLocations.snapshot());
     return true;
   }
 

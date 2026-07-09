@@ -15,6 +15,7 @@ import {
   CircleUser,
   LayoutDashboard,
   LogOut,
+  MapPin,
   PanelLeftClose,
   PanelLeftOpen,
   Ruler,
@@ -225,6 +226,8 @@ export function AppShell() {
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
         // Tags BLE (identidade aumentada) + Calibração de câmera — Fase 1/1.5 do plano de tags.
         { to: "/tags-ble", icon: Bluetooth, label: "Tags BLE" },
+        // Mapa (estilo AirTag): última localização conhecida de cada tag no OpenStreetMap.
+        { to: "/mapa", icon: MapPin, label: "Mapa" },
         { to: "/calibracao", icon: Ruler, label: "Calibração" },
       ],
     },

@@ -9,6 +9,7 @@ import { UsersPage } from "./routes/UsersPage";
 import { ProfilePage } from "./routes/ProfilePage";
 import { AlarmHealthPage } from "./routes/AlarmHealthPage";
 import { BtTagsPage } from "./routes/BtTagsPage";
+import { TagsMapPage } from "./routes/TagsMapPage";
 import { CalibrationPage } from "./routes/CalibrationPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
@@ -36,6 +37,8 @@ const router = createBrowserRouter([
       { path: "/relatorio", element: <ReportPage /> },
       // Tags BLE (identidade aumentada): tela crua das leituras ao vivo da estação.
       { path: "/tags-ble", element: <BtTagsPage /> },
+      // Mapa de tags (estilo AirTag): última localização conhecida de cada tag no OpenStreetMap.
+      { path: "/mapa", element: <TagsMapPage /> },
       // Calibração por câmera (homografia → metros no chão; base da posição por tag BLE).
       { path: "/calibracao", element: <CalibrationPage /> },
       { path: "/alarmes-saude", element: <AlarmHealthPage /> },
