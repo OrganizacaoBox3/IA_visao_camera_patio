@@ -36,6 +36,19 @@ describe("hub único — o coletor usa a MESMA API do sistema (sobe um, sobe tud
     expect(indexSrc).toContain("routeData.handle(");
   });
 
+  it("a descoberta UDP (o que faz o TC22 achar o hub) roda no MESMO processo do hub", () => {
+    expect(indexSrc).toContain('require("./discovery")');
+    expect(indexSrc).toContain("discovery.start(");
+  });
+
+  it("o contrato de descoberta (porta UDP + probe) é IDÊNTICO no hub e no TC22", () => {
+    const discSrc = read("./discovery.js");
+    for (const src of [discSrc, tc22Src]) {
+      expect(src).toContain("41234"); // porta UDP do beacon
+      expect(src).toContain("VISAO_HUB_DISCOVER"); // payload do broadcast
+    }
+  });
+
   it("a rota do coletor é exatamente a que o servidor registra", () => {
     expect(btStationSrc).toContain(INGEST_PATH);
   });
@@ -49,8 +62,8 @@ describe("hub único — o coletor usa a MESMA API do sistema (sobe um, sobe tud
   });
 
   it("o TC22 aponta pro MESMO caminho e porta do hub (não uma API divergente)", () => {
-    const m = tc22Src.match(/HUB_URL\s*=\s*"([^"]+)"/);
-    expect(m, "HUB_URL não encontrado no MainActivity").toBeTruthy();
+    const m = tc22Src.match(/DEFAULT_HUB_URL\s*=\s*"([^"]+)"/);
+    expect(m, "DEFAULT_HUB_URL não encontrado no MainActivity").toBeTruthy();
     const url = m[1];
     expect(url.endsWith(INGEST_PATH)).toBe(true); // mesmo caminho da rota do hub
     expect(url).toContain(`:${HUB_PORT}`); // mesma porta-padrão do hub

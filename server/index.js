@@ -15,6 +15,7 @@ const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
+const discovery = require("./discovery");
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
 
@@ -273,6 +274,9 @@ io.on("connection", (socket) => {
   rtsp.setAnalysisViewer(analysis.isAnalyzing);
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);
+    // Descoberta na LAN (mesmo processo): o coletor TC22 acha o hub por UDP broadcast, sem digitar IP.
+    // Falha aqui é acessória — o próprio módulo trata erro sem derrubar o hub.
+    discovery.start({ port: PORT });
     console.log(
       alerts.andonEnabled()
         ? "[andon] webhook de alertas ATIVO"

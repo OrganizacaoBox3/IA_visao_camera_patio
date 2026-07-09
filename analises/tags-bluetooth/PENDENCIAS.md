@@ -17,6 +17,9 @@
 - **Fase 2 — tag fixa de REFERÊNCIA**: heartbeat da estação + drift do RSSI + leitura RSSI@1m
   (observabilidade; **não** entra na associação, que segue por correlação). Módulo puro `stationHealth.ts`
   + hook + chip; marcada na calibração (`refTag:{mac,px}`).
+- **TC22 conecta ao hub sozinho**: descoberta UDP na LAN (broadcast `VISAO_HUB_DISCOVER` → o hub responde
+  o endereço; `server/discovery.js` no MESMO processo — gate `single-hub.test.js`). Endereço também
+  editável à mão (toque no subtítulo) e persistido, como fallback. "Sobe um, sobe tudo" travado em teste.
 
 ## Pendente (priorizado)
 

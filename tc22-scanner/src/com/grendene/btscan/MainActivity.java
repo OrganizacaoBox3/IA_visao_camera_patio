@@ -26,8 +26,16 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.text.InputType;
+import android.widget.EditText;
+
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -45,14 +53,20 @@ import java.util.Map;
  * e mostra falha de POST no hub — sem crashar e sem exigir reabrir o app. A tela atualiza SOZINHA por
  * um refresh periódico (Handler): tags novas aparecem, RSSI muda, tags paradas desbotam e caem.
  *
- * Rede: por USB, rode `adb reverse tcp:4000 tcp:4000` → o 127.0.0.1:4000 do TC22 chega no hub do PC.
- * Em produção (WiFi), troque HUB_URL pelo endereço real do hub.
+ * Rede: acha o hub SOZINHO na LAN por descoberta UDP (broadcast → o hub responde o endereço; caminho
+ * feliz de "se o hub está no ar, conecta"). Por USB, `adb reverse tcp:4000 tcp:4000` mantém 127.0.0.1
+ * funcionando. O endereço também é editável à mão (toque no subtítulo) e persistido — fallback se o
+ * broadcast for bloqueado na rede.
  */
 public class MainActivity extends Activity {
     static final String TAG = "BTSCAN";
     static final String OUI = "48:87:2D"; // fabricante das tags do projeto
     static final String STATION_ID = "tc22";
-    static final String HUB_URL = "http://127.0.0.1:4000/api/bt/reading";
+    static final String DEFAULT_HUB_URL = "http://127.0.0.1:4000/api/bt/reading";
+    static final String PREFS = "btscan";        // SharedPreferences do app
+    static final String KEY_HUB = "hub_url";      // chave do endereço do hub (editável em runtime)
+    static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
+    static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
     static final long POST_EVERY_MS = 2000;      // envio ao hub
     static final long REFRESH_MS = 1000;         // refresh da tela (vida)
     static final long STALE_MS = 6000;           // sem ver a tag -> desbota
@@ -94,6 +108,7 @@ public class MainActivity extends Activity {
     private long lastScanStartMs = 0;
 
     // Estado do hub (escrito pelo poster, lido pela main)
+    private volatile String hubUrl = DEFAULT_HUB_URL; // endereço do ingest — descoberto na LAN ou editado à mão; persistido
     private volatile int hubState = 0;             // 0=aguardando 1=ok 2=falha
     private volatile String hubDetail = "aguardando primeiro envio ao hub";
 
@@ -103,10 +118,16 @@ public class MainActivity extends Activity {
 
     // UI
     private LinearLayout listContainer;
-    private TextView btChip, hubChip, tagChip, detailLine;
+    private TextView btChip, hubChip, tagChip, detailLine, subLine;
     private float density = 1f;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean running = true;
+    private final Runnable subtitleRefresh = new Runnable() {
+        @Override
+        public void run() {
+            updateSubtitle();
+        }
+    };
 
     private final ScanCallback cb = new ScanCallback() {
         @Override
@@ -241,7 +262,7 @@ public class MainActivity extends Activity {
             n = tags.size();
         }
         try {
-            c = (HttpURLConnection) new URL(HUB_URL).openConnection();
+            c = (HttpURLConnection) new URL(hubUrl).openConnection();
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");
             c.setConnectTimeout(3000);
@@ -266,12 +287,83 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Broadcast UDP p/ achar o hub na LAN (contrato com server/discovery.js). URL de ingest ou null. Fora da main. */
+    private String discoverHub() {
+        DatagramSocket sock = null;
+        try {
+            sock = new DatagramSocket();
+            sock.setBroadcast(true);
+            sock.setSoTimeout(1500);
+            byte[] probe = DISCOVERY_PROBE.getBytes("UTF-8");
+            sock.send(new DatagramPacket(probe, probe.length,
+                    InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT));
+            byte[] buf = new byte[512];
+            DatagramPacket resp = new DatagramPacket(buf, buf.length);
+            sock.receive(resp); // bloqueia até a resposta ou o timeout
+            String msg = new String(resp.getData(), 0, resp.getLength(), "UTF-8");
+            int i = msg.indexOf("\"ingest\":\"");
+            if (i < 0) return null;
+            i += 10; // len de "ingest":"
+            int j = msg.indexOf('"', i);
+            if (j < 0) return null;
+            return msg.substring(i, j);
+        } catch (Exception e) {
+            return null; // sem hub na LAN, ou broadcast bloqueado — silencioso (o manual é o fallback)
+        } finally {
+            if (sock != null) sock.close();
+        }
+    }
+
+    /** Subtítulo = endereço atual do hub, tocável p/ editar à mão. */
+    private void updateSubtitle() {
+        if (subLine == null) return;
+        subLine.setText(new StringBuilder("hub · ").append(hubUrl).append("  ·  toque p/ editar").toString());
+    }
+
+    /** Dialog p/ fixar o endereço do hub à mão (persistido) — fallback quando o broadcast não passa. */
+    private void promptHubUrl() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setText(hubUrl);
+        input.setPadding(dp(16), dp(12), dp(16), dp(12));
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("Endereço do hub");
+        b.setMessage("URL do ingest — mesmo caminho/porta do hub. Ex.: http://192.168.0.10:4000/api/bt/reading");
+        b.setView(input);
+        b.setPositiveButton("Salvar", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface d, int w) {
+                String v = input.getText().toString().trim();
+                if (v.length() == 0) return;
+                hubUrl = v;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_HUB, v).apply();
+                hubState = 0;
+                hubDetail = "endereço atualizado — reenviando…";
+                updateSubtitle();
+            }
+        });
+        b.setNeutralButton("Padrão", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface d, int w) {
+                hubUrl = DEFAULT_HUB_URL;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_HUB, DEFAULT_HUB_URL).apply();
+                hubState = 0;
+                updateSubtitle();
+            }
+        });
+        b.setNegativeButton("Cancelar", null);
+        b.show();
+    }
+
     // ---------- Ciclo de vida ----------
 
     @Override
     protected void onCreate(Bundle s) {
         super.onCreate(s);
         density = getResources().getDisplayMetrics().density;
+        hubUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HUB, DEFAULT_HUB_URL);
         buildUi();
 
         BluetoothManager bm = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
@@ -300,6 +392,16 @@ public class MainActivity extends Activity {
                         return;
                     }
                     postOnce();
+                    // "Se o hub está no ar, conecta": quando o envio falha, procura o hub na LAN por
+                    // broadcast e adota o endereço SE alguém responder (nunca quebra um endereço que funciona).
+                    if (hubState == 2) {
+                        String found = discoverHub();
+                        if (found != null && !found.equals(hubUrl)) {
+                            hubUrl = found;
+                            hubDetail = new StringBuilder("hub encontrado na rede: ").append(found).toString();
+                            ui.post(subtitleRefresh);
+                        }
+                    }
                 }
             }
         });
@@ -363,11 +465,17 @@ public class MainActivity extends Activity {
         title.setTextSize(19);
         title.setTypeface(Typeface.DEFAULT_BOLD);
 
-        TextView sub = new TextView(this);
-        sub.setText(new StringBuilder("fusão tag↔câmera · ").append(HUB_URL).toString());
-        sub.setTextColor(C_MUTED);
-        sub.setTextSize(11);
-        sub.setPadding(0, dp(2), 0, 0);
+        subLine = new TextView(this);
+        subLine.setTextColor(C_MUTED);
+        subLine.setTextSize(11);
+        subLine.setPadding(0, dp(2), 0, 0);
+        subLine.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                promptHubUrl();
+            }
+        });
+        updateSubtitle();
 
         LinearLayout chips = new LinearLayout(this);
         chips.setOrientation(LinearLayout.HORIZONTAL);
@@ -385,7 +493,7 @@ public class MainActivity extends Activity {
         detailLine.setPadding(0, dp(10), 0, 0);
 
         header.addView(title);
-        header.addView(sub);
+        header.addView(subLine);
         header.addView(chips);
         header.addView(detailLine);
 
