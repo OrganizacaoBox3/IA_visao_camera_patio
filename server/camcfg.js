@@ -130,6 +130,22 @@ function cleanCalibration(c) {
   // origem da correlação RSSI×distância. Aditivo: ausente/ inválido = omitido (SÓ números; LGPD).
   const s = c.station;
   if (s && typeof s === "object" && isCoord(s.x) && isCoord(s.y)) out.station = { x: s.x, y: s.y };
+  // refTag (opcional): tag FIXA de referência num ponto conhecido do chão — âncora p/ heartbeat/drift/
+  // RSSI@1m. `mac` = MAC MAIÚSCULO (o mesmo das leituras BLE); `px` = ponto de IMAGEM (normalizado
+  // 0..1). Aditivo: ausente/ inválido = omitido (SÓ números/strings curtas; LGPD).
+  const rt = c.refTag;
+  if (
+    rt &&
+    typeof rt === "object" &&
+    typeof rt.mac === "string" &&
+    rt.mac.trim() !== "" &&
+    rt.px &&
+    typeof rt.px === "object" &&
+    isCoord(rt.px.x) &&
+    isCoord(rt.px.y)
+  ) {
+    out.refTag = { mac: String(rt.mac).trim().toUpperCase(), px: { x: rt.px.x, y: rt.px.y } };
+  }
   return out;
 }
 

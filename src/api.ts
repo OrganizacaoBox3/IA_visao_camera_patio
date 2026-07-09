@@ -308,7 +308,9 @@ export type { Matrix3, Vec2 } from "./vision/homography";
 export type CalibrationPoint = { px: Vec2; world: Vec2 };
 // station (opcional): ponto de imagem (normalizado 0..1) do chão onde a estação BLE fica — origem
 // da correlação RSSI×distância da fusão tag↔pessoa. Ausente = comportamento atual (aditivo). SÓ números.
-export type CameraCalibration = { points: CalibrationPoint[]; H: Matrix3; updatedAt: number; station?: Vec2 };
+// refTag (opcional): tag FIXA num ponto conhecido do chão — âncora p/ heartbeat/drift/RSSI@1m.
+// `mac` = MAC maiúsculo (o mesmo das leituras BLE); `px` = ponto de imagem (0..1). Aditivo. SÓ números/strings.
+export type CameraCalibration = { points: CalibrationPoint[]; H: Matrix3; updatedAt: number; station?: Vec2; refTag?: { mac: string; px: Vec2 } };
 // GET /api/calibration/:cameraId → CameraCalibration | null (null = nunca calibrada). Auth: autenticado.
 export const getCalibration = (cameraId: string) =>
   apiGet<CameraCalibration | null>(`/api/calibration/${encodeURIComponent(cameraId)}`);

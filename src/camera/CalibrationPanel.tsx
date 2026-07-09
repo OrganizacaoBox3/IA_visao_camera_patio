@@ -17,14 +17,25 @@ import {
   computeHomography,
   measureDistance,
   worldToPixel,
+  pixelToWorld,
   type Correspondence,
   type Matrix3,
   type Vec2,
 } from "../vision/homography";
-import { getCalibration, saveCalibration, ApiError, type CameraCalibration } from "../api";
+import {
+  getCalibration,
+  saveCalibration,
+  getBtReadings,
+  ApiError,
+  type CameraCalibration,
+  type BtReading,
+} from "../api";
+import { useStationHealth } from "../fusion/useStationHealth";
+import { StationHealthChip } from "../fusion/StationHealthChip";
 
 type Mode = "calibrar" | "medir";
-type CalStep = "cantos" | "estacao"; // dentro de "calibrar": marcar os 4 cantos OU o ponto da estação BLE
+// dentro de "calibrar": marcar os 4 cantos, o ponto da estação BLE OU a tag fixa de referência
+type CalStep = "cantos" | "estacao" | "referencia";
 
 /** Cantos do retângulo em coords de mundo (metros), na ordem de clique: 1→(0,0) 2→(L,0) 3→(L,C) 4→(0,C). */
 function worldCorners(L: number, C: number): Vec2[] {
@@ -50,6 +61,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [calStep, setCalStep] = useState<CalStep>("cantos"); // o que se marca no palco ao calibrar
   const [corners, setCorners] = useState<Vec2[]>([]); // cantos clicados (px 0..1), até 4, em ordem
   const [station, setStation] = useState<Vec2 | null>(null); // ponto do chão da estação BLE (px 0..1), opcional
+  // tag FIXA de referência (âncora de saúde): qual MAC + onde ela está no chão (px 0..1). mac/px marcados
+  // em passos separados — `mac` pode estar vazio (só px) e vice-versa; só entra no save quando ambos.
+  const [refTag, setRefTag] = useState<{ mac: string; px: Vec2 | null } | null>(null);
+  const [btReadings, setBtReadings] = useState<BtReading[]>([]); // leituras BLE vivas (poll no passo "referencia")
   const [width, setWidth] = useState<string>("1"); // Largura (lado 1→2), metros — string p/ digitar livre
   const [length, setLength] = useState<string>("1"); // Comprimento (lado 2→3), metros
   const [savedH, setSavedH] = useState<Matrix3 | null>(null);
@@ -59,7 +74,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ kind: "corner" | "measure" | "station"; idx: number } | null>(null); // ponto sendo arrastado
+  const dragRef = useRef<{ kind: "corner" | "measure" | "station" | "reftag"; idx: number } | null>(null); // ponto sendo arrastado
   const [hoverIdx, setHoverIdx] = useState<number | null>(null); // ponto sob o cursor (feedback de "pegar")
 
   // Carrega a calibração existente. Reconstrói os cantos + L×C quando são 4 pontos (método retângulo);
@@ -69,6 +84,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     setLoading(true);
     setCorners([]);
     setStation(null);
+    setRefTag(null);
     setSavedH(null);
     setMeasurePts([]);
     getCalibration(cameraId)
@@ -76,6 +92,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
         if (cancelled || !cal) return;
         setSavedH(cal.H);
         if (cal.station) setStation({ x: cal.station.x, y: cal.station.y });
+        if (cal.refTag) setRefTag({ mac: cal.refTag.mac, px: { x: cal.refTag.px.x, y: cal.refTag.px.y } });
         if (cal.points.length === 4) {
           setCorners(cal.points.map((p) => ({ x: p.px.x, y: p.px.y })));
           setWidth(String(cal.points[1].world.x)); // (L,0)
@@ -131,11 +148,55 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     return { seg, step };
   }, [activeH, L, C, dimsOk]);
 
+  // Leituras BLE vivas: só enquanto se marca a tag de referência (poll leve a cada ~2s). Efêmero (LGPD).
+  useEffect(() => {
+    if (mode !== "calibrar" || calStep !== "referencia") return;
+    let cancelled = false;
+    const load = () =>
+      getBtReadings()
+        .then((r) => {
+          if (!cancelled) setBtReadings(r);
+        })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [mode, calStep]);
+
+  // Distância real estação ↔ tag de referência (m), pelas projeções no mundo — só com H + ambos os pontos.
+  const distMeters = useMemo(() => {
+    if (!activeH || !station || !refTag?.px) return undefined;
+    const a = pixelToWorld(activeH, station);
+    const b = pixelToWorld(activeH, refTag.px);
+    if (!a || !b) return undefined;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }, [activeH, station, refTag]);
+
+  // Saúde da estação (heartbeat/drift/RSSI@1m) ancorada na tag fixa — hook de fusão (frente C).
+  const stationHealth = useStationHealth({
+    refMac: refTag?.mac || undefined,
+    distMeters,
+    enabled: mode === "calibrar" && calStep === "referencia" && !!refTag?.mac,
+  });
+
   // ── Interação por PONTEIRO: pegar/arrastar um ponto existente OU adicionar um novo. Coords do palco
   // → normalizadas 0..1 (contra o retângulo da imagem). Mouse e toque (pointer events). ──
   const HIT = 0.04; // raio de acerto (fração da imagem) p/ "pegar" um ponto já marcado
   const activePts =
-    mode === "medir" ? measurePts : calStep === "estacao" ? (station ? [station] : []) : corners;
+    mode === "medir"
+      ? measurePts
+      : calStep === "estacao"
+        ? station
+          ? [station]
+          : []
+        : calStep === "referencia"
+          ? refTag?.px
+            ? [refTag.px]
+            : []
+          : corners;
 
   function pxFrom(e: React.PointerEvent<HTMLDivElement>): Vec2 | null {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -170,6 +231,11 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       const hit = nearest(station ? [station] : [], px);
       if (hit != null) dragRef.current = { kind: "station", idx: 0 };
       else setStation(px); // clicar no chão fixa/reposiciona a estação; arraste p/ ajustar
+    } else if (calStep === "referencia") {
+      if (!canConfigure) return;
+      const hit = nearest(refTag?.px ? [refTag.px] : [], px);
+      if (hit != null) dragRef.current = { kind: "reftag", idx: 0 };
+      else setRefTag((r) => ({ mac: r?.mac ?? "", px })); // fixa/reposiciona o ponto do chão; mantém o mac
     } else {
       if (!canConfigure) return;
       const hit = nearest(corners, px);
@@ -188,6 +254,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     if (d) {
       if (d.kind === "corner") setCorners((p) => p.map((c, i) => (i === d.idx ? px : c)));
       else if (d.kind === "station") setStation(px);
+      else if (d.kind === "reftag") setRefTag((r) => (r ? { ...r, px } : { mac: "", px }));
       else setMeasurePts((p) => p.map((c, i) => (i === d.idx ? px : c)));
       return;
     }
@@ -211,6 +278,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       H: liveH.H,
       updatedAt: Date.now(),
       ...(station ? { station } : {}), // só vai quando marcado; ausente = fallback no back
+      ...(refTag && refTag.mac && refTag.px ? { refTag: { mac: refTag.mac, px: refTag.px } } : {}), // idem
     };
     try {
       const saved = await saveCalibration(cameraId, payload);
@@ -268,6 +336,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
               options={[
                 { value: "cantos", label: "Cantos" },
                 { value: "estacao", label: "Estação BLE" },
+                { value: "referencia", label: "Tag de referência" },
               ]}
             />
           )}
@@ -298,9 +367,13 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                   ? station
                     ? "Estação marcada — arraste para ajustar"
                     : "Clique no chão onde fica a estação BLE"
-                  : corners.length < 4
-                    ? `Clique o canto ${CORNER_HINT[corners.length]}`
-                    : "4 cantos marcados"}
+                  : calStep === "referencia"
+                    ? refTag?.px
+                      ? "Tag de referência marcada — arraste para ajustar"
+                      : "Escolha a tag na lista e clique no chão onde ela está fixada"
+                    : corners.length < 4
+                      ? `Clique o canto ${CORNER_HINT[corners.length]}`
+                      : "4 cantos marcados"}
               </span>
               {corners.length > 0 && (
                 <>
@@ -311,6 +384,34 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                     Refazer
                   </Button>
                 </>
+              )}
+            </div>
+          )}
+          {canConfigure && calStep === "referencia" && (
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[12px] text-text-muted">Tags visíveis agora:</span>
+                <StationHealthChip health={stationHealth} />
+              </div>
+              {btReadings.length === 0 ? (
+                <span className="text-[12px] text-text-muted">Nenhuma tag visível — verifique a estação.</span>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {btReadings.map((r) => {
+                    const selected = refTag?.mac === r.mac;
+                    return (
+                      <Button
+                        key={r.mac}
+                        size="sm"
+                        variant={selected ? "primary" : "ghost"}
+                        aria-pressed={selected}
+                        onClick={() => setRefTag((prev) => ({ mac: r.mac, px: prev?.px ?? null }))}
+                      >
+                        {r.rotulo || r.mac} · {r.rssi} dBm
+                      </Button>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
@@ -433,6 +534,24 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 estação
               </text>
             </g>
+          )}
+          {/* Tag de referência: LOSANGO (distinto dos cantos-círculo e da estação-antena), em --state-info. */}
+          {mode === "calibrar" && refTag?.px && (
+            <svg x={`${refTag.px.x * 100}%`} y={`${refTag.px.y * 100}%`} width={1} height={1} overflow="visible">
+              <rect
+                x={-7}
+                y={-7}
+                width={14}
+                height={14}
+                transform={`rotate(45) scale(${calStep === "referencia" && hoverIdx === 0 ? 1.2 : 1})`}
+                fill="var(--state-info)"
+                stroke="var(--bg)"
+                strokeWidth={2}
+              />
+              <text x={13} y={4} fontSize={12} fill="var(--state-info)">
+                ref
+              </text>
+            </svg>
           )}
           {/* Modo medir: linha + pontos. */}
           {mode === "medir" && measurePts.length === 2 && (
