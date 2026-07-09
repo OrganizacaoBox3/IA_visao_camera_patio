@@ -364,7 +364,7 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
 
         TextView sub = new TextView(this);
-        sub.setText(new StringBuilder("Grendene · fusão tag↔câmera · ").append(HUB_URL).toString());
+        sub.setText(new StringBuilder("fusão tag↔câmera · ").append(HUB_URL).toString());
         sub.setTextColor(C_MUTED);
         sub.setTextSize(11);
         sub.setPadding(0, dp(2), 0, 0);

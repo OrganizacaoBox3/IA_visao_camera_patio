@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import { BluetoothSearching, Tag } from "lucide-react";
 import { useAuth } from "../auth";
 import { APP_CONFIG } from "../config";
-import { PageHeader, Badge, EmptyState, Spinner } from "../ui";
-import { getBtReadings, type BtReading } from "../api";
+import { PageHeader, Badge, EmptyState, Spinner, Button, Input } from "../ui";
+import {
+  getBtReadings,
+  getBtTags,
+  createBtTag,
+  updateBtTag,
+  type BtReading,
+  type BtTag,
+} from "../api";
 
 // Tela CRUA das tags BLE (Fase 1 do plano — analises/tags-bluetooth/00-avaliacao-e-plano.md §5.1):
 // mostra AO VIVO cada tag vista pela estação, ordenada por sinal (mais forte primeiro), marcando
@@ -27,12 +34,51 @@ function rssiPct(rssi: number): number {
 }
 
 export function BtTagsPage() {
-  const { token } = useAuth();
+  const { token, canConfigure } = useAuth();
   const [byMac, setByMac] = useState<Record<string, Live>>({});
   const [connected, setConnected] = useState(false);
   const [seeded, setSeeded] = useState(false);
   // Tick só para re-renderizar e recalcular o "stale" localmente quando nada chega pelo socket.
   const [, setNowTick] = useState(0);
+  // Registro (QUEM é a tag): nome↔MAC. Só carregado p/ quem configura (a rota exige engenharia). Editar
+  // um nome grava no cadastro (bt_tags); a estação/overlay passam a mostrar a pessoa. Chave = MAC maiúsculo.
+  const [tagByMac, setTagByMac] = useState<Record<string, BtTag>>({});
+  const [editMac, setEditMac] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [savingMac, setSavingMac] = useState<string | null>(null);
+
+  const loadTags = useCallback(() => {
+    if (!canConfigure) return;
+    getBtTags()
+      .then((list) => {
+        const m: Record<string, BtTag> = {};
+        for (const t of list) m[t.btName.toUpperCase()] = t;
+        setTagByMac(m);
+      })
+      .catch(() => {
+        /* sem permissão / hub antigo — segue só com as leituras */
+      });
+  }, [canConfigure]);
+  useEffect(() => {
+    loadTags();
+  }, [loadTags]);
+
+  async function saveName(mac: string) {
+    const name = editName.trim();
+    if (!name) return;
+    setSavingMac(mac);
+    try {
+      const existing = tagByMac[mac.toUpperCase()];
+      if (existing) await updateBtTag(existing.id, { rotulo: name });
+      else await createBtTag(mac, name);
+      setEditMac(null);
+      loadTags();
+    } catch {
+      /* mantém a edição aberta em caso de erro */
+    } finally {
+      setSavingMac(null);
+    }
+  }
 
   // Mescla um lote de leituras no mapa por MAC, carimbando o TS de recepção local.
   function mergeReadings(rows: BtReading[]) {
@@ -136,6 +182,9 @@ export function BtTagsPage() {
               {rows.map((r) => {
                 const stale = now - r.ts > STALE_MS;
                 const pct = rssiPct(r.rssi);
+                const reg = tagByMac[r.mac]; // MAC já é maiúsculo (mergeReadings)
+                const name = reg?.rotulo ?? r.rotulo ?? null; // registro local (fresco) → enriquecido → nada
+                const editing = editMac === r.mac;
                 return (
                   <li
                     key={r.mac}
@@ -148,18 +197,44 @@ export function BtTagsPage() {
                     >
                       <Tag size={15} strokeWidth={1.75} />
                     </span>
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate text-[14px] font-medium text-text">
-                        {r.rotulo ?? r.mac}
-                      </span>
-                      <span className="text-[11px] text-text-muted">
-                        {r.rotulo ? r.mac : "tag não cadastrada"}
-                        {stale && " · sem sinal recente"}
-                      </span>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      {editing ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            placeholder="Nome da pessoa"
+                            className="w-48"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveName(r.mac);
+                              if (e.key === "Escape") setEditMac(null);
+                            }}
+                          />
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={savingMac === r.mac || !editName.trim()}
+                            onClick={() => saveName(r.mac)}
+                          >
+                            {savingMac === r.mac ? "…" : "Salvar"}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditMac(null)}>
+                            Cancelar
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="truncate text-[14px] font-medium text-text">{name ?? r.mac}</span>
+                          <span className="text-[11px] text-text-muted">
+                            {name ? r.mac : "sem nome"}
+                            {stale && " · sem sinal recente"}
+                          </span>
+                        </>
+                      )}
                     </div>
-                    <div className="flex-1" />
                     {/* Barra de sinal analógica + valor cru (going-gray: neutro; nunca só número). */}
-                    <div className="flex w-40 items-center gap-2">
+                    <div className="flex w-40 shrink-0 items-center gap-2">
                       <span
                         className="h-1.5 flex-1 overflow-hidden rounded-full bg-panel"
                         role="img"
@@ -177,6 +252,19 @@ export function BtTagsPage() {
                         {r.rssi} dBm
                       </span>
                     </div>
+                    {canConfigure && !editing && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0"
+                        onClick={() => {
+                          setEditMac(r.mac);
+                          setEditName(name ?? "");
+                        }}
+                      >
+                        {name ? "editar" : "nomear"}
+                      </Button>
+                    )}
                   </li>
                 );
               })}

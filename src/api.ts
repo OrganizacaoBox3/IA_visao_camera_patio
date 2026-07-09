@@ -324,6 +324,18 @@ export type BtReading = { mac: string; rotulo: string | null; rssi: number; stat
 // GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
 export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
 
+// ── CADASTRO de tags (definir QUEM é a tag: rótulo/pessoa por nome do BT/MAC) ──────────────────
+// A estação vê a tag pelo MAC/nome; o cadastro liga isso a um rótulo (a pessoa). Persistido (config).
+// Auth de escrita: perfil de configuração (engenharia/superadmin) — coerente com câmeras/zonas.
+export type BtTag = { id: string; btName: string; rotulo: string; ativo: boolean; criadoEm: number };
+export const getBtTags = () => apiGet<BtTag[]>("/api/bt-tags");
+export const createBtTag = (btName: string, rotulo: string) =>
+  apiSend<BtTag>("POST", "/api/bt-tags", { btName, rotulo });
+export const updateBtTag = (id: string, patch: { rotulo?: string; ativo?: boolean; btName?: string }) =>
+  apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
+export const deleteBtTag = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/bt-tags/${encodeURIComponent(id)}`);
+
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
 // POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`

@@ -12,7 +12,7 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <!-- usesCleartextTraffic: o hub em LAN/USB é HTTP (não-HTTPS); Android 9+ bloqueia sem isto. -->
-    <application android:label="Grendene BT Scan" android:usesCleartextTraffic="true">
+    <application android:label="Estação BLE" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
