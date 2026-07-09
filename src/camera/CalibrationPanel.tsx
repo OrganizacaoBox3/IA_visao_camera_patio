@@ -1,20 +1,22 @@
-// Painel de CALIBRAÇÃO de homografia por câmera (MVP, self-contained). Duas funções sobre a MESMA
-// imagem do chão:
-//   • Calibrar: o operador clica ≥4 pontos no piso e digita a posição real (X,Y em metros) de cada
-//     um → computa a homografia (src/vision/homography.ts) e salva no hub (api.saveCalibration).
+// Painel de CALIBRAÇÃO de homografia por câmera (MVP, self-contained). Método de MERCADO (10-calibracao-
+// melhoria.md): em vez de digitar X,Y avulso de cada ponto (frágil/impraticável), o operador marca os 4
+// CANTOS de um RETÂNGULO real no chão, em ordem, e informa só Largura×Comprimento (metros). A homografia
+// (src/vision/homography.ts) sai dos 4 cantos ↔ (0,0),(L,0),(L,C),(0,C). A matemática é a mesma; muda a UX.
+//   • Calibrar: 4 cantos + L×C → H salva no hub (api.saveCalibration). Uma GRADE métrica projetada de volta
+//     mostra se a calibração "assenta" no chão (conferência visual, como o mercado faz).
 //   • Medir: com a câmera calibrada, clica 2 pontos → distância REAL no chão em metros.
 //
-// DESACOPLADO da casca de câmera (ADR-007): NÃO monta dentro do <canvas>/fullscreen — recebe uma
-// imagem estática (`snapshotUrl`, ex.: um frame baixado) e captura cliques sobre um <img>/placeholder
-// próprio. Coordenadas são NORMALIZADAS 0..1 (mesmo sistema de zonas/tracks/pé da pessoa), medidas
-// contra o retângulo do palco (o wrapper encolhe até a imagem → sem matemática de letterbox).
-// LGPD: só geometria/números trafegam; a imagem é local e efêmera (nunca persistida).
+// DESACOPLADO da casca de câmera (ADR-007): recebe uma imagem estática (`snapshotUrl`) e captura cliques
+// sobre um <img>/placeholder próprio. Coords NORMALIZADAS 0..1 (mesmo sistema de zonas/tracks/pé). Só
+// geometria/números trafegam; a imagem é local/efêmera (LGPD). Localizamos o PÉ da pessoa (no chão, Z=0) —
+// pontos fora do chão exigiriam homografia de altura (evolução futura, se o campo pedir).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapPin, Ruler, Save, Trash2, X } from "lucide-react";
+import { Grid3x3, Ruler, Save, Undo2, X } from "lucide-react";
 import { Button, Badge, Field, Input, SegmentedControl, Alert } from "../ui";
 import {
   computeHomography,
   measureDistance,
+  worldToPixel,
   type Correspondence,
   type Matrix3,
   type Vec2,
@@ -22,14 +24,16 @@ import {
 import { getCalibration, saveCalibration, ApiError, type CameraCalibration } from "../api";
 
 type Mode = "calibrar" | "medir";
-// Ponto em EDIÇÃO: px fixado no clique; world como STRING (permite digitar "-", "1.", vazio sem o
-// glitch do input numérico controlado). Vira Correspondence só quando ambos parseiam a número finito.
-type EditPoint = { id: string; px: Vec2; wx: string; wy: string };
 
-const uid = () =>
-  typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2);
+/** Cantos do retângulo em coords de mundo (metros), na ordem de clique: 1→(0,0) 2→(L,0) 3→(L,C) 4→(0,C). */
+function worldCorners(L: number, C: number): Vec2[] {
+  return [
+    { x: 0, y: 0 },
+    { x: L, y: 0 },
+    { x: L, y: C },
+    { x: 0, y: C },
+  ];
+}
 
 type Props = {
   cameraId: string;
@@ -42,8 +46,10 @@ type Props = {
 
 export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, onClose }: Props) {
   const [mode, setMode] = useState<Mode>("calibrar");
-  const [edits, setEdits] = useState<EditPoint[]>([]);
-  const [savedH, setSavedH] = useState<Matrix3 | null>(null); // H persistida (base da medição)
+  const [corners, setCorners] = useState<Vec2[]>([]); // cantos clicados (px 0..1), até 4, em ordem
+  const [width, setWidth] = useState<string>("1"); // Largura (lado 1→2), metros — string p/ digitar livre
+  const [length, setLength] = useState<string>("1"); // Comprimento (lado 2→3), metros
+  const [savedH, setSavedH] = useState<Matrix3 | null>(null);
   const [measurePts, setMeasurePts] = useState<Vec2[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -51,25 +57,23 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [note, setNote] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
-  // Carrega a calibração existente (prefill dos pontos + H). Degrada gracioso se ausente/erro.
+  // Carrega a calibração existente. Reconstrói os cantos + L×C quando são 4 pontos (método retângulo);
+  // se for de um formato antigo, ainda usa a H p/ MEDIR. Degrada gracioso.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setEdits([]);
+    setCorners([]);
     setSavedH(null);
     setMeasurePts([]);
     getCalibration(cameraId)
       .then((cal) => {
         if (cancelled || !cal) return;
         setSavedH(cal.H);
-        setEdits(
-          cal.points.map((p) => ({
-            id: uid(),
-            px: { x: p.px.x, y: p.px.y },
-            wx: String(p.world.x),
-            wy: String(p.world.y),
-          })),
-        );
+        if (cal.points.length === 4) {
+          setCorners(cal.points.map((p) => ({ x: p.px.x, y: p.px.y })));
+          setWidth(String(cal.points[1].world.x)); // (L,0)
+          setLength(String(cal.points[2].world.y)); // (L,C)
+        }
       })
       .catch((e) => {
         if (!cancelled) console.warn("[calibration] carga falhou — começando vazio", e);
@@ -82,26 +86,43 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     };
   }, [cameraId]);
 
-  // Correspondências vivas + H recomputada ao editar (memo — só quando ≥4 pontos com metros válidos).
-  const { corr, liveH } = useMemo(() => {
-    const corr: Correspondence[] = edits.map((e) => ({
-      px: e.px,
-      world: { x: parseFloat(e.wx), y: parseFloat(e.wy) },
-    }));
-    const allNumbers = corr.every(
-      (c) => Number.isFinite(c.world.x) && Number.isFinite(c.world.y),
-    );
-    const liveH =
-      edits.length >= 4 && allNumbers ? computeHomography(corr) : null;
-    return { corr, liveH };
-  }, [edits]);
+  const L = parseFloat(width);
+  const C = parseFloat(length);
+  const dimsOk = Number.isFinite(L) && L > 0 && Number.isFinite(C) && C > 0;
 
-  // H ativa p/ medição: a recém-editada (se válida) ou a última salva.
+  // H recomputada quando há 4 cantos + dimensões válidas (memo).
+  const liveH = useMemo(() => {
+    if (corners.length !== 4 || !dimsOk) return null;
+    const w = worldCorners(L, C);
+    const corr: Correspondence[] = corners.map((px, i) => ({ px, world: w[i] }));
+    return computeHomography(corr);
+  }, [corners, L, C, dimsOk]);
+
+  // H ativa p/ medição + grade: a recém-editada (se válida) ou a última salva.
   const activeH: Matrix3 | null = liveH && liveH.ok ? liveH.H : savedH;
+
   const distance =
-    activeH && measurePts.length === 2
-      ? measureDistance(activeH, measurePts[0], measurePts[1])
-      : null;
+    activeH && measurePts.length === 2 ? measureDistance(activeH, measurePts[0], measurePts[1]) : null;
+
+  // Grade métrica de conferência: linhas do mundo (0..L × 0..C) a cada `step` m projetadas de volta na
+  // imagem (worldToPixel). Se "assenta" no chão, a calibração está boa. Só quando há H válida.
+  const grid = useMemo(() => {
+    if (!activeH || !dimsOk) return null;
+    const step = Math.max(1, Math.ceil(Math.max(L, C) / 12)); // ≤ ~13 linhas por eixo
+    const seg: Array<[Vec2, Vec2]> = [];
+    const proj = (wx: number, wy: number) => worldToPixel(activeH, { x: wx, y: wy });
+    for (let x = 0; x <= L + 1e-6; x += step) {
+      const a = proj(x, 0);
+      const b = proj(x, C);
+      if (a && b) seg.push([a, b]);
+    }
+    for (let y = 0; y <= C + 1e-6; y += step) {
+      const a = proj(0, y);
+      const b = proj(L, y);
+      if (a && b) seg.push([a, b]);
+    }
+    return { seg, step };
+  }, [activeH, L, C, dimsOk]);
 
   // Clique no palco → coordenada normalizada 0..1 (contra o retângulo da imagem).
   function onStageClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -116,21 +137,21 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       return;
     }
     if (!canConfigure) return;
-    setEdits((p) => [...p, { id: uid(), px, wx: "0", wy: "0" }]);
     setNote(null);
+    setCorners((p) => (p.length >= 4 ? p : [...p, px])); // até 4; "Refazer" limpa
   }
 
-  const setWorld = (id: string, axis: "wx" | "wy", v: string) =>
-    setEdits((p) => p.map((e) => (e.id === id ? { ...e, [axis]: v } : e)));
-  const removePoint = (id: string) => setEdits((p) => p.filter((e) => e.id !== id));
+  const undoCorner = () => setCorners((p) => p.slice(0, -1));
+  const resetCorners = () => setCorners([]);
 
   async function save() {
     if (!liveH || !liveH.ok) return;
     setSaving(true);
     setErr(null);
     setNote(null);
+    const w = worldCorners(L, C);
     const payload: CameraCalibration = {
-      points: corr.map((c) => ({ px: c.px, world: c.world })),
+      points: corners.map((px, i) => ({ px, world: w[i] })),
       H: liveH.H,
       updatedAt: Date.now(),
     };
@@ -144,6 +165,8 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       setSaving(false);
     }
   }
+
+  const CORNER_HINT = ["1 · próximo-esquerdo", "2 · próximo-direito", "3 · longe-direito", "4 · longe-esquerdo"];
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -173,19 +196,63 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
         ]}
       />
 
-      <p className="text-[12px] text-text-muted">
-        {mode === "calibrar"
-          ? canConfigure
-            ? "Clique em ≥4 pontos do chão e informe a posição real (X,Y em metros) de cada um."
-            : "A calibração requer perfil de engenharia. Você pode usar o modo Medir."
-          : activeH
+      {mode === "calibrar" ? (
+        <>
+          <p className="text-[12px] text-text-muted">
+            {canConfigure
+              ? "Escolha um RETÂNGULO no chão (área demarcada, pallet, ladrilhos) e clique os 4 cantos EM ORDEM. Depois informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros."
+              : "A calibração requer perfil de engenharia. Você pode usar o modo Medir."}
+          </p>
+          {canConfigure && (
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="Largura 1→2 (m)" className="w-32">
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  min="0"
+                  value={width}
+                  onChange={(ev) => setWidth(ev.target.value)}
+                />
+              </Field>
+              <Field label="Comprimento 2→3 (m)" className="w-36">
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  min="0"
+                  value={length}
+                  onChange={(ev) => setLength(ev.target.value)}
+                />
+              </Field>
+              <span className="mb-2 text-[12px] text-text-muted">
+                {corners.length < 4
+                  ? `Clique o canto ${CORNER_HINT[corners.length]}`
+                  : "4 cantos marcados"}
+              </span>
+              {corners.length > 0 && (
+                <>
+                  <Button size="sm" variant="ghost" className="mb-1" onClick={undoCorner}>
+                    <Undo2 size={14} strokeWidth={1.75} aria-hidden /> Desfazer
+                  </Button>
+                  <Button size="sm" variant="ghost" className="mb-1" onClick={resetCorners}>
+                    Refazer
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-[12px] text-text-muted">
+          {activeH
             ? "Clique em 2 pontos do chão para medir a distância real entre eles."
-            : "Calibre a câmera primeiro (≥4 pontos) para poder medir em metros."}
-      </p>
+            : "Calibre a câmera primeiro (retângulo do chão) para poder medir em metros."}
+        </p>
+      )}
 
-      {/* Palco: wrapper ENCOLHE até a imagem (cliques mapeiam direto a 0..1, sem letterbox). A imagem é
-          capada à viewport (max-h) e à largura da página (max-w) p/ não estourar/cortar a tela; o palco
-          centraliza e acompanha o tamanho real exibido. */}
+      {/* Palco: wrapper ENCOLHE até a imagem (cliques mapeiam direto a 0..1, sem letterbox). Imagem capada
+          à viewport (max-h) e à largura da página (max-w) p/ não cortar a tela. */}
       <div
         ref={stageRef}
         onClick={onStageClick}
@@ -216,56 +283,79 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
           />
         )}
         <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+          {/* GRADE de conferência (métrica projetada de volta) — some quando ainda não há H válida. */}
           {mode === "calibrar" &&
-            edits.map((e, i) => (
-              <g key={e.id}>
+            grid?.seg.map(([a, b], i) => (
+              <line
+                key={`g${i}`}
+                x1={`${a.x * 100}%`}
+                y1={`${a.y * 100}%`}
+                x2={`${b.x * 100}%`}
+                y2={`${b.y * 100}%`}
+                stroke="var(--state-ok)"
+                strokeWidth={1}
+                opacity={0.5}
+              />
+            ))}
+          {/* Contorno do retângulo (cantos na ordem) + marcadores numerados. */}
+          {mode === "calibrar" && corners.length >= 2 && (
+            <polygon
+              points={corners.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(" ")}
+              fill="none"
+              stroke="var(--state-info)"
+              strokeWidth={2}
+              strokeDasharray={corners.length < 4 ? "4 3" : undefined}
+            />
+          )}
+          {mode === "calibrar" &&
+            corners.map((p, i) => (
+              <g key={`c${i}`}>
                 <circle
-                  cx={`${e.px.x * 100}%`}
-                  cy={`${e.px.y * 100}%`}
+                  cx={`${p.x * 100}%`}
+                  cy={`${p.y * 100}%`}
                   r={6}
                   fill="var(--state-info)"
                   stroke="var(--bg)"
                   strokeWidth={2}
                 />
-                <text
-                  x={`${e.px.x * 100}%`}
-                  y={`${e.px.y * 100}%`}
-                  dx={9}
-                  dy={4}
-                  fontSize={12}
-                  fill="var(--state-info)"
-                >
+                <text x={`${p.x * 100}%`} y={`${p.y * 100}%`} dx={9} dy={4} fontSize={12} fill="var(--state-info)">
                   {i + 1}
                 </text>
               </g>
             ))}
-          {mode === "medir" && (
-            <>
-              {measurePts.length === 2 && (
-                <line
-                  x1={`${measurePts[0].x * 100}%`}
-                  y1={`${measurePts[0].y * 100}%`}
-                  x2={`${measurePts[1].x * 100}%`}
-                  y2={`${measurePts[1].y * 100}%`}
-                  stroke="var(--state-warn)"
-                  strokeWidth={2}
-                />
-              )}
-              {measurePts.map((p, i) => (
-                <circle
-                  key={i}
-                  cx={`${p.x * 100}%`}
-                  cy={`${p.y * 100}%`}
-                  r={6}
-                  fill="var(--state-warn)"
-                  stroke="var(--bg)"
-                  strokeWidth={2}
-                />
-              ))}
-            </>
+          {/* Modo medir: linha + pontos. */}
+          {mode === "medir" && measurePts.length === 2 && (
+            <line
+              x1={`${measurePts[0].x * 100}%`}
+              y1={`${measurePts[0].y * 100}%`}
+              x2={`${measurePts[1].x * 100}%`}
+              y2={`${measurePts[1].y * 100}%`}
+              stroke="var(--state-warn)"
+              strokeWidth={2}
+            />
           )}
+          {mode === "medir" &&
+            measurePts.map((p, i) => (
+              <circle
+                key={`m${i}`}
+                cx={`${p.x * 100}%`}
+                cy={`${p.y * 100}%`}
+                r={6}
+                fill="var(--state-warn)"
+                stroke="var(--bg)"
+                strokeWidth={2}
+              />
+            ))}
         </svg>
       </div>
+
+      {/* Grade: legenda do passo (quando visível). */}
+      {mode === "calibrar" && grid && (
+        <span className="inline-flex items-center gap-1 text-[11px] text-text-muted">
+          <Grid3x3 size={12} strokeWidth={1.75} aria-hidden /> Grade de conferência: {grid.step} m por linha —
+          deve assentar no chão.
+        </span>
+      )}
 
       {/* Medição: leitura da distância em metros. */}
       {mode === "medir" && (
@@ -287,75 +377,25 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
         </div>
       )}
 
-      {/* Calibração: lista de pontos com as coordenadas reais (metros). */}
+      {/* Calibração: estado da homografia + salvar. */}
       {mode === "calibrar" && (
         <div className="flex flex-col gap-2">
           {loading && <span className="text-[12px] text-text-muted">Carregando…</span>}
-          {!loading && edits.length === 0 && (
-            <span className="text-[12px] text-text-muted">
-              Nenhum ponto. Clique no chão da imagem para adicionar.
-            </span>
-          )}
-          {edits.map((e, i) => (
-            <div key={e.id} className="flex items-end gap-2">
-              <span className="mb-2 inline-flex items-center gap-1 text-[12px] text-text-dim">
-                <MapPin size={13} strokeWidth={1.75} aria-hidden /> {i + 1}
-              </span>
-              <Field label="X (m)" className="w-24">
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.1"
-                  value={e.wx}
-                  disabled={!canConfigure}
-                  onChange={(ev) => setWorld(e.id, "wx", ev.target.value)}
-                />
-              </Field>
-              <Field label="Y (m)" className="w-24">
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.1"
-                  value={e.wy}
-                  disabled={!canConfigure}
-                  onChange={(ev) => setWorld(e.id, "wy", ev.target.value)}
-                />
-              </Field>
-              <span className="mb-2 text-[11px] text-text-muted">
-                px {e.px.x.toFixed(2)},{e.px.y.toFixed(2)}
-              </span>
-              {canConfigure && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="mb-1"
-                  aria-label={`Remover ponto ${i + 1}`}
-                  onClick={() => removePoint(e.id)}
-                >
-                  <Trash2 size={14} strokeWidth={1.75} aria-hidden />
-                </Button>
-              )}
-            </div>
-          ))}
-
-          {/* Estado da homografia + ação de salvar. */}
           {liveH && !liveH.ok && <Alert tone="warn">{liveH.error}</Alert>}
           {err && <Alert tone="alert">{err}</Alert>}
           {note && <Alert tone="ok">{note}</Alert>}
           {canConfigure && (
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={!liveH || !liveH.ok || saving}
-                onClick={save}
-              >
+              <Button size="sm" variant="primary" disabled={!liveH || !liveH.ok || saving} onClick={save}>
                 <Save size={14} strokeWidth={1.75} aria-hidden /> {saving ? "Salvando…" : "Salvar calibração"}
               </Button>
-              {edits.length < 4 && (
+              {corners.length < 4 && (
                 <span className="text-[12px] text-text-muted">
-                  Faltam {4 - edits.length} ponto(s) para o mínimo.
+                  Faltam {4 - corners.length} canto(s).
                 </span>
+              )}
+              {corners.length === 4 && !dimsOk && (
+                <span className="text-[12px] text-text-muted">Informe Largura e Comprimento (&gt; 0).</span>
               )}
             </div>
           )}
