@@ -9,6 +9,7 @@ import {
 import {
   BarChart3,
   BellRing,
+  Bluetooth,
   Cctv,
   ChevronDown,
   CircleUser,
@@ -16,6 +17,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Ruler,
   Search,
   ShieldCheck,
   Users,
@@ -221,6 +223,9 @@ export function AppShell() {
         // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
         { to: "/cameras", icon: Video, label: "Câmeras" },
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
+        // Tags BLE (identidade aumentada) + Calibração de câmera — Fase 1/1.5 do plano de tags.
+        { to: "/tags-ble", icon: Bluetooth, label: "Tags BLE" },
+        { to: "/calibracao", icon: Ruler, label: "Calibração" },
       ],
     },
     {

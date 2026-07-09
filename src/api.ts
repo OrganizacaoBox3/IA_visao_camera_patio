@@ -315,6 +315,15 @@ export const getCalibration = (cameraId: string) =>
 export const saveCalibration = (cameraId: string, calibration: CameraCalibration) =>
   apiPut<CameraCalibration>(`/api/calibration/${encodeURIComponent(cameraId)}`, { calibration });
 
+// ── Leituras BLE ao vivo (identidade aumentada por tag — analises/tags-bluetooth/00...) ──────
+// A estação varre BLE e reporta ao hub; o hub enriquece com o rótulo cadastrado e RELAYA aos
+// painéis via socket `bt-readings`. Este GET é só a SEMENTE (snapshot do que dá pra ver agora)
+// para um painel que abre depois — o vivo vem pelo socket. SÓ metadados/RSSI (LGPD): efêmero,
+// nunca persistido. `rotulo` = nome da pessoa/tag cadastrada, ou null se a tag não é conhecida.
+export type BtReading = { mac: string; rotulo: string | null; rssi: number; stationId?: string };
+// GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
+export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
+
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
 // POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`

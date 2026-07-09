@@ -8,6 +8,8 @@ import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
 import { ProfilePage } from "./routes/ProfilePage";
 import { AlarmHealthPage } from "./routes/AlarmHealthPage";
+import { BtTagsPage } from "./routes/BtTagsPage";
+import { CalibrationPage } from "./routes/CalibrationPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -32,6 +34,10 @@ const router = createBrowserRouter([
       // Gestão de câmeras (IP + nó local) — ação única de "adicionar câmera" da Central.
       { path: "/cameras", element: <CamerasPage /> },
       { path: "/relatorio", element: <ReportPage /> },
+      // Tags BLE (identidade aumentada): tela crua das leituras ao vivo da estação.
+      { path: "/tags-ble", element: <BtTagsPage /> },
+      // Calibração por câmera (homografia → metros no chão; base da posição por tag BLE).
+      { path: "/calibracao", element: <CalibrationPage /> },
       { path: "/alarmes-saude", element: <AlarmHealthPage /> },
       { path: "/usuarios", element: <UsersPage /> },
       { path: "/perfil", element: <ProfilePage /> },
