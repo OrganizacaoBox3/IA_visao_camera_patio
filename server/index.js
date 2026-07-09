@@ -25,6 +25,7 @@ const routeData = require("./routes/data");
 const routeAlarms = require("./routes/alarms");
 const routeNotif = require("./routes/notif");
 const routeBtTags = require("./routes/bt-tags");
+const routeBtStation = require("./routes/bt-station");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
@@ -99,6 +100,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeAlarms.handle(req, res, ctx)) return;
     if (await routeNotif.handle(req, res, ctx)) return;
     if (await routeBtTags.handle(req, res, ctx)) return;
+    if (await routeBtStation.handle(req, res, ctx)) return;
     if (await routeUsers.handle(req, res, ctx)) return;
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
