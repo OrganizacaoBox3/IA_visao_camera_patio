@@ -71,26 +71,28 @@ function send(msg) {
   if (process.send) process.send(msg);
 }
 
-// RGB raw SIZE×SIZE → tensor CHW fp32 [1,3,SIZE,SIZE] (rescale 1/255, sem mean/std).
-function rgbToTensor(data) {
-  const n = SIZE * SIZE;
+// RGB raw size×size → tensor CHW fp32 [1,3,size,size] (rescale 1/255, sem mean/std).
+// size default = SIZE (input global); a câmera FOCADA pode pedir menor (ANALYSIS_FOCUS_INPUT) p/
+// inferência mais rápida = overlay mais fresco (07-*). O eixo H/W do ONNX é dinâmico (múltiplo de 32).
+function rgbToTensor(data, size = SIZE) {
+  const n = size * size;
   const f = new Float32Array(3 * n);
   for (let i = 0; i < n; i++) {
     f[i] = data[i * 3] / 255;
     f[n + i] = data[i * 3 + 1] / 255;
     f[2 * n + i] = data[i * 3 + 2] / 255;
   }
-  return new ort.Tensor("float32", f, [1, 3, SIZE, SIZE]);
+  return new ort.Tensor("float32", f, [1, 3, size, size]);
 }
 
-// JPEG buffer → tensor CHW fp32 (squash resize, 1/255).
-async function preprocess(jpegBuf) {
+// JPEG buffer → tensor CHW fp32 (squash resize, 1/255). size default = SIZE (por-requisição na focada).
+async function preprocess(jpegBuf, size = SIZE) {
   const { data } = await sharp(jpegBuf)
-    .resize(SIZE, SIZE, { fit: "fill" })
+    .resize(size, size, { fit: "fill" })
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return rgbToTensor(data);
+  return rgbToTensor(data, size);
 }
 
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
@@ -214,7 +216,7 @@ function tileGrid(cols, rows, overlap) {
  * Devolve { dets, decodeMs, inferMs } com dets em frações 0..1 do FRAME.
  * Custo: N× inferência por rodada (medição: README.md §Longo alcance).
  */
-async function detectTiled(jpegBuf, spec) {
+async function detectTiled(jpegBuf, spec, size = SIZE) {
   const cols = Math.max(1, Math.min(4, Math.round(spec.cols) || 1));
   const rows = Math.max(1, Math.min(4, Math.round(spec.rows) || 1));
   const overlap = Math.max(0, Math.min(0.5, Number(spec.overlap) || 0));
@@ -236,10 +238,10 @@ async function detectTiled(jpegBuf, spec) {
     const height = Math.max(1, Math.min(H - top, Math.round((t.y1 - t.y0) * H)));
     const { data: tileRgb } = await sharp(data, { raw: { width: W, height: H, channels: info.channels } })
       .extract({ left, top, width, height })
-      .resize(SIZE, SIZE, { fit: "fill" })
+      .resize(size, size, { fit: "fill" })
       .raw()
       .toBuffer({ resolveWithObject: true });
-    const tensor = rgbToTensor(tileRgb);
+    const tensor = rgbToTensor(tileRgb, size);
     const t1 = performance.now();
     const outputs = await session.run({ pixel_values: tensor });
     inferMs += performance.now() - t1;
@@ -285,13 +287,16 @@ async function drain() {
     jobs.delete(cameraId);
     if (!job) continue;
     try {
+      // Input por-requisição (câmera FOCADA pede menor p/ inferência rápida = overlay fresco, 07-*).
+      // Validado [160,1024]; ausente/inválido → SIZE (input global, comportamento de sempre).
+      const size = Number.isFinite(job.input) && job.input >= 160 && job.input <= 1024 ? job.input : SIZE;
       // pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
       if (job.tiles && (job.tiles.cols > 1 || job.tiles.rows > 1)) {
-        const r = await detectTiled(job.jpeg, job.tiles);
+        const r = await detectTiled(job.jpeg, job.tiles, size);
         send({ id: job.id, cameraId, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
       } else {
         const t0 = performance.now();
-        const tensor = await preprocess(job.jpeg);
+        const tensor = await preprocess(job.jpeg, size);
         const t1 = performance.now();
         const outputs = await session.run({ pixel_values: tensor });
         const t2 = performance.now();

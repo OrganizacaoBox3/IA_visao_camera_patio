@@ -57,6 +57,19 @@ medido com sequência de frames DIFERENTES p/ o gate sempre disparar, como pesso
 4. **Cortar a latência da câmera OLHADA**: p/ a câmera focada, input/modelo menor = inferência mais
    rápida = caixa mais fresca. Na câmera que se OLHA, frescor > recall (tradeoff invertido do eval).
 
+## Correções aplicadas (2026-07-08)
+
+- **fix #2a — `maxExtrapMs` 500→1000** (`interpolate.ts`, commit 110e8af): a caixa prevê o gap inteiro
+  em vez de congelar em meio intervalo. Front-only, sem custo.
+- **fix #1 — compensação de latência** (`analysis-tracks` ganha `latencyMs`; commit 4005807): o cliente
+  ancora o keyframe em `recvT - latencyMs` → a extrapolação prevê pro AGORA e a caixa SENTA na pessoa.
+  Mata o ~640ms crônico. É o **principal** conserto do "marcador atrás". Retrocompat + testado.
+- **fix #2b — input por-requisição na focada** (`ANALYSIS_FOCUS_INPUT`, opt-in; worker/precision/engine):
+  câmera OLHADA infere com input menor = mais fps. **VALIDADO** (S 1080p): 640→**416** sobe a focada de
+  **1,0→1,6fps** (caixa 1000→615ms). Efeito **modesto** — a 1080p o decode/postprocess NÃO encolhem com
+  o input (só a inferência); o salto maior (→3,9fps) exigiria **modelo leve (N) na focada** = pool
+  dual-modelo (mudança grande, DEFERIDA). Default = input global (sem mudança); é escape-hatch por deploy.
+
 ## Reenquadramento honesto do arco
 O incômodo real do dono ("não reconhece / trava / marcador atrás") é, na experiência dele, **em boa parte
 LATÊNCIA/CADÊNCIA DE OVERLAY** — barato (front + cadência), **não** o fine-tune caro. O eval de recall

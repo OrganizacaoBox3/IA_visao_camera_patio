@@ -37,6 +37,17 @@ function resolveInputSize() {
   return Math.max(160, Math.min(1024, snapped));
 }
 
+// Input da câmera FOCADA (ANALYSIS_FOCUS_INPUT). Câmera aberta em tela cheia troca RECALL por
+// LATÊNCIA: input menor → inferência mais rápida → overlay mais fresco (o marcador acompanha a
+// pessoa; medido no 07-*: S@1080p focada dá só ~1,4fps, o gargalo é a inferência). DEFAULT =
+// resolveInputSize() (= input global → NENHUMA mudança de comportamento; é opt-in por deploy).
+function resolveFocusInput() {
+  const raw = Number(process.env.ANALYSIS_FOCUS_INPUT);
+  if (!Number.isFinite(raw) || raw <= 0) return resolveInputSize();
+  const snapped = Math.round(raw / 32) * 32;
+  return Math.max(160, Math.min(1024, snapped));
+}
+
 const PRECISION = Object.freeze({
   // ── Detector (consumidor: worker.js — squash/tiles; engine.js — tiles no pedido) ──
   detector: Object.freeze({
@@ -65,6 +76,11 @@ const PRECISION = Object.freeze({
     //    SENSOR: eval/persons-cftv.mjs (MOT20, GT) + gate. Evidência: reconhecimento-
     //    pessoas/04-resultado-fullset-capacidade.md + perf-input-size-dfine.md.
     input: resolveInputSize(),
+    // 5b. Input da câmera FOCADA (ANALYSIS_FOCUS_INPUT) — CUSTO/latência, não qualidade de fundo.
+    //    Consumidor: engine.js (manda `input` no pedido só quando a câmera está em FOCO). Default =
+    //    input global (sem mudança). SENSOR: scripts/measure-focus.cjs (cadência) + 07-diagnostico-
+    //    overlay-lag.md. Menor = overlay mais fresco (marcador acompanha) × menos recall NA focada.
+    focusInput: resolveFocusInput(),
     // 6. Grid do perfil longRange (tiling estilo SAHI): 2×2/0.1 espelha o front
     //    (src/vision/detect.ts). Fixo (YAGNI): grid maior re-quadruplica o custo
     //    sem caso medido. SENSOR: run-eval --mode tiled (recall distante × ms/frame).

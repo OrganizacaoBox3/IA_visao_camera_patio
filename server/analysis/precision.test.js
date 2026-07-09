@@ -15,6 +15,7 @@ describe("PRECISION — defaults calibrados (mudança exige eval antes/depois �
     expect(PRECISION.detector.nmsIou).toBe(0.6);
     expect(PRECISION.detector.containment).toBe(0.7);
     expect(PRECISION.detector.input).toBe(640);
+    expect(PRECISION.detector.focusInput).toBe(640); // default = input global (opt-in: ANALYSIS_FOCUS_INPUT)
     expect(PRECISION.detector.tiles).toEqual({ cols: 2, rows: 2, overlap: 0.1 });
   });
 

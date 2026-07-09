@@ -65,6 +65,8 @@ const TICK_MS = Math.min(
 // ── Knobs de QUALIDADE — painel de precisão (racional+sensor de cada um: precision.js) ──
 const HIGH_SCORE = PRECISION.detector.highScore; // nascimento/1ª passada; worker devolve ≥ scoreMin (2ª passada sustenta)
 const LR_TILES = PRECISION.detector.tiles; // grid do perfil longRange (pedido ao worker leva `tiles`)
+const INPUT = PRECISION.detector.input; // input global (squash) — base p/ decidir o override de foco
+const FOCUS_INPUT = PRECISION.detector.focusInput; // input (menor) da câmera FOCADA — overlay fresco (07-*)
 const MOTION_GATE_ON = motion.GATE_ON;
 const MOTION_W = motion.THUMB_W;
 const MOTION_H = motion.THUMB_H;
@@ -339,6 +341,9 @@ function dispatchToWorker(st, frame, now) {
       cameraId: st.id,
       jpeg: Buffer.from(frame.buf),
       ...(st.longRange ? { tiles: LR_TILES } : {}),
+      // Câmera FOCADA com input de foco configurado (< global) → inferência mais rápida = overlay mais
+      // fresco (07-*). Só manda o campo quando difere do global — o caminho default fica idêntico.
+      ...(st.roundMs === ROUND_MS_FOCUS && FOCUS_INPUT !== INPUT ? { input: FOCUS_INPUT } : {}),
     });
   } catch {
     st.busy = false;
