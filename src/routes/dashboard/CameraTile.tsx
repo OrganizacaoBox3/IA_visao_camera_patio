@@ -1,6 +1,9 @@
-import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
+import { getCalibration, type BtReading } from "../../api";
+import { type Matrix3 } from "../../vision/homography";
+import { useTagFusion } from "../../fusion/useTagFusion";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
@@ -47,12 +50,15 @@ const WEBRTC_ESTABLISH_MS = 7000;
 function Go2rtcVideoTile({
   camId,
   getHubAnalysis,
+  getReadings,
   onWebrtcFail,
 }: {
   camId: string;
   // Getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
   // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
   getHubAnalysis?: () => HubAnalysis | null;
+  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Ausente → sem rótulo de tag (só "Pessoa <id>").
+  getReadings?: () => BtReading[];
   // Detecção de fonte caída (go2rtc sem frames p/ esta câmera): chamado UMA vez com o id quando o
   // WebRTC não estabelece vídeo dentro da janela. O pai (DashboardPage) cai o tile pra MJPEG.
   // Ausente → sem fallback; o tile segue tentando WebRTC (comportamento atual).
@@ -136,11 +142,28 @@ function Go2rtcVideoTile({
       }
     };
   }, [camId, onWebrtcFail]);
+
+  // Fusão tag↔pessoa (caminho C): carrega a homografia desta câmera (metros) e associa as leituras BLE
+  // aos tracks → rótulo na caixa. Desligada sem getReadings (grade sem estação) → labelFor sempre null.
+  const [calH, setCalH] = useState<Matrix3 | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getCalibration(camId)
+      .then((c) => {
+        if (alive) setCalH(c?.H ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [camId]);
+  const { labelFor } = useTagFusion({ getHubAnalysis, getReadings, H: calH, enabled: !!getReadings });
+
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
       {/* Caixas do hub interpoladas, num <canvas> transparente exatamente sobre o vídeo. */}
-      <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} />
+      <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} labelFor={labelFor} />
     </div>
   );
 }
@@ -205,6 +228,8 @@ type CameraTileProps = {
   // hub; o CameraWorkspace desenha esses tracks na grade em vez de rodar inferência local.
   // OPCIONAL/retrocompatível (ausente → pipeline local). (ADR-009)
   getHubAnalysis?: () => HubAnalysis | null;
+  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só o tile WebRTC usa; ausente → sem rótulo.
+  getReadings?: () => BtReading[];
   // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
   // canvas + relé socket.io. Por câmera (camcfg). Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
@@ -233,6 +258,7 @@ export const CameraTile = memo(function CameraTile({
   status,
   analysisEngine,
   getHubAnalysis,
+  getReadings,
   transport,
   onWebrtcFail,
   onOpen,
@@ -258,6 +284,7 @@ export const CameraTile = memo(function CameraTile({
         key={`rtc-${camera.id}`}
         camId={camera.id}
         getHubAnalysis={getHubAnalysis}
+        getReadings={getReadings}
         onWebrtcFail={onWebrtcFail}
       />
     </button>

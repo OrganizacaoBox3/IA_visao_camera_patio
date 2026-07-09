@@ -1,7 +1,7 @@
 // Conexão Socket.IO da central: abre o socket e roteia TODOS os eventos do hub para os refs do
 // relé de frames e para os setters de estado das outras frentes. CONTRATOS SOCKET aditivos/
 // defensivos (payloads desconhecidos degradam para o default seguro; nunca quebram a central).
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../../config";
 import {
@@ -10,7 +10,7 @@ import {
   type HubZone,
 } from "../../CameraWorkspace";
 import { loadCamConfig } from "../../cameraConfig";
-import { type AlarmEvent } from "../../api";
+import { type AlarmEvent, type BtReading } from "../../api";
 import { type Camera, type CameraStatus } from "./types";
 import { newFrameEntry, type FrameEntry } from "./useFrameRelay";
 
@@ -40,6 +40,8 @@ export type DashboardSocket = {
   analysisEngines: Record<string, "hub" | "local">;
   // Sincronização ao vivo — revisão de tripwires por câmera (ADR-006).
   revByCamera: Map<string, number>;
+  // Leituras BLE da estação (bt-readings) — getter estável p/ a fusão tag↔pessoa (caminho C).
+  getBtReadings: () => BtReading[];
 };
 
 export function useDashboardSocket({
@@ -68,6 +70,9 @@ export function useDashboardSocket({
   // o "espelho" do que o servidor já sabe, usado p/ idempotência (não reemitir o mesmo id),
   // re-emit no reconnect (o servidor perde o foco no disconnect) e release no unmount.
   const focusRef = useRef<string | null>(null);
+  // Leituras BLE da estação (bt-readings, global — 1 estação). Ref (sem re-render por evento, padrão
+  // hubAnalysisRef); a fusão tag↔pessoa (useTagFusion) lê pelo getter estável abaixo.
+  const btReadingsRef = useRef<BtReading[]>([]);
 
   useEffect(() => {
     const socket = io(APP_CONFIG.net.serverUrl, {
@@ -135,6 +140,10 @@ export function useDashboardSocket({
         });
       },
     );
+    // Leituras BLE (estação → hub → dashboards). Global; a fusão as usa por câmera calibrada.
+    socket.on("bt-readings", (p: { readings?: BtReading[] }) => {
+      btReadingsRef.current = Array.isArray(p?.readings) ? p.readings : [];
+    });
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
@@ -205,5 +214,8 @@ export function useDashboardSocket({
     socketRef.current?.emit("analysis-focus", { id: wanted });
   }, [openId, analysisEngines]);
 
-  return { socketRef, connected, statuses, analysisEngines, revByCamera };
+  // Getter estável das leituras BLE (identidade fixa → não quebra o memo de quem consome a fusão).
+  const getBtReadings = useCallback(() => btReadingsRef.current, []);
+
+  return { socketRef, connected, statuses, analysisEngines, revByCamera, getBtReadings };
 }

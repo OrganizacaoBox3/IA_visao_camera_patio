@@ -260,6 +260,7 @@ export function DashboardPage() {
                 status={statuses[c.id]}
                 analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
+                getReadings={socket.getBtReadings}
                 transport={transportOf(c.id)}
                 // Auto-fallback: o tile avisa quando o <video-stream> WebRTC não estabelece vídeo.
                 onWebrtcFail={handleWebrtcFail}
