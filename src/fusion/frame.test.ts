@@ -19,6 +19,17 @@ describe("buildFusionFrame — distância via homografia", () => {
     expect(f.readings).toEqual([{ tag: "João", rssi: -50 }]); // rótulo vira o `tag`
     expect(f.ts).toBe(1000);
   });
+
+  it("stationPx é a ORIGEM da distância: mesma pessoa, estação diferente → distância diferente", () => {
+    const tracks = [{ id: 1, bbox: [0.4, 0.4, 0.2, 0.1] as const }]; // pé em (0.5, 0.5)
+    // Default (base-centro 0.5,1.0): |(0.5,0.5) - (0.5,1.0)| = 0.5.
+    const dDefault = buildFusionFrame(tracks, [], ID, 1000).tracks[0].dist;
+    // Estação marcada na calibração em (0.1, 0.9): |(0.5,0.5) - (0.1,0.9)| = hypot(0.4,0.4).
+    const dMarked = buildFusionFrame(tracks, [], ID, 1000, { x: 0.1, y: 0.9 }).tracks[0].dist;
+    expect(dDefault).toBeCloseTo(0.5, 5);
+    expect(dMarked).toBeCloseTo(Math.hypot(0.4, 0.4), 5);
+    expect(dMarked).not.toBeCloseTo(dDefault, 5); // prova: o ponto passado É a origem
+  });
 });
 
 describe("buildFusionFrame — fallback sem calibração", () => {

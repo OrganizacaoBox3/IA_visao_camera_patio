@@ -24,6 +24,7 @@ import {
 import { getCalibration, saveCalibration, ApiError, type CameraCalibration } from "../api";
 
 type Mode = "calibrar" | "medir";
+type CalStep = "cantos" | "estacao"; // dentro de "calibrar": marcar os 4 cantos OU o ponto da estação BLE
 
 /** Cantos do retângulo em coords de mundo (metros), na ordem de clique: 1→(0,0) 2→(L,0) 3→(L,C) 4→(0,C). */
 function worldCorners(L: number, C: number): Vec2[] {
@@ -46,7 +47,9 @@ type Props = {
 
 export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, onClose }: Props) {
   const [mode, setMode] = useState<Mode>("calibrar");
+  const [calStep, setCalStep] = useState<CalStep>("cantos"); // o que se marca no palco ao calibrar
   const [corners, setCorners] = useState<Vec2[]>([]); // cantos clicados (px 0..1), até 4, em ordem
+  const [station, setStation] = useState<Vec2 | null>(null); // ponto do chão da estação BLE (px 0..1), opcional
   const [width, setWidth] = useState<string>("1"); // Largura (lado 1→2), metros — string p/ digitar livre
   const [length, setLength] = useState<string>("1"); // Comprimento (lado 2→3), metros
   const [savedH, setSavedH] = useState<Matrix3 | null>(null);
@@ -56,7 +59,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ kind: "corner" | "measure"; idx: number } | null>(null); // ponto sendo arrastado
+  const dragRef = useRef<{ kind: "corner" | "measure" | "station"; idx: number } | null>(null); // ponto sendo arrastado
   const [hoverIdx, setHoverIdx] = useState<number | null>(null); // ponto sob o cursor (feedback de "pegar")
 
   // Carrega a calibração existente. Reconstrói os cantos + L×C quando são 4 pontos (método retângulo);
@@ -65,12 +68,14 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     let cancelled = false;
     setLoading(true);
     setCorners([]);
+    setStation(null);
     setSavedH(null);
     setMeasurePts([]);
     getCalibration(cameraId)
       .then((cal) => {
         if (cancelled || !cal) return;
         setSavedH(cal.H);
+        if (cal.station) setStation({ x: cal.station.x, y: cal.station.y });
         if (cal.points.length === 4) {
           setCorners(cal.points.map((p) => ({ x: p.px.x, y: p.px.y })));
           setWidth(String(cal.points[1].world.x)); // (L,0)
@@ -129,7 +134,8 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   // ── Interação por PONTEIRO: pegar/arrastar um ponto existente OU adicionar um novo. Coords do palco
   // → normalizadas 0..1 (contra o retângulo da imagem). Mouse e toque (pointer events). ──
   const HIT = 0.04; // raio de acerto (fração da imagem) p/ "pegar" um ponto já marcado
-  const activePts = mode === "medir" ? measurePts : corners;
+  const activePts =
+    mode === "medir" ? measurePts : calStep === "estacao" ? (station ? [station] : []) : corners;
 
   function pxFrom(e: React.PointerEvent<HTMLDivElement>): Vec2 | null {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -159,6 +165,11 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       const hit = nearest(measurePts, px);
       if (hit != null) dragRef.current = { kind: "measure", idx: hit };
       else setMeasurePts((p) => (p.length >= 2 ? [px] : [...p, px]));
+    } else if (calStep === "estacao") {
+      if (!canConfigure) return;
+      const hit = nearest(station ? [station] : [], px);
+      if (hit != null) dragRef.current = { kind: "station", idx: 0 };
+      else setStation(px); // clicar no chão fixa/reposiciona a estação; arraste p/ ajustar
     } else {
       if (!canConfigure) return;
       const hit = nearest(corners, px);
@@ -176,6 +187,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     const d = dragRef.current;
     if (d) {
       if (d.kind === "corner") setCorners((p) => p.map((c, i) => (i === d.idx ? px : c)));
+      else if (d.kind === "station") setStation(px);
       else setMeasurePts((p) => p.map((c, i) => (i === d.idx ? px : c)));
       return;
     }
@@ -198,6 +210,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       points: corners.map((px, i) => ({ px, world: w[i] })),
       H: liveH.H,
       updatedAt: Date.now(),
+      ...(station ? { station } : {}), // só vai quando marcado; ausente = fallback no back
     };
     try {
       const saved = await saveCalibration(cameraId, payload);
@@ -248,6 +261,17 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
               : "A calibração requer perfil de engenharia. Você pode usar o modo Medir."}
           </p>
           {canConfigure && (
+            <SegmentedControl<CalStep>
+              value={calStep}
+              onChange={setCalStep}
+              ariaLabel="O que marcar no chão"
+              options={[
+                { value: "cantos", label: "Cantos" },
+                { value: "estacao", label: "Estação BLE" },
+              ]}
+            />
+          )}
+          {canConfigure && (
             <div className="flex flex-wrap items-end gap-2">
               <Field label="Largura 1→2 (m)" className="w-32">
                 <Input
@@ -270,9 +294,13 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 />
               </Field>
               <span className="mb-2 text-[12px] text-text-muted">
-                {corners.length < 4
-                  ? `Clique o canto ${CORNER_HINT[corners.length]}`
-                  : "4 cantos marcados"}
+                {calStep === "estacao"
+                  ? station
+                    ? "Estação marcada — arraste para ajustar"
+                    : "Clique no chão onde fica a estação BLE"
+                  : corners.length < 4
+                    ? `Clique o canto ${CORNER_HINT[corners.length]}`
+                    : "4 cantos marcados"}
               </span>
               {corners.length > 0 && (
                 <>
@@ -364,7 +392,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <circle
                   cx={`${p.x * 100}%`}
                   cy={`${p.y * 100}%`}
-                  r={hoverIdx === i ? 8 : 6}
+                  r={calStep === "cantos" && hoverIdx === i ? 8 : 6}
                   fill="var(--state-info)"
                   stroke="var(--bg)"
                   strokeWidth={2}
@@ -374,6 +402,38 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 </text>
               </g>
             ))}
+          {/* Estação BLE: marcador de "antena/beacon" (anel radiante + ponto), cor distinta dos cantos. */}
+          {mode === "calibrar" && station && (
+            <g>
+              <circle
+                cx={`${station.x * 100}%`}
+                cy={`${station.y * 100}%`}
+                r={calStep === "estacao" && hoverIdx === 0 ? 12 : 10}
+                fill="none"
+                stroke="var(--state-warn)"
+                strokeWidth={1.5}
+                opacity={0.6}
+              />
+              <circle
+                cx={`${station.x * 100}%`}
+                cy={`${station.y * 100}%`}
+                r={calStep === "estacao" && hoverIdx === 0 ? 6 : 5}
+                fill="var(--state-warn)"
+                stroke="var(--bg)"
+                strokeWidth={2}
+              />
+              <text
+                x={`${station.x * 100}%`}
+                y={`${station.y * 100}%`}
+                dx={13}
+                dy={4}
+                fontSize={12}
+                fill="var(--state-warn)"
+              >
+                estação
+              </text>
+            </g>
+          )}
           {/* Modo medir: linha + pontos. */}
           {mode === "medir" && measurePts.length === 2 && (
             <line

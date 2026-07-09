@@ -125,7 +125,12 @@ function cleanCalibration(c) {
     });
   }
   if (!Array.isArray(c.H) || c.H.length !== 9 || !c.H.every(fin)) return null;
-  return { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };
+  const out = { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };
+  // station (opcional): ponto de IMAGEM (normalizado 0..1) do CHÃO onde a estação BLE fica —
+  // origem da correlação RSSI×distância. Aditivo: ausente/ inválido = omitido (SÓ números; LGPD).
+  const s = c.station;
+  if (s && typeof s === "object" && isCoord(s.x) && isCoord(s.y)) out.station = { x: s.x, y: s.y };
+  return out;
 }
 
 // ── Persistência ─────────────────────────────────────────────────────────────
