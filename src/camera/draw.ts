@@ -250,6 +250,9 @@ export function drawTracks(
   tracks: ReadonlyArray<TrackBox>,
   conf: number,
   inspecting: boolean,
+  // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o nome quando há confiança;
+  // null = "não sei" → cai no "Pessoa <id>". Ausente = feature desligada (comportamento de sempre).
+  labelFor?: (trackId: number) => string | null,
 ) {
   ctx.lineWidth = 1.5;
   const personStroke = cssVar("--state-info", "#38bdf8");
@@ -265,9 +268,10 @@ export function drawTracks(
       h = t.bbox[3] * cr.h;
     ctx.strokeStyle = personStroke;
     ctx.strokeRect(x, y, w, h);
+    const who = labelFor?.(t.id) || `Pessoa ${t.id}`; // nome da tag quando associada, senão o id
     const tag = inspecting
-      ? `Pessoa ${t.id} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
-      : `Pessoa ${t.id}`;
+      ? `${who} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
+      : who;
     ctx.font = inspecting ? "bold 12px ui-sans-serif, system-ui" : "10px monospace";
     const tw = ctx.measureText(tag).width + 8;
     ctx.fillStyle = scrim;

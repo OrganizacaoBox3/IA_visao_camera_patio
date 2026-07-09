@@ -304,6 +304,7 @@ export function DashboardPage() {
                 // Simetria com o tile; a câmera aberta mantém o pipeline local (decisão no rAF
                 // do CameraWorkspace) — o getter só é consumido na grade (mode≠full).
                 getHubAnalysis={hubGetterFor(open.id)}
+                getReadings={socket.getBtReadings}
                 onClose={() => setOpenId(null)}
                 onAlert={handleAlert}
               />

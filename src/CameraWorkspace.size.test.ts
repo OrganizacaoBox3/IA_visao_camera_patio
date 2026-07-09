@@ -18,7 +18,10 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
 // Teto ATUAL (não-ideal). BAIXE ao extrair uma responsabilidade; SUBIR exige justificativa.
-const MAX_LINES = 1910;
+// 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
+// (carga da homografia + fusão tag↔pessoa) foi EXTRAÍDO p/ src/fusion/useCameraTagLabels.ts — aqui
+// sobrou só a fiação mínima (prop getReadings + 1 chamada de hook + o labelFor no drawTracks).
+const MAX_LINES = 1920;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

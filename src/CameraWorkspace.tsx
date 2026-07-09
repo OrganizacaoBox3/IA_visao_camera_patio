@@ -52,7 +52,8 @@ import {
   type ZoneMode,
 } from "./zones";
 import { loadCamConfig, getCameraCfg, setCameraCfg } from "./cameraConfig";
-import { ApiError } from "./api";
+import { ApiError, type BtReading } from "./api";
+import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
 import {
   decodeMask,
   encodeMask,
@@ -185,6 +186,9 @@ type Props = {
   /** Getter ESTÁVEL do último `analysis-tracks` (tracks/zonas do MOTOR do hub). Consumido com
    *  engine==="hub" em ambos os modos: a instância vira espelho e não agenda o coco local. */
   getHubAnalysis?: () => HubAnalysis | null;
+  /** Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só a câmera ABERTA (mode="full") usa —
+   *  rotula a pessoa com o nome da tag. Ausente → sem rótulo de tag (só "Pessoa <id>"). */
+  getReadings?: () => BtReading[];
   /** Transporte do VÍDEO da câmera aberta: "webrtc" = <video-stream> (decode por HW) atrás de um
    *  canvas TRANSPARENTE; "mjpeg"/ausente = frames desenhados no canvas (caminho original). */
   transport?: "mjpeg" | "webrtc";
@@ -206,6 +210,7 @@ export function CameraWorkspace({
   tripwiresRev,
   analysisEngine = "local",
   getHubAnalysis,
+  getReadings,
   transport = "mjpeg",
   onWebrtcFail,
 }: Props) {
@@ -359,6 +364,15 @@ export function CameraWorkspace({
     hubFlowRef,
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
+
+  // Fusão tag↔pessoa (caminho C) — SÓ na câmera ABERTA: nome da tag no rótulo. Ref lido no rAF/draw.
+  const labelForRef = useCameraTagLabels({
+    cameraId,
+    getHubAnalysis,
+    getReadings,
+    enabled: mode === "full" && !!getReadings,
+  });
+
   // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
 
@@ -1163,7 +1177,7 @@ export function CameraWorkspace({
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)
-      drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed);
+      drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed, labelForRef.current);
 
     // Laço por-zona (retângulo/máscara + rótulo + dets + fadiga) → ./camera/draw. Último arg
     // (1 pessoa = 1 caixa): a camada de dets omite a det de pessoa já coberta por um track.
