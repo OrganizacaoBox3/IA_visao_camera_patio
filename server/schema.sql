@@ -144,6 +144,13 @@ create table if not exists cam_config (
   camera_id text primary key,
   data jsonb not null default '{}'::jsonb
 );
+-- CALIBRAÇÃO: homografia de chão por câmera (medir distância em metros; ADR tags-bluetooth §3).
+-- `data` = { points:[{px:{x,y 0..1}, world:{x,y metros}}, …≥4], H:[9 números row-major], updatedAt }.
+-- H é computada no cliente (src/vision/homography.ts). SÓ geometria/números — nunca imagem (LGPD).
+create table if not exists cam_calibration (
+  camera_id text primary key,
+  data jsonb not null default '{}'::jsonb
+);
 
 -- ── ÍNDICES (consultas: eventos por ts desc; buckets por hora) ───────────────
 create index if not exists idx_ativ_events_ts on ativ_events (ts desc);

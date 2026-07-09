@@ -72,6 +72,32 @@ async function handle(req, res, ctx) {
     }
   }
 
+  // ── CALIBRAÇÃO (homografia px↔metros) — COMPARTILHADA, por câmera ──────────
+  // GET (qualquer autenticado) lê (null se nunca calibrada → front oculta a medição);
+  // PUT exige perfil de configuração. Substitui a calibração da câmera e persiste.
+  const mcal = path0.match(/^\/api\/calibration\/([\w-]+)$/);
+  if (mcal) {
+    const cameraId = decodeURIComponent(mcal[1]);
+    if (req.method === "GET") {
+      if (!requireAuth(req, res)) return true;
+      json(res, 200, camcfg.getCalibration(cameraId));
+      return true;
+    }
+    if (req.method === "PUT") {
+      if (!requireConfigurer(req, res)) return true;
+      const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+      const saved = await camcfg.saveCalibration(cameraId, body && body.calibration);
+      if (!saved) {
+        json(res, 400, { error: "calibração inválida (mín. 4 pontos e matriz H 3×3)" });
+        return true;
+      }
+      // Novo kind ADITIVO: o engine ignora kinds desconhecidos (onCamcfgUpdated) — contrato intacto.
+      io.to("dashboards").emit("camcfg-updated", { kind: "calibration", cameraId });
+      json(res, 200, saved);
+      return true;
+    }
+  }
+
   return false;
 }
 

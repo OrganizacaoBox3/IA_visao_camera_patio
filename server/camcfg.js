@@ -13,6 +13,7 @@ const FILE = path.join(__dirname, "camcfg.json");
 let tripwires = new Map(); // cameraId -> Tripwire[]
 let zones = new Map(); // cameraId -> Zone[]
 let camConfigs = new Map(); // cameraId -> CameraCfg
+let calibrations = new Map(); // cameraId -> Calibration (homografia px↔metros; ver cleanCalibration)
 let usingPg = false;
 
 // ── Validação defensiva (só persistimos geometria/ids/nomes/config) ──────────
@@ -27,6 +28,8 @@ const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
 // (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
 const TRANSPORTS = new Set(["auto", "mjpeg", "webrtc"]);
 const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+// Número finito qualquer (metros do mundo / entradas de H podem ser negativos ou grandes).
+const fin = (v) => typeof v === "number" && Number.isFinite(v);
 const clamp01 = (v, d) => {
   const n = num(v, d);
   return n < 0 ? 0 : n > 1 ? 1 : n;
@@ -104,6 +107,27 @@ function cleanCamConfig(c) {
   };
 }
 
+// Calibração de HOMOGRAFIA por câmera (medir distância no chão em metros; ADR tags-bluetooth §3).
+// `points` = correspondências px(imagem, normalizado 0..1) ↔ world(metros); `H` = matriz 3×3
+// ROW-MAJOR (9 números) computada no cliente por src/vision/homography.ts. SÓ geometria/números —
+// nunca imagem/frame (LGPD). Validação defensiva: ≥4 pontos, px em 0..1, world/H finitos.
+function cleanCalibration(c) {
+  if (!c || typeof c !== "object") return null;
+  if (!Array.isArray(c.points) || c.points.length < 4) return null;
+  const points = [];
+  for (const p of c.points) {
+    if (!p || !p.px || !p.world) return null;
+    if (!isCoord(p.px.x) || !isCoord(p.px.y)) return null; // px normalizado 0..1
+    if (!fin(p.world.x) || !fin(p.world.y)) return null; // metros (finitos, sinal livre)
+    points.push({
+      px: { x: p.px.x, y: p.px.y },
+      world: { x: p.world.x, y: p.world.y },
+    });
+  }
+  if (!Array.isArray(c.H) || c.H.length !== 9 || !c.H.every(fin)) return null;
+  return { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };
+}
+
 // ── Persistência ─────────────────────────────────────────────────────────────
 function saveFile() {
   try {
@@ -114,6 +138,7 @@ function saveFile() {
           tripwires: Object.fromEntries(tripwires),
           zones: Object.fromEntries(zones),
           camConfigs: Object.fromEntries(camConfigs),
+          calibrations: Object.fromEntries(calibrations),
         },
         null,
         2,
@@ -162,6 +187,19 @@ async function persistCamConfig(cameraId) {
     [cameraId, JSON.stringify(cfg)],
   );
 }
+// Calibração: upsert do objeto de UMA câmera (remove a linha se ficou nula).
+async function persistCalibration(cameraId) {
+  if (!usingPg) return saveFile();
+  const cal = calibrations.get(cameraId);
+  if (!cal) {
+    await db.query("delete from cam_calibration where camera_id=$1", [cameraId]);
+    return;
+  }
+  await db.query(
+    "insert into cam_calibration (camera_id,data) values ($1,$2) on conflict (camera_id) do update set data=excluded.data",
+    [cameraId, JSON.stringify(cal)],
+  );
+}
 
 async function init() {
   if (db.configured()) {
@@ -184,9 +222,15 @@ async function init() {
         const cfg = cleanCamConfig(row.data);
         if (cfg) camConfigs.set(String(row.camera_id), cfg);
       }
+      const rk = await db.query("select camera_id, data from cam_calibration");
+      calibrations = new Map();
+      for (const row of rk.rows) {
+        const cal = cleanCalibration(row.data);
+        if (cal) calibrations.set(String(row.camera_id), cal);
+      }
       usingPg = true;
       console.log(
-        `[camcfg] tripwires de ${tripwires.size}, zonas de ${zones.size} e config de ${camConfigs.size} câmera(s) do Postgres`,
+        `[camcfg] tripwires de ${tripwires.size}, zonas de ${zones.size}, config de ${camConfigs.size} e calibração de ${calibrations.size} câmera(s) do Postgres`,
       );
       return;
     } catch (e) {
@@ -211,10 +255,16 @@ async function init() {
       const cfg = cleanCamConfig(obj);
       if (cfg) camConfigs.set(String(cam), cfg);
     }
+    calibrations = new Map();
+    for (const [cam, obj] of Object.entries((data && data.calibrations) || {})) {
+      const cal = cleanCalibration(obj);
+      if (cal) calibrations.set(String(cam), cal);
+    }
   } catch {
     tripwires = new Map();
     zones = new Map();
     camConfigs = new Map();
+    calibrations = new Map();
   }
 }
 
@@ -259,6 +309,20 @@ async function saveCamConfig(cameraId, input) {
   await persistCamConfig(id);
   return cfg;
 }
+// Calibração de homografia; null quando a câmera nunca foi calibrada (o front trata como ausente).
+function getCalibration(cameraId) {
+  return calibrations.get(str(cameraId)) || null;
+}
+// Substitui a calibração de uma câmera e persiste; devolve a calibração salva (ou null se inválida).
+async function saveCalibration(cameraId, input) {
+  const id = str(cameraId);
+  if (!id) return null;
+  const cal = cleanCalibration(input);
+  if (!cal) return null;
+  calibrations.set(id, cal);
+  await persistCalibration(id);
+  return cal;
+}
 
 module.exports = {
   init,
@@ -268,4 +332,6 @@ module.exports = {
   saveZones,
   getCamConfig,
   saveCamConfig,
+  getCalibration,
+  saveCalibration,
 };
