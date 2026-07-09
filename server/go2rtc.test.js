@@ -44,3 +44,41 @@ describe("enabled()/binExists — stat cacheado com TTL de 60s", () => {
     expect(go2rtc.enabled()).toBe(false);
   });
 });
+
+// generateYaml — INGEST RTMP: câmera que só faz PUSH (Intelbras/Dahua) entra pela URL do cadastro
+// apontando pro PRÓPRIO republish do go2rtc (rtsp://127.0.0.1:8554/<nome>) → liga listener RTMP :1935
+// + cria o canal VAZIO <nome> que aceita o publish. Sem env/config no servidor.
+describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
+  it("câmera RTSP normal (pull): nenhum bloco rtmp — comportamento inalterado", () => {
+    const { text, count } = go2rtc.generateYaml([{ id: "cam1", url: "rtsp://user:pass@10.0.0.5:554/cam" }]);
+    expect(text).not.toContain("rtmp:");
+    expect(text).toContain('  "cam1":');
+    expect(text).toContain('    - "rtsp://user:pass@10.0.0.5:554/cam"');
+    expect(count).toBe(1);
+  });
+
+  it("URL apontando pro republish do go2rtc: liga listener RTMP + canal de ingest VAZIO", () => {
+    const { text } = go2rtc.generateYaml([{ id: "cam-abc", url: "rtsp://127.0.0.1:8554/causei_cam2" }]);
+    expect(text).toContain("rtmp:");
+    expect(text).toContain('listen: ":1935"');
+    expect(text).toContain('  "cam-abc":'); // stream normal da câmera (source = o republish)
+    expect(text).toContain('    - "rtsp://127.0.0.1:8554/causei_cam2"');
+    expect(text).toMatch(/\n {2}"causei_cam2":\n/); // canal de ingest VAZIO (sem source abaixo)
+  });
+
+  it("aceita localhost e múltiplos canais de ingest com UM só listener", () => {
+    const { text } = go2rtc.generateYaml([
+      { id: "cA", url: "rtsp://localhost:8554/causei_cam2" },
+      { id: "cB", url: "rtsp://127.0.0.1:8554/causei_cam3" },
+    ]);
+    expect((text.match(/rtmp:/g) || []).length).toBe(1); // um bloco só
+    expect(text).toMatch(/\n {2}"causei_cam2":\n/);
+    expect(text).toMatch(/\n {2}"causei_cam3":\n/);
+  });
+
+  it("sem câmeras: streams vazio e sem rtmp", () => {
+    const { text } = go2rtc.generateYaml([]);
+    expect(text).toContain("streams: {}");
+    expect(text).not.toContain("rtmp:");
+  });
+});

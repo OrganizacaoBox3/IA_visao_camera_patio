@@ -41,6 +41,9 @@ const API_HOST = "127.0.0.1"; // proxy same-origin: go2rtc só escuta local; ngi
 const API_PORT = Number(process.env.GO2RTC_API_PORT ?? 1984);
 const RTSP_PORT = Number(process.env.GO2RTC_RTSP_PORT ?? 8554);
 const WEBRTC_PORT = Number(process.env.GO2RTC_WEBRTC_PORT ?? 8555);
+// Porta do listener de INGEST RTMP (câmera que só faz PUSH — Intelbras/Dahua). SÓ é aberta quando
+// existe um canal rtmp-in (ver generateYaml); default 1935. Exposição pública depende do firewall.
+const RTMP_PORT = Number(process.env.GO2RTC_RTMP_PORT ?? 1935);
 // Candidatos WebRTC (necessário só p/ acesso FORA da LAN): "10.0.0.20:8555,stun:8555".
 const WEBRTC_CANDIDATES = String(process.env.GO2RTC_WEBRTC_CANDIDATES || "")
   .split(",")
@@ -103,6 +106,22 @@ function q(s) {
 /** Monta o texto do go2rtc.yaml. sources: [{ id, url }] — id vira o NOME do stream (contrato). */
 function generateYaml(sources) {
   const seen = new Set();
+  const valid = (Array.isArray(sources) ? sources : [])
+    .filter((s) => s && s.id && s.url && !seen.has(String(s.id)))
+    .filter((s) => seen.add(String(s.id)) || true); // dedup por id (primeiro vence)
+
+  // INGEST RTMP (câmera que só faz PUSH — Intelbras/Dahua). Uma câmera cadastrada com URL apontando
+  // pro PRÓPRIO republish do go2rtc (rtsp://127.0.0.1:RTSP_PORT/<nome>) DECLARA que <nome> é um canal
+  // de ingest: o go2rtc (a) abre um listener RTMP e (b) cria um stream VAZIO <nome> que ACEITA o publish
+  // (a câmera empurra rtmp://host:RTMP_PORT/<nome>). Assim câmeras que só empurram entram na central sem
+  // PULL — e SEM env/config no servidor: a URL do cadastro (estado de runtime) é o que liga o ingest.
+  const selfRe = new RegExp(`^rtsp://(?:127\\.0\\.0\\.1|localhost):${RTSP_PORT}/([^/?#\\s]+)`, "i");
+  const ingest = new Set();
+  for (const s of valid) {
+    const m = selfRe.exec(String(s.url));
+    if (m && !seen.has(m[1])) ingest.add(m[1]); // não colide com um id de câmera existente
+  }
+
   const lines = [];
   lines.push("# GERADO por server/go2rtc.js — NÃO editar à mão (regenerado quando as câmeras mudam).");
   lines.push("# LGPD: sem módulo de gravação (record) — go2rtc só relaya/remuxa, frames efêmeros.");
@@ -121,14 +140,17 @@ function generateYaml(sources) {
     lines.push("  candidates:");
     for (const c of WEBRTC_CANDIDATES) lines.push(`    - ${q(c)}`);
   }
+  if (ingest.size) {
+    // Listener de ingest: aceita publish RTMP nos canais VAZIOS abaixo. Só liga quando há câmera
+    // rtmp-in. Sem gravação (LGPD). Publish do go2rtc é SEM auth → exponha a porta só por firewall,
+    // restrita à origem das câmeras (ver analises/rtmp-ingest/deploy-homolog-rtmp.md).
+    lines.push("rtmp:");
+    lines.push(`  listen: ${q(`:${RTMP_PORT}`)}`);
+  }
   lines.push("log:");
   lines.push(`  level: ${q(process.env.GO2RTC_LOG_LEVEL || "info")}`);
 
-  const valid = (Array.isArray(sources) ? sources : [])
-    .filter((s) => s && s.id && s.url && !seen.has(String(s.id)))
-    .filter((s) => seen.add(String(s.id)) || true); // dedup por id (primeiro vence)
-
-  if (!valid.length) {
+  if (!valid.length && !ingest.size) {
     lines.push("streams: {}");
   } else {
     lines.push("streams:");
@@ -138,6 +160,8 @@ function generateYaml(sources) {
       lines.push(`  ${q(s.id)}:`);
       lines.push(`    - ${q(s.url)}`);
     }
+    // Canais de ingest RTMP: streams VAZIOS (sem source) que RECEBEM o publish da câmera.
+    for (const name of ingest) lines.push(`  ${q(name)}:`);
   }
   return { text: lines.join("\n") + "\n", count: valid.length };
 }
