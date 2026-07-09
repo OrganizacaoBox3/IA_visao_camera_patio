@@ -124,12 +124,14 @@ export function useDashboardSocket({
     // defensivo: campos ausentes viram lista vazia (tile fica sem caixas, nunca quebra).
     socket.on(
       "analysis-tracks",
-      (p: { cameraId: string; ts?: number; tracks?: HubTrack[]; zones?: HubZone[] }) => {
+      (p: { cameraId: string; ts?: number; tracks?: HubTrack[]; zones?: HubZone[]; latencyMs?: number }) => {
         if (!p || typeof p.cameraId !== "string") return;
         hubAnalysisRef.current.set(p.cameraId, {
           ts: Date.now(),
           tracks: Array.isArray(p.tracks) ? p.tracks : [],
           zones: Array.isArray(p.zones) ? p.zones : [],
+          // Idade do frame no hub (captura→emissão) → o interpolador compensa o overlay lag.
+          latencyMs: typeof p.latencyMs === "number" && p.latencyMs >= 0 ? p.latencyMs : 0,
         });
       },
     );

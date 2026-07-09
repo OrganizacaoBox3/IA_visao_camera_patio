@@ -21,7 +21,9 @@ export type HubTrack = {
 };
 
 export type HubZone = { id: string; label: string; people: number; occupied: boolean };
-export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[] };
+// latencyMs (aditivo): idade captura→emissão do frame no hub (ms). O interpolador ancora o keyframe
+// em `recvT - latencyMs` e extrapola pro AGORA → a caixa senta na pessoa (07-diagnostico-overlay-lag).
+export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[]; latencyMs?: number };
 
 /** Track do pipeline do CLIENTE (local ou espelho do hub) — alimenta presença/zona/counter/desenho. */
 export type Track = {

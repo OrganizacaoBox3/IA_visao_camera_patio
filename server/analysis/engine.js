@@ -328,6 +328,9 @@ async function decodeThumb(jpeg) {
 function dispatchToWorker(st, frame, now) {
   st.busy = true;
   st.inflight = ++seq;
+  st.inflightTs = frame.ts; // ts da CAPTURA do frame despachado — base do latencyMs no payload
+  // (compensação do overlay lag: reconhecimento-pessoas/07-*). Sobrescrito no próximo despacho;
+  // lido pelo pipeline na MESMA rodada (processRound roda antes do próximo dispatch da câmera).
   st.lastInferAt = now;
   try {
     workerHost.send({

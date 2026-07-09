@@ -32,6 +32,10 @@ export type InterpTrack = {
 export type Snapshot = {
   ts: number;
   tracks: readonly InterpTrack[];
+  /** Idade captura→emissão do frame no hub (ms, aditivo). Ancora o keyframe em `recvT - latencyMs`
+   *  → a extrapolação prevê pro AGORA e a caixa senta na pessoa (07-diagnostico-overlay-lag.md).
+   *  Ausente/0 (hub antigo) → ancora em `recvT`, comportamento de antes (retrocompat). */
+  latencyMs?: number;
 };
 
 /** Caixa pronta para desenhar: bbox já interpolada + opacidade do fade + idade (telemetria). */
@@ -129,6 +133,12 @@ export class TrackInterpolator {
   ingest(snap: Snapshot, recvT: number): void {
     if (snap.ts === this.lastTs) return;
     this.lastTs = snap.ts;
+    // Latência captura→emissão do hub: ancora o keyframe ATRÁS de recvT nesse tanto, p/ a extrapolação
+    // prever pro AGORA real (a caixa nasceria ~latencyMs atrás). Capada ao teto de extrapolação
+    // (maxExtrapMs) — não adianta compensar mais do que se extrapola, e limita a inflação da idade
+    // (ageMs = now - kf.t) p/ não disparar fade cedo. Ausente/negativa → 0 (retrocompat).
+    const lat = clampNum(snap.latencyMs ?? 0, 0, this.cfg.maxExtrapMs);
+    const kfT = recvT - lat;
     for (const tr of snap.tracks) {
       const kf: Keyframe = {
         bbox: tr.bbox,
@@ -136,7 +146,7 @@ export class TrackInterpolator {
         score: tr.score,
         vx: tr.vx,
         vy: tr.vy,
-        t: recvT,
+        t: kfT,
       };
       const e = this.entries.get(tr.id);
       if (e) {

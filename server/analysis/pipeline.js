@@ -144,6 +144,10 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
       emitTracks({
         cameraId: st.id,
         ts: now,
+        // Latência captura→emissão (ms): quanto o frame ENVELHECEU no pipeline (fila+decode+inferência)
+        // antes de virar caixa. O cliente ancora o keyframe em `recvT - latencyMs` e extrapola pro AGORA
+        // real → a caixa senta na pessoa em vez de nascer ~meio segundo atrás (07-diagnostico-overlay-lag).
+        latencyMs: st.inflightTs ? Math.max(0, now - st.inflightTs) : 0,
         tracks: tracks.map((t) => ({
           id: t.id,
           bbox: [t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], // normalizado 0..1

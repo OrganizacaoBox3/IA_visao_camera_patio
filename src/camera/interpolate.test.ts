@@ -158,6 +158,25 @@ describe("TrackInterpolator — dead-reckoning por velocidade do Kalman (vx/vy)"
     expect(it0.sample(500)[0].bbox[0]).toBeCloseTo(0.1, 6);
   });
 
+  it("latencyMs: ancora o keyframe ATRÁS de recvT → a caixa prevê pro AGORA (compensa o overlay lag)", () => {
+    // SEM latencyMs: na chegada dt≈0 → a caixa fica na posição da CAPTURA (o ~640ms de atraso do 07-*).
+    const noComp = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    noComp.ingest({ ts: 1, tracks: [{ id: 1, bbox: box(0, 0), zone: null, vx: 0.1, vy: 0 }] }, 1000);
+    expect(noComp.sample(1000)[0].bbox[0]).toBeCloseTo(0, 6); // atrasada (na captura, x=0)
+
+    // COM latencyMs=500: keyframe ancora em recvT-500 → no MESMO instante a caixa já prevê +v×0.5s.
+    const comp = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    comp.ingest({ ts: 1, tracks: [{ id: 1, bbox: box(0, 0), zone: null, vx: 0.1, vy: 0 }], latencyMs: 500 }, 1000);
+    expect(comp.sample(1000)[0].bbox[0]).toBeCloseTo(0.05, 6); // +0.1×0.5s = latência compensada
+  });
+
+  it("latencyMs é capada a maxExtrapMs (não sobre-extrapola nem infla a idade/fade)", () => {
+    const comp = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 300 });
+    comp.ingest({ ts: 1, tracks: [{ id: 1, bbox: box(0, 0), zone: null, vx: 0.1, vy: 0 }], latencyMs: 5000 }, 1000);
+    // lat capada a 300ms → +0.1×0.3 = 0.03 (não dispara com uma latência absurda)
+    expect(comp.sample(1000)[0].bbox[0]).toBeCloseTo(0.03, 6);
+  });
+
   it("EASING no snap: a correção do payload novo transita suave, não teleporta", () => {
     const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000, snapMs: 200 });
     it0.ingest(snap(1, [{ id: 1, bbox: box(0, 0), vx: 0.1, vy: 0 }]), 0); // reta A: prevê x=0.1 em t=1000
