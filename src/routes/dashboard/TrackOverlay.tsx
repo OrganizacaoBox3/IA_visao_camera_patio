@@ -21,10 +21,13 @@ type TrackOverlayProps = {
   videoRef: RefObject<VideoStreamElement | null>;
   // Getter estável do último `analysis-tracks` da câmera (mesmo da central). Ausente → overlay vazio.
   getHubAnalysis?: () => HubAnalysis | null;
+  // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o rótulo quando a associação
+  // tem confiança; null = "não sei" → cai no "Pessoa <id>" de sempre. Ausente = feature desligada.
+  labelFor?: (trackId: number) => string | null;
 };
 
 // Canvas transparente sobre o vídeo: pinta as caixas do hub interpoladas num rAF próprio.
-export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
+export function TrackOverlay({ videoRef, getHubAnalysis, labelFor }: TrackOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -91,7 +94,9 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
           h = t.bbox[3] * cr.h;
         ctx.strokeStyle = stroke;
         ctx.strokeRect(x, y, w, h);
-        const tag = `Pessoa ${t.id}`;
+        // Rótulo: a TAG BLE associada (fusão) quando há; senão "Pessoa <id>". A associação é "não sei"-
+        // honesta (associate.ts) → só rotula quem o RSSI×distância casou com confiança.
+        const tag = labelFor?.(t.id) || `Pessoa ${t.id}`;
         let tw = labelWidth.get(tag);
         if (tw === undefined) {
           if (labelWidth.size > 512) labelWidth.clear();
@@ -111,7 +116,7 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
       cancelled = true;
       cancelAnimationFrame(raf);
     };
-  }, [videoRef, getHubAnalysis]);
+  }, [videoRef, getHubAnalysis, labelFor]);
 
   return <canvas ref={canvasRef} className="rtc-overlay" aria-hidden="true" />;
 }
