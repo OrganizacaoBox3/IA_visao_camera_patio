@@ -25,20 +25,23 @@ JPEG real capturado. A rede: PC e câmera no mesmo `/24` (`192.168.1.0/24`), pus
 - **Validado em campo (jul/08) no go2rtc LATERAL de validação** (scratchpad, NÃO o do hub):
   Intelbras `192.168.1.28` empurrou (firmware forçou o app `live`), go2rtc recebeu, republish RTSP
   1080p + áudio AAC, tile no painel via cadastro `rtsp://127.0.0.1:8560/live`; snapshot real capturado.
-- **PENDENTE de validação real:** o mesmo caminho no go2rtc DO HUB (com este código) só será provado
-  **no homolog, após o deploy** — o hub nunca recebeu RTMP ainda (o código é novo, só passou no unit).
+- **VALIDADO NO HOMOLOG (jul/09)** — commit `3251a7c`, deploy Actions success. Câmera Intelbras real
+  empurrou pra `rtmp://cam.box3.software:1935/causei_cam1` → go2rtc DO HUB recebeu (h264 1080p20 +
+  AAC); confirmado **da rede** por playback RTMP (`ffprobe rtmp://cam.box3.software:1935/causei_cam1`)
+  e frame ao vivo capturado remotamente. **Esta câmera RESPEITOU o path `causei_cam1`** (não forçou
+  `live`) — o padrão `causei_camN` funciona pra ela.
 - Teste unit do `generateYaml` (URL self-referente → `rtmp: listen:` + stream vazio): FEITO.
 - Runbook de homolog escrito: [`deploy-homolog-rtmp.md`](deploy-homolog-rtmp.md).
+- Infra homolog LIGADA: DNS `cam.box3.software` → 137.184.183.179, dashboard https 200 (nginx+TLS já
+  serviam o domínio), porta 1935 acende com o cadastro da câmera.
 
 ## Pendente
 
-1. **INFRA homolog — ligar o ingest na VPS** (passos no runbook [`deploy-homolog-rtmp.md`](deploy-homolog-rtmp.md)):
-   - deploy do código (Actions `deploy-homolog`, manual);
-   - abrir TCP **1935** inbound no firewall — **restrito ao IP de origem das câmeras** (publish sem auth);
-   - DNS: registro A `cam.box3.software` → IP do homolog (usuário confirmou que aponta);
-   - nginx: trocar `server_name` placeholder por `cam.box3.software` + TLS (certbot) — só pro dashboard
-     https; o RTMP não passa pelo nginx (TCP cru na 1935).
-2. **Teste**: unit no `generateYaml` (detecção da URL self-referente → `rtmp: listen:` + stream vazio).
+1. **Endurecer o firewall da 1935** (P1 de segurança): hoje a 1935 aceitou conexão do mundo
+   (RTMP publish do go2rtc é **SEM auth** → qualquer um que saiba o nome do canal pode empurrar).
+   Restringir a porta ao(s) **IP(s) público(s) de origem das câmeras** (ufw / firewall do DO).
+2. **Cadastrar cam2..6** conforme forem sendo apontadas: `rtsp://127.0.0.1:8554/causei_camN` no painel
+   + push da câmera pro mesmo `causei_camN` (confirmar caso a caso se o firmware respeita o path ou força `live`).
 3. **Contrato device**: Intelbras/Dahua força app `live` (documentado aqui e no runbook). Falta conferir
    se outros modelos usam chave configurável (aí cada câmera poderia ter seu `causei_camN`).
 
