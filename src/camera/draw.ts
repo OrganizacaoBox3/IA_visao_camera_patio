@@ -515,7 +515,7 @@ export function drawZoneOverlays(
     let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
     if (r?.modo === "atividade") {
       color = stateCanvasColor(r.view.state);
-      label2 = `${z.label} · ${r.view.state} · ${r.view.people}p`;
+      label2 = `${z.label} · ${r.view.state}`;
     } else if (r?.modo === "leitura") {
       color = cssVar("--state-info", "#38bdf8");
       label2 = `${z.label} · ${r.lastCode ?? "leitura…"}`;
