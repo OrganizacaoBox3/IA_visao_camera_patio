@@ -111,7 +111,7 @@ export function BtTagsPage() {
         </Badge>
       </PageHeader>
 
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         {!seeded ? (
           <div className="flex items-center gap-2 text-[13px] text-text-muted">
             <Spinner /> Carregando leituras…

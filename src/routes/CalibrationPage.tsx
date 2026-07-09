@@ -92,7 +92,7 @@ export function CalibrationPage() {
         subtitle="Meça distâncias reais no chão (metros) — base da posição por tag BLE."
       />
 
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         <Field label="Câmera">
           <Select
             ariaLabel="Câmera para calibrar"

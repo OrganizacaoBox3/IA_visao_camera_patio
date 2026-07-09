@@ -183,19 +183,25 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
             : "Calibre a câmera primeiro (≥4 pontos) para poder medir em metros."}
       </p>
 
-      {/* Palco: wrapper encolhe até a imagem → cliques mapeiam direto a 0..1 (sem letterbox). */}
+      {/* Palco: wrapper ENCOLHE até a imagem (cliques mapeiam direto a 0..1, sem letterbox). A imagem é
+          capada à viewport (max-h) e à largura da página (max-w) p/ não estourar/cortar a tela; o palco
+          centraliza e acompanha o tamanho real exibido. */}
       <div
         ref={stageRef}
         onClick={onStageClick}
-        className="relative w-full cursor-crosshair select-none overflow-hidden rounded-sm border border-border bg-panel-2"
-        style={snapshotUrl ? undefined : { aspectRatio: "16 / 9" }}
+        className="relative mx-auto cursor-crosshair select-none overflow-hidden rounded-sm border border-border bg-panel-2"
+        style={
+          snapshotUrl
+            ? { width: "fit-content", maxWidth: "100%" }
+            : { width: "min(100%, 640px)", aspectRatio: "16 / 9" }
+        }
       >
         {snapshotUrl ? (
           <img
             src={snapshotUrl}
             alt="Chão da câmera para calibração"
             draggable={false}
-            className="block w-full select-none"
+            className="block max-h-[55vh] max-w-full select-none"
           />
         ) : (
           <div
