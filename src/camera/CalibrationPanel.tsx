@@ -56,6 +56,8 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ kind: "corner" | "measure"; idx: number } | null>(null); // ponto sendo arrastado
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null); // ponto sob o cursor (feedback de "pegar")
 
   // Carrega a calibração existente. Reconstrói os cantos + L×C quando são 4 pontos (método retângulo);
   // se for de um formato antigo, ainda usa a H p/ MEDIR. Degrada gracioso.
@@ -124,21 +126,63 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     return { seg, step };
   }, [activeH, L, C, dimsOk]);
 
-  // Clique no palco → coordenada normalizada 0..1 (contra o retângulo da imagem).
-  function onStageClick(e: React.MouseEvent<HTMLDivElement>) {
+  // ── Interação por PONTEIRO: pegar/arrastar um ponto existente OU adicionar um novo. Coords do palco
+  // → normalizadas 0..1 (contra o retângulo da imagem). Mouse e toque (pointer events). ──
+  const HIT = 0.04; // raio de acerto (fração da imagem) p/ "pegar" um ponto já marcado
+  const activePts = mode === "medir" ? measurePts : corners;
+
+  function pxFrom(e: React.PointerEvent<HTMLDivElement>): Vec2 | null {
     const rect = stageRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-    const px: Vec2 = {
+    if (!rect || rect.width === 0 || rect.height === 0) return null;
+    return {
       x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
       y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
     };
+  }
+  function nearest(pts: Vec2[], px: Vec2): number | null {
+    let best: number | null = null;
+    let bestD = HIT;
+    pts.forEach((c, i) => {
+      const d = Math.hypot(c.x - px.x, c.y - px.y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const px = pxFrom(e);
+    if (!px) return;
     if (mode === "medir") {
-      setMeasurePts((p) => (p.length >= 2 ? [px] : [...p, px]));
+      const hit = nearest(measurePts, px);
+      if (hit != null) dragRef.current = { kind: "measure", idx: hit };
+      else setMeasurePts((p) => (p.length >= 2 ? [px] : [...p, px]));
+    } else {
+      if (!canConfigure) return;
+      const hit = nearest(corners, px);
+      if (hit != null) dragRef.current = { kind: "corner", idx: hit };
+      else {
+        setNote(null);
+        setCorners((p) => (p.length >= 4 ? p : [...p, px])); // até 4; arraste p/ ajustar, "Refazer" limpa
+      }
+    }
+    if (dragRef.current) e.currentTarget.setPointerCapture(e.pointerId); // captura → arrasto suave fora do palco
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const px = pxFrom(e);
+    if (!px) return;
+    const d = dragRef.current;
+    if (d) {
+      if (d.kind === "corner") setCorners((p) => p.map((c, i) => (i === d.idx ? px : c)));
+      else setMeasurePts((p) => p.map((c, i) => (i === d.idx ? px : c)));
       return;
     }
-    if (!canConfigure) return;
-    setNote(null);
-    setCorners((p) => (p.length >= 4 ? p : [...p, px])); // até 4; "Refazer" limpa
+    setHoverIdx(nearest(activePts, px)); // feedback: cursor "pega" ao passar sobre um ponto
+  }
+  function onPointerEnd() {
+    dragRef.current = null;
   }
 
   const undoCorner = () => setCorners((p) => p.slice(0, -1));
@@ -200,7 +244,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
         <>
           <p className="text-[12px] text-text-muted">
             {canConfigure
-              ? "Escolha um RETÂNGULO no chão (área demarcada, pallet, ladrilhos) e clique os 4 cantos EM ORDEM. Depois informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros."
+              ? "Escolha um RETÂNGULO no chão (área demarcada, pallet, ladrilhos) e clique os 4 cantos EM ORDEM — arraste um canto para ajustar. Depois informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros."
               : "A calibração requer perfil de engenharia. Você pode usar o modo Medir."}
           </p>
           {canConfigure && (
@@ -246,7 +290,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       ) : (
         <p className="text-[12px] text-text-muted">
           {activeH
-            ? "Clique em 2 pontos do chão para medir a distância real entre eles."
+            ? "Clique em 2 pontos do chão para medir a distância real entre eles — arraste para ajustar."
             : "Calibre a câmera primeiro (retângulo do chão) para poder medir em metros."}
         </p>
       )}
@@ -255,13 +299,20 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
           à viewport (max-h) e à largura da página (max-w) p/ não cortar a tela. */}
       <div
         ref={stageRef}
-        onClick={onStageClick}
-        className="relative mx-auto cursor-crosshair select-none overflow-hidden rounded-sm border border-border bg-panel-2"
-        style={
-          snapshotUrl
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerLeave={() => {
+          onPointerEnd();
+          setHoverIdx(null);
+        }}
+        className="relative mx-auto touch-none select-none overflow-hidden rounded-sm border border-border bg-panel-2"
+        style={{
+          cursor: hoverIdx != null ? "grab" : "crosshair",
+          ...(snapshotUrl
             ? { width: "fit-content", maxWidth: "100%" }
-            : { width: "min(100%, 640px)", aspectRatio: "16 / 9" }
-        }
+            : { width: "min(100%, 640px)", aspectRatio: "16 / 9" }),
+        }}
       >
         {snapshotUrl ? (
           <img
@@ -313,7 +364,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <circle
                   cx={`${p.x * 100}%`}
                   cy={`${p.y * 100}%`}
-                  r={6}
+                  r={hoverIdx === i ? 8 : 6}
                   fill="var(--state-info)"
                   stroke="var(--bg)"
                   strokeWidth={2}
@@ -340,7 +391,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 key={`m${i}`}
                 cx={`${p.x * 100}%`}
                 cy={`${p.y * 100}%`}
-                r={6}
+                r={hoverIdx === i ? 8 : 6}
                 fill="var(--state-warn)"
                 stroke="var(--bg)"
                 strokeWidth={2}
