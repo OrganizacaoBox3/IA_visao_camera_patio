@@ -299,6 +299,22 @@ export const getCamConfig = (cameraId: string) =>
 export const saveCamConfig = (cameraId: string, config: CameraCfg) =>
   apiPut<CameraCfg>(`/api/camconfig/${encodeURIComponent(cameraId)}`, { config });
 
+// ── CALIBRAÇÃO de homografia (px normalizado 0..1 ↔ metros) — COMPARTILHADA, por câmera ──
+// Mede distância real no chão em metros e projeta o pé da pessoa no plano (base da fusão de tag
+// BLE — analises/tags-bluetooth/00-avaliacao-e-plano.md §3). H é computada no cliente por
+// src/vision/homography.ts; o hub valida (≥4 pontos, matriz 3×3) e persiste. SÓ números (LGPD).
+import type { Matrix3, Vec2 } from "./vision/homography";
+export type { Matrix3, Vec2 } from "./vision/homography";
+export type CalibrationPoint = { px: Vec2; world: Vec2 };
+export type CameraCalibration = { points: CalibrationPoint[]; H: Matrix3; updatedAt: number };
+// GET /api/calibration/:cameraId → CameraCalibration | null (null = nunca calibrada). Auth: autenticado.
+export const getCalibration = (cameraId: string) =>
+  apiGet<CameraCalibration | null>(`/api/calibration/${encodeURIComponent(cameraId)}`);
+// PUT /api/calibration/:cameraId {calibration} → substitui; responde a calibração salva.
+// Auth: perfil de configuração (engenharia).
+export const saveCalibration = (cameraId: string, calibration: CameraCalibration) =>
+  apiPut<CameraCalibration>(`/api/calibration/${encodeURIComponent(cameraId)}`, { calibration });
+
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
 // POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`
