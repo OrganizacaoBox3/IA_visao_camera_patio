@@ -9,6 +9,7 @@ const alerts = require("./alerts");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
+const btTags = require("./bt-tags");
 const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
@@ -23,6 +24,7 @@ const routeAuth = require("./routes/auth");
 const routeData = require("./routes/data");
 const routeAlarms = require("./routes/alarms");
 const routeNotif = require("./routes/notif");
+const routeBtTags = require("./routes/bt-tags");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
@@ -96,6 +98,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeData.handle(req, res, ctx)) return;
     if (await routeAlarms.handle(req, res, ctx)) return;
     if (await routeNotif.handle(req, res, ctx)) return;
+    if (await routeBtTags.handle(req, res, ctx)) return;
     if (await routeUsers.handle(req, res, ctx)) return;
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
@@ -235,6 +238,7 @@ io.on("connection", (socket) => {
     settings.init(),
     events.init(),
     camcfg.init(),
+    btTags.init(),
   ]);
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
   // produção, ABORTA SÓ pelo AUTH_SECRET default (catastrófico + corrigível por env, sem deadlock).

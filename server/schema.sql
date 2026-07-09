@@ -90,6 +90,18 @@ create table if not exists app_settings (
   data jsonb not null
 );
 
+-- ── TAGS BLUETOOTH (identidade aumentada na câmera) — registro por nome do BT ──
+-- Cadastro das tags que pessoas carregam; a estação BLE casa o que vê (bt_name) com o
+-- rótulo. LGPD: só o CADASTRO é persistido (config); leituras de RSSI são efêmeras (em
+-- memória, nunca gravadas) — mesma doutrina dos frames (ADR-002). SÓ METADADOS.
+create table if not exists bt_tags (
+  id text primary key,
+  bt_name text unique not null,   -- nome/MAC do Bluetooth p/ casar com o que a estação enxerga
+  rotulo text,                    -- nome amigável / pessoa portadora
+  ativo boolean default true,
+  criado_em bigint
+);
+
 -- ── EVENTOS DE ALARME (fila acionável com acknowledge) ───────────────────────
 -- LGPD: SÓ METADADOS — nada de imagens/frames. Campos são texto/ids/timestamps.
 -- priority: advisory | high | critical (calculada pela política em alarmPolicy.js).

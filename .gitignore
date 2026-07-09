@@ -76,3 +76,4 @@ eval/model-comparison.json
 
 # dataset de eval (MOT20) — não versionar
 archive.zip
+server/bt-tags.json
