@@ -99,7 +99,37 @@ partir do Tier 2 (trilateração). No Tier 0-1 (associação por proximidade/mov
 3. **Fusão (Fase 2)** guiada pelo número do spike — Tier 1 se RSSI+movimento bastar; Tier 2 se precisar escala.
 4. O rótulo AR sai **de graça** no fim (reusa o overlay) — o difícil é a associação, não o desenho.
 
-**Decisões que definem custo/complexidade (preciso de você):** (a) densidade típica — quantas pessoas COM
-tag numa mesma cena? (b) as tags têm **IMU/acelerômetro**? (c) topo do orçamento — dá pra 3 estações/área
-(Tier 2) ou tem que ser 1 (Tier 0-1)? (d) precisão desejada — "destacar a pessoa certa" (associação) basta,
-ou querem posição métrica (metros)?
+## 9. Decisões TRAVADAS (2026-07-08) + o caminho honesto
+
+Respostas do dono: **(a) 3-6 pessoas com tag por cena · (b) tags SÓ beacon (sem IMU) · (c) 1 estação por
+área · (d) querem os DOIS: destacar E posição em metros.**
+
+**Verdade dura:** essa é a combinação mais barata E mais difícil. RSSI de **1 antena** não separa 3-6 pessoas
+de forma confiável (é um anel ruidoso), e **sem IMU** perdemos o sinal de movimento independente, e **sem 3
+estações** não há trilateração. Do jeito ingênuo (Tier 0), **não fecha** para 3-6 pessoas — o medo do dono
+se confirma.
+
+**Mas há um ângulo que usa 1 estação E entrega os metros — via a CÂMERA:**
+
+1. **Metros: a CÂMERA dá, não o BLE.** Com a homografia (calibrar 4 pontos do chão), o PÉ de cada pessoa
+   rastreada vira posição no chão (metros) — para QUALQUER pessoa, com 1 câmera. A meta "posição em metros"
+   é entregue pela câmera; o BLE só diz o NOME. **1 estação basta pra isso.**
+2. **Associação por CORRELAÇÃO RSSI × distância-da-câmera (sem IMU, 1 estação):** ponha a estação JUNTO da
+   câmera. A câmera dá a distância real de cada pessoa ao longo do tempo (via homografia); o RSSI de cada tag
+   também varia com a distância ao longo do tempo. **Casar cada tag com a pessoa cuja distância-no-tempo mais
+   se correlaciona com o RSSI-no-tempo** daquela tag (janela deslizante + Hungarian). Usa o MOVIMENTO das
+   pessoas (que a câmera vê) no lugar do IMU. É o melhor tiro com 1 estação sem IMU.
+
+**Risco declarado (honestidade):** isso funciona SE as 3-6 pessoas se moverem DIFERENTE (trajetórias de
+distância distintas). Pessoas paradas juntas ou andando em bloco à mesma distância **ficam ambíguas** — aí o
+sistema deve dizer "não sei" (sem rótulo) em vez de errar. A convergência leva **alguns segundos** de
+movimento. O ruído de RSSI (corpo/orientação) é o limite. **Isto é EXATAMENTE o que a Fase 0 (spike) tem
+que medir antes de construir** — se reprovar para 3-6, as saídas honestas são: (i) tags COM IMU (upgrade
+barato, sinal independente forte), (ii) 3 estações (trilateração), (iii) aceitar menos pessoas/menor confiança.
+
+**Caminho escolhido (dado o travado):**
+- **Fase 0 — spike:** medir a correlação RSSI × distância-da-câmera com 3 pessoas andando. Make-or-break.
+- **Homografia sobe pra cedo** (Fase 1.5): necessária p/ os metros E p/ o sinal de correlação.
+- **Fase 1 (registro + ingest)** segue como plumbing seguro, independente do spike — começa já, em paralelo.
+- **Fusão (Fase 2)** = correlação RSSI×distância + "não sei" honesto; overlay AR do rótulo na caixa.
+- Se o spike reprovar 3-6: recomendar **tags com IMU** (o de-risco mais barato) antes de escalar estações.
