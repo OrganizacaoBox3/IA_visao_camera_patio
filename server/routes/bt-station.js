@@ -1,9 +1,9 @@
 // Rota de INGEST da estação BLE (device-facing): o coletor (TC22) POSTa as leituras; o hub enriquece
 // (bt-readings) e relaya aos dashboards. Auth de DEVICE por token (espelha o CAMERA_TOKEN), separada da
 // CRUD de tags (superadmin, routes/bt-tags.js) — responsabilidade única. Leituras são efêmeras (LGPD).
-const btReadings = require("../bt-readings");
-const btLocations = require("../bt-locations");
-const btTags = require("../bt-tags");
+const btReadings = require("../bt/bt-readings");
+const btLocations = require("../bt/bt-locations");
+const btTags = require("../bt/bt-tags");
 const users = require("../users");
 
 // Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita

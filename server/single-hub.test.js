@@ -37,12 +37,12 @@ describe("hub único — o coletor usa a MESMA API do sistema (sobe um, sobe tud
   });
 
   it("a descoberta UDP (o que faz o TC22 achar o hub) roda no MESMO processo do hub", () => {
-    expect(indexSrc).toContain('require("./discovery")');
+    expect(indexSrc).toContain('require("./bt/discovery")');
     expect(indexSrc).toContain("discovery.start(");
   });
 
   it("o contrato de descoberta (porta UDP + probe) é IDÊNTICO no hub e no TC22", () => {
-    const discSrc = read("./discovery.js");
+    const discSrc = read("./bt/discovery.js");
     for (const src of [discSrc, tc22Src]) {
       expect(src).toContain("41234"); // porta UDP do beacon
       expect(src).toContain("VISAO_HUB_DISCOVER"); // payload do broadcast

@@ -6,7 +6,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const db = require("./db");
+const db = require("../db");
 
 const FILE = path.join(__dirname, "bt-tags.json");
 let list = [];

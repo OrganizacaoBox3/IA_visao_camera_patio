@@ -5,7 +5,7 @@
 // uma linha por tag, last-wins).
 const fs = require("node:fs");
 const path = require("node:path");
-const db = require("./db");
+const db = require("../db");
 const btTags = require("./bt-tags");
 
 const FILE = path.join(__dirname, "bt-locations.json");

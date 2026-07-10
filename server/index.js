@@ -9,14 +9,14 @@ const alerts = require("./alerts");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
-const btTags = require("./bt-tags");
-const btLocations = require("./bt-locations");
+const btTags = require("./bt/bt-tags");
+const btLocations = require("./bt/bt-locations");
 const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
-const discovery = require("./discovery");
+const discovery = require("./bt/discovery");
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
 

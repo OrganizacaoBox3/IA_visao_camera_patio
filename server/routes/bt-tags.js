@@ -1,7 +1,7 @@
 // Rotas de TAGS BLUETOOTH (perfil de configuração — engenharia/superadmin): cadastro/lista/edição
 // das tags por nome do Bluetooth (definir QUEM é a tag). Coerente com câmeras/zonas.
 // Espelha routes/notif.js (recipients). Leituras de RSSI NÃO passam por aqui (são efêmeras).
-const btTags = require("../bt-tags");
+const btTags = require("../bt/bt-tags");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireConfigurer } = ctx;

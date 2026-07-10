@@ -22,16 +22,11 @@ import {
   type Matrix3,
   type Vec2,
 } from "../vision/homography";
-import {
-  getCalibration,
-  saveCalibration,
-  getBtReadings,
-  ApiError,
-  type CameraCalibration,
-  type BtReading,
-} from "../api";
+import { getCalibration, saveCalibration, ApiError, type CameraCalibration } from "../api";
 import { useStationHealth } from "../fusion/useStationHealth";
 import { StationHealthChip } from "../fusion/StationHealthChip";
+import { useBleReadings } from "./useBleReadings";
+import { TagPicker } from "./TagPicker";
 
 type Mode = "calibrar" | "medir";
 // dentro de "calibrar": marcar os 4 cantos, associar uma tag ÂNCORA a cada canto, o ponto da
@@ -69,7 +64,6 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   // tag FIXA de referência (âncora de saúde): qual MAC + onde ela está no chão (px 0..1). mac/px marcados
   // em passos separados — `mac` pode estar vazio (só px) e vice-versa; só entra no save quando ambos.
   const [refTag, setRefTag] = useState<{ mac: string; px: Vec2 | null } | null>(null);
-  const [btReadings, setBtReadings] = useState<BtReading[]>([]); // leituras BLE vivas (poll no passo "referencia")
   const [width, setWidth] = useState<string>("1"); // Largura (lado 1→2), metros — string p/ digitar livre
   const [length, setLength] = useState<string>("1"); // Comprimento (lado 2→3), metros
   const [savedH, setSavedH] = useState<Matrix3 | null>(null);
@@ -81,6 +75,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ kind: "corner" | "measure" | "station" | "reftag"; idx: number } | null>(null); // ponto sendo arrastado
   const [hoverIdx, setHoverIdx] = useState<number | null>(null); // ponto sob o cursor (feedback de "pegar")
+  // Leituras BLE vivas: só nos passos que escolhem uma tag (referência OU âncoras). Efêmero (LGPD).
+  const btReadings = useBleReadings(
+    mode === "calibrar" && (calStep === "referencia" || calStep === "ancoras"),
+  );
 
   // Carrega a calibração existente. Reconstrói os cantos + L×C quando são 4 pontos (método retângulo);
   // se for de um formato antigo, ainda usa a H p/ MEDIR. Degrada gracioso.
@@ -154,25 +152,6 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     }
     return { seg, step };
   }, [activeH, L, C, dimsOk]);
-
-  // Leituras BLE vivas: enquanto se marca a tag de referência OU se associam âncoras aos cantos
-  // (poll leve a cada ~2s). Efêmero (LGPD).
-  useEffect(() => {
-    if (mode !== "calibrar" || (calStep !== "referencia" && calStep !== "ancoras")) return;
-    let cancelled = false;
-    const load = () =>
-      getBtReadings()
-        .then((r) => {
-          if (!cancelled) setBtReadings(r);
-        })
-        .catch(() => {});
-    load();
-    const id = setInterval(load, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [mode, calStep]);
 
   // Distância real estação ↔ tag de referência (m), pelas projeções no mundo — só com H + ambos os pontos.
   const distMeters = useMemo(() => {
@@ -419,26 +398,11 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <span className="text-[12px] text-text-muted">Tags visíveis agora:</span>
                 <StationHealthChip health={stationHealth} />
               </div>
-              {btReadings.length === 0 ? (
-                <span className="text-[12px] text-text-muted">Nenhuma tag visível — verifique a estação.</span>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {btReadings.map((r) => {
-                    const selected = refTag?.mac === r.mac;
-                    return (
-                      <Button
-                        key={r.mac}
-                        size="sm"
-                        variant={selected ? "primary" : "ghost"}
-                        aria-pressed={selected}
-                        onClick={() => setRefTag((prev) => ({ mac: r.mac, px: prev?.px ?? null }))}
-                      >
-                        {r.rotulo || r.mac} · {r.rssi} dBm
-                      </Button>
-                    );
-                  })}
-                </div>
-              )}
+              <TagPicker
+                readings={btReadings}
+                selectedMac={refTag?.mac ?? null}
+                onPick={(mac) => setRefTag((prev) => ({ mac, px: prev?.px ?? null }))}
+              />
             </div>
           )}
           {canConfigure && calStep === "ancoras" && (
@@ -475,13 +439,12 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                   <span className="text-[12px] text-text-muted">
                     Tag-âncora para o canto {anchorCorner + 1}:
                   </span>
-                  {btReadings.length === 0 ? (
-                    <span className="text-[12px] text-text-muted">
-                      Nenhuma tag visível — verifique a estação.
-                    </span>
-                  ) : (
-                    <div className="flex flex-wrap gap-1.5">
-                      {cornerMacs[anchorCorner] && (
+                  <TagPicker
+                    readings={btReadings}
+                    selectedMac={cornerMacs[anchorCorner] || null}
+                    onPick={(mac) => setCornerMacs((m) => m.map((v, i) => (i === anchorCorner ? mac : v)))}
+                    leading={
+                      cornerMacs[anchorCorner] ? (
                         <Button
                           size="sm"
                           variant="ghost"
@@ -491,25 +454,9 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                         >
                           Sem âncora
                         </Button>
-                      )}
-                      {btReadings.map((r) => {
-                        const selected = cornerMacs[anchorCorner] === r.mac;
-                        return (
-                          <Button
-                            key={r.mac}
-                            size="sm"
-                            variant={selected ? "primary" : "ghost"}
-                            aria-pressed={selected}
-                            onClick={() =>
-                              setCornerMacs((m) => m.map((v, i) => (i === anchorCorner ? r.mac : v)))
-                            }
-                          >
-                            {r.rotulo || r.mac} · {r.rssi} dBm
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  )}
+                      ) : null
+                    }
+                  />
                 </>
               )}
             </div>
