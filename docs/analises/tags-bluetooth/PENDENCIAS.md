@@ -38,17 +38,24 @@
   extrapolação ótimo = 0 → limite de 1 estação+RSSI; caminho além = **âncora/multi-estação**, não mais extrapolação.
   **Default segue o v1** (ganho do v3 é modesto/sintético/afinado à suíte) — v3 é candidato até **dado de campo** validar.
 
-## Pendente (priorizado)
+## Pendente (priorizado — re-ranqueado 2026-07-10 pelos NÚMEROS do harness de associação)
 
-1. **Multi-estação / cross-camera** *(opção "a")*: mapear **câmera → estação local**; a fusão usa só o
-   RSSI da estação da área. É o que destrava **"continua sendo ela ao trocar de câmera"** — a tag é a
-   identidade global, mas hoje a fusão usa leituras globais (1 estação assumida). Alto valor.
-2. **Validação de campo**: câmera WebRTC calibrada + estação posicionada reportando ao hub + pessoas
-   com tags andando → **medir acurácia real** (quantas cola / quantas "não sei") e afinar limiares
-   (confiança, janela, movimento mínimo).
-3. **Refino da fusão**: guarda de margem top-2 (desambiguar movimento em bloco).
-4. **Distância absoluta** *(só se 1 estação + RSSI não bastar)*: tags-com-IMU, UWB, ou trilateração
-   multi-estação. A fase 2 deixa o RSSI@1m pronto como insumo.
+> O associador foi **medido pela primeira vez** (`src/fusion/replay-fusion.ts`, 8 cenários sintéticos,
+> gate no verify — `docs/cientifica/harness-associacao-indoor.md`). O ranking abaixo vem da medição.
+
+1. **Fix do `CameraTile` (grade) — passar `stationPx` calibrado à fusão.** O tile vivo usa o default
+   (0.5,1.0): custo MEDIDO = precisão 81,4%→49,2% (−32 pts), erros 2,2×. Barato e de alto impacto.
+2. **Guarda de ambiguidade top-2 no associador**: no `bloco` (pessoas lado a lado) o associador FALA em
+   vez de abster (precisão 60,8%, 20 id-switches; multidão 49,8%) — viola a invariante "rótulo errado é
+   pior que nenhum". Abster quando 1º≈2º score. Agora mensurável pelo harness.
+3. **Associação ótima global** (Hungarian/transporte ótimo, dev.md) vs. guloso — medir na `multidão`.
+4. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
+   estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
+5. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
+   `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (RMSE do sintético → real).
+6. **Distância absoluta** *(só se 1 estação + RSSI não bastar)*: IMU, UWB, trilateração multi-estação.
+7. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
+   sem calibração (71,8% vs 44,5%) — medido.
 
 ## Limites honestos (não são bugs — física de 1 estação + RSSI)
 

@@ -1,5 +1,13 @@
 # Fase 0 — Harness de replay (de-risco do motor de localização)
 
+> ⚠️ **RE-ROTULADO (2026-07-10), correção de rumo do dono:** este harness e seus motores (Fases 0–3)
+> modelam o **produto AirTag/outdoor** — a posição vem do **GPS do coletor**. É trilha de PRODUTO
+> (pátio/veículo/área externa), válida, mas **não é o motor científico** dos documentos de pesquisa:
+> o problema real é **pessoas caminhando indoor, sem GPS**, onde a **câmera dá a posição** (homografia)
+> e o **BLE dá a identidade** (associação). O harness do modelo científico vive em
+> [harness-associacao-indoor.md](harness-associacao-indoor.md) e mede `src/fusion/associate.ts`.
+> O andaime construído aqui (evidência→motor puro→replay→métricas→benchmark) foi o molde reaproveitado.
+
 > Trilha de pesquisa do [ADR-012](../analises/decisoes/ADR-012-abordagem-cientifica-viabilidade.md).
 > **Fase 0 = o subconjunto barato/JS que se adota AGORA** (dev.md §3: o investimento de maior ROI é
 > gravar dado bruto + um harness que re-executa qualquer versão do motor e cospe métricas comparáveis).

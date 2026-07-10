@@ -1,9 +1,14 @@
-# `src/localizacao/` — a costura (seam) de localização
+# `src/localizacao/` — a costura (seam) + a trilha de PRODUTO AirTag (outdoor/GPS)
 
-Fronteira estável entre **quem calcula onde uma entidade está** e **quem mostra isso**.
-Decisão do **ADR-012** (`docs/analises/decisoes/ADR-012-abordagem-cientifica-viabilidade.md`):
-o motor científico futuro (factor graph) é uma trilha à parte. Para não acoplar a UI ao
-motor de hoje, esta pasta define o contrato pelo qual a UI consome localização.
+Fronteira estável entre **quem calcula onde uma entidade está** e **quem mostra isso**
+(ADR-012, `docs/analises/decisoes/ADR-012-abordagem-cientifica-viabilidade.md`).
+
+> ⚠️ **Rótulo honesto (2026-07-10):** os motores e o simulador desta pasta modelam o **produto
+> AirTag/outdoor** — a posição vem do **GPS do coletor** (celular). Isso vale para pátio/veículo/área
+> externa. **NÃO é o motor científico indoor** (pessoas com tag no bolso, sem GPS): esse é
+> câmera=posição (homografia) + BLE=identidade (associação) e vive em **`src/fusion/`**, com harness
+> próprio (`docs/cientifica/harness-associacao-indoor.md`). As duas trilhas produzem `LocatedEntity[]`
+> pela mesma costura, mas resolvem problemas diferentes — não confundir.
 
 ## A regra
 
@@ -13,16 +18,16 @@ motor de hoje, esta pasta define o contrato pelo qual a UI consome localização
   com campos reservados ao motor (covariance, revision, velocity) documentados mas ainda não usados.
 - `adapters.ts` — funções **puras** que mapeiam as fontes de HOJE (`TagLocation[]` +
   `BtReading[]`, de `../api`) para `LocatedEntity[]`. Sem React, sem I/O — testáveis.
-- `adapters.test.ts` — testes determinísticos do merge (posição + live), fallback de label e source.
+  Consumidor real: `TagsMapPage` (religada — a prova viva da costura).
 
-## Roadmap
+## Trilha AirTag (outdoor) — o que há aqui
 
-- **Hoje:** heurístico. `fromTagLocations()` reproduz o merge que a `TagsMapPage` faz (última
-  posição do coletor + visibilidade ao vivo), com `source: "gps"`.
-- **Futuro:** motor científico em `docs/cientifica/` produz `LocatedEntity[]` (com covariância,
-  `source: "fusion"`) por outro caminho — **sem tocar a UI**.
+- `evidence.ts` / `engine.ts` / `replay.ts` / `metrics.ts` / `simulate.ts` / `scenarios.ts` —
+  harness de replay determinístico (motor puro plugável, RMSE/cobertura, benchmark 9 cenários).
+- Motores: `engine.ts#baselineEngine` (carimba o GPS do coletor) → `fusion-engine.ts` (v1, centroide
+  ponderado por RSSI, **o default medido**: ~14,9 m na suíte) → `motion-engine.ts` (v2, empata) →
+  `guarded-engine.ts` (v3, 14,35 m; teto físico provado: 4/9 cenários têm ganho de extrapolação = 0).
+- `recording.ts` — loader do event-sourcing real (`server/bt/recorder.js`, flag `BT_RECORD`)
+  + `labeledRecording` (verdade estática) p/ RMSE de campo.
 
-## Estado atual (aditivo)
-
-Este módulo estabelece a fronteira; os consumidores (ex.: `TagsMapPage`) **ainda não foram
-religados** a ele. Rewire é trabalho futuro — a costura vem primeiro.
+Histórico e números: `docs/cientifica/fase0-harness-replay.md`.
