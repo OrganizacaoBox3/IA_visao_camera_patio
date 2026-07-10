@@ -24,6 +24,7 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -779,6 +780,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle s) {
         super.onCreate(s);
+        // Modo estação: TELA SEMPRE ACESA. Com a tela apagada o Android estrangula o scan BLE de app
+        // em segundo plano e a estação fica CEGA (caso real de campo: 11 min postando readings vazios).
+        // O app é dedicado — o TC22 é a antena da estação — então manter a tela ligada é a semântica
+        // certa, não desperdício. FLAG_KEEP_SCREEN_ON só vale com o app em foreground: não impede o
+        // usuário de sair do app nem segura wakelock global.
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         density = getResources().getDisplayMetrics().density;
         hubUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HUB, DEFAULT_HUB_URL);
         loadTagNames();
