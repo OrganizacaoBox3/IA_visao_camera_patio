@@ -12,6 +12,13 @@ import {
 
 /** Atalhos de construção (confiança irrelevante para a métrica — fixa em 0.9). */
 const asg = (trackId: number, tag: string | null): Assignment => ({ trackId, tag, confidence: 0.9 });
+/** Atalho com margin/hadConflict explícitos, para os testes de reliability/conflictRate. */
+const asgM = (
+  trackId: number,
+  tag: string | null,
+  margin: number,
+  hadConflict = false,
+): Assignment => ({ trackId, tag, confidence: 0.9, margin, hadConflict });
 const tick = (
   ts: number,
   assignments: Assignment[],
@@ -161,6 +168,91 @@ describe("computeIdentityMetrics — bordas sem NaN", () => {
     expect(m.wrongRate).toBe(0);
     expect(m.abstained).toBe(2);
     expect(m.trueAbstain).toBe(2);
+  });
+});
+
+describe("computeIdentityMetrics — reliabilityBins (calibração da margem)", () => {
+  it("classifica decisões faladas no bin certo por margem e calcula accuracy por bin", () => {
+    const truth: Record<number, string | null> = { 1: "AA", 2: "BB", 3: "CC", 4: "DD" };
+    const m = computeIdentityMetrics([
+      tick(9000, [
+        asgM(1, "AA", 0.95), // certo, bin [0.8,1.0]
+        asgM(2, "XX", 0.9), // errado (verdade BB), bin [0.8,1.0]
+        asgM(3, "CC", 0.1), // certo, bin [0,0.2)
+        asgM(4, "ZZ", 0.05), // errado (verdade DD), bin [0,0.2)
+      ], truth),
+    ]);
+    expect(m.reliabilityBins).toHaveLength(5);
+    const [bin0, , , , bin4] = m.reliabilityBins;
+    expect(bin0.marginMin).toBe(0);
+    expect(bin0.marginMax).toBeCloseTo(0.2);
+    expect(bin0.correct).toBe(1);
+    expect(bin0.wrong).toBe(1);
+    expect(bin0.accuracy).toBeCloseTo(0.5);
+    expect(bin4.marginMin).toBeCloseTo(0.8);
+    expect(bin4.marginMax).toBe(1);
+    expect(bin4.correct).toBe(1);
+    expect(bin4.wrong).toBe(1);
+    expect(bin4.accuracy).toBeCloseTo(0.5);
+  });
+
+  it("abstenções (tag null) NÃO entram no reliability diagram, só decisões faladas", () => {
+    const truth: Record<number, string | null> = { 1: "AA" };
+    const m = computeIdentityMetrics([tick(9000, [asgM(1, null, 0.05, true)], truth)]);
+    const total = m.reliabilityBins.reduce((s, b) => s + b.correct + b.wrong, 0);
+    expect(total).toBe(0);
+  });
+
+  it("bin vazio tem accuracy 0, nunca NaN", () => {
+    const truth: Record<number, string | null> = { 1: "AA" };
+    const m = computeIdentityMetrics([tick(9000, [asgM(1, "AA", 0.95)], truth)]);
+    for (const b of m.reliabilityBins) {
+      expect(Number.isNaN(b.accuracy)).toBe(false);
+      if (b.correct + b.wrong === 0) expect(b.accuracy).toBe(0);
+    }
+  });
+
+  it("margin ausente (Assignment antigo, sem instrumentação) cai no bin [0,0.2) sem quebrar", () => {
+    const truth: Record<number, string | null> = { 1: "AA" };
+    const m = computeIdentityMetrics([tick(9000, [asg(1, "AA")], truth)]);
+    expect(m.reliabilityBins[0].correct).toBe(1);
+  });
+
+  it("margem no limite exato do bin (0.2, 0.4, ...) cai no bin SUPERIOR (left-closed)", () => {
+    const truth: Record<number, string | null> = { 1: "AA" };
+    const m = computeIdentityMetrics([tick(9000, [asgM(1, "AA", 0.2)], truth)]);
+    expect(m.reliabilityBins[0].correct).toBe(0);
+    expect(m.reliabilityBins[1].correct).toBe(1);
+  });
+
+  it("margem 1.0 exata cai no último bin (fechado nos dois lados)", () => {
+    const truth: Record<number, string | null> = { 1: "AA" };
+    const m = computeIdentityMetrics([tick(9000, [asgM(1, "AA", 1.0)], truth)]);
+    expect(m.reliabilityBins[4].correct).toBe(1);
+  });
+});
+
+describe("computeIdentityMetrics — conflictRate", () => {
+  it("conta a fração de ticks com PELO MENOS UM assignment em conflito", () => {
+    const truth: Record<number, string | null> = { 1: "AA", 2: "BB" };
+    const m = computeIdentityMetrics([
+      tick(9000, [asgM(1, "AA", 0.9, false), asgM(2, "BB", 0.9, false)], truth), // sem conflito
+      tick(9500, [asgM(1, null, 0.05, true), asgM(2, "BB", 0.9, false)], truth), // 1 em conflito
+      tick(10000, [asgM(1, "AA", 0.9, false), asgM(2, null, 0.05, true)], truth), // 1 em conflito
+    ]);
+    expect(m.conflictRate).toBeCloseTo(2 / 3);
+  });
+
+  it("sem ticks avaliados → conflictRate 0 (nunca NaN)", () => {
+    const m = computeIdentityMetrics([]);
+    expect(m.conflictRate).toBe(0);
+  });
+
+  it("track fantasma com hadConflict não conta (ignorado como o resto das métricas)", () => {
+    const m = computeIdentityMetrics([
+      tick(9000, [asgM(99, "AA", 0.05, true)], {}), // 99 não existe na verdade
+    ]);
+    expect(m.conflictRate).toBe(0);
   });
 });
 

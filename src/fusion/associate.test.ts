@@ -402,6 +402,91 @@ describe("TagTrackAssociator — atribuição ótima global (knob optimal, Hunga
   });
 });
 
+describe("TagTrackAssociator — instrumentação margin/hadConflict (reliability diagram)", () => {
+  it("par CLARO (sem concorrente): margin alto (≈score), hadConflict false", () => {
+    const N = 10;
+    const frames = makeFrames(N, 1000, 500, (i) => ({
+      tracks: [
+        { trackId: 1, dist: ramp(1, 6, i, N) },
+        { trackId: 2, dist: ramp(6, 1, i, N) },
+      ],
+      readings: [
+        { tag: "AA", rssi: ramp(-50, -75, i, N) },
+        { tag: "BB", rssi: ramp(-75, -50, i, N) },
+      ],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const res = a.assign();
+    const t1 = res.find((r) => r.trackId === 1)!;
+    const t2 = res.find((r) => r.trackId === 2)!;
+    expect(t1.tag).toBe("AA");
+    expect(t2.tag).toBe("BB");
+    expect(t1.margin).toBeGreaterThan(0.9);
+    expect(t2.margin).toBeGreaterThan(0.9);
+    expect(t1.hadConflict).toBe(false);
+    expect(t2.hadConflict).toBe(false);
+  });
+
+  it("caso ambíguo (bloco): abstenção com margin baixo e hadConflict true", () => {
+    const n = 10;
+    const blocoFrames = makeFrames(n, 0, 500, (i) => ({
+      tracks: [
+        { trackId: 1, dist: ramp(1, 6, i, n) },
+        { trackId: 2, dist: ramp(1.3, 6.3, i, n) }, // paralela (bloco)
+      ],
+      readings: [
+        { tag: "AA", rssi: ramp(-50, -75, i, n) },
+        { tag: "BB", rssi: ramp(-52, -77, i, n) },
+      ],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of blocoFrames) a.push(f);
+    const res = a.assign();
+    expect(res.map((r) => r.tag)).toEqual([null, null]);
+    for (const r of res) {
+      expect(r.margin).toBeLessThan(0.3); // empate físico → margem quase nula
+      expect(r.margin).toBeGreaterThanOrEqual(0); // clamp/definição não deixa negativo neste caso
+      expect(r.hadConflict).toBe(true);
+    }
+  });
+
+  it("sem nenhum candidato elegível (tag ausente): margin 0, hadConflict false (não é empate, é falta de evidência)", () => {
+    const N = 8;
+    const frames = makeFrames(N, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: ramp(1, 6, i, N) }],
+      readings: [], // nenhuma tag em cena
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const [r] = a.assign();
+    expect(r.tag).toBeNull();
+    expect(r.margin).toBe(0);
+    expect(r.hadConflict).toBe(false);
+  });
+
+  it("oclusão/flicker: abstenção por concorrência do fantasma também reporta margin baixo e hadConflict true", () => {
+    const n = 10;
+    const occlusionFrames = makeFrames(n, 0, 500, (i) => ({
+      tracks:
+        i === n - 1
+          ? [{ trackId: 2, dist: ramp(1.3, 6.3, i, n) }]
+          : [
+              { trackId: 1, dist: ramp(1, 6, i, n) },
+              { trackId: 2, dist: ramp(1.3, 6.3, i, n) },
+            ],
+      readings: [{ tag: "AA", rssi: ramp(-50, -75, i, n) }],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of occlusionFrames) a.push(f);
+    const [r] = a.assign();
+    expect(r.trackId).toBe(2);
+    expect(r.tag).toBeNull();
+    expect(r.hadConflict).toBe(true);
+    expect(r.margin).toBeLessThan(0.3);
+  });
+});
+
 describe("TagTrackAssociator — janela, determinismo e limpeza", () => {
   it("frames fora da janela são podados (não contam p/ a correlação)", () => {
     const a = new TagTrackAssociator({ windowMs: 2000 });

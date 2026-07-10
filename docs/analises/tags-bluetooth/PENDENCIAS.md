@@ -51,10 +51,26 @@
    perguntas de viés/GP. O roteiro completo de 6 min (`protocolo-teste-campo-indoor.md`) continua
    sendo o padrão-ouro quando houver disponibilidade — **ambos DEFERIDOS pelo dono**, não bloqueio
    técnico. É também o dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 podem ser religados.
-3. **Contrato de gravação/pseudo-label** (session-recorder): decisões do associador com margem +
-   candidatos rejeitados por tick, versão do algoritmo/knobs por sessão, offset de relógio hub↔TC22.
-   Definir "episódio-candidato a pseudo-label" (margem alta sustentada, sem conflito, sem id-switch).
-   Uma página de contrato — "código se refatora, dado não gravado se perdeu para sempre".
+3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
+   - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
+     `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),
+     escrita 1x por processo. `session-loader.ts` parseia (`SessionMeta`), retrocompatível com
+     gravações antigas (`meta: null`).
+   - ⬜ **Decisões do associador por tick (margem + candidatos rejeitados)** — GAP HONESTO: o
+     associador (`TagTrackAssociator.assign()`) roda no CLIENTE (`useTagFusion.ts`, browser), não
+     no hub que grava o JSONL (`server/bt/session-recorder.js`) — gravar isso exige um canal NOVO
+     cliente→servidor (endpoint/socket) que não existe hoje; não construído sem necessidade
+     validada em campo. A DEFINIÇÃO já está pronta em código: `PseudoLabelCandidate`/
+     `AssignmentTick`/`findPseudoLabelCandidates` (`src/fusion/session-loader.ts`) — "episódio-
+     candidato" = associação sustentada (≥5s), margem alta (≥0.15), sem conflito, sem troca de
+     tag/id no mesmo track. Espera o wiring de gravação para ter dado real a minerar.
+   - ⬜ **Offset de relógio hub↔TC22** — investigado e CONFIRMADO limite físico: o payload real do
+     TC22 (`tc22-scanner/.../MainActivity.java:405`, contrato `{stationId, readings:[{mac,name,rssi}]}`)
+     NÃO tem timestamp do dispositivo — todo `ts` é `Date.now()` do hub na chegada (mesmo achado já
+     listado em `status-implementacao.md`, "ts de captura na borda"). Não implementável sem o TC22
+     ganhar um campo de timestamp próprio; documentado como limitação, não inventado protocolo NTP.
+     Se o TC22 um dia mandar `deviceTs`, a linha `{"t":"clock","ts":<hubTs>,"deviceTs":<...>}` é o
+     formato natural a adicionar (o loader já tolera tipos de linha desconhecidos).
 4. **Espalhar as âncoras em distâncias log-espaçadas** (ex.: 0,5/1,5/4/8 m à estação, não um retângulo
    compacto) — barato, destrava a identificabilidade do expoente `n` e amplia a malha de auditoria de
    resíduo (uma âncora perto do canto da `…CE:3C` separaria obstrução local de deriva da estação).

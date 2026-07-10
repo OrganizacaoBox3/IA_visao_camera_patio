@@ -7,6 +7,42 @@
 //   {"t":"cal","ts":<ms>,"cameraId":"<id>","H":[9 números]|null,"station":{"x":0..1,"y":0..1}|null}
 //   {"t":"trk","ts":<ms>,"cameraId":"<id>","tracks":[{"id":<num>,"bbox":[x,y,w,h]}]}  // bbox 0..1
 //   {"t":"ble","ts":<ms>,"stationId":"<id>","readings":[{"mac":"<MAC>","rssi":<int>}]}
+//   {"t":"meta","ts":<ms>,"gitRev":"<hash curto>"|null,"fusionConfig":{...knobs de associate.ts}}
+//     — versão do algoritmo/knobs (pedido do especialista científico, 2026-07-10): escrita UMA vez,
+//     na primeira linha gravada do PROCESSO (não por câmera/sessão — ver `ensureMeta()`). "Replay de
+//     gravação antiga com semântica nova é lixo silencioso" — sem isso não dá pra saber que default
+//     de `minMargin`/`optimal`/etc. gerou aquela decisão. `gitRev` é o `git rev-parse --short HEAD`
+//     do hub no instante da gravação (null se `git` indisponível, ex.: pacote de release sem .git —
+//     não é fatal). `fusionConfig` é um ESPELHO MANUAL dos `DEFAULTS` de `src/fusion/associate.ts`
+//     (ver `CLIENT_FUSION_CONFIG_MIRROR` abaixo) — mesma convenção de espelho manual já usada em
+//     `eval/` para `precision.js` (CLAUDE.md §6: "toda mudança de knob... passa por eles"). Por quê
+//     um espelho e não import direto: o associador roda no CLIENTE (browser, `useTagFusion.ts`), e o
+//     hub (`server/`) é CommonJS puro — não há ponte de runtime entre o TS do cliente e o JS do
+//     servidor sem build. `gitRev` é a fonte de verdade DEFINITIVA se este espelho ficar desatualizado
+//     (baixe `git show <gitRev>:src/fusion/associate.ts` e confira); manter isso sincronizado é
+//     responsabilidade de quem mexer nos DEFAULTS de associate.ts (mesmo espírito do precision.js).
+//
+// GAP CONHECIDO (a) — decisões do associador POR TICK (trackId/tag/confidence/margin/hadConflict,
+// incluindo candidatos REJEITADOS) NÃO são gravadas aqui. Investigado: `TagTrackAssociator.assign()`
+// roda em `src/fusion/useTagFusion.ts`, no CLIENTE (browser) — o hub (dono deste arquivo) NUNCA
+// executa o associador e não tem visibilidade sobre suas decisões. Gravar isso exigiria um canal
+// NOVO cliente→servidor (endpoint HTTP ou emissão socket) que hoje não existe. Decisão HONESTA:
+// não inventar essa rota sem necessidade clara validada em campo — fica como GAP documentado e
+// escopado para fase futura (backlog: `docs/analises/tags-bluetooth/PENDENCIAS.md`, item 3). A
+// DEFINIÇÃO do que seria minerado dessas decisões (o "episódio-candidato a pseudo-label") já está
+// tipada em `src/fusion/session-loader.ts` (`PseudoLabelCandidate`/`findPseudoLabelCandidates`),
+// pronta para o dia em que a gravação for viabilizada.
+//
+// GAP CONHECIDO (c) — OFFSET DE RELÓGIO hub↔TC22: investigado em `server/routes/bt-station.js` e no
+// código-fonte real do coletor (`tc22-scanner/src/com/grendene/btscan/MainActivity.java:405`, contrato
+// documentado ali: `{stationId, readings:[{mac,name,rssi}]}`) — o TC22 NÃO manda timestamp próprio no
+// payload; todo `ts` gravado (inclusive aqui) é `Date.now()` do HUB na chegada (já flagueado em
+// `docs/cientifica/status-implementacao.md`, item "ts de captura na borda"). Sem um `deviceTs` no
+// payload não há o que comparar — {hubTs, deviceTs} exigiria dado que o dispositivo não envia. NÃO
+// implementado (documentar > inventar protocolo NTP): se o TC22 um dia ganhar timestamp próprio
+// (ex.: `body.ts`/`body.deviceTs`), a linha `{"t":"clock","ts":<hubTs>,"deviceTs":<deviceTs>}`,
+// gravada periodicamente (ex.: 1×/min), é o formato natural a adicionar aqui — o loader já tolera
+// tipos de linha desconhecidos (contrato aditivo), então isso pode ser ligado sem migração.
 //
 // LGPD (ADR-002): SÓ metadados (caixas/MAC/RSSI/matriz H) — JAMAIS frame/imagem. Whitelist de campos:
 // mesmo que track/leitura traga mais coisa, nada além do contrato acima vai pro disco. Minimização
@@ -30,10 +66,49 @@
 // recalibrar durante a sessão entra no JSONL (o loader aplica "último cal vence").
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const camcfg = require("../camcfg");
 
 // Co-locado com os outros artefatos de runtime do domínio BT (bt-recording.jsonl etc.). Gitignored.
 const FILE = path.join(__dirname, "fusion-session.jsonl");
+
+// Raiz do repo (server/bt/ → ../..) — onde o `git rev-parse` deve rodar.
+const REPO_ROOT = path.join(__dirname, "..", "..");
+
+// ESPELHO MANUAL dos `DEFAULTS` de `src/fusion/associate.ts` (ver header) — o FusionConfig efetivo
+// hoje, porque `useTagFusion.ts` sempre instancia `new TagTrackAssociator()` sem overrides (conferido
+// em 2026-07-10: nenhum lugar do cliente passa config). Se um dia existir override em produção, este
+// espelho para de ser a verdade e passa a ser só o "default de fábrica" — o `gitRev` gravado ao lado
+// continua reconstituindo os DEFAULTS exatos daquela revisão via `git show`.
+const CLIENT_FUSION_CONFIG_MIRROR = {
+  windowMs: 8000,
+  minSamples: 5,
+  minConfidence: 0.5,
+  minMovement: 0.25,
+  minMargin: 0.1,
+  optimal: false,
+  maxDistRatio: 0,
+  distWeight: 0,
+};
+
+// `git rev-parse --short HEAD` obtido 1x por processo (lazy) e cacheado. `undefined` = ainda não
+// tentou; `null` = tentou e falhou (sem `.git`/`git` ausente, ex.: pacote de release — não é fatal).
+let gitRevCache;
+function getGitRev() {
+  if (gitRevCache !== undefined) return gitRevCache;
+  try {
+    gitRevCache = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+    })
+      .toString()
+      .trim();
+  } catch {
+    gitRevCache = null; // sem .git / git ausente — segue sem versão, nunca lança
+  }
+  return gitRevCache;
+}
 
 // Opt-in: liga só quando FUSION_RECORD é truthy (1/true/yes/on). Lido a CADA chamada — sem estado de
 // boot, dá pra ligar/desligar sem reiniciar caso a env mude no processo.
@@ -58,6 +133,18 @@ function fail(e) {
   console.error("[fusion-recorder] falha ao gravar (ignorado; não loga de novo):", String((e && e.message) || e));
 }
 
+// Escreve a linha "meta" (versão do algoritmo/knobs — ver header) UMA vez por processo, antes da
+// PRIMEIRA linha de qualquer outro tipo. `metaWritten` é marcado ANTES do append (não depois, ao
+// contrário do `calStamp`): computar `gitRev` chama um subprocesso — não vale a pena repetir a cada
+// tick só porque o disco falhou uma vez; se a escrita falhar, `fail()` já loga e o resto do pipeline
+// segue mudo, como o resto deste arquivo.
+let metaWritten = false;
+function ensureMeta() {
+  if (metaWritten) return;
+  metaWritten = true;
+  append({ t: "meta", ts: Date.now(), gitRev: getGitRev(), fusionConfig: CLIENT_FUSION_CONFIG_MIRROR });
+}
+
 /**
  * Grava UMA rodada de tracks de uma câmera (chamado no ponto de emissão do `analysis-tracks`).
  * Whitelist: só {id, bbox} de cada track (bbox normalizado 0..1, como veio do tracker).
@@ -68,6 +155,7 @@ function fail(e) {
 function recordTracks(cameraId, ts, tracks) {
   if (!enabled()) return;
   try {
+    ensureMeta();
     const id = String(cameraId || "");
     const when = Number(ts) || Date.now();
     const cal = camcfg.getCalibration(id); // null quando a câmera nunca foi calibrada
@@ -96,6 +184,7 @@ function recordTracks(cameraId, ts, tracks) {
 function recordReadings(stationId, ts, readings) {
   if (!enabled()) return;
   try {
+    ensureMeta();
     const clean = (Array.isArray(readings) ? readings : []).map((r) => ({
       mac: String((r && r.mac) || ""),
       rssi: Number(r && r.rssi),

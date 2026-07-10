@@ -5,10 +5,12 @@
 // linha suja + diag, saneamento de ts (outlier ±24h, teto de ticks) e o replay ponta a ponta sem NaN.
 // Determinístico — nenhuma linha depende de relógio ou sorteio. console.warn é espionado (o loader
 // sinaliza descarte/anomalia por warn — os testes de diag ASSERTAM isso; os demais só o silenciam).
+// Também cobre a linha "meta" (versão do algoritmo/knobs) — aditiva, retrocompat com gravações
+// antigas — e o minerador de referência `findPseudoLabelCandidates` (definição do episódio-candidato).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
-import { parseFusionSession, replayFusionSession } from "./session-loader";
-import type { SessionTruth } from "./session-loader";
+import { findPseudoLabelCandidates, parseFusionSession, replayFusionSession } from "./session-loader";
+import type { AssignmentTick, SessionTruth } from "./session-loader";
 
 // ——— Construtores de linha (o formato FIXO do contrato entre as frentes) ———
 
@@ -35,6 +37,10 @@ function bleLine(
   stationId = "est-1",
 ): string {
   return JSON.stringify({ t: "ble", ts, stationId, readings });
+}
+
+function metaLine(ts: number, gitRev: string | null, fusionConfig: Record<string, unknown>): string {
+  return JSON.stringify({ t: "meta", ts, gitRev, fusionConfig });
 }
 
 const IDENTITY_H = [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -252,8 +258,14 @@ describe("parseFusionSession (loader da gravação de campo)", () => {
     // O MAC fora da truth chega INTACTO aos readings do tick (vai ao push do associador)…
     expect(scenario.ticks[0].readings.map((r) => r.mac)).toEqual(["AA:AA", "ZZ:ZZ"]);
     // …e o replay roda sem NaN (a métrica simplesmente nunca o cobra como verdade).
-    for (const [key, value] of Object.entries(metrics))
+    // `reliabilityBins` é um array (histograma), não um número — fora do loop, checado à parte.
+    for (const [key, value] of Object.entries(metrics)) {
+      if (key === "reliabilityBins") continue;
       expect(Number.isFinite(value), `métrica ${key} não é finita`).toBe(true);
+    }
+    for (const bin of metrics.reliabilityBins ?? []) {
+      expect(Number.isFinite(bin.accuracy), "reliabilityBins[].accuracy não é finita").toBe(true);
+    }
   });
 
   it("saneamento de ts: evento além de ±24h do mediano é descartado com warn (nunca OOM)", () => {
@@ -306,6 +318,128 @@ describe("parseFusionSession (loader da gravação de campo)", () => {
     expect(sc.H).toBeNull();
     expect(sc.diag).toEqual({ linesTotal: 2, linesDropped: 2, cameras: {} });
   });
+
+  it("gravação SEM linha 'meta' (formato antigo) continua funcionando idêntico; meta sai null", () => {
+    const lines = [
+      calLine(0, "camA", IDENTITY_H, { x: 0.2, y: 0.9 }),
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+      bleLine(0, [{ mac: "AA", rotulo: null, rssi: -50 }]),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.meta).toBeNull();
+    expect(sc.diag).toEqual({ linesTotal: 3, linesDropped: 0, cameras: { camA: 2 } }); // cal+trk contam (padrão já existente)
+    expect(sc.ticks).toHaveLength(1); // resto do comportamento intacto
+  });
+
+  it("linha 'meta': parseada, exposta em sc.meta, NÃO conta em cameras/ticks; ÚLTIMA vence", () => {
+    const cfg1 = { minMargin: 0.1, windowMs: 8000 };
+    const cfg2 = { minMargin: 0.1, windowMs: 8000, optimal: true };
+    const lines = [
+      metaLine(0, "abc1234", cfg1),
+      calLine(0, "camA", IDENTITY_H, { x: 0.2, y: 0.9 }),
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+      bleLine(0, [{ mac: "AA", rotulo: null, rssi: -50 }]),
+      metaLine(500, "def5678", cfg2), // meta re-emitida (ex.: recalibração de knob) — última vence
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.meta).toEqual({ gitRev: "def5678", fusionConfig: cfg2 });
+    // meta não é cal/trk: não entra em diag.cameras nem é contada como linha suja (cal+trk = 2, padrão já existente).
+    expect(sc.diag).toEqual({ linesTotal: 5, linesDropped: 0, cameras: { camA: 2 } });
+    expect(sc.ticks).toHaveLength(1); // meta não afeta a grade de ticks
+  });
+
+  it("linha 'meta' com gitRev null (git indisponível na gravação) é válida", () => {
+    const lines = [metaLine(0, null, { minMargin: 0.1 }), trkLine(0, "camA", [])];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.meta).toEqual({ gitRev: null, fusionConfig: { minMargin: 0.1 } });
+  });
+
+  it("linha 'meta' sem fusionConfig é suja (descartada, contada no diag) — não derruba o resto", () => {
+    const lines = [
+      JSON.stringify({ t: "meta", ts: 0, gitRev: "abc" }), // sem fusionConfig
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.meta).toBeNull();
+    expect(sc.diag.linesDropped).toBe(1);
+    expect(sc.ticks).toHaveLength(1);
+  });
+});
+
+describe("findPseudoLabelCandidates (definição do episódio-candidato a pseudo-label)", () => {
+  const tick = (
+    ts: number,
+    trackId: number,
+    tag: string | null,
+    extra?: Partial<AssignmentTick>,
+  ): AssignmentTick => ({ ts, trackId, tag, confidence: 0.9, ...extra });
+
+  it("episódio sustentado (>= minDurationMs, margem alta, sem conflito) vira candidato", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    const out = findPseudoLabelCandidates(ticks);
+    expect(out).toEqual([
+      { trackId: 1, tag: "AA:AA", startTs: 0, endTs: 6000, durationMs: 6000, minMarginInEpisode: 0.3 },
+    ]);
+  });
+
+  it("episódio CURTO demais (< minDurationMs) não vira candidato", () => {
+    const ticks = [tick(0, 1, "AA:AA", { margin: 0.3 }), tick(1000, 1, "AA:AA", { margin: 0.3 })];
+    expect(findPseudoLabelCandidates(ticks)).toEqual([]);
+  });
+
+  it("troca de tag no MESMO track corta o episódio (sem esticar através da troca)", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    for (let ts = 6500; ts <= 12500; ts += 500) ticks.push(tick(ts, 1, "BB:BB", { margin: 0.3 }));
+    const out = findPseudoLabelCandidates(ticks);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ tag: "AA:AA", startTs: 0, endTs: 6000 });
+    expect(out[1]).toMatchObject({ tag: "BB:BB", startTs: 6500, endTs: 12500 });
+  });
+
+  it("margem abaixo do piso interrompe o episódio; conflito também interrompe", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    ticks.push(tick(6500, 1, "AA:AA", { margin: 0.01 })); // margem baixa — quebra
+    for (let ts = 7000; ts <= 13000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    ticks.push(tick(13500, 1, "AA:AA", { margin: 0.3, hadConflict: true })); // conflito — quebra
+    for (let ts = 14000; ts <= 20000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    const out = findPseudoLabelCandidates(ticks);
+    // 3 trechos sustentados separados pelas duas interrupções.
+    expect(out).toHaveLength(3);
+    expect(out.every((c) => c.durationMs >= 5000)).toBe(true);
+  });
+
+  it("tag null (associador disse 'não sei') nunca inicia nem estica episódio", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, null));
+    expect(findPseudoLabelCandidates(ticks)).toEqual([]);
+  });
+
+  it("id-switch (novo trackId) nunca funde com o episódio de outro track", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, "AA:AA", { margin: 0.3 }));
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 2, "AA:AA", { margin: 0.3 })); // mesmo intervalo, OUTRO track
+    const out = findPseudoLabelCandidates(ticks);
+    expect(out).toHaveLength(2);
+    expect(out.map((c) => c.trackId).sort()).toEqual([1, 2]);
+  });
+
+  it("margin ausente (gravação sem essa info) não bloqueia o episódio; minMarginInEpisode sai null", () => {
+    const ticks: AssignmentTick[] = [];
+    for (let ts = 0; ts <= 6000; ts += 500) ticks.push(tick(ts, 1, "AA:AA")); // sem margin nem hadConflict
+    const out = findPseudoLabelCandidates(ticks);
+    expect(out).toEqual([
+      { trackId: 1, tag: "AA:AA", startTs: 0, endTs: 6000, durationMs: 6000, minMarginInEpisode: null },
+    ]);
+  });
+
+  it("opts customizados (minDurationMs/minMargin) são respeitados", () => {
+    const ticks = [tick(0, 1, "AA:AA", { margin: 0.2 }), tick(1000, 1, "AA:AA", { margin: 0.2 })];
+    expect(findPseudoLabelCandidates(ticks, { minDurationMs: 500 })).toHaveLength(1);
+    expect(findPseudoLabelCandidates(ticks, { minDurationMs: 500, minMargin: 0.25 })).toEqual([]); // margem não bate o piso custom
+  });
 });
 
 describe("replayFusionSession (ponta a ponta no associador de produção)", () => {
@@ -331,9 +465,15 @@ describe("replayFusionSession (ponta a ponta no associador de produção)", () =
     expect(scenario.ticks).toHaveLength(61);
     expect(scenario.H).toBeNull();
 
-    // Nenhum campo numérico pode ser NaN/Infinity — a régua de honestidade das métricas.
-    for (const [key, value] of Object.entries(metrics))
+    // Nenhum campo NUMÉRICO pode ser NaN/Infinity — a régua de honestidade das métricas.
+    // `reliabilityBins` é um array (histograma), não um número — verificado à parte, abaixo.
+    for (const [key, value] of Object.entries(metrics)) {
+      if (key === "reliabilityBins") continue;
       expect(Number.isFinite(value), `métrica ${key} não é finita`).toBe(true);
+    }
+    for (const bin of metrics.reliabilityBins ?? []) {
+      expect(Number.isFinite(bin.accuracy), "reliabilityBins[].accuracy não é finita").toBe(true);
+    }
     // Houve avaliação de verdade após o warmup default (8 s) — o replay realmente rodou.
     expect(metrics.ticksEvaluated).toBeGreaterThan(0);
     expect(metrics.opportunities + metrics.trueAbstain + metrics.falseLabels).toBeGreaterThan(0);

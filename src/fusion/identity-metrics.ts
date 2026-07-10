@@ -35,7 +35,26 @@ export type IdentityMetrics = {
   coverage: number; // correct/opportunities; 0 sem oportunidades
   wrongRate: number; // wrong / TODAS as decisões avaliadas (opportunities+trueAbstain+falseLabels)
   idSwitches: number; // trocas de rótulo não-null → OUTRO não-null em aparições consecutivas do track
+  /** ADITIVO (reliability diagram — pedido do especialista científico, docs/cientifica/): a guarda
+   *  de ambiguidade top-2 (`minMargin` em associate.ts) decide falar/abster por uma MARGEM entre
+   *  o 1º e o 2º melhor candidato; esta é a pergunta "essa margem é HONESTA?" em número. Histograma
+   *  FIXO de 5 bins sobre TODAS as decisões que FALARAM (a.tag !== null — inclui falso-rótulo,
+   *  não só `opportunities`), usando `Assignment.margin` clampado a [0,1] (defensivo — o valor
+   *  bruto pode sair ligeiramente negativo com a guarda desligada, ver docstring de margin).
+   *  `accuracy = correct/(correct+wrong)` por bin; 0 quando o bin não teve nenhuma decisão (nunca
+   *  NaN). Se a guarda for honesta, accuracy deve CRESCER com o bin (margem alta → acerto raro
+   *  de errar) — é essa monotonicidade que valida (ou não) o knob. */
+  reliabilityBins: { marginMin: number; marginMax: number; correct: number; wrong: number; accuracy: number }[];
+  /** ADITIVO: fração dos ticks avaliados (pós-warmup) em que PELO MENOS UM assignment do tick
+   *  teve `hadConflict:true` (≥2 candidatos com score competitivo pro mesmo track vencedor — ver
+   *  CONFLICT_MARGIN_THRESHOLD em associate.ts). É o gatilho quantitativo pra decidir quando vale
+   *  investir em atribuição ótima global (Hungarian/Sinkhorn): com poucas tags, espera-se baixo.
+   *  0 quando não há ticks avaliados. */
+  conflictRate: number;
 };
+
+/** Bordas fixas do reliability diagram: 5 bins de largura 0,2 cobrindo [0,1]. */
+const RELIABILITY_BIN_EDGES = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
 
 /**
  * Computa as métricas de identidade sobre os ticks. Ignora ticks com ts < warmupMs (a janela do
@@ -61,17 +80,39 @@ export function computeIdentityMetrics(
   let falseLabels = 0;
   let wrongAnchor = 0;
   let idSwitches = 0;
+  let ticksWithConflict = 0;
 
   // Rótulo do track na sua ÚLTIMA aparição avaliada (para detectar a troca não-null → não-null).
   const lastLabel = new Map<number, string | null>();
 
+  // Histograma do reliability diagram (5 bins fixos) — só decisões que FALARAM (tag !== null).
+  const bins = RELIABILITY_BIN_EDGES.slice(0, -1).map((lo, k) => ({
+    marginMin: lo,
+    marginMax: RELIABILITY_BIN_EDGES[k + 1],
+    correct: 0,
+    wrong: 0,
+  }));
+
   for (const tick of ticks) {
     if (tick.ts < warmupMs) continue; // janela ainda enchendo → não avalia
     ticksEvaluated++;
+    let tickHasConflict = false;
 
     for (const a of tick.assignments) {
       if (!(a.trackId in tick.truthTagByTrack)) continue; // track fantasma → ignora
       const truth = tick.truthTagByTrack[a.trackId];
+
+      if (a.hadConflict) tickHasConflict = true;
+
+      if (a.tag !== null) {
+        // Decisão que FALOU (certa OU errada, inclusive falso-rótulo): entra no reliability
+        // diagram pela margem que a guarda usou pra deixar falar. Margin ausente (Assignment
+        // construído sem a instrumentação, ex.: testes antigos) → trata como sem concorrência (0).
+        const m = Math.max(0, Math.min(1, a.margin ?? 0));
+        const idx = Math.min(bins.length - 1, Math.floor(m / 0.2));
+        if (a.tag === truth) bins[idx].correct++;
+        else bins[idx].wrong++;
+      }
 
       if (truth !== null) {
         // Pessoa COM tag: acertar, errar ou abster — as três são "oportunidades".
@@ -98,6 +139,8 @@ export function computeIdentityMetrics(
       if (prev !== undefined && prev !== null && a.tag !== null && a.tag !== prev) idSwitches++;
       lastLabel.set(a.trackId, a.tag);
     }
+
+    if (tickHasConflict) ticksWithConflict++;
   }
 
   const spoke = correct + wrong; // vezes em que o associador FALOU um rótulo avaliável
@@ -115,6 +158,11 @@ export function computeIdentityMetrics(
     coverage: opportunities === 0 ? 0 : correct / opportunities,
     wrongRate: decisions === 0 ? 0 : wrong / decisions,
     idSwitches,
+    reliabilityBins: bins.map((b) => ({
+      ...b,
+      accuracy: b.correct + b.wrong === 0 ? 0 : b.correct / (b.correct + b.wrong),
+    })),
+    conflictRate: ticksEvaluated === 0 ? 0 : ticksWithConflict / ticksEvaluated,
   };
 }
 

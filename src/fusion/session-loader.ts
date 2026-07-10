@@ -44,6 +44,11 @@
 //   tick SEGUINTE, que não existe na gravação.
 // - Descarte NUNCA é mudo: o retorno traz `diag` ADITIVO (linhas totais/descartadas, câmeras vistas)
 //   e console.warn sinaliza >1 câmera no arquivo ou cameraId pedido que não casa nada.
+// - Linha "meta" (ADITIVA, 2026-07-10 — ver `session-recorder.js`): versão do algoritmo/knobs da
+//   sessão (`gitRev` + `fusionConfig`, espelho do `DEFAULTS` de associate.ts). NÃO participa da
+//   grade de ticks (não tem cameraId, não é cal/trk/ble) — é lida à parte e exposta em `meta` no
+//   retorno (aditivo a `SimFusionScenario`); "último vence" se houver mais de uma (mesmo padrão do
+//   "cal"). Gravações ANTIGAS sem essa linha continuam funcionando idênticas — `meta` sai `null`.
 import { replayFusion } from "./replay-fusion";
 import type { FusionConfig } from "./associate";
 import type { SimFusionScenario, SimTick } from "./sim";
@@ -72,8 +77,18 @@ export type SessionDiag = {
   cameras: Record<string, number>;
 };
 
-/** SimFusionScenario + diagnóstico do parse. Aditivo — quem espera SimFusionScenario segue servido. */
-export type LoadedFusionSession = SimFusionScenario & { diag: SessionDiag };
+/** Versão do algoritmo/knobs da sessão (linha "meta" — ver session-recorder.js). `gitRev` null =
+ *  git indisponível no momento da gravação (não é erro). `fusionConfig` é o espelho manual dos
+ *  DEFAULTS de associate.ts tal como a linha trouxe (não validado campo-a-campo — é reportado
+ *  cru; `gitRev` é a fonte de verdade em caso de dúvida sobre o valor exato de um knob). */
+export type SessionMeta = {
+  gitRev: string | null;
+  fusionConfig: Record<string, unknown>;
+};
+
+/** SimFusionScenario + diagnóstico do parse + meta da sessão. Aditivo — quem espera
+ *  SimFusionScenario segue servido; `meta` é `null` em gravações antigas (sem linha "meta"). */
+export type LoadedFusionSession = SimFusionScenario & { diag: SessionDiag; meta: SessionMeta | null };
 
 const DEFAULT_TICK_MS = 500; // TICK_MS do useTagFusion de produção
 const DEFAULT_STATION_PX: Vec2 = { x: 0.5, y: 1.0 }; // mesmo default do frame.ts (estação junto da câmera)
@@ -85,7 +100,9 @@ const MAX_TICKS = 500_000; // teto duro da grade (nunca OOM por ts ruim/tickMs m
 type CalEvent = { t: "cal"; ts: number; cameraId: string; H: Matrix3 | null; station: Vec2 | null };
 type TrkEvent = { t: "trk"; ts: number; cameraId: string; tracks: DrawTrack[] };
 type BleEvent = { t: "ble"; ts: number; readings: RawReading[] };
-type SessionEvent = CalEvent | TrkEvent | BleEvent;
+/** Linha "meta" — sem cameraId (não participa do filtro por câmera nem da grade de ticks). */
+type MetaEvent = { t: "meta"; ts: number; gitRev: string | null; fusionConfig: Record<string, unknown> };
+type SessionEvent = CalEvent | TrkEvent | BleEvent | MetaEvent;
 
 // ——— Guards de parse (dado real vem sujo — validar tudo, nunca lançar) ———
 
@@ -169,6 +186,12 @@ function parseLine(line: string): SessionEvent | null {
     }
     return { t: "ble", ts: o.ts, readings };
   }
+  if (o.t === "meta") {
+    const fc = asRecord(o.fusionConfig);
+    if (!fc) return null; // sem fusionConfig a linha "meta" não serve pra nada — conta como suja
+    const gitRev = typeof o.gitRev === "string" ? o.gitRev : null;
+    return { t: "meta", ts: o.ts, gitRev, fusionConfig: fc };
+  }
   return null; // tipo desconhecido — contrato aditivo: eventos novos não derrubam o loader
 }
 
@@ -213,6 +236,13 @@ export function parseFusionSession(
   }
   const diag: SessionDiag = { linesTotal: lines.length, linesDropped, cameras };
 
+  // Meta da sessão (linha "meta" — ver header): o ÚLTIMO vence, mesmo padrão do "cal". Opcional —
+  // gravações antigas sem essa linha devolvem `meta: null` (não afeta nada mais no scenario).
+  let sessionMeta: SessionMeta | null = null;
+  for (const ev of parsed) {
+    if (ev.t === "meta") sessionMeta = { gitRev: ev.gitRev, fusionConfig: ev.fusionConfig };
+  }
+
   // Câmera do replay: a pedida, ou a primeira vista num "cal"/"trk" do arquivo.
   let cameraId = opts?.cameraId;
   if (cameraId === undefined) {
@@ -236,8 +266,9 @@ export function parseFusionSession(
     );
 
   // Só os eventos que a produção desta câmera veria; saneados por ts e ordenados (gravação pode
-  // intercalar e relógio pode vir sujo — ver cabeçalho).
-  let events = parsed.filter((ev) => ev.t === "ble" || ev.cameraId === cameraId);
+  // intercalar e relógio pode vir sujo — ver cabeçalho). "meta" fica de fora (já extraída acima,
+  // não tem cameraId e não alimenta a grade de ticks).
+  let events = parsed.filter((ev) => ev.t !== "meta" && (ev.t === "ble" || ev.cameraId === cameraId));
   if (events.length > 0) {
     const median = medianTs(events);
     const sane = events.filter((ev) => Math.abs(ev.ts - median) <= TS_OUTLIER_MS);
@@ -302,7 +333,7 @@ export function parseFusionSession(
     }
   }
 
-  return { ticks, H, stationPx, diag };
+  return { ticks, H, stationPx, diag, meta: sessionMeta };
 }
 
 /**
@@ -319,4 +350,138 @@ export function replayFusionSession(
   const scenario = parseFusionSession(lines, truth, opts);
   const { metrics } = replayFusion(scenario, cfg, opts?.warmupMs);
   return { metrics, scenario };
+}
+
+// ——— Definição conceitual: episódio-candidato a PSEUDO-LABEL (pedido do especialista científico,
+// 2026-07-10 — dev.md §6: "smoother como gerador de pseudo-labels"). ———
+//
+// GAP CONHECIDO (ver session-recorder.js, GAP (a)): a gravação de campo HOJE não inclui a decisão
+// do associador por tick — `TagTrackAssociator.assign()` roda no CLIENTE (`useTagFusion.ts`), não
+// no hub que grava o JSONL. Nenhuma sessão gravada hoje tem `AssignmentTick[]` para alimentar
+// `findPseudoLabelCandidates`. O que segue é a DEFINIÇÃO tipada e uma implementação de referência,
+// prontas para o dia em que a gravação de decisões for viabilizada (endpoint novo ou wiring
+// client-side — fase futura, fora de escopo aqui).
+
+/** Um tick de decisão do associador — o formato mínimo que `Assignment` (associate.ts) tem HOJE
+ *  (trackId/tag/confidence) mais o `ts` do tick. `margin`/`hadConflict` são OPCIONAIS: se/quando
+ *  `Assignment` ganhar esses campos (frente paralela), passam a fluir aqui sem quebrar nada — sem
+ *  eles, a guarda de margem/conflito do minerador (abaixo) simplesmente não filtra por eles. */
+export type AssignmentTick = {
+  ts: number;
+  trackId: number;
+  tag: string | null;
+  confidence: number;
+  /** Margem top-2 do par escolhido (quando o associador expõe — ver associate.ts). Ausente = não
+   *  disponível nesta gravação/versão; o minerador então não pode exigir margem mínima para esse tick. */
+  margin?: number;
+  /** true = havia concorrente disputando o mesmo track/tag naquele tick (quando exposto). */
+  hadConflict?: boolean;
+};
+
+/** Episódio-candidato a pseudo-label: um trecho contínuo, para o MESMO trackId, em que a MESMA tag
+ *  foi mantida com margem alta e sem conflito por tempo suficiente — "o sistema estava confiante e
+ *  por quê" (matéria-prima para treinar um smoother/estimador retroativo sem anotação manual extra).
+ *  NÃO é o rótulo em si — é o CANDIDATO; a decisão de promovê-lo a pseudo-label (threshold de
+ *  qualidade final, amostragem, deduplicação entre sessões) fica para quem consumir esta lista. */
+export type PseudoLabelCandidate = {
+  trackId: number;
+  tag: string;
+  startTs: number;
+  endTs: number;
+  durationMs: number;
+  /** Menor `margin` observado no episódio; `null` se `margin` nunca esteve presente na série
+   *  (gravação sem essa informação — ver GAP acima). */
+  minMarginInEpisode: number | null;
+};
+
+/** Ver docstring de `PseudoLabelCandidate`. Sustentação mínima e piso de margem alta por padrão —
+ *  ambos ajustáveis; um episódio termina (e é cortado em dois) no primeiro tick que muda de tag,
+ *  cai abaixo da margem exigida, ou reporta conflito — o que É, por construção, o único sinal de
+ *  id-switch/ambiguidade observável neste nível de dado (não há acesso ao estado interno do
+ *  tracker aqui, só à saída do associador por tick). */
+const DEFAULT_PL_MIN_DURATION_MS = 5000; // "N segundos" do pedido — piso conservador de sustentação
+const DEFAULT_PL_MIN_MARGIN = 0.15; // acima do minMargin padrão do associador (0.1) — folga extra p/ candidato
+
+export function findPseudoLabelCandidates(
+  assignments: readonly AssignmentTick[],
+  opts?: { minDurationMs?: number; minMargin?: number },
+): PseudoLabelCandidate[] {
+  const minDurationMs = opts?.minDurationMs ?? DEFAULT_PL_MIN_DURATION_MS;
+  const minMargin = opts?.minMargin ?? DEFAULT_PL_MIN_MARGIN;
+
+  // Agrupa por trackId e ordena por ts — cada grupo é a linha do tempo de UMA pessoa rastreada;
+  // um id-switch de verdade (o tracker troca o ID físico da pessoa) automaticamente vira DOIS
+  // grupos distintos aqui, então nunca estica um episódio através dele.
+  const byTrack = new Map<number, AssignmentTick[]>();
+  for (const a of assignments) {
+    let arr = byTrack.get(a.trackId);
+    if (!arr) {
+      arr = [];
+      byTrack.set(a.trackId, arr);
+    }
+    arr.push(a);
+  }
+
+  const out: PseudoLabelCandidate[] = [];
+  for (const [trackId, ticks] of byTrack) {
+    const sorted = [...ticks].sort((x, y) => x.ts - y.ts);
+
+    let runStart = -1;
+    let runTag: string | null = null;
+    let runHasMargin = false;
+    let runMinMargin: number | null = null;
+
+    const flush = (endIdx: number): void => {
+      if (runStart < 0 || runTag === null) return;
+      const start = sorted[runStart];
+      const end = sorted[endIdx];
+      const durationMs = end.ts - start.ts;
+      if (durationMs >= minDurationMs) {
+        out.push({
+          trackId,
+          tag: runTag,
+          startTs: start.ts,
+          endTs: end.ts,
+          durationMs,
+          minMarginInEpisode: runHasMargin ? runMinMargin : null,
+        });
+      }
+    };
+
+    for (let i = 0; i < sorted.length; i++) {
+      const t = sorted[i];
+      const marginOk = t.margin === undefined || t.margin >= minMargin;
+      const conflictOk = t.hadConflict !== true;
+      const qualifies = t.tag !== null && marginOk && conflictOk;
+      const sameTagAsRun = runStart >= 0 && t.tag === runTag;
+
+      if (qualifies && sameTagAsRun) {
+        if (t.margin !== undefined) {
+          runHasMargin = true;
+          runMinMargin = runMinMargin === null ? t.margin : Math.min(runMinMargin, t.margin);
+        }
+        continue;
+      }
+
+      // Tick não estica o episódio corrente (mudou de tag, caiu a margem, ou houve conflito):
+      // fecha o que estava aberto antes de decidir se este tick abre um novo.
+      if (runStart >= 0) flush(i - 1);
+
+      if (qualifies) {
+        runStart = i;
+        runTag = t.tag;
+        runHasMargin = t.margin !== undefined;
+        runMinMargin = t.margin ?? null;
+      } else {
+        runStart = -1;
+        runTag = null;
+        runHasMargin = false;
+        runMinMargin = null;
+      }
+    }
+    if (runStart >= 0) flush(sorted.length - 1);
+  }
+
+  out.sort((a, b) => a.trackId - b.trackId || a.startTs - b.startTs);
+  return out;
 }

@@ -69,7 +69,35 @@ export type TrackDist = {
   metric?: boolean;
 };
 export type FusionFrame = { ts: number; readings: TagReading[]; tracks: TrackDist[] };
-export type Assignment = { trackId: number; tag: string | null; confidence: number }; // tag=null → "não sei"
+export type Assignment = {
+  trackId: number;
+  tag: string | null; // tag=null → "não sei"
+  confidence: number;
+  /** ADITIVO (instrumentação p/ reliability diagram — pedido do especialista científico):
+   *  margem top-2 EFETIVA do par escolhido para esta pista — min(marginPista, marginTag), o
+   *  MESMO valor que a guarda de ambiguidade (`minMargin`) usa pra decidir falar/abster (não é
+   *  recalculado por fora; é a mesma matemática de assign() exposta). Dois casos sem par
+   *  escolhido (nenhum candidato alcançou minConfidence): `margin: 0` — não houve concorrência
+   *  a reportar, a abstenção é por FALTA de evidência, não por empate. Clampado para [0,1] só na
+   *  leitura do reliability diagram (identity-metrics.ts); aqui o valor bruto pode, em teoria,
+   *  sair ligeiramente negativo quando um fantasma da janela supera o par escolhido (guarda
+   *  desligada — minMargin:0 — deixa o par falar mesmo perdendo a concorrência; ver teste de
+   *  oclusão). */
+  margin?: number;
+  /** ADITIVO: true quando existiu ≥1 concorrente de verdade (score>0 no outro eixo pista OU tag,
+   *  incluindo fantasmas da janela) E a margem ficou abaixo de CONFLICT_MARGIN_THRESHOLD — ver a
+   *  constante abaixo. Limiar FIXO de instrumentação, independente do knob `minMargin` (o knob é
+   *  configurável por deploy; o contador de conflito precisa de uma régua estável pra comparar
+   *  cenários entre si). Sem par escolhido → false (não há vencedor pra disputar). */
+  hadConflict?: boolean;
+};
+
+/** Limiar FIXO (instrumentação, não é knob) pra `Assignment.hadConflict`: margem abaixo disto com
+ *  concorrente real presente conta como "disputa competitiva" pelo mesmo track vencedor. Escolhido
+ *  por ser 3× o default operacional de `minMargin` (0.1) — folga suficiente pra capturar "quase
+ *  empatou" mesmo quando a guarda está mais permissiva que o default. Não afeta score/confiança;
+ *  só rotula a instrumentação (reliability diagram / taxa de conflito em identity-metrics.ts). */
+const CONFLICT_MARGIN_THRESHOLD = 0.3;
 
 export type FusionConfig = {
   windowMs?: number; // janela de correlação
@@ -514,9 +542,13 @@ export class TagTrackAssociator {
     // Melhor concorrente FANTASMA por tag: pistas com amostras na janela mas fora do último
     // frame (flicker/oclusão). Só alimentam o scan da guarda — nunca a escolha 1-1 nem a saída
     // (e concorrem pelo guard pré-gate: veto não silencia concorrente, ver PairEvidence).
+    // Computado sempre que há `chosen` (não só com minMargin>0): a instrumentação de margin/
+    // hadConflict precisa dos concorrentes mesmo com a guarda desligada (minMargin:0) — o gate
+    // continua decidindo falar/abster igual antes (accepted abaixo não muda), só a MEDIÇÃO passou
+    // a existir também nesse caso.
     const currentSet = new Set(currentTracks);
     const ghostBestByTag = new Array<number>(tags.length).fill(0);
-    if (minMargin > 0 && chosen.length > 0) {
+    if (chosen.length > 0) {
       for (const [id, distSeries] of distByTrack) {
         if (currentSet.has(id)) continue;
         for (let j = 0; j < tags.length; j++) {
@@ -526,23 +558,32 @@ export class TagTrackAssociator {
       }
     }
 
-    // Guarda de ambiguidade top-2 (formulação documentada acima; concorrentes vêm da matriz de
-    // GUARDA). Máximo sobre conjunto vazio = 0 (sem concorrente algum, a margem é o próprio score).
+    // Diagnóstico por par ESCOLHIDO (antes da guarda de margem decidir aceitar/recusar): a MESMA
+    // matemática da guarda (margem top-2 nos dois eixos, concorrentes da matriz de GUARDA +
+    // fantasmas), exposta como instrumentação (Assignment.margin/hadConflict) — fonte única, sem
+    // recálculo paralelo. `margin` = min(marginPista, marginTag); a condição de aceite da guarda
+    // abaixo é EXATAMENTE `margin >= minMargin` (refatorado sem mudar o resultado).
+    const rowDiag = new Map<number, { margin: number; hadConflict: boolean }>();
+    for (const { i, j } of chosen) {
+      const s = score[i][j];
+      let bestOtherTag = 0;
+      for (let jj = 0; jj < tags.length; jj++) {
+        if (jj !== j && guard[i][jj] > bestOtherTag) bestOtherTag = guard[i][jj];
+      }
+      let bestOtherTrack = ghostBestByTag[j]; // fantasmas da janela também concorrem (fix)
+      for (let ii = 0; ii < currentTracks.length; ii++) {
+        if (ii !== i && guard[ii][j] > bestOtherTrack) bestOtherTrack = guard[ii][j];
+      }
+      const margin = Math.min(s - bestOtherTag, s - bestOtherTrack);
+      const bestOther = Math.max(bestOtherTag, bestOtherTrack);
+      rowDiag.set(i, { margin, hadConflict: bestOther > 0 && margin < CONFLICT_MARGIN_THRESHOLD });
+    }
+
+    // Guarda de ambiguidade top-2 (formulação documentada acima): o par só fala se a margem
+    // (já calculada em rowDiag) alcançar minMargin. Guarda desligada (minMargin<=0) → fala sempre
+    // que chosen escolheu (comportamento pré-instrumentação, intacto).
     const accepted =
-      minMargin <= 0
-        ? chosen
-        : chosen.filter(({ i, j }) => {
-            const s = score[i][j];
-            let bestOtherTag = 0;
-            for (let jj = 0; jj < tags.length; jj++) {
-              if (jj !== j && guard[i][jj] > bestOtherTag) bestOtherTag = guard[i][jj];
-            }
-            let bestOtherTrack = ghostBestByTag[j]; // fantasmas da janela também concorrem (fix)
-            for (let ii = 0; ii < currentTracks.length; ii++) {
-              if (ii !== i && guard[ii][j] > bestOtherTrack) bestOtherTrack = guard[ii][j];
-            }
-            return s - bestOtherTag >= minMargin && s - bestOtherTrack >= minMargin;
-          });
+      minMargin <= 0 ? chosen : chosen.filter(({ i }) => rowDiag.get(i)!.margin >= minMargin);
 
     const assigned = new Map<number, { tag: string; score: number }>();
     for (const { i, j } of accepted) {
@@ -552,9 +593,20 @@ export class TagTrackAssociator {
     // Uma Assignment por pista corrente, em ordem estável de trackId.
     return currentTracks.map((id, i) => {
       const a = assigned.get(id);
-      if (a !== undefined) return { trackId: id, tag: a.tag, confidence: a.score };
+      const diag = rowDiag.get(i);
+      if (a !== undefined) {
+        // diag sempre existe aqui: `a` só existe p/ i que veio de `accepted`, subconjunto de `chosen`.
+        return { trackId: id, tag: a.tag, confidence: a.score, margin: diag!.margin, hadConflict: diag!.hadConflict };
+      }
       // "não sei": reporta o melhor score que a pista alcançou (honesto — mostra o quão perto chegou).
-      return { trackId: id, tag: null, confidence: score[i].length > 0 ? Math.max(...score[i]) : 0 };
+      const confidence = score[i].length > 0 ? Math.max(...score[i]) : 0;
+      if (diag !== undefined) {
+        // chosen mas recusado pela guarda de margem: abstenção AMBÍGUA — margin real, hadConflict
+        // real (foi a concorrência que barrou a fala).
+        return { trackId: id, tag: null, confidence, margin: diag.margin, hadConflict: diag.hadConflict };
+      }
+      // nenhum candidato alcançou minConfidence: abstenção por FALTA de evidência, não por empate.
+      return { trackId: id, tag: null, confidence, margin: 0, hadConflict: false };
     });
   }
 
