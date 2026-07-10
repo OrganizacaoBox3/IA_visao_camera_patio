@@ -2,8 +2,8 @@
 
 Detecção de pessoas + tracking + contagem por linha + ocupação por zona rodando **no hub**,
 24/7, independente de espectador. O navegador segue exibindo vídeo/overlays; os INDICADORES
-passam a nascer aqui. Plano: `analises/plano-analise-server-side.md` · medições:
-`analises/spike-dfine-hub.md`.
+passam a nascer aqui. Plano: `docs/analises/plano-analise-server-side.md` · medições:
+`docs/analises/spike-dfine-hub.md`.
 
 ## Arquitetura
 
@@ -43,7 +43,7 @@ mesmas APIs, mesmos testes de paridade (mudanças de comportamento nascem LÁ).
 
 O **default de produção é o D-FINE-S obj2coco** (`ANALYSIS_MODEL=s`): no harness de acurácia
 (`eval/MODELS.md`) o recall de pessoa **média/pequena ~dobra** vs o N — exatamente o gargalo que
-travava a contagem de linha (`analises/acuracia-modelos.md §3`) — a **~2.4× o CPU**. Os três são a
+travava a contagem de linha (`docs/analises/acuracia-modelos.md §3`) — a **~2.4× o CPU**. Os três são a
 **mesma arquitetura D-FINE** (input `pixel_values` 640, saídas `logits[1,300,80]`+`pred_boxes[1,300,4]`,
 COCO 80) → **drop-in absoluto**: só troca o `.onnx`. Todos `onnx-community/*-ONNX`, **Apache-2.0**, fp32,
 `onnx/model.onnx`, baixados no boot com verificação de tamanho + sha256 (escrita atômica).
@@ -88,7 +88,7 @@ Zona com **`modo: "exclusao"`** no camcfg: a detecção de pessoa cujo **PÉ (bo
 `x+w/2`, `y+h`)** cai dentro dela (**mask-aware** se a zona tem máscara pintada) é **DESCARTADA no
 engine ANTES de ByteTrack/counter/zonas/ingest/emit** — não conta, não rastreia, não vira overlay.
 
-**Por quê:** o soak (`analises/acuracia-modelos.md §2`) mediu que **47–86% dos FP** vêm de poucos
+**Por quê:** o soak (`docs/analises/acuracia-modelos.md §2`) mediu que **47–86% dos FP** vêm de poucos
 **objetos fixos** (grade/placa, janela escura de van, estruturas à beira-lago) lidos como torso/cabeça
 no piso de confiança. Como o FP é **espacialmente preso** e a pessoa real **se move**, mascarar o
 hotspot mata o FP **sem custar recall**. Ancorar no **pé** (não no centro) casa a supressão com o chão
@@ -118,7 +118,7 @@ completa (decode+pré+infer) a 1920w. Recall medido na mesma cena: pessoas ≥0.
 nascimento de track) **5 → 22** em 95 frames (frames com ≥1 pessoa: 3 → 18; frame-a-frame o
 tiling ganhou em 18, empatou em 74, perdeu em 3). A 720w o efeito quase some (0 → 3): tile de
 fonte estreita não tem pixel novo — **panorâmica longRange pede fonte larga (Largura 1920 no
-cadastro, como recomenda `docs/manuais/manual-incluir-cameras.md`)**.
+cadastro, como recomenda `docs/produto/manuais/manual-incluir-cameras.md`)**.
 
 **Recomendação:** use SÓ em câmeras panorâmicas/campo aberto com gente distante; o fps
 continua `ANALYSIS_FPS` (1). Dimensionamento: câmera longRange custa ~4 câmeras comuns —

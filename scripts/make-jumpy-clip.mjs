@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// scripts/make-jumpy-clip.mjs — BANCADA VISUAL do fix-rastro (analises/
+// scripts/make-jumpy-clip.mjs — BANCADA VISUAL do fix-rastro (docs/analises/
 // fix-rastro-tracking.md): gera, a partir de um clipe de CFTV, um clipe com
 // SALTOS DE STREAM determinísticos — remove `--cut` s de conteúdo a cada
 // `--window` s, no offset sorteado por PRNG com SEED FIXA (mesmo seed = mesmos
@@ -16,7 +16,7 @@
 // (codec/duração esperada/frames) — exit 0 só com clipe válido.
 //
 // Publicação na bancada (MediaMTX na porta 8556 — convenção de
-// analises/plano-teste-camera-real.md, a 8554 é do go2rtc). No mediamtx-bench.yml:
+// docs/analises/plano-teste-camera-real.md, a 8554 é do go2rtc). No mediamtx-bench.yml:
 //   paths:
 //     bench-jumpy:
 //       runOnInit: ffmpeg -re -stream_loop -1 -i C:\Users\crist\bench-visao\clipe-jumpy.mp4 -c copy -f rtsp rtsp://localhost:8556/bench-jumpy
@@ -119,7 +119,7 @@ if (problems.length) die(`clipe gerado NÃO validou: ${problems.join("; ")}`);
 console.log(`[make-jumpy-clip] out: ${OUT}`);
 console.log(`[make-jumpy-clip] VALIDADO — ${outDur.toFixed(1)}s (esperado ~${expectedDur.toFixed(1)}s), ${frames} frames, ${outVideo.codec_name} ${outVideo.width}x${outVideo.height}`);
 console.log(`
-Publicar na bancada (MediaMTX na 8556 — analises/plano-teste-camera-real.md):
+Publicar na bancada (MediaMTX na 8556 — docs/analises/plano-teste-camera-real.md):
   paths:
     bench-jumpy:
       runOnInit: ffmpeg -re -stream_loop -1 -i ${OUT} -c copy -f rtsp rtsp://localhost:8556/bench-jumpy

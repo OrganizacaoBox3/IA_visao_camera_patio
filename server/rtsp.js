@@ -102,7 +102,7 @@ function setAnalysisViewer(fn) {
  * quality no cadastro). Estes valores são a RESOLUÇÃO/COMPRESSÃO da única imagem que o motor de
  * análise vê nas câmeras RTSP — eixo nº 1 de precisão de pessoa deste domínio. Trade-off dos
  * defaults: gargalo é CPU/main-thread, não banda (LAN) → +decode/+banda aceitável (evidência:
- * analises/plano-performance-imagem.md). A qualidade final depende do STREAM da câmera IP —
+ * docs/analises/plano-performance-imagem.md). A qualidade final depende do STREAM da câmera IP —
  * prefira um sub-stream de boa qualidade na URL; o ffmpeg só reamostra/re-encoda o que chega.
  */
 function defaultCfg() {

@@ -6,7 +6,7 @@ name: CI
 #   e2e    — fluxo real no navegador (hub isolado + vite dev + Chromium headless com webcam fake)
 #   eval   — acurácia: gate de detecção sobre o modelo ONNX real + contagem fim-a-fim sintética
 #
-# SEM paths-ignore de propósito: analises/*.md e ADRs acompanham código no mesmo PR (mudar uma
+# SEM paths-ignore de propósito: docs/analises/*.md e ADRs acompanham código no mesmo PR (mudar uma
 # invariante muda comportamento esperado), e um filtro por path cria o falso-verde do commit
 # "só docs" que carrega um thresholds.json junto. Rodar tudo sempre é barato; falso-verde não é.
 

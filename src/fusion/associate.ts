@@ -1,6 +1,6 @@
 // Fusão PURA tag BLE ↔ pessoa rastreada (caminho C, 1 estação, sem IMU).
 //
-// FÍSICA (medida no spike — analises/tags-bluetooth/01-spike-resultados.md):
+// FÍSICA (medida no spike — docs/analises/tags-bluetooth/01-spike-resultados.md):
 // 1 estação + RSSI-only NÃO separa pessoas próximas (SNR≈1). O ÚNICO sinal que funciona sem IMU e
 // com 1 antena é CORRELACIONAR, numa janela de tempo, a série de RSSI de cada tag com a série de
 // DISTÂNCIA-à-estação de cada pessoa que a câmera rastreia (via homografia). Quem se move diferente

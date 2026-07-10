@@ -12,7 +12,7 @@
 // fill, sem aleatoriedade). Não entra em `npm run verify` — é gate manual / CI
 // opcional, rode ANTES de trocar modelo/threshold/NMS. Decisão de DEFAULT exige
 // também o full-set (run-eval.mjs): o fixture pequeno não decide sozinho
-// (evidência: analises/perf-input-size-dfine.md).
+// (evidência: docs/analises/perf-input-size-dfine.md).
 //
 // Uso:
 //   node eval/gate.mjs               → mede e compara (gate)

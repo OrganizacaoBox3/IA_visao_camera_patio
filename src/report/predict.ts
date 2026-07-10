@@ -2,7 +2,7 @@
 // Função PURA e read-only — não faz IO nem toca em React. Consumida pela Onda 2
 // (CameraWorkspace) ao lado do slider de sensibilidade, para PREVER o volume de alertas
 // que uma configuração geraria ANTES de aplicá-la (padrão "preview de impacto" do benchmark
-// VMS/Cognex — analises/benchmark-interfaces/00-sintese-recomendacoes.md, Onda A #3).
+// VMS/Cognex — docs/analises/benchmark-interfaces/00-sintese-recomendacoes.md, Onda A #3).
 //
 // PREMISSAS (é uma estimativa GROSSEIRA p/ orientar, não um número exato — documentadas):
 //  1. O histórico de alertas de uma área foi gerado com a sensibilidade PADRÃO (5), cujo

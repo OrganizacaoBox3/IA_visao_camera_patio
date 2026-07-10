@@ -13,7 +13,7 @@ import {
   type BtTag,
 } from "../api";
 
-// Tela CRUA das tags BLE (Fase 1 do plano — analises/tags-bluetooth/00-avaliacao-e-plano.md §5.1):
+// Tela CRUA das tags BLE (Fase 1 do plano — docs/analises/tags-bluetooth/00-avaliacao-e-plano.md §5.1):
 // mostra AO VIVO cada tag vista pela estação, ordenada por sinal (mais forte primeiro), marcando
 // como "sumindo" as que pararam de ser reportadas. Prova a ponta-a-ponta do ingest BLE.
 //

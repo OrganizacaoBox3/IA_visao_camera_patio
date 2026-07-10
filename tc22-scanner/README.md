@@ -2,7 +2,7 @@
 
 App Android mínimo que roda no coletor **Zebra TC22** (Android 14): varre anúncios BLE e mostra/loga as
 tags do projeto (família `48:87:2D` / nome `CP*`). É a **antena real** da fusão tag↔câmera
-(`analises/tags-bluetooth/`). Passo atual: **provar que o coletor acha todas as tags** (logca `BTSCAN`).
+(`docs/analises/tags-bluetooth/`). Passo atual: **provar que o coletor acha todas as tags** (logca `BTSCAN`).
 Responsabilidade única: varrer + exibir. (Reporte HTTP ao hub = próximo passo.)
 
 ## Build + deploy (sem gradle — offline, evita o conflito gradle 7.5.1 × JDK 21)

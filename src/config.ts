@@ -34,7 +34,7 @@ export const APP_CONFIG = {
     // conservador: baixar mataria recall de pares próximos; subir deixa passar a duplicata parcial.
     containmentThr: 0.7,
 
-    // PERFIL "LONGO ALCANCE" / PANORÂMICA (P0 do plano `analises/plano-deteccao-objetos.md`).
+    // PERFIL "LONGO ALCANCE" / PANORÂMICA (P0 do plano `docs/analises/plano-deteccao-objetos.md`).
     // OPT-IN POR CÂMERA: são só os PARÂMETROS do perfil; nada aqui muda o comportamento default.
     // Quem consome (frentes B/C: cameraConfig/CameraWorkspace/processors) liga o perfil por câmera
     // e repassa estes valores a `detectFrame(..., opts)` (tiling na grade + tile maior + limiares baixos)

@@ -149,7 +149,7 @@ function attributeZone(target, zones) {
   return best ? (best.label ?? null) : null;
 }
 
-// ── zona de exclusão (calibração — analises/acuracia-modelos.md Medida A) ────
+// ── zona de exclusão (calibração — docs/analises/acuracia-modelos.md Medida A) ────
 /**
  * A pessoa está numa zona de EXCLUSÃO? Critério = o PÉ (bottom-center do bbox: cx,
  * y+h) dentro do retângulo de ALGUMA zona, respeitando a MÁSCARA quando pintada.

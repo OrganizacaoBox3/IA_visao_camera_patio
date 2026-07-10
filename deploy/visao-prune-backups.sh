@@ -12,7 +12,7 @@
 #   • O `deploy` não tem permissão de editar este arquivo (dono = root); só de EXECUTÁ-LO via sudo.
 #   • Mantém sempre os KEEP mais recentes → há SEMPRE ≥1 backup de rollback, mesmo mid-deploy.
 #
-# INSTALAÇÃO (1× pelo root — ver docs/ci-cd-github-actions.md):
+# INSTALAÇÃO (1× pelo root — ver docs/produto/ci-cd-github-actions.md):
 #   sudo cp deploy/visao-prune-backups.sh /usr/local/sbin/visao-prune-backups
 #   sudo chown root:root /usr/local/sbin/visao-prune-backups && sudo chmod 755 /usr/local/sbin/visao-prune-backups
 #   # + a linha de sudoers:  deploy ALL=(root) NOPASSWD: /usr/local/sbin/visao-prune-backups

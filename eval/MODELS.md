@@ -45,7 +45,7 @@ Custo relativo ao N (mesma máquina, back-to-back): **S = 2.4× CPU** (2.6× wal
   @0.50: **N=0 → S=7 → M=6** (em 150 cenas). Isso **quebra o invariante calibrado
   `fp_empties@0.50 = 0`** do `eval/thresholds.json` → **exige recalibrar o gate**
   (`node eval/gate.mjs --calibrate`) e casa com a Medida A (máscara de exclusão) do
-  `analises/acuracia-modelos.md`, já que esses FP tendem a ser objeto fixo no piso de score.
+  `docs/analises/acuracia-modelos.md`, já que esses FP tendem a ser objeto fixo no piso de score.
 
 ## Veredito
 

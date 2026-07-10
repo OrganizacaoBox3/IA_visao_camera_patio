@@ -1,4 +1,4 @@
-// Contrato do FALLBACK JSON do histórico (sem Postgres) — auditoria analises/saude/01-*.
+// Contrato do FALLBACK JSON do histórico (sem Postgres) — auditoria docs/analises/saude/01-*.
 // Barra regressão SILENCIOSA do caminho que roda no homolog/dev quando o PG cai: ingest →
 // buckets/events round-trip, na MESMA forma camelCase dos SELECTs (o front não distingue PG de
 // JSON). Antes só flushIntervalMs (puro) era testado; o round-trip do store não tinha sensor.

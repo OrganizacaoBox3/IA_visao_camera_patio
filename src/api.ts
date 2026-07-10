@@ -301,7 +301,7 @@ export const saveCamConfig = (cameraId: string, config: CameraCfg) =>
 
 // ── CALIBRAÇÃO de homografia (px normalizado 0..1 ↔ metros) — COMPARTILHADA, por câmera ──
 // Mede distância real no chão em metros e projeta o pé da pessoa no plano (base da fusão de tag
-// BLE — analises/tags-bluetooth/00-avaliacao-e-plano.md §3). H é computada no cliente por
+// BLE — docs/analises/tags-bluetooth/00-avaliacao-e-plano.md §3). H é computada no cliente por
 // src/vision/homography.ts; o hub valida (≥4 pontos, matriz 3×3) e persiste. SÓ números (LGPD).
 import type { Matrix3, Vec2 } from "./vision/homography";
 export type { Matrix3, Vec2 } from "./vision/homography";
@@ -321,7 +321,7 @@ export const getCalibration = (cameraId: string) =>
 export const saveCalibration = (cameraId: string, calibration: CameraCalibration) =>
   apiPut<CameraCalibration>(`/api/calibration/${encodeURIComponent(cameraId)}`, { calibration });
 
-// ── Leituras BLE ao vivo (identidade aumentada por tag — analises/tags-bluetooth/00...) ──────
+// ── Leituras BLE ao vivo (identidade aumentada por tag — docs/analises/tags-bluetooth/00...) ──────
 // A estação varre BLE e reporta ao hub; o hub enriquece com o rótulo cadastrado e RELAYA aos
 // painéis via socket `bt-readings`. Este GET é só a SEMENTE (snapshot do que dá pra ver agora)
 // para um painel que abre depois — o vivo vem pelo socket. SÓ metadados/RSSI (LGPD): efêmero,

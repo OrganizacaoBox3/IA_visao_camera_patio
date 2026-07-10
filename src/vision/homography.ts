@@ -2,7 +2,7 @@
 // Converte um ponto do PÉ da pessoa (pixel normalizado 0..1) para uma posição no CHÃO em METROS
 // e vice-versa, e mede distâncias reais entre dois pontos da imagem. Base do "medir distância na
 // câmera" e da fusão de identidade por tag BLE (projetar o pé no chão) — ver
-// analises/tags-bluetooth/00-avaliacao-e-plano.md §3.
+// docs/analises/tags-bluetooth/00-avaliacao-e-plano.md §3.
 //
 // HOME desta lógica: aqui em src/vision/ (vizinha de bytetrack/counting/luma — CV pura do cliente).
 // O FRONT é quem computa H (na calibração) e mede (readout); o hub apenas PERSISTE os pontos + H

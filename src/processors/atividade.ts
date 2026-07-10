@@ -70,7 +70,7 @@ export type ExclusionZone = {
   contains?: (nx: number, ny: number) => boolean;
 };
 
-// Filtro de EXCLUSÃO na ORIGEM (calibração — analises/acuracia-modelos.md Medida A). Remove as
+// Filtro de EXCLUSÃO na ORIGEM (calibração — docs/analises/acuracia-modelos.md Medida A). Remove as
 // detecções de PESSOA cujo PÉ (bottom-center do bbox, em PIXELS → normalizado por frameW/H) cai
 // numa zona modo "exclusao" (mask-aware via z.contains). Aplicado UMA vez no CameraWorkspace ANTES
 // do tracker E do cálculo de ocupação, para que presença/counter/overlay E o `occupied`

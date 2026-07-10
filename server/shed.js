@@ -17,7 +17,7 @@ const SHED_IDLE_MS = Number(process.env.SHED_IDLE_MS ?? 60_000);
 const SHED_SWEEP_MS = Number(process.env.SHED_SWEEP_MS ?? 5_000);
 // Piso ABSOLUTO do modo vigília (fps). 2 é o mínimo seguro provado na bancada: a 2fps de
 // ingest a análise @1fps degradou 0,97→0,78fps — o piso 2× a cadência dá margem; abaixo
-// disso a rodada + inferência perdem janelas (analises/perf-round3/frente1-ingest-relay.md §5).
+// disso a rodada + inferência perdem janelas (docs/analises/perf-round3/frente1-ingest-relay.md §5).
 const VIGIL_MIN_FPS = Math.max(1, Number(process.env.SHED_VIGIL_MIN_FPS ?? 2));
 // INVARIANTE: SHED_WEBCAM_FPS ≥ 1 — o sampler do motor de análise é @1fps (ADR-009); abaixo
 // disso a análise de webcam rebaixada degradaria sem nenhum aviso.

@@ -143,7 +143,7 @@ function generateYaml(sources) {
   if (ingest.size) {
     // Listener de ingest: aceita publish RTMP nos canais VAZIOS abaixo. Só liga quando há câmera
     // rtmp-in. Sem gravação (LGPD). Publish do go2rtc é SEM auth → exponha a porta só por firewall,
-    // restrita à origem das câmeras (ver analises/rtmp-ingest/deploy-homolog-rtmp.md).
+    // restrita à origem das câmeras (ver docs/analises/rtmp-ingest/deploy-homolog-rtmp.md).
     lines.push("rtmp:");
     lines.push(`  listen: ${q(`:${RTMP_PORT}`)}`);
   }

@@ -16,7 +16,7 @@ export type CameraCfg = {
   pontoLeitura: string;
   capture: CapturePreset;
   selectedClasses: string[];
-  // Perfil "Longo alcance / Panorâmica" (P0/P1 de `analises/plano-deteccao-objetos.md`). OPT-IN por
+  // Perfil "Longo alcance / Panorâmica" (P0/P1 de `docs/analises/plano-deteccao-objetos.md`). OPT-IN por
   // câmera; default false = comportamento atual. Ligado → o CameraWorkspace aplica tiling na grade +
   // tile maior + limiares menores (detection.longRange) e movimento/pessoas mais sensíveis.
   longRange: boolean;

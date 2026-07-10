@@ -12,8 +12,8 @@ o **navegador é espelho** (vídeo por **WebRTC** quando o gateway **go2rtc** es
 especializados** no cliente (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). O **hub Node** (`server/`)
 segue relé de frames via Socket.IO + persistência (Postgres com fallback JSON) + notificações
 (WhatsApp/Baileys, Andon). Nós de câmera (`/camera`, webcam) e RTSP (ffmpeg → JPEG) viram câmeras comuns
-na central. Arquitetura detalhada: `docs-regenerada/`. Decisões: `analises/decisoes/` (ADRs). Histórico
-de implementação: `analises/implementacao-changelog.md`.
+na central. Arquitetura detalhada: `docs/arquitetura/`. Decisões: `docs/analises/decisoes/` (ADRs). Histórico
+de implementação: `docs/analises/implementacao-changelog.md`.
 
 ## 2. Princípios inegociáveis (atemporais)
 
@@ -53,7 +53,7 @@ de implementação: `analises/implementacao-changelog.md`.
 - **Feature multi-arquivo:** `spec` (o quê + critérios de aceite em **Given/When/Then** + **fora de escopo**) →
   `plan` (como + mapa requisito→implementação + riscos) → `tasks` (`[S]`/`[P]`) → implement → **validate**. A spec é a fonte da verdade.
 - **Paralelização (multi-agente):** **paralelize execução, serialize revisão.** Particione por **propriedade exclusiva de arquivo** (sem git/worktree, edições concorrentes no mesmo arquivo se sobrescrevem); contratos entre frentes paralelas são explicitados antes; valide o estado combinado ao fim de cada onda.
-- **Decisão arquitetural não-óbvia → ADR curto** em `analises/decisoes/` (Contexto→Decisão→Consequências).
+- **Decisão arquitetural não-óbvia → ADR curto** em `docs/analises/decisoes/` (Contexto→Decisão→Consequências).
 - **Anti-overengineering:** sem arquitetura especulativa, sem DRY dogmático, sem processo pesado para mudança leve. Filtro Signal×Noise: se não aumenta capacidade real, não reduz carga e não move KPI, é ruído.
 
 ## 6. Verificação (o motor — onde mais investimos)
@@ -63,7 +63,7 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 - **`npm run verify` = `lint` (ESLint) + `typecheck` (`tsc --noEmit`) + `build` (Vite) + `test` (Vitest) + `audit` (`npm audit`).** Gate local via **pre-push hook** (`.githooks/pre-push`, `core.hooksPath`) + CI (`.github/workflows/ci.yml`). **Vermelho não entra.** Para mudança que toca o front/fluxo, rode também o e2e: `npx playwright test`.
 - **Critérios de aceite viram teste** (ao menos caminhos críticos/invariantes). "Validado manual" é ponto de partida, não chegada. Regressão corrigida → vira teste (ex.: Select-em-Dialog no `e2e/`). Lógicas puras com unit test em Vitest (`*.test.ts`/`*.test.js` ao lado do código).
 - **Sensores de acurácia no gate (CI):** `eval/` (detecção — `gate.mjs`, fixture COCO estratificado) e `eval/counting.mjs` (contagem fim-a-fim) rodam no CI e barram regressão de ML/heurística — toda mudança de knob de `precision.js` passa por eles (fonte única de config espelhada no eval).
-- **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `analises/saude/`.*
+- **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `docs/analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `docs/analises/saude/`.*
 
 ## 7. Definition of Done
 
@@ -84,10 +84,10 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 | Onde                 | O quê                                                                                                               |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `../agentes/`        | Doutrina completa: manifesto, práticas, política de IA, pesquisa de autonomia, glossário                            |
-| `docs-regenerada/`   | Documentação técnica da arquitetura (gerada do código)                                                              |
-| `analises/decisoes/` | ADRs (decisões com Contexto→Decisão→Consequências)                                                                  |
-| `analises/`          | Planos, benchmarks de UI, changelog de implementação                                                                |
-| `docs/`              | Backlog/planos originais do produto (preservados)                                                                   |
+| `docs/arquitetura/`   | Documentação técnica da arquitetura (gerada do código)                                                              |
+| `docs/analises/decisoes/` | ADRs (decisões com Contexto→Decisão→Consequências)                                                                  |
+| `docs/analises/`          | Planos, benchmarks de UI, changelog de implementação                                                                |
+| `docs/produto/`              | Backlog/planos originais do produto (preservados)                                                                   |
 | `CLAUDE.md` (este)   | Steering: como desenvolvemos aqui. Atualizar quando uma regra mudar (corrigiu o agente 2× no mesmo fato → escreva). |
 
 > **Atualização:** este guia é vivo. Mudou uma invariante/contrato? Atualize aqui **no mesmo PR**. Em conflito entre este guia e o código, este guia decide (ou é corrigido explicitamente).

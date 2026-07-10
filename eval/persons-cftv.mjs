@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // eval/persons-cftv.mjs — SENSOR de reconhecimento de pessoas em CFTV com GROUND-TRUTH.
 //
-// Mede os 2 sintomas do teste real (analises/reconhecimento-pessoas/00-diagnostico-atual.md)
+// Mede os 2 sintomas do teste real (docs/analises/reconhecimento-pessoas/00-diagnostico-atual.md)
 // contra rótulo à mão, no pipeline REAL (worker.js + bytetrack.js — via lib.mjs, sem reimplementar):
 //   • "perde pessoa andando"  → recall (detector E emitido) + ID-SWITCHES
 //   • "inventa pessoa"         → precisão / FP

@@ -317,7 +317,7 @@ function tick() {
 // Thumbnail de luma single-channel (0..255, length MOTION_W*MOTION_H) a partir do JPEG.
 // sharp faz shrink-on-load (decodifica já em escala reduzida via DCT). CUSTO MEDIDO:
 // 8,28ms de CPU por decode (26ms wall sob contenção) — NÃO é sub-ms como se assumia
-// (analises/perf-round3/frente3-hub-hotloops.md §4d). Trade-off que se paga: ~8ms p/
+// (docs/analises/perf-round3/frente3-hub-hotloops.md §4d). Trade-off que se paga: ~8ms p/
 // economizar uma inferência de centenas de ms (1 pulo do gate a cada ~50 decodes já
 // paga); roda no pool de threads do libvips, sem bloquear o event loop. Barateá-lo
 // (shrink mais agressivo/kernel nearest) só vale investigar com ≥8 câmeras.

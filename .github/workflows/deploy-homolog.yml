@@ -1,7 +1,7 @@
 name: Deploy Homolog
 
 # CD do HOMOLOG (VPS Ubuntu / DigitalOcean) — automatiza o runbook manual
-# docs/deploy-atualizacao-2026-07.md. Setup completo: docs/ci-cd-github-actions.md.
+# docs/produto/deploy-atualizacao-2026-07.md. Setup completo: docs/produto/ci-cd-github-actions.md.
 #
 # Disparo MANUAL (workflow_dispatch) — humano no loop, NUNCA auto-on-push.
 # CLAUDE.md §8: gate determinístico antes de ação irreversível = teste-verde OU aprovação
@@ -233,7 +233,7 @@ jobs:
 
           echo "== [1/7] pré-checagens (o CD atualiza; NÃO faz o setup inicial) =="
           test -f "$TAR" || { echo "ERRO: release não encontrado em $TAR"; exit 1; }
-          test -d "$APP" || { echo "ERRO: $APP não existe — rode o setup inicial (docs/deploy-digitalocean.md)"; exit 1; }
+          test -d "$APP" || { echo "ERRO: $APP não existe — rode o setup inicial (docs/produto/deploy-digitalocean.md)"; exit 1; }
           $SUDO systemctl cat "$SERVICE" >/dev/null || { echo "ERRO: unit $SERVICE não instalada"; exit 1; }
           # ESPAÇO EM DISCO, antes de tocar qualquer coisa (aprendizado do deploy #4:
           # "No space left on device" no MEIO do cp -a do backup, VPS compartilhada a 100%).
@@ -336,7 +336,7 @@ jobs:
           echo "=================================================================="
           echo "HEALTH FALHOU (http=$HTTP_OK, svc=$SVC_OK) — deploy marcado VERMELHO."
           echo "SEM rollback automático (decisão deliberada): o backup está intacto."
-          echo "Para reverter (runbook docs/deploy-atualizacao-2026-07.md §9), no servidor:"
+          echo "Para reverter (runbook docs/produto/deploy-atualizacao-2026-07.md §9), no servidor:"
           echo ""
           echo "  sudo systemctl stop $SERVICE"
           echo "  sudo rm -rf $APP"

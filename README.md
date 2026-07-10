@@ -53,8 +53,8 @@ Ajustes (env): `RTSP_FPS` (8), `RTSP_WIDTH` (480), `RTSP_QUALITY` (7, menor = me
 
 ## Privacidade (LGPD by design)
 
-Sem upload persistente, sem reconhecimento facial, sem identificação individual. Pessoas recebem **IDs efêmeros** ("Pessoa N") que somem ao sair e resetam por sessão. Veja `docs/avaliacao-reconhecimento-presenca.md`.
+Sem upload persistente, sem reconhecimento facial, sem identificação individual. Pessoas recebem **IDs efêmeros** ("Pessoa N") que somem ao sair e resetam por sessão. Veja `docs/produto/avaliacao-reconhecimento-presenca.md`.
 
 ## Docs
 
-`docs/PLANO-MVP.md` · `docs/avaliacao-reconhecimento-presenca.md`.
+`docs/produto/PLANO-MVP.md` · `docs/produto/avaliacao-reconhecimento-presenca.md`.

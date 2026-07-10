@@ -22,7 +22,7 @@
                              que --state-critical-bg (#2a1113); manteve o hex
                              original p/ não mudar a cor renderizada           */
   --danger-bg-hover: #4a1a1e; /* hover do anterior                                  */
-  /* ── Tipografia — 7 papéis (padrão da casa, analises/plano-padronizacao-visual.md).
+  /* ── Tipografia — 7 papéis (padrão da casa, docs/analises/plano-padronizacao-visual.md).
      Espelho no @theme do tailwind.css → utilities text-micro … text-kpi.
      text-[Npx] é proibido em código de página. */
   --fs-micro: 10px; /* legenda técnica (eixos/unidades; mono se numérico) */
@@ -88,7 +88,7 @@
 /* ════════════════════════════════════════════════════════════════════════
    TOKENS SEMÂNTICOS DE ESTADO — "going gray" (Onda A · fundação de design)
    ────────────────────────────────────────────────────────────────────────
-   Princípio (analises/benchmark-interfaces/00-sintese-recomendacoes.md):
+   Princípio (docs/analises/benchmark-interfaces/00-sintese-recomendacoes.md):
    "cor é informação, não decoração". Base NEUTRA/cinza por padrão; saturação
    reservada para a ANORMALIDADE que exige ação. Estes tokens são o CONTRATO
    estável consumido pela Onda 2 (CameraWorkspace.tsx, DashboardPage.tsx).

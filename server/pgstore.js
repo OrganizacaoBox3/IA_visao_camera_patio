@@ -70,7 +70,7 @@ function warnPgDown(e) {
 
 // ── Flush do fallback JSON: write-behind assíncrono + intervalo adaptativo ───
 // Custo MEDIDO do flush completo (stringify+write+rename do histórico INTEIRO), perf round 3,
-// frente 3, achado h (analises/perf-round3/frente3-hub-hotloops.md):
+// frente 3, achado h (docs/analises/perf-round3/frente3-hub-hotloops.md):
 //   29 ms @1k · 78 ms @10k · 566 ms @50k eventos — e antes era tudo SÍNCRONO a cada ≤2s.
 // Duas defesas: (a) write+rename saem do event loop via fs.promises, com no máximo 1 write em
 // voo (o stringify continua síncrono no loop — amortizado por b); (b) o intervalo entre flushes

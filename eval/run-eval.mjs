@@ -2,7 +2,7 @@
 // eval/run-eval.mjs — harness FULL-SET de acurácia: mede o pipeline REAL de
 // produção sobre o dataset COCO completo (300 imagens). É a régua que decide
 // DEFAULT de modelo/threshold — o fixture do gate NÃO decide sozinho
-// (evidência: analises/perf-input-size-dfine.md).
+// (evidência: docs/analises/perf-input-size-dfine.md).
 //
 // Como mede: fork do worker de produção via eval/lib.mjs (decode sharp →
 // squash 640 → D-FINE ONNX/CPU → score≥0.25 → NMS; modo tiling 2×2 overlap 0.1

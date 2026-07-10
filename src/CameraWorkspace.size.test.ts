@@ -1,7 +1,7 @@
 // CameraWorkspace.size.test.ts — RATCHET anti-reengorda do god-component.
 //
 // POR QUÊ: o retrofit-2 declarou o teto ≤1850, mas o arquivo reengordou 1822→1889 SEM
-// nenhum sensor que barrasse (auditoria analises/saude/01-auditoria-doutrina-2026-07.md).
+// nenhum sensor que barrasse (auditoria docs/analises/saude/01-auditoria-doutrina-2026-07.md).
 // A meta virou TEXTO, não gate. Este teste é o BACKSTOP: crescer vira uma DECISÃO
 // consciente (o teste fica vermelho; subir o teto exige justificativa + nota de residual
 // no PR), não uma deriva silenciosa.

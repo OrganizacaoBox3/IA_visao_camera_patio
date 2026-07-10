@@ -13,7 +13,7 @@
 // baixo (2ª passada), sobrevivência a detecção intermitente (TTL), histerese de
 // 2 rodadas, filtro de micro-jitter (minMove) e teleporte (id novo).
 //
-// SENSORES DO FIX-RASTRO (analises/fix-rastro-tracking.md) — o CONTRATO do
+// SENSORES DO FIX-RASTRO (docs/analises/fix-rastro-tracking.md) — o CONTRATO do
 // stream que SALTA, medido no PAYLOAD EMITIDO (o que o front desenha):
 //   • salto moderado (gap ≤2.5s, deslocamento ≈ vx·dt) → MESMO id, travessia conta;
 //   • salto extremo → id novo é OK, mas NUNCA >1 track emitido p/ 1 pessoa;
@@ -24,7 +24,7 @@
 //
 // O que NÃO mede (fronteira honesta): o recall do DETECTOR (sensor: gate.mjs/
 // run-eval.mjs) e travessias em vídeo real (replay de campo — extensão prevista
-// em analises/acuracia-modelos.md §3/Onda 2; bancada VISUAL do salto:
+// em docs/analises/acuracia-modelos.md §3/Onda 2; bancada VISUAL do salto:
 // scripts/make-jumpy-clip.mjs).
 //
 // Knobs: DERIVADOS de server/analysis/precision.js (fonte ÚNICA — o MESMO painel
@@ -47,7 +47,7 @@ const { PRECISION, trackTtlMs } = require(path.join(ROOT, "server", "analysis", 
 // ── Knobs: fonte ÚNICA = PRECISION (o MESMO que engine.js createState injeta) ─
 // Antes eram literais espelhados à mão e OMITIAM reassoc/LOST — o sensor só
 // COINCIDIA com produção pelos defaults internos do bytetrack.js (paridade frágil).
-// Agora deriva do painel: mudou o knob lá → o sensor segue. (analises/saude/01-*.)
+// Agora deriva do painel: mudou o knob lá → o sensor segue. (docs/analises/saude/01-*.)
 const ROUND_MS = 500; // câmera COM tripwire roda a ANALYSIS_FPS_LINE=2 (recall×cadência) — knob de CUSTO, local
 const KNOBS = {
   roundMs: ROUND_MS,
@@ -356,7 +356,7 @@ if (failed) {
     `       Mudou knob/lógica de tracking ou contagem? O diff acima diz QUAL mecanismo quebrou.`,
   );
   console.error(
-    `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver analises/fix-rastro-tracking.md.\n`,
+    `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver docs/analises/fix-rastro-tracking.md.\n`,
   );
   process.exit(1);
 }

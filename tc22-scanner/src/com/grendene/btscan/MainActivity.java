@@ -57,7 +57,7 @@ import org.json.JSONObject;
 
 /**
  * Estação BLE do TC22 — varre as tags (família Grendene) e REPORTA ao hub por HTTP. É a "antena real"
- * da identidade aumentada (analises/tags-bluetooth/). Responsabilidade única: varrer + reportar + exibir vivo.
+ * da identidade aumentada (docs/analises/tags-bluetooth/). Responsabilidade única: varrer + reportar + exibir vivo.
  * Loga em Logcat ("BTSCAN") p/ diagnóstico. Sem `+` em runtime (Android não tem StringConcatFactory) e sem lambda.
  *
  * Robustez (queixa do dono): recupera de BT off→on, de permissão negada, de scan que morre (watchdog),

@@ -1,5 +1,5 @@
 // Fonte ÚNICA do vocabulário de ALARME no front: o contrato de evento (espelha 1:1 o backend
-// B1, §1 de `analises/contrato-eventos-alarme.md`) e a sua apresentação (rótulos pt-BR + token
+// B1, §1 de `docs/analises/contrato-eventos-alarme.md`) e a sua apresentação (rótulos pt-BR + token
 // de cor por prioridade/estado). Prioridade nova = tipo + rótulo + cor mudam JUNTOS, aqui.
 // SÓ METADADOS (LGPD): nunca imagem/frame — apenas texto, identificadores e timestamps.
 //

@@ -1,4 +1,4 @@
-// Trava de brute-force do login (server/loginThrottle.js) — auditoria analises/saude/01-*, R-A.
+// Trava de brute-force do login (server/loginThrottle.js) — auditoria docs/analises/saude/01-*, R-A.
 // Clock injetável → sem timers reais. Prova de sensibilidade: bloqueia após `max`, expira
 // pela janela, zera no sucesso, e chaves (IPs) distintas não interferem.
 import { describe, it, expect } from "vitest";

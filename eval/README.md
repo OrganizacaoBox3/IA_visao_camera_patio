@@ -87,7 +87,7 @@ de detecções sintéticas com nº de travessias **conhecido**.
   divergência → exit 1 com a tabela in/out esperado×contado (o cenário diz QUAL mecanismo
   quebrou). Determinístico: sem env, sem aleatoriedade, timestamps fixos.
 - **Fronteira honesta:** NÃO mede o recall do detector (sensor: gate/run-eval) nem vídeo
-  real — replay de travessias de campo segue previsto (`analises/acuracia-modelos.md §3`).
+  real — replay de travessias de campo segue previsto (`docs/analises/acuracia-modelos.md §3`).
   Knobs são espelho dos defaults de produção (`engine.js`); se mudarem lá, atualize o
   espelho em `counting.mjs`.
 
