@@ -64,13 +64,42 @@
 // OPERAÇÃO: a linha "cal" é escrita na PRIMEIRA rodada de tracks gravada da câmera (H/station null se
 // não calibrada) e RE-EMITIDA sempre que o `updatedAt` da calibração no camcfg mudar — calibrar ou
 // recalibrar durante a sessão entra no JSONL (o loader aplica "último cal vence").
+//
+// SEGURANÇA DO DADO (invariante da casa, CLAUDE.md §3 — nasceu de um incidente real, 2026-07-10: um
+// `rm -f` num arquivo sob escrita ativa apagou ~7h de gravação irrecuperável, gitignored):
+//  1. SEGMENTAÇÃO POR HORA: cada hora vira um arquivo `fusion-session-YYYY-MM-DD_HH.jsonl` novo — a
+//     perda MÁXIMA de um acidente cai de "a sessão inteira" para "a hora corrente". Cada segmento é
+//     AUTOSSUFICIENTE (meta/cal re-emitidos no início de cada um — ver `rollSegmentIfNeeded()`), então
+//     o loader consegue ler um segmento sozinho sem depender dos anteriores.
+//  2. BACKUP PERIÓDICO: a cada `BACKUP_EVERY_APPENDS` linhas, o segmento corrente é copiado para
+//     `<nome>.bak.jsonl` ao lado (mesma pasta, também gitignored) — se o arquivo ativo for apagado por
+//     engano, a cópia mais recente (no máximo `BACKUP_EVERY_APPENDS` linhas atrás) sobrevive. NÃO é
+//     backup fora do alcance de quem tem acesso à pasta (mitigação parcial, documentada como tal — não
+//     substitui um backup externo de verdade se o incidente for mais sério que "comando errado").
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const camcfg = require("../camcfg");
 
-// Co-locado com os outros artefatos de runtime do domínio BT (bt-recording.jsonl etc.). Gitignored.
-const FILE = path.join(__dirname, "fusion-session.jsonl");
+const DIR = __dirname; // co-locado com os outros artefatos de runtime do domínio BT. Gitignored.
+
+// Chave de hora local (sem `:`, inválido em nome de arquivo no Windows): "YYYY-MM-DD_HH".
+function hourKey(d) {
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_${p2(d.getHours())}`;
+}
+
+function segmentPath(key) {
+  return path.join(DIR, `fusion-session-${key}.jsonl`);
+}
+
+// Estado do segmento ATIVO — recalculado a cada escrita (barato: 1 `new Date()` + comparação de
+// string). Trocar de segmento reseta `metaWritten`/`calStamp`: cada arquivo nasce autossuficiente.
+let activeKey = null;
+let activeFile = null;
+let appendsInSegment = 0;
+
+const BACKUP_EVERY_APPENDS = 200; // ordem de grandeza: minutos de gravação a ~1-20Hz, não segundos
 
 // Raiz do repo (server/bt/ → ../..) — onde o `git rev-parse` deve rodar.
 const REPO_ROOT = path.join(__dirname, "..", "..");
@@ -117,14 +146,41 @@ function enabled() {
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
-// Última calibração gravada por câmera NESTE processo: cameraId → `updatedAt` do camcfg (null =
-// "gravada como não-calibrada"). Se o updatedAt corrente divergir, a linha "cal" é re-emitida.
-const calStamp = new Map();
+// Última calibração gravada por câmera NO SEGMENTO ATIVO: cameraId → `updatedAt` do camcfg (null =
+// "gravada como não-calibrada"). Se o updatedAt corrente divergir, a linha "cal" é re-emitida. Limpo
+// a cada rollover de hora (ver `rollSegmentIfNeeded`) — cada segmento reconstrói seu próprio "cal".
+let calStamp = new Map();
 // Fail-safe "loga 1x": o pipeline chama a ~10-20 Hz — um disco cheio não pode virar spam de log.
+// Global (não por segmento) — disco com defeito não se conserta trocando de hora.
 let warned = false;
 
+// Troca de segmento por hora (ver header §SEGURANÇA DO DADO). Idempotente: só age quando a chave de
+// hora muda. Reseta o estado "escrito neste segmento" (meta/cal) — cada arquivo nasce autossuficiente.
+function rollSegmentIfNeeded() {
+  const key = hourKey(new Date());
+  if (key === activeKey) return;
+  activeKey = key;
+  activeFile = segmentPath(key);
+  appendsInSegment = 0;
+  calStamp = new Map();
+  metaWritten = false;
+}
+
+// Backup periódico (mitigação, não crítico): copia o segmento ativo pra `<nome>.bak.jsonl` ao lado.
+// Falha de backup NUNCA usa `fail()`/loga-e-para — é best-effort silencioso (o path principal de
+// gravação não pode ficar refém de um backup que falhou).
+function backupSegment() {
+  try {
+    fs.copyFileSync(activeFile, activeFile.replace(/\.jsonl$/, ".bak.jsonl"));
+  } catch {
+    // silencioso de propósito — ver comentário acima
+  }
+}
+
 function append(line) {
-  fs.appendFileSync(FILE, JSON.stringify(line) + "\n");
+  fs.appendFileSync(activeFile, JSON.stringify(line) + "\n");
+  appendsInSegment++;
+  if (appendsInSegment % BACKUP_EVERY_APPENDS === 0) backupSegment();
 }
 
 function fail(e) {
@@ -133,11 +189,11 @@ function fail(e) {
   console.error("[fusion-recorder] falha ao gravar (ignorado; não loga de novo):", String((e && e.message) || e));
 }
 
-// Escreve a linha "meta" (versão do algoritmo/knobs — ver header) UMA vez por processo, antes da
-// PRIMEIRA linha de qualquer outro tipo. `metaWritten` é marcado ANTES do append (não depois, ao
-// contrário do `calStamp`): computar `gitRev` chama um subprocesso — não vale a pena repetir a cada
-// tick só porque o disco falhou uma vez; se a escrita falhar, `fail()` já loga e o resto do pipeline
-// segue mudo, como o resto deste arquivo.
+// Escreve a linha "meta" (versão do algoritmo/knobs — ver header) UMA vez por SEGMENTO, antes da
+// PRIMEIRA linha de qualquer outro tipo naquele arquivo. `metaWritten` é marcado ANTES do append
+// (não depois, ao contrário do `calStamp`): computar `gitRev` chama um subprocesso — não vale a pena
+// repetir a cada tick só porque o disco falhou uma vez; se a escrita falhar, `fail()` já loga e o
+// resto do pipeline segue mudo, como o resto deste arquivo.
 let metaWritten = false;
 function ensureMeta() {
   if (metaWritten) return;
@@ -155,6 +211,7 @@ function ensureMeta() {
 function recordTracks(cameraId, ts, tracks) {
   if (!enabled()) return;
   try {
+    rollSegmentIfNeeded();
     ensureMeta();
     const id = String(cameraId || "");
     const when = Number(ts) || Date.now();
@@ -184,6 +241,7 @@ function recordTracks(cameraId, ts, tracks) {
 function recordReadings(stationId, ts, readings) {
   if (!enabled()) return;
   try {
+    rollSegmentIfNeeded();
     ensureMeta();
     const clean = (Array.isArray(readings) ? readings : []).map((r) => ({
       mac: String((r && r.mac) || ""),
@@ -195,4 +253,7 @@ function recordReadings(stationId, ts, readings) {
   }
 }
 
-module.exports = { enabled, recordTracks, recordReadings, FILE };
+// `getActiveFile`: caminho do segmento CORRENTE (null antes da 1ª escrita — não há segmento ainda).
+// Substitui o antigo export `FILE` (constante única): agora o arquivo muda a cada hora (ver
+// §SEGURANÇA DO DADO no header) — não há mais "o" arquivo, só o segmento ativo no momento.
+module.exports = { enabled, recordTracks, recordReadings, getActiveFile: () => activeFile, DIR };

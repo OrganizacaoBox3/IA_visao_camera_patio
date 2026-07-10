@@ -43,6 +43,28 @@ function metaLine(ts: number, gitRev: string | null, fusionConfig: Record<string
   return JSON.stringify({ t: "meta", ts, gitRev, fusionConfig });
 }
 
+/**
+ * Régua de honestidade das métricas: TODO campo NUMÉRICO tem que ser finito (nunca NaN/Infinity) —
+ * mas testado por TIPO, não por lista nomeada de chaves. Um `Object.entries` genérico que assume
+ * "todo campo é número" QUEBRA a cada campo aditivo não-numérico (aconteceu com `reliabilityBins`,
+ * um array — ver achado do especialista científico, 2026-07-10: "contrato aditivo que quebra teste
+ * denuncia teste sobre-especificado"). Testando por `typeof === "number"` em vez de por nome, o
+ * PRÓXIMO campo aditivo (numérico ou não) passa por aqui de graça, sem editar este arquivo de novo.
+ * `reliabilityBins`, quando presente, é conferido à parte (é um array de objetos, não um número).
+ */
+function expectMetricsHonest(metrics: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(metrics)) {
+    if (typeof value !== "number") continue; // campo aditivo não-numérico — fora desta régua
+    expect(Number.isFinite(value), `métrica ${key} não é finita`).toBe(true);
+  }
+  const bins = metrics.reliabilityBins;
+  if (Array.isArray(bins)) {
+    for (const bin of bins as { accuracy: unknown }[]) {
+      expect(Number.isFinite(bin.accuracy), "reliabilityBins[].accuracy não é finita").toBe(true);
+    }
+  }
+}
+
 const IDENTITY_H = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 const NO_TRUTH: SessionTruth = {};
 
@@ -258,14 +280,7 @@ describe("parseFusionSession (loader da gravação de campo)", () => {
     // O MAC fora da truth chega INTACTO aos readings do tick (vai ao push do associador)…
     expect(scenario.ticks[0].readings.map((r) => r.mac)).toEqual(["AA:AA", "ZZ:ZZ"]);
     // …e o replay roda sem NaN (a métrica simplesmente nunca o cobra como verdade).
-    // `reliabilityBins` é um array (histograma), não um número — fora do loop, checado à parte.
-    for (const [key, value] of Object.entries(metrics)) {
-      if (key === "reliabilityBins") continue;
-      expect(Number.isFinite(value), `métrica ${key} não é finita`).toBe(true);
-    }
-    for (const bin of metrics.reliabilityBins ?? []) {
-      expect(Number.isFinite(bin.accuracy), "reliabilityBins[].accuracy não é finita").toBe(true);
-    }
+    expectMetricsHonest(metrics);
   });
 
   it("saneamento de ts: evento além de ±24h do mediano é descartado com warn (nunca OOM)", () => {
@@ -466,14 +481,7 @@ describe("replayFusionSession (ponta a ponta no associador de produção)", () =
     expect(scenario.H).toBeNull();
 
     // Nenhum campo NUMÉRICO pode ser NaN/Infinity — a régua de honestidade das métricas.
-    // `reliabilityBins` é um array (histograma), não um número — verificado à parte, abaixo.
-    for (const [key, value] of Object.entries(metrics)) {
-      if (key === "reliabilityBins") continue;
-      expect(Number.isFinite(value), `métrica ${key} não é finita`).toBe(true);
-    }
-    for (const bin of metrics.reliabilityBins ?? []) {
-      expect(Number.isFinite(bin.accuracy), "reliabilityBins[].accuracy não é finita").toBe(true);
-    }
+    expectMetricsHonest(metrics);
     // Houve avaliação de verdade após o warmup default (8 s) — o replay realmente rodou.
     expect(metrics.ticksEvaluated).toBeGreaterThan(0);
     expect(metrics.opportunities + metrics.trueAbstain + metrics.falseLabels).toBeGreaterThan(0);

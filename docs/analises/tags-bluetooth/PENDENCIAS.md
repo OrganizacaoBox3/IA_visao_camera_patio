@@ -81,19 +81,47 @@
 6. **Multi-estação** — gated (hardware é barato — ESP32/Android aposentado bastam — mas o custo real é
    que cada estação nova precisa da própria calibração/auditoria de deriva, como as 4 âncoras atuais
    já provam). Depois do campo, não antes.
-7. **Sinkhorn/transporte ótimo COM modelo de ambiguidade** (não standalone — ver recalibração da
-   Pergunta 1) — GATED por um **gatilho quantitativo mensurável**: taxa de ticks com conflito de
-   atribuição real (≥2 tags disputando o mesmo track). Hoje baixa (poucas tags); enquanto for baixa,
-   fica no gelo por número, não por intuição. Métrica em construção (task #13).
-8. **Reliability diagram (calibração de confiança)** — a margem top-2 é honesta (margem alta ⇒ erro
-   raro de verdade)? Barato sobre o harness existente; a invariante do produto inteira repousa nisso.
-   Em construção (task #13).
-9. **Persistência de rótulo no track** (alavanca de PRODUTO, não ciência) — hoje a cobertura (12-34%)
-   é *por tick de decisão*; um rótulo confirmado com margem alta poderia persistir no track até
-   morte/contradição forte/timeout, multiplicando a **cobertura de experiência** (o que o operador vê)
-   sem falar mais vezes nem sacrificar a invariante. Possivelmente o maior ganho percebido por esforço
-   do backlog inteiro — precisa de escopo cuidadoso (definir "morte"/"contradição forte"/timeout) antes
-   de ir a produção, tratado como rodada própria tipo v4 (construir+medir+revisão adversarial).
+7. ✅🔬 **Reliability diagram + taxa de conflito** — CONSTRUÍDOS 2026-07-10 (task #13). `conflictRate`
+   NÃO é baixa (46,9% no canônico, ~90-98% em multidão) — **corrigiu a suposição do especialista** de
+   que seria rara com poucas tags. Reliability é honestamente monotônico em `multidao`.
+8. 🔬 **Hungarian+dustbin — ELEVADO de "gated" para EXPERIMENTO IMEDIATO** (2026-07-10, o próprio
+   gatilho do item 7 acabou de estourar o limiar): a taxa de conflito alta muda a leitura — não é
+   "Sinkhorn standalone" (recalibrado, Pergunta 1), é **atribuição com abstenção dentro da
+   otimização** (dustbin do SuperGlue / unbalanced OT). Diferente do v4: é política de decisão sobre
+   os MESMOS scores que o guloso já consome — não introduz física nova, logo estruturalmente menos
+   vulnerável à circularidade (as 2 sentinelas de viés rodam mesmo assim; disciplina não abre exceção).
+   **Desenho**: custo da lixeira DERIVADO da curva de calibração (aceitar par só quando a precisão
+   empírica implicada pela margem ≥ alvo de produto) — não é knob livre. Regra a priori: erro total ≤
+   baseline, cobertura ≥ baseline, sobrevive às sentinelas, ganho decomposto OBRIGATORIAMENTE como
+   conversão abstenção→acerto (lição do v4, não reembaralhamento de acertos entre pares).
+   **Pré-requisito em andamento**: curva de reliability SEM o corte de minMargin (task em progresso)
+   — o custo do dustbin deriva dela.
+9. **Persistência de rótulo no track** (produto — não ciência, mas rodada própria tipo v4) — escopo
+   escrito em `docs/cientifica/escopo-persistencia-rotulo.md` (máquina de estados, métricas novas —
+   cobertura de experiência/erro-segundos/latência de correção — sentinela de id-switch-na-
+   confirmação). **Construção e torneio começam já** (não é física nova); o **DEFAULT em produção**
+   fica condicionado a dado (ou proxy) de id-switch com gente de verdade — diferente do hello world
+   solo (item 2), que não testa ambiguidade multi-pessoa.
+10. **Fragmentação de tracks como proxy de id-switch** — minerável JÁ na gravação passiva que
+    recomeçou (morte+renascimento de track próximos no tempo/espaço), sem verdade anotada. Não
+    captura troca SILENCIOSA entre 2 pessoas que se cruzam, mas calibra a ordem de grandeza real da
+    instabilidade do tracker (hoje só chutada pelo simulador) — alimenta o gate do item 9.
+11. **Achado de código (2026-07-10, verificado por leitura, não suposição)**: o cálculo de
+    margem/conflito (`associate.ts`) usa a matriz de score ESTÁTICA (pré-resolução gulosa) — um
+    concorrente "fantasma" já consumido por OUTRO par ainda conta como rival. Isso **superestima**
+    ambiguidade sistematicamente (nunca subestima) e pode explicar parte da taxa de conflito alta,
+    em cima da colisão de assinatura 1-D. Não é bug (é simplificação defensável); registrado para
+    informar a leitura do shuffle-baseline (item 7) e de qualquer refinamento futuro do dustbin.
+
+### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
+
+- **(a)** Taxa de conflito sob shuffle (embaralhar RSSI entre tags) ficará PRÓXIMA da real em
+  `multidao`; no `canonico`, a real ficará VISIVELMENTE ABAIXO do shuffle (scores carregam informação
+  real ali). Em teste (Frente C, 2026-07-10).
+- **(b)** Alongar a janela de correlação (`windowMs`) derruba a taxa de conflito MAIS do que melhora a
+  precisão média — ataca a colisão, não o ruído.
+- **(c)** A segunda estação, quando existir, derrubará a taxa de conflito desproporcionalmente ao
+  ganho de precisão — duplica a dimensão do espaço de assinatura.
 
 ### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
 

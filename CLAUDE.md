@@ -39,6 +39,14 @@ de implementação: `docs/analises/implementacao-changelog.md`.
 - **Casca fullscreen da câmera NÃO vira Radix Dialog** (Portal/scroll-lock remontaria o `<canvas>` e quebraria o rAF/editor). Trap de foco manual permanece. (ADR-007)
 - **Radix é a camada de UI.** Todo controle interativo usa primitiva Radix via wrappers de `src/ui/`. (ADR-003, ADR-007)
 - **"Going gray":** cor é informação. Base neutra (tokens `--state-*`); saturada só para anormalidade.
+- **Gravação de campo é artefato imutável e append-only.** Nenhum agente (nem humano, em modo automático) tem
+  poder de deleção sobre sessões de gravação real (`server/bt/fusion-session*.jsonl` e afins). Nasceu de um
+  incidente (2026-07-10): um `rm -f` num arquivo sob escrita ativa apagou ~7h de dado de campo irrecuperável.
+  Mitigação em camadas: gravador segmenta por hora (perda máxima = 1h, não a sessão) + cópia de backup
+  periódica fora do diretório de trabalho ativo. **Runbook se acontecer de novo:** NÃO reinicie o processo
+  gravador — ele ainda segura o handle do arquivo e pode salvar o que resta; encerrar/reiniciar é o que perde
+  os dados de vez. Isto é Windows: não existe o truque `/proc/PID/fd/` do Linux — a recuperação depende de
+  ferramenta de undelete NTFS (ex. TestDisk) rodada **antes** de qualquer nova escrita no volume; sem garantia.
 - **SQL/persistência:** queries parametrizadas; SIAG é **read-only**; `schema.sql` idempotente (aditivo, sem alterar tabelas existentes).
 
 ## 4. Stack & padrão da casa
