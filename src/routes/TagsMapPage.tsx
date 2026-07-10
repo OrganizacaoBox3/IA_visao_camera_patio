@@ -4,6 +4,8 @@ import L from "leaflet";
 import { MapPin, Radar, Search, Wifi, X } from "lucide-react";
 import { PageHeader, Badge, EmptyState, ScrollArea, Input } from "../ui";
 import { getBtLocations, getBtReadings, type TagLocation, type BtReading } from "../api";
+import { fromTagLocations } from "../localizacao/adapters";
+import type { LocatedEntity } from "../localizacao/entity";
 
 // Busca acento-insensível (rótulo "João" casa "joao"; MAC casa por substring).
 const norm = (s: string) =>
@@ -12,11 +14,11 @@ const norm = (s: string) =>
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
 
-// Mapa = CENTRAL DO COLETOR. Duas fontes (polling ~4s):
-//  • GET /api/bt/locations → ÚLTIMA localização por tag (estilo AirTag: onde o celular a viu por último).
-//  • GET /api/bt/readings  → tags VISÍVEIS AGORA (em alcance do coletor neste instante) + RSSI.
-// Pino VIVO (verde, com halo) = visível agora; pino que desbota (going-gray) = só última localização.
-// Assim o operador vê no mapa TUDO que o coletor enxerga + onde cada tag ficou. LGPD: só metadados.
+// Mapa = CENTRAL DO COLETOR. Consome a COSTURA do ADR-012 (src/localizacao): as duas fontes brutas
+// (GET /api/bt/locations = última posição por tag; GET /api/bt/readings = visíveis agora) são fundidas
+// pelo adapter `fromTagLocations` no contrato estável `LocatedEntity[]`. Esta página NÃO conhece o
+// heurístico nem o motor futuro — só o contrato. O RSSI (detalhe de sensor, fora do contrato) fica num
+// lookup à parte só para exibição. Pino VIVO (verde, halo) = live; desbota (going-gray) = última posição.
 const POLL_MS = 4000;
 // Centro só usado quando NÃO há nenhum pin (com pins, o mapa dá fitBounds). Sobral/CE (CD Grendene).
 const DEFAULT_CENTER: L.LatLngExpression = [-3.688, -40.348];
@@ -28,19 +30,9 @@ const C_LIVE = "var(--state-ok)"; // VISÍVEL AGORA (em alcance) — o sinal mai
 const C_RECENT = "var(--state-info)"; // vista há pouco
 const C_STALE = "var(--state-neutral)"; // parada há muito
 
-type Row = {
-  mac: string;
-  name: string; // rótulo cadastrado, senão o MAC
-  loc: TagLocation | null; // última localização (null = ainda sem GPS)
-  rssi: number | null; // RSSI se visível agora
-  visible: boolean; // em alcance do coletor NESTE instante
-};
-
-function colorFor(r: Row, now: number): string {
-  if (r.visible) return C_LIVE;
-  const age = r.loc ? now - r.loc.ts : Infinity;
-  if (age < FRESH_MS) return C_RECENT;
-  return C_STALE;
+function colorFor(e: LocatedEntity, now: number): string {
+  if (e.live) return C_LIVE;
+  return now - e.seenAt < FRESH_MS ? C_RECENT : C_STALE;
 }
 
 // "visto há X" — humano e curto.
@@ -68,15 +60,17 @@ function makeIcon(color: string, live: boolean): L.DivIcon {
     popupAnchor: [0, -8],
   });
 }
-function popupHtml(r: Row, now: number): string {
+function statusLabel(e: LocatedEntity, now: number, rssi: number | null): string {
+  if (e.live) return `visível agora${rssi != null ? ` · ${rssi} dBm` : ""}`;
+  if (e.position) {
+    const acc = e.accuracyM != null ? ` · ±${Math.round(e.accuracyM)} m` : "";
+    return `${agoLabel(e.seenAt, now)}${acc}`;
+  }
+  return "sem localização ainda";
+}
+function popupHtml(e: LocatedEntity, now: number, rssi: number | null): string {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  let sub: string;
-  if (r.visible) sub = `visível agora${r.rssi != null ? ` · ${r.rssi} dBm` : ""}`;
-  else if (r.loc) {
-    const acc = r.loc.acc != null ? ` · ±${Math.round(r.loc.acc)} m` : "";
-    sub = `${agoLabel(r.loc.ts, now)}${acc}`;
-  } else sub = "sem localização ainda";
-  return `<strong>${esc(r.name)}</strong><br/><span style="opacity:.75">${esc(sub)}</span>`;
+  return `<strong>${esc(e.label)}</strong><br/><span style="opacity:.75">${esc(statusLabel(e, now, rssi))}</span>`;
 }
 
 export function TagsMapPage() {
@@ -96,6 +90,7 @@ export function TagsMapPage() {
   // ── Cria o mapa uma vez (cleanup no unmount) ──────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    const markers = markersRef.current; // captura estável p/ o cleanup (o Map nunca é reatribuído)
     const map = L.map(containerRef.current, { center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, zoomControl: true });
     // Satélite (limpo, sem ruído de ruas): Esri World Imagery — grátis, sem chave de API.
     // Esri só tem imagem até ~z17 nesta região (interior/CE) — z18+ retorna o placeholder "Map data not
@@ -110,7 +105,7 @@ export function TagsMapPage() {
       window.clearTimeout(t);
       map.remove();
       mapRef.current = null;
-      markersRef.current.clear();
+      markers.clear();
       didFitRef.current = false;
     };
   }, []);
@@ -138,123 +133,113 @@ export function TagsMapPage() {
     };
   }, []);
 
-  // ── Merge: última localização (posição) × leituras ao vivo (visível agora + RSSI), por MAC. ──
-  const merged = useMemo<Row[]>(() => {
-    const byMac = new Map<string, Row>();
-    for (const t of tags) {
-      byMac.set(t.mac, { mac: t.mac, name: t.rotulo ?? t.mac, loc: t, rssi: null, visible: false });
-    }
-    for (const r of readings) {
-      const mac = String(r.mac).toUpperCase();
-      const ex = byMac.get(mac);
-      if (ex) {
-        ex.visible = true;
-        ex.rssi = r.rssi;
-        if (r.rotulo) ex.name = r.rotulo;
-      } else {
-        byMac.set(mac, { mac, name: r.rotulo ?? mac, loc: null, rssi: r.rssi, visible: true });
-      }
-    }
-    return [...byMac.values()];
-  }, [tags, readings]);
+  // ── A COSTURA: as fontes brutas viram LocatedEntity[] pelo adapter. A página consome só isto. ──
+  const entities = useMemo<LocatedEntity[]>(() => fromTagLocations(tags, readings, now), [tags, readings, now]);
+  // RSSI por MAC — detalhe de sensor FORA do contrato; só p/ exibir na lista/popup.
+  const rssiByMac = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of readings) m.set(String(r.mac).toUpperCase(), r.rssi);
+    return m;
+  }, [readings]);
 
-  const visibleCount = useMemo(() => merged.filter((r) => r.visible).length, [merged]);
+  const visibleCount = useMemo(() => entities.filter((e) => e.live).length, [entities]);
 
-  // ── Sincroniza marcadores (só tags com localização). live = visível agora → pino verde com halo. ──
+  // ── Sincroniza marcadores (só entidades com posição). live = visível agora → pino verde com halo. ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const store = markersRef.current;
     const seen = new Set<string>();
 
-    for (const r of merged) {
-      if (!r.loc || !Number.isFinite(r.loc.lat) || !Number.isFinite(r.loc.lon)) continue;
-      seen.add(r.mac);
-      const color = colorFor(r, now);
-      const key = `${r.visible ? "live" : "last"}:${color}`;
-      const pos: L.LatLngExpression = [r.loc.lat, r.loc.lon];
-      const existing = store.get(r.mac);
+    for (const e of entities) {
+      if (!e.position) continue;
+      seen.add(e.id);
+      const color = colorFor(e, now);
+      const key = `${e.live ? "live" : "last"}:${color}`;
+      const pos: L.LatLngExpression = [e.position.lat, e.position.lon];
+      const rssi = rssiByMac.get(e.id) ?? null;
+      const existing = store.get(e.id);
       if (existing) {
         existing.marker.setLatLng(pos);
         if (existing.key !== key) {
-          existing.marker.setIcon(makeIcon(color, r.visible));
+          existing.marker.setIcon(makeIcon(color, e.live));
           existing.key = key;
         }
-        existing.marker.setPopupContent(popupHtml(r, now));
-        existing.marker.setTooltipContent(r.name);
+        existing.marker.setPopupContent(popupHtml(e, now, rssi));
+        existing.marker.setTooltipContent(e.label);
       } else {
-        const marker = L.marker(pos, { icon: makeIcon(color, r.visible) })
+        const marker = L.marker(pos, { icon: makeIcon(color, e.live) })
           .addTo(map)
-          .bindTooltip(r.name, { direction: "top", offset: [0, -8] })
-          .bindPopup(popupHtml(r, now));
-        store.set(r.mac, { marker, key });
+          .bindTooltip(e.label, { direction: "top", offset: [0, -8] })
+          .bindPopup(popupHtml(e, now, rssi));
+        store.set(e.id, { marker, key });
       }
     }
 
-    for (const [mac, entry] of store) {
-      if (!seen.has(mac)) {
+    for (const [id, entry] of store) {
+      if (!seen.has(id)) {
         entry.marker.remove();
-        store.delete(mac);
+        store.delete(id);
       }
     }
 
     if (!didFitRef.current && store.size > 0) {
-      const bounds = L.latLngBounds([...store.values()].map((e) => e.marker.getLatLng()));
+      const bounds = L.latLngBounds([...store.values()].map((en) => en.marker.getLatLng()));
       map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
       didFitRef.current = true;
     }
-  }, [merged, now]);
+  }, [entities, now, rssiByMac]);
 
   // Lista lateral: VISÍVEIS agora primeiro (por RSSI), depois localizadas por recência.
   const sorted = useMemo(
     () =>
-      [...merged].sort((a, b) => {
-        if (a.visible !== b.visible) return a.visible ? -1 : 1;
-        if (a.visible && b.visible) return (b.rssi ?? -999) - (a.rssi ?? -999);
-        return (b.loc?.ts ?? 0) - (a.loc?.ts ?? 0);
+      [...entities].sort((a, b) => {
+        if (a.live !== b.live) return a.live ? -1 : 1;
+        if (a.live && b.live) return (rssiByMac.get(b.id) ?? -999) - (rssiByMac.get(a.id) ?? -999);
+        return b.seenAt - a.seenAt;
       }),
-    [merged],
+    [entities, rssiByMac],
   );
 
-  const focus = useCallback((r: Row) => {
+  const focus = useCallback((e: LocatedEntity) => {
     const map = mapRef.current;
-    if (!map || !r.loc) return;
-    map.setView([r.loc.lat, r.loc.lon], Math.max(map.getZoom(), 17), { animate: true });
-    markersRef.current.get(r.mac)?.marker.openPopup();
+    if (!map || !e.position) return;
+    map.setView([e.position.lat, e.position.lon], Math.max(map.getZoom(), 17), { animate: true });
+    markersRef.current.get(e.id)?.marker.openPopup();
   }, []);
 
-  // ── Busca: casa por rótulo OU MAC (acento/caixa-insensível). matchMacs=null → sem busca. ──
+  // ── Busca: casa por rótulo OU MAC (acento/caixa-insensível). matchIds=null → sem busca. ──
   const q = norm(search.trim());
-  const matchMacs = useMemo(() => {
+  const matchIds = useMemo(() => {
     if (!q) return null;
     const s = new Set<string>();
-    for (const r of sorted) if (norm(r.name).includes(q) || norm(r.mac).includes(q)) s.add(r.mac);
+    for (const e of sorted) if (norm(e.label).includes(q) || norm(e.id).includes(q)) s.add(e.id);
     return s;
   }, [q, sorted]);
-  const visibleRows = matchMacs ? sorted.filter((r) => matchMacs.has(r.mac)) : sorted;
+  const visibleRows = matchIds ? sorted.filter((e) => matchIds.has(e.id)) : sorted;
 
   // Destaque no mapa: casa = opaco; não casa = esmaecido.
   useEffect(() => {
-    for (const [mac, entry] of markersRef.current) {
-      entry.marker.setOpacity(!matchMacs || matchMacs.has(mac) ? 1 : 0.25);
+    for (const [id, entry] of markersRef.current) {
+      entry.marker.setOpacity(!matchIds || matchIds.has(id) ? 1 : 0.25);
     }
-  }, [matchMacs, merged]);
+  }, [matchIds, entities]);
 
   // Match único (forte) → centraliza e abre o popup uma vez.
   useEffect(() => {
-    if (matchMacs && matchMacs.size === 1) {
-      const [mac] = matchMacs;
-      if (lastAutoFocus.current !== mac) {
-        const r = sorted.find((x) => x.mac === mac);
-        if (r?.loc) {
-          focus(r);
-          lastAutoFocus.current = mac;
+    if (matchIds && matchIds.size === 1) {
+      const [id] = matchIds;
+      if (lastAutoFocus.current !== id) {
+        const e = sorted.find((x) => x.id === id);
+        if (e?.position) {
+          focus(e);
+          lastAutoFocus.current = id;
         }
       }
     } else {
       lastAutoFocus.current = null;
     }
-  }, [matchMacs, sorted, focus]);
+  }, [matchIds, sorted, focus]);
 
   return (
     <div className="page">
@@ -304,7 +289,7 @@ export function TagsMapPage() {
         </Badge>
         <Badge tone={error ? "warn" : undefined}>
           <Radar size={12} strokeWidth={1.75} aria-hidden />
-          {error ? "sem conexão" : `${merged.length} tag${merged.length === 1 ? "" : "s"}`}
+          {error ? "sem conexão" : `${entities.length} tag${entities.length === 1 ? "" : "s"}`}
         </Badge>
       </PageHeader>
 
@@ -313,12 +298,12 @@ export function TagsMapPage() {
 
         <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-panel-2 md:flex">
           <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            Tags {matchMacs ? `· ${visibleRows.length}/${merged.length}` : ""}
+            Tags {matchIds ? `· ${visibleRows.length}/${entities.length}` : ""}
           </div>
           <ScrollArea className="min-h-0 flex-1">
             {!loaded ? (
               <div className="p-3 text-[13px] text-text-muted">Carregando…</div>
-            ) : merged.length === 0 ? (
+            ) : entities.length === 0 ? (
               <div className="p-3">
                 <EmptyState>
                   Nenhuma tag ainda. Assim que o coletor vir uma tag, ela aparece aqui — e no mapa
@@ -331,32 +316,29 @@ export function TagsMapPage() {
               </div>
             ) : (
               <ul className="flex flex-col p-2">
-                {visibleRows.map((r) => {
-                  const color = colorFor(r, now);
-                  const status = r.visible
-                    ? `visível agora${r.rssi != null ? ` · ${r.rssi} dBm` : ""}`
-                    : r.loc
-                      ? agoLabel(r.loc.ts, now)
-                      : "sem localização ainda";
+                {visibleRows.map((e) => {
+                  const color = colorFor(e, now);
                   return (
-                    <li key={r.mac}>
+                    <li key={e.id}>
                       <button
                         type="button"
-                        onClick={() => focus(r)}
-                        disabled={!r.loc}
+                        onClick={() => focus(e)}
+                        disabled={!e.position}
                         className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-panel disabled:cursor-default disabled:opacity-60"
-                        title={r.loc ? "Centralizar no mapa" : "Ainda sem localização (GPS)"}
+                        title={e.position ? "Centralizar no mapa" : "Ainda sem localização (GPS)"}
                       >
                         <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-hidden>
-                          {r.visible ? (
+                          {e.live ? (
                             <Wifi size={14} strokeWidth={2} style={{ color }} />
                           ) : (
                             <MapPin size={14} strokeWidth={2} style={{ color }} />
                           )}
                         </span>
                         <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-[13px] text-text">{r.name}</span>
-                          <span className="text-[11px] text-text-muted">{status}</span>
+                          <span className="truncate text-[13px] text-text">{e.label}</span>
+                          <span className="text-[11px] text-text-muted">
+                            {statusLabel(e, now, rssiByMac.get(e.id) ?? null)}
+                          </span>
                         </span>
                       </button>
                     </li>
