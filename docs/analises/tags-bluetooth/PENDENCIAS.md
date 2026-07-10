@@ -145,8 +145,19 @@
      depois da injeção) — **mais lento que a sentinela 1**, na direção que a previsão do
      especialista registrava (memória é o pior caso). Números fixos/reproduzíveis, não achados por
      sorte — documentados no teste.
-   - ⬜ **(4) torneio** com a regra a priori (métricas novas: cobertura de experiência, erro-segundos
-     por estado de origem, latência de correção — ainda não existem no harness). Próximo passo.
+   - ✅🔬 **(4a) métricas novas — FEITAS e a previsão do especialista CONFIRMADA quantitativamente**
+     (`src/fusion/memory-metrics.ts`, 9 testes): `computeMemoryMetrics` (cobertura de experiência —
+     tempo, não tick, pesado por delta real de `ts` — + erro-segundos decomposto fresco×memória) e
+     `computeCorrectionLatencies` ("da quebra real até a tela parar de mentir", por episódio
+     contíguo de desacordo crença×verdade). Medido nas duas sentinelas (seed=1, "cruzamento"):
+     erro-segundos-em-memória da sentinela durante-memória (14,5s) é **mais que o DOBRO** da
+     sentinela na confirmação (6s) — exatamente a direção prevista (memória é o pior caso, mais
+     tempo pra exibir errado sem correção precoce). Números fixos, reproduzíveis, no teste.
+   - ⬜ **(4b) torneio** com a regra a priori do escopo (erro-segundos ≤ baseline sem persistência,
+     cobertura de experiência ≥ N× o baseline NA MESMA UNIDADE — tempo, não por-tick de hoje —,
+     sobrevive às 2 sentinelas, ganho decomposto). Falta: rodar a política de memória sobre a suíte
+     inteira de cenários (não só os 2 de sentinela) e comparar contra o baseline sem persistência
+     usando as MESMAS métricas. Próximo passo.
    - ⬜ **(5) revisão adversarial** antes de qualquer default em produção.
 10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
     `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
