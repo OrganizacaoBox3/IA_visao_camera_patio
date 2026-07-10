@@ -4,12 +4,14 @@ import { computeHomography } from "../../vision/homography";
 import type { SimTick } from "../sim";
 
 // Mesmos 4 pontos de sim.ts (FLOOR_PAIRS) — chão 8×6 m em perspectiva.
-const H = computeHomography([
+const calib = computeHomography([
   { px: { x: 0.15, y: 0.92 }, world: { x: 0, y: 0 } },
   { px: { x: 0.85, y: 0.92 }, world: { x: 8, y: 0 } },
   { px: { x: 0.68, y: 0.3 }, world: { x: 8, y: 6 } },
   { px: { x: 0.32, y: 0.3 }, world: { x: 0, y: 6 } },
-]).H!;
+]);
+if (!calib.ok) throw new Error(`teste: homografia degenerada (${calib.error})`);
+const H = calib.H;
 
 const STATION_PX = { x: 0.15, y: 0.92 }; // canto (0,0) — mesmo ponto do 1º par
 
