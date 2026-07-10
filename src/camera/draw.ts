@@ -17,6 +17,7 @@ import { ZONE_MODE_LABEL, type Zone } from "../zones";
 import { type CineFrame } from "./cineBuffer";
 import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
 import { coveredByAny } from "../vision/nms";
+import { worldToPixel, type Matrix3, type Vec2 } from "../vision/homography";
 
 // Resultado por zona guardado p/ desenho + painel. Vive aqui (perto do desenho que o
 // consome) e é reimportado pelo CameraWorkspace; mover não muda comportamento.
@@ -435,6 +436,93 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
     ctx.fillText(lines[i][0], bx + pad, by + pad + i * lh);
   }
   ctx.textBaseline = "alphabetic"; // restaura o default (o resto do palco assume-o)
+}
+
+// ── Malha de CALIBRAÇÃO (homografia do chão) — camada de conferência na câmera ABERTA ──
+// Feedback visual do posicionamento no piso: projeta uma GRADE métrica do chão de volta na imagem
+// (worldToPixel) + marca os PONTOS que o operador cadastrou na calibração. Toggleável (opt-in) — o
+// GATE (estado/ref) vive no componente; aqui só o desenho (função FOLHA/pura). Going-gray: grade em
+// --state-info SUTIL (linha fina, esmaecida, "conferência"); pontos com rótulo curto da âncora/MAC.
+// Coords px/world são NORMALIZADAS 0..1 → escaladas pelo retângulo de conteúdo (cr), como os demais.
+export type CalibDot = { px: Vec2; world: Vec2; mac?: string };
+export function drawCalibrationOverlay(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  points: ReadonlyArray<CalibDot>,
+  H: Matrix3 | null,
+) {
+  // GRADE do chão: só com H válida. Deriva o range métrico dos `world` dos pontos e liga linhas a
+  // cada `step` m (passo de ~1 m; sobe p/ retângulos grandes → ≤ ~13 linhas/eixo, como a conferência
+  // do CalibrationPanel). Cada endpoint (mundo→px normalizado via worldToPixel) é escalado por `cr`.
+  if (H && points.length >= 2) {
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const p of points) {
+      if (p.world.x < minX) minX = p.world.x;
+      if (p.world.x > maxX) maxX = p.world.x;
+      if (p.world.y < minY) minY = p.world.y;
+      if (p.world.y > maxY) maxY = p.world.y;
+    }
+    const spanX = maxX - minX,
+      spanY = maxY - minY;
+    if (spanX > 1e-6 && spanY > 1e-6) {
+      const step = Math.max(1, Math.ceil(Math.max(spanX, spanY) / 12));
+      const toPx = (wx: number, wy: number): Vec2 | null => {
+        const w = worldToPixel(H, { x: wx, y: wy });
+        return w ? { x: cr.x + w.x * cr.w, y: cr.y + w.y * cr.h } : null;
+      };
+      ctx.save();
+      ctx.strokeStyle = cssVar("--state-info", "#38bdf8");
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      for (let x = minX; x <= maxX + 1e-6; x += step) {
+        const a = toPx(x, minY),
+          b = toPx(x, maxY);
+        if (a && b) {
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        }
+      }
+      for (let y = minY; y <= maxY + 1e-6; y += step) {
+        const a = toPx(minX, y),
+          b = toPx(maxX, y);
+        if (a && b) {
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  // PONTOS cadastrados: círculo marcado no px normalizado; rótulo curto (últimos octetos do MAC/âncora)
+  // ao lado quando o ponto tiver `mac`. Going-gray: contorno --state-info, texto sobre scrim discreto.
+  const dot = cssVar("--state-info", "#38bdf8");
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  const fg = cssVar("--cam-overlay-fg", "#cbd5e1");
+  ctx.font = "10px ui-monospace, monospace";
+  for (const p of points) {
+    const px = cr.x + p.px.x * cr.w,
+      py = cr.y + p.px.y * cr.h;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = dot;
+    ctx.fillStyle = scrim;
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (p.mac) {
+      const tag = p.mac.length > 5 ? p.mac.slice(-5) : p.mac; // âncora curta (ex.: "EE:FF")
+      const tw = ctx.measureText(tag).width + 6;
+      ctx.fillStyle = scrim;
+      ctx.fillRect(px + 6, py - 7, tw, 13);
+      ctx.fillStyle = fg;
+      ctx.fillText(tag, px + 9, py + 3);
+    }
+  }
 }
 
 // Grade de pintura (ao editar a máscara de uma zona).

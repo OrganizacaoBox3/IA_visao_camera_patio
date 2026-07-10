@@ -21,7 +21,10 @@ import { describe, it, expect } from "vitest";
 // 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
 // (carga da homografia + fusão tag↔pessoa) foi EXTRAÍDO p/ src/fusion/useCameraTagLabels.ts — aqui
 // sobrou só a fiação mínima (prop getReadings + 1 chamada de hook + o labelFor no drawTracks).
-const MAX_LINES = 1920;
+// 1920→1950 (jul/09): toggle "malha da calibração" (grade do chão via homografia + pontos cadastrados)
+// na câmera ABERTA. O GROSSO (carga da calibração + estado/ref do toggle) foi EXTRAÍDO p/
+// src/camera/useCalibrationOverlay.ts; aqui sobrou a fiação (1 hook + 1 draw call + o Toggle no rodapé).
+const MAX_LINES = 1950;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

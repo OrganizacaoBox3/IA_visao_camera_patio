@@ -34,8 +34,9 @@ import { useStationHealth } from "../fusion/useStationHealth";
 import { StationHealthChip } from "../fusion/StationHealthChip";
 
 type Mode = "calibrar" | "medir";
-// dentro de "calibrar": marcar os 4 cantos, o ponto da estação BLE OU a tag fixa de referência
-type CalStep = "cantos" | "estacao" | "referencia";
+// dentro de "calibrar": marcar os 4 cantos, associar uma tag ÂNCORA a cada canto, o ponto da
+// estação BLE OU a tag fixa de referência
+type CalStep = "cantos" | "ancoras" | "estacao" | "referencia";
 
 /** Cantos do retângulo em coords de mundo (metros), na ordem de clique: 1→(0,0) 2→(L,0) 3→(L,C) 4→(0,C). */
 function worldCorners(L: number, C: number): Vec2[] {
@@ -60,6 +61,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [mode, setMode] = useState<Mode>("calibrar");
   const [calStep, setCalStep] = useState<CalStep>("cantos"); // o que se marca no palco ao calibrar
   const [corners, setCorners] = useState<Vec2[]>([]); // cantos clicados (px 0..1), até 4, em ordem
+  // MAC de uma tag BLE ÂNCORA por canto (index-aligned a `corners`); "" = canto sem âncora. Posição
+  // conhecida do vértice → base p/ calibrar distância/triangulação depois (a matemática fica adiada).
+  const [cornerMacs, setCornerMacs] = useState<string[]>([]);
+  const [anchorCorner, setAnchorCorner] = useState<number>(0); // canto em edição no passo "âncoras"
   const [station, setStation] = useState<Vec2 | null>(null); // ponto do chão da estação BLE (px 0..1), opcional
   // tag FIXA de referência (âncora de saúde): qual MAC + onde ela está no chão (px 0..1). mac/px marcados
   // em passos separados — `mac` pode estar vazio (só px) e vice-versa; só entra no save quando ambos.
@@ -83,6 +88,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     let cancelled = false;
     setLoading(true);
     setCorners([]);
+    setCornerMacs([]);
     setStation(null);
     setRefTag(null);
     setSavedH(null);
@@ -95,6 +101,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
         if (cal.refTag) setRefTag({ mac: cal.refTag.mac, px: { x: cal.refTag.px.x, y: cal.refTag.px.y } });
         if (cal.points.length === 4) {
           setCorners(cal.points.map((p) => ({ x: p.px.x, y: p.px.y })));
+          setCornerMacs(cal.points.map((p) => p.mac ?? "")); // âncora por canto (aditivo; "" = sem)
           setWidth(String(cal.points[1].world.x)); // (L,0)
           setLength(String(cal.points[2].world.y)); // (L,C)
         }
@@ -148,9 +155,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     return { seg, step };
   }, [activeH, L, C, dimsOk]);
 
-  // Leituras BLE vivas: só enquanto se marca a tag de referência (poll leve a cada ~2s). Efêmero (LGPD).
+  // Leituras BLE vivas: enquanto se marca a tag de referência OU se associam âncoras aos cantos
+  // (poll leve a cada ~2s). Efêmero (LGPD).
   useEffect(() => {
-    if (mode !== "calibrar" || calStep !== "referencia") return;
+    if (mode !== "calibrar" || (calStep !== "referencia" && calStep !== "ancoras")) return;
     let cancelled = false;
     const load = () =>
       getBtReadings()
@@ -236,13 +244,18 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
       const hit = nearest(refTag?.px ? [refTag.px] : [], px);
       if (hit != null) dragRef.current = { kind: "reftag", idx: 0 };
       else setRefTag((r) => ({ mac: r?.mac ?? "", px })); // fixa/reposiciona o ponto do chão; mantém o mac
+    } else if (calStep === "ancoras") {
+      // Passo âncoras: clicar SELECIONA o canto (não move nem cria) — a tag é escolhida na lista.
+      const hit = nearest(corners, px);
+      if (hit != null) setAnchorCorner(hit);
     } else {
       if (!canConfigure) return;
       const hit = nearest(corners, px);
       if (hit != null) dragRef.current = { kind: "corner", idx: hit };
-      else {
+      else if (corners.length < 4) {
         setNote(null);
-        setCorners((p) => (p.length >= 4 ? p : [...p, px])); // até 4; arraste p/ ajustar, "Refazer" limpa
+        setCorners((p) => [...p, px]); // até 4; arraste p/ ajustar, "Refazer" limpa
+        setCornerMacs((m) => [...m, ""]); // mantém a âncora index-aligned aos cantos
       }
     }
     if (dragRef.current) e.currentTarget.setPointerCapture(e.pointerId); // captura → arrasto suave fora do palco
@@ -264,8 +277,16 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     dragRef.current = null;
   }
 
-  const undoCorner = () => setCorners((p) => p.slice(0, -1));
-  const resetCorners = () => setCorners([]);
+  const undoCorner = () => {
+    setCorners((p) => p.slice(0, -1));
+    setCornerMacs((m) => m.slice(0, -1)); // âncora acompanha o canto removido
+  };
+  const resetCorners = () => {
+    setCorners([]);
+    setCornerMacs([]);
+  };
+  // Nome legível de um MAC-âncora (rótulo cadastrado, se a tag está visível agora; senão o MAC).
+  const macName = (mac: string) => btReadings.find((r) => r.mac === mac)?.rotulo || mac;
 
   async function save() {
     if (!liveH || !liveH.ok) return;
@@ -274,7 +295,11 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     setNote(null);
     const w = worldCorners(L, C);
     const payload: CameraCalibration = {
-      points: corners.map((px, i) => ({ px, world: w[i] })),
+      points: corners.map((px, i) => ({
+        px,
+        world: w[i],
+        ...(cornerMacs[i] ? { mac: cornerMacs[i] } : {}), // âncora só vai quando associada
+      })),
       H: liveH.H,
       updatedAt: Date.now(),
       ...(station ? { station } : {}), // só vai quando marcado; ausente = fallback no back
@@ -335,6 +360,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
               ariaLabel="O que marcar no chão"
               options={[
                 { value: "cantos", label: "Cantos" },
+                { value: "ancoras", label: "Âncoras" },
                 { value: "estacao", label: "Estação BLE" },
                 { value: "referencia", label: "Tag de referência" },
               ]}
@@ -412,6 +438,79 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                     );
                   })}
                 </div>
+              )}
+            </div>
+          )}
+          {canConfigure && calStep === "ancoras" && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[12px] text-text-muted">
+                Associe uma tag BLE ÂNCORA (posição conhecida) a cada canto: selecione o canto, depois
+                escolha a tag na lista abaixo. Base para calibrar distância/triangulação depois.
+              </p>
+              {corners.length < 4 ? (
+                <span className="text-[12px] text-text-muted">
+                  Marque os 4 cantos primeiro (passo Cantos).
+                </span>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[12px] text-text-muted">Canto:</span>
+                    {corners.map((_, i) => {
+                      const selected = anchorCorner === i;
+                      const mac = cornerMacs[i] || "";
+                      return (
+                        <Button
+                          key={`ac${i}`}
+                          size="sm"
+                          variant={selected ? "primary" : "ghost"}
+                          aria-pressed={selected}
+                          onClick={() => setAnchorCorner(i)}
+                        >
+                          {i + 1}
+                          {mac ? ` · ${macName(mac)}` : ""}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <span className="text-[12px] text-text-muted">
+                    Tag-âncora para o canto {anchorCorner + 1}:
+                  </span>
+                  {btReadings.length === 0 ? (
+                    <span className="text-[12px] text-text-muted">
+                      Nenhuma tag visível — verifique a estação.
+                    </span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {cornerMacs[anchorCorner] && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setCornerMacs((m) => m.map((v, i) => (i === anchorCorner ? "" : v)))
+                          }
+                        >
+                          Sem âncora
+                        </Button>
+                      )}
+                      {btReadings.map((r) => {
+                        const selected = cornerMacs[anchorCorner] === r.mac;
+                        return (
+                          <Button
+                            key={r.mac}
+                            size="sm"
+                            variant={selected ? "primary" : "ghost"}
+                            aria-pressed={selected}
+                            onClick={() =>
+                              setCornerMacs((m) => m.map((v, i) => (i === anchorCorner ? r.mac : v)))
+                            }
+                          >
+                            {r.rotulo || r.mac} · {r.rssi} dBm
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -493,7 +592,12 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <circle
                   cx={`${p.x * 100}%`}
                   cy={`${p.y * 100}%`}
-                  r={calStep === "cantos" && hoverIdx === i ? 8 : 6}
+                  r={
+                    (calStep === "cantos" && hoverIdx === i) ||
+                    (calStep === "ancoras" && anchorCorner === i)
+                      ? 8
+                      : 6
+                  }
                   fill="var(--state-info)"
                   stroke="var(--bg)"
                   strokeWidth={2}
@@ -501,6 +605,20 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <text x={`${p.x * 100}%`} y={`${p.y * 100}%`} dx={9} dy={4} fontSize={12} fill="var(--state-info)">
                   {i + 1}
                 </text>
+                {/* Âncora associada: nome/MAC ao lado do canto (só quando há uma). */}
+                {cornerMacs[i] && (
+                  <text
+                    x={`${p.x * 100}%`}
+                    y={`${p.y * 100}%`}
+                    dx={9}
+                    dy={17}
+                    fontSize={10}
+                    fill="var(--state-info)"
+                    opacity={0.75}
+                  >
+                    {macName(cornerMacs[i])}
+                  </text>
+                )}
               </g>
             ))}
           {/* Estação BLE: marcador de "antena/beacon" (anel radiante + ponto), cor distinta dos cantos. */}

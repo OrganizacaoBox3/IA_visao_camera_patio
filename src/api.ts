@@ -305,7 +305,9 @@ export const saveCamConfig = (cameraId: string, config: CameraCfg) =>
 // src/vision/homography.ts; o hub valida (≥4 pontos, matriz 3×3) e persiste. SÓ números (LGPD).
 import type { Matrix3, Vec2 } from "./vision/homography";
 export type { Matrix3, Vec2 } from "./vision/homography";
-export type CalibrationPoint = { px: Vec2; world: Vec2 };
+// mac (opcional): MAC MAIÚSCULO de uma tag BLE ÂNCORA fixada NESTE vértice (posição conhecida) —
+// base p/ calibrar distância/triangulação depois. Aditivo; ausente = vértice sem âncora. SÓ string.
+export type CalibrationPoint = { px: Vec2; world: Vec2; mac?: string };
 // station (opcional): ponto de imagem (normalizado 0..1) do chão onde a estação BLE fica — origem
 // da correlação RSSI×distância da fusão tag↔pessoa. Ausente = comportamento atual (aditivo). SÓ números.
 // refTag (opcional): tag FIXA num ponto conhecido do chão — âncora p/ heartbeat/drift/RSSI@1m.

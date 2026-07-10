@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Download,
   Eraser,
+  Grid3x3,
   ImageDown,
   Lock,
   Pause,
@@ -54,6 +55,7 @@ import {
 import { loadCamConfig, getCameraCfg, setCameraCfg } from "./cameraConfig";
 import { ApiError, type BtReading } from "./api";
 import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
+import { useCalibrationOverlay } from "./camera/useCalibrationOverlay";
 import {
   decodeMask,
   encodeMask,
@@ -106,6 +108,7 @@ import {
   drawTripwireDraft,
   drawZoneOverlays,
   drawTelemetryHud,
+  drawCalibrationOverlay,
   RISK_LABEL,
   type ZoneResult,
   type TrackBox,
@@ -372,6 +375,10 @@ export function CameraWorkspace({
     getReadings,
     enabled: mode === "full" && !!getReadings,
   });
+
+  // Malha da calibração (grade do chão via homografia + pontos cadastrados) — SÓ na câmera ABERTA.
+  // Toggle opt-in; refs (onRef/dataRef) lidos no rAF/drawScene sem re-armar o laço de desenho.
+  const calib = useCalibrationOverlay(cameraId, mode === "full");
 
   // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
@@ -1193,6 +1200,13 @@ export function CameraWorkspace({
       layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
     );
 
+    // Malha da calibração (toggle opt-in): grade do chão via homografia + pontos cadastrados —
+    // feedback do posicionamento no piso. rAF lê os refs; só desenha quando ligado e há pontos.
+    if (calib.onRef.current) {
+      const c = calib.dataRef.current;
+      if (c.points.length) drawCalibrationOverlay(ctx, cr, c.points, c.H);
+    }
+
     // Tripwires — SEMPRE visíveis. Modo hub (ADR-009): o "hoje" é SÓ o acumulado do servidor
     // (somar a sessão local contaria cada cruzamento 2×) e paused=false (o motor conta 24/7);
     // modo local: base do servidor + sessão corrente, pausado na grade.
@@ -1874,6 +1888,19 @@ export function CameraWorkspace({
             HUD
           </Toggle>
         </Tooltip>
+        {/* Malha da calibração: grade do chão (homografia) + pontos cadastrados. Some quando a
+            câmera nunca foi calibrada. Going-gray: conferência de posicionamento, não anormalidade. */}
+        {calib.hasCalibration && (
+          <Tooltip content="Mostrar a malha da calibração sobre o vídeo: grade do chão (via homografia) + os pontos cadastrados — confere o posicionamento da pessoa no piso">
+            <Toggle
+              aria-label="Malha da calibração"
+              pressed={calib.on}
+              onPressedChange={calib.setOn}
+            >
+              <Grid3x3 size={16} strokeWidth={1.75} aria-hidden /> Malha
+            </Toggle>
+          </Tooltip>
+        )}
         {/* Fonte da análise (ADR-009): NEUTRO e só no modo hub; local = nada. No modo hub o
             worker tfjs nem sobe p/ pessoas — o badge de detecção abaixo só aparece se um
             consumidor local (fadiga/celular, engine local) o iniciou. */}

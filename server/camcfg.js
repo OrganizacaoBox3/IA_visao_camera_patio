@@ -119,10 +119,15 @@ function cleanCalibration(c) {
     if (!p || !p.px || !p.world) return null;
     if (!isCoord(p.px.x) || !isCoord(p.px.y)) return null; // px normalizado 0..1
     if (!fin(p.world.x) || !fin(p.world.y)) return null; // metros (finitos, sinal livre)
-    points.push({
+    const pt = {
       px: { x: p.px.x, y: p.px.y },
       world: { x: p.world.x, y: p.world.y },
-    });
+    };
+    // mac (opcional): tag BLE ÂNCORA fixada NESTE vértice (posição conhecida) — MAC MAIÚSCULO (o
+    // mesmo das leituras BLE). Aditivo: só entra quando presente/não-vazio (SÓ string curta; LGPD).
+    const mac = str(p.mac).toUpperCase();
+    if (mac) pt.mac = mac;
+    points.push(pt);
   }
   if (!Array.isArray(c.H) || c.H.length !== 9 || !c.H.every(fin)) return null;
   const out = { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };

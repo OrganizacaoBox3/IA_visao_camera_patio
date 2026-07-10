@@ -37,6 +37,8 @@ import android.content.DialogInterface;
 import android.text.InputType;
 import android.widget.EditText;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -49,6 +51,9 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Estação BLE do TC22 — varre as tags (família Grendene) e REPORTA ao hub por HTTP. É a "antena real"
@@ -72,11 +77,15 @@ public class MainActivity extends Activity {
     static final String PREFS = "btscan";        // SharedPreferences do app
     static final String KEY_HUB = "hub_url";      // chave do endereço do hub (editável em runtime)
     static final String KEY_NAMES = "tag_names";  // blob de nomes customizados (linhas "mac=nome")
+    static final String KEY_LOCS = "tag_locs";    // blob da última localização por tag (linhas "mac=lat,lon,ts")
     static final String SUFFIX_READING = "/api/bt/reading";  // sufixo do ingest — trocado p/ tag-name
     static final String SUFFIX_TAGNAME = "/api/bt/tag-name"; // endpoint de nomeação (contrato com o hub)
+    static final String SUFFIX_TAGS = "/api/bt/tags";        // endpoint de listagem de nomes (pull do hub)
     static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
     static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
     static final long POST_EVERY_MS = 2000;      // envio ao hub
+    static final long SYNC_NAMES_MS = 15000;     // pull periódico dos nomes do hub (servidor = fonte)
+    static final long SAVE_LOCS_EVERY_TICKS = 15; // persiste a réplica de localização a cada N ticks (se mudou)
     static final long REFRESH_MS = 1000;         // refresh da tela (vida)
     static final long STALE_MS = 6000;           // sem ver a tag -> desbota
     static final long DROP_MS = 20000;           // sem ver a tag -> some da lista/contagem
@@ -131,6 +140,18 @@ public class MainActivity extends Activity {
         h.append("};");
         h.append("var rb=document.getElementById('rc');");
         h.append("if(rb){rb.onclick=function(){if(here){follow=true;map.setView(here.getLatLng(),Math.max(map.getZoom(),17));}};}");
+        // Marcadores das TAGS (réplica local): âmbar, distinto do verde "você está aqui". Recebe o array já
+        // montado pelo app (setTags([{mac,name,lat,lon}])); cria/move os pontos e remove os que sumiram.
+        h.append("var tagMarks={};");
+        h.append("window.setTags=function(arr){try{");
+        h.append("var seen={};");
+        h.append("for(var i=0;i<arr.length;i++){var it=arr[i];var mc=it.mac;seen[mc]=true;");
+        h.append("var m=tagMarks[mc];");
+        h.append("if(m==null){m=L.circleMarker([it.lat,it.lon],{radius:6,color:'#0F1115',weight:2,fillColor:'#E0A93B',fillOpacity:1}).addTo(map);tagMarks[mc]=m;}");
+        h.append("else{m.setLatLng([it.lat,it.lon]);}");
+        h.append("m.bindTooltip(it.name,{direction:'top'});}");
+        h.append("for(var k in tagMarks){if(!seen[k]){map.removeLayer(tagMarks[k]);delete tagMarks[k];}}");
+        h.append("}catch(e){}};");
         h.append("</script></body></html>");
         return h.toString();
     }
@@ -174,6 +195,13 @@ public class MainActivity extends Activity {
     private final Object nameLock = new Object();
     private final HashMap<String, String> tagNames = new HashMap<String, String>();
 
+    // Réplica local da ÚLTIMA localização vista de cada tag (mac -> [lat,lon,ts]). Persistida em prefs (KEY_LOCS).
+    // Escrita quando a tag é vista COM fix (fora da main, no callback do scan); lida na main (makeRow/pushTags).
+    private final Object locLock = new Object();
+    private final HashMap<String, double[]> tagLocs = new HashMap<String, double[]>();
+    private volatile boolean locsDirty = false;   // há localização nova ainda não persistida
+    private long tickCount = 0;                    // conta ticks p/ persistir a réplica periodicamente (só main)
+
     // UI
     private LinearLayout listContainer;
     private TextView btChip, hubChip, tagChip, detailLine, subLine;
@@ -213,6 +241,15 @@ public class MainActivity extends Activity {
                     t.rssi = rssi;
                     t.lastSeen = now;
                     if (name.length() > 0) t.name = name;
+                }
+                // Réplica local: com fix, guarda a última posição em que ESTA tag foi vista (é a referência do app).
+                if (hasFix) {
+                    double la = lastLat, lo = lastLon;
+                    double ts = System.currentTimeMillis();
+                    synchronized (locLock) {
+                        tagLocs.put(mac, new double[]{la, lo, ts});
+                    }
+                    locsDirty = true;
                 }
             }
         }
@@ -523,6 +560,66 @@ public class MainActivity extends Activity {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_NAMES, sb.toString()).apply();
     }
 
+    /** Carrega a réplica de localização do prefs (linhas "mac=lat,lon,ts"). Tolerante a linha malformada. */
+    private void loadTagLocs() {
+        String blob = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_LOCS, "");
+        if (blob == null || blob.length() == 0) return;
+        String[] lines = blob.split("\n");
+        synchronized (locLock) {
+            for (int i = 0; i < lines.length; i++) {
+                String ln = lines[i];
+                int eq = ln.indexOf('=');
+                if (eq <= 0) continue; // sem '=' ou mac vazio
+                String mac = ln.substring(0, eq);
+                String[] parts = ln.substring(eq + 1).split(",");
+                if (parts.length < 2) continue;
+                try {
+                    double la = Double.parseDouble(parts[0]);
+                    double lo = Double.parseDouble(parts[1]);
+                    double ts = parts.length >= 3 ? Double.parseDouble(parts[2]) : 0d;
+                    tagLocs.put(mac, new double[]{la, lo, ts});
+                } catch (Exception ignored) {
+                    // linha corrompida — ignora e segue
+                }
+            }
+        }
+    }
+
+    /** Persiste a réplica de localização como blob simples (StringBuilder, sem lib; ponto decimal via Double.toString). */
+    private void saveTagLocs() {
+        StringBuilder sb = new StringBuilder();
+        synchronized (locLock) {
+            boolean first = true;
+            for (Map.Entry<String, double[]> e : tagLocs.entrySet()) {
+                double[] v = e.getValue();
+                if (!first) sb.append('\n');
+                first = false;
+                sb.append(e.getKey()).append('=')
+                        .append(Double.toString(v[0])).append(',')
+                        .append(Double.toString(v[1])).append(',')
+                        .append(Double.toString(v[2]));
+            }
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_LOCS, sb.toString()).apply();
+    }
+
+    /** Formata um grau com 4 casas decimais SEM locale (sempre ponto) e sem `+` — p/ exibir a última posição. */
+    private String fmt4(double v) {
+        long scaled = Math.round(v * 10000d);
+        boolean neg = scaled < 0;
+        if (neg) scaled = -scaled;
+        long ip = scaled / 10000;
+        long fp = scaled % 10000;
+        StringBuilder sb = new StringBuilder();
+        if (neg) sb.append('-');
+        sb.append(Long.toString(ip)).append('.');
+        if (fp < 1000) sb.append('0');
+        if (fp < 100) sb.append('0');
+        if (fp < 10) sb.append('0');
+        sb.append(Long.toString(fp));
+        return sb.toString();
+    }
+
     /** Deriva a URL de nomeação do hubUrl atual: troca o sufixo /reading por /tag-name (ou concatena seguro). */
     private String tagNameUrl() {
         String base = hubUrl;
@@ -533,6 +630,71 @@ public class MainActivity extends Activity {
         StringBuilder sb = new StringBuilder(base);
         if (base.length() > 0 && base.charAt(base.length() - 1) == '/') sb.setLength(sb.length() - 1);
         return sb.append(SUFFIX_TAGNAME).toString();
+    }
+
+    /** Deriva a URL de listagem de nomes do hubUrl atual: troca o sufixo /reading por /tags (ou concatena seguro). */
+    private String tagsUrl() {
+        String base = hubUrl;
+        if (base.endsWith(SUFFIX_READING)) {
+            StringBuilder sb = new StringBuilder(base.substring(0, base.length() - SUFFIX_READING.length()));
+            return sb.append(SUFFIX_TAGS).toString();
+        }
+        StringBuilder sb = new StringBuilder(base);
+        if (base.length() > 0 && base.charAt(base.length() - 1) == '/') sb.setLength(sb.length() - 1);
+        return sb.append(SUFFIX_TAGS).toString();
+    }
+
+    /**
+     * Puxa os nomes do hub (GET /api/bt/tags → [{mac,rotulo}]) e ADOTA (servidor = fonte). Fora da main.
+     * Só regrava/redesenha se algo mudou. Falha é silenciosa (o naming local continua empurrando via postTagName).
+     */
+    private void syncTagNamesOnce() {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(tagsUrl()).openConnection();
+            c.setRequestMethod("GET");
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(3000);
+            int code = c.getResponseCode();
+            if (code < 200 || code >= 300) return;
+            InputStream is = c.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[1024];
+            int r;
+            while ((r = is.read(buf)) != -1) bos.write(buf, 0, r);
+            is.close();
+            String body = new String(bos.toByteArray(), "UTF-8");
+            JSONArray arr = new JSONArray(body);
+            boolean changed = false;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String mac = o.optString("mac", "");
+                String rotulo = o.optString("rotulo", "");
+                if (mac.length() == 0 || rotulo.length() == 0) continue;
+                synchronized (nameLock) {
+                    String prev = tagNames.get(mac);
+                    if (prev == null || !prev.equals(rotulo)) {
+                        tagNames.put(mac, rotulo);
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) {
+                saveTagNames();
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        refreshUi(adapter != null && adapter.isEnabled());
+                    }
+                });
+                Log.i(TAG, "nomes sincronizados do hub");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, new StringBuilder("sync tags falhou: ").append(e.getMessage()).toString());
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     /** Escapa o mínimo p/ JSON válido (nome é digitado pelo operador): barra invertida e aspas. */
@@ -620,6 +782,7 @@ public class MainActivity extends Activity {
         density = getResources().getDisplayMetrics().density;
         hubUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HUB, DEFAULT_HUB_URL);
         loadTagNames();
+        loadTagLocs();
         buildUi();
 
         BluetoothManager bm = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
@@ -674,6 +837,23 @@ public class MainActivity extends Activity {
         poster.setDaemon(true);
         poster.start();
 
+        // Sync de nomes (PULL): a cada SYNC_NAMES_MS puxa os rótulos do hub e adota (servidor = fonte). Fora da main.
+        Thread syncer = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (running) {
+                    syncTagNamesOnce();
+                    try {
+                        Thread.sleep(SYNC_NAMES_MS);
+                    } catch (InterruptedException ie) {
+                        return;
+                    }
+                }
+            }
+        });
+        syncer.setDaemon(true);
+        syncer.start();
+
         ui.post(tick); // liga o refresh vivo (que também gerencia o scan)
     }
 
@@ -682,6 +862,8 @@ public class MainActivity extends Activity {
         super.onDestroy();
         running = false;
         ui.removeCallbacks(tick);
+        if (locsDirty) saveTagLocs(); // não perde a última posição vista ao fechar
+        locsDirty = false;
         if (map != null) {
             try {
                 map.destroy();
@@ -708,6 +890,13 @@ public class MainActivity extends Activity {
             pruneStale();
             refreshUi(btOn);
             pushLocation(); // atualiza o "você está aqui" no mapa (só age quando há fix)
+            pushTags();     // atualiza os marcadores das tags (réplica local de localização)
+            // Persiste a réplica periodicamente, só quando algo mudou (evita escrever prefs todo tick).
+            tickCount++;
+            if (locsDirty && (tickCount % SAVE_LOCS_EVERY_TICKS == 0)) {
+                locsDirty = false;
+                saveTagLocs();
+            }
             ui.postDelayed(this, REFRESH_MS);
         }
     };
@@ -730,6 +919,41 @@ public class MainActivity extends Activity {
             js.append(Double.toString(lastLat)).append(',')
                     .append(Double.toString(lastLon)).append(',')
                     .append(Float.toString(lastAcc)).append(')');
+            map.evaluateJavascript(js.toString(), null);
+        } catch (Exception ignored) {
+            // WebView pode estar em transição — ignora; o próximo tick tenta de novo
+        }
+    }
+
+    /**
+     * Injeta os marcadores das tags (réplica local) no mapa via JS (main thread). Monta o array com o
+     * NOME atual (rótulo do operador/hub se houver) — StringBuilder, sem `+`. Passa o array literal direto
+     * ao setTags (o WebView avalia como JS; sem JSON.parse). Barato: só um evaluateJavascript por tick.
+     */
+    private void pushTags() {
+        if (!mapReady || map == null) return;
+        StringBuilder arr = new StringBuilder("[");
+        synchronized (locLock) {
+            boolean first = true;
+            for (Map.Entry<String, double[]> e : tagLocs.entrySet()) {
+                double[] v = e.getValue();
+                String mac = e.getKey();
+                String nm;
+                synchronized (nameLock) {
+                    nm = tagNames.get(mac);
+                }
+                if (nm == null || nm.length() == 0) nm = mac;
+                if (!first) arr.append(',');
+                first = false;
+                arr.append("{\"mac\":\"").append(jsonEscape(mac))
+                        .append("\",\"name\":\"").append(jsonEscape(nm))
+                        .append("\",\"lat\":").append(Double.toString(v[0]))
+                        .append(",\"lon\":").append(Double.toString(v[1])).append('}');
+            }
+        }
+        arr.append(']');
+        try {
+            StringBuilder js = new StringBuilder("setTags(").append(arr).append(')');
             map.evaluateJavascript(js.toString(), null);
         } catch (Exception ignored) {
             // WebView pode estar em transição — ignora; o próximo tick tenta de novo
@@ -950,6 +1174,18 @@ public class MainActivity extends Activity {
         macTv.setTextSize(12);
         left.addView(nameTv);
         left.addView(macTv);
+        // Réplica local: se já vimos esta tag com fix, mostra a última posição conhecida (referência do app).
+        double[] loc;
+        synchronized (locLock) {
+            loc = tagLocs.get(mac);
+        }
+        if (loc != null) {
+            TextView locTv = new TextView(this);
+            locTv.setText(new StringBuilder("última: ").append(fmt4(loc[0])).append(',').append(fmt4(loc[1])).toString());
+            locTv.setTextColor(C_MUTED);
+            locTv.setTextSize(11);
+            left.addView(locTv);
+        }
 
         // Barra de sinal
         int barW = dp(84), barH = dp(8);

@@ -94,6 +94,17 @@ async function handle(req, res, ctx) {
     return true;
   }
 
+  // App (TC22) → hub: PUXA os nomes cadastrados das tags (sync bidirecional). Mesma auth de device do /reading.
+  // MAC MAIÚSCULO + rótulo; só tags ativas. LGPD: só metadado (cadastro).
+  if (req.url === "/api/bt/tags" && req.method === "GET") {
+    if (!tokenOk(req)) {
+      json(res, 401, { error: "token de estação inválido" });
+      return true;
+    }
+    json(res, 200, btTags.listForDevice());
+    return true;
+  }
+
   return false;
 }
 

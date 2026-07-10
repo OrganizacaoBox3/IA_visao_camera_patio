@@ -123,4 +123,9 @@ async function upsertByMac(mac, rotulo) {
   return { tag: t };
 }
 
-module.exports = { init, create, update, remove, match, upsertByMac, all: () => list };
+// Lista device-facing (TC22 sincroniza nomes): só tags ativas, MAC MAIÚSCULO como chave + rótulo cadastrado.
+function listForDevice() {
+  return list.filter((t) => t.ativo !== false).map((t) => ({ mac: key(t.btName), rotulo: t.rotulo }));
+}
+
+module.exports = { init, create, update, remove, match, upsertByMac, listForDevice, all: () => list };
