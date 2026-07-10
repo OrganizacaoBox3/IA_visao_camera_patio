@@ -96,9 +96,40 @@ Duas frentes independentes (propriedade de arquivo exclusiva, contrato da Fase 0
   fusão < baseline diretamente). **Honestidade:** o ganho é sintético (RSSI limpo); em campo (RSSI ruidoso/
   não-monotônico) tende a ser menor — é v1, como previsto.
 
+## Fase 2 (2026-07-09) — ✅ modelo de movimento + suíte de benchmark (paralelizada)
+
+Duas frentes independentes (arquivos novos exclusivos, contrato fixo), integradas num `verify` único
+(661 testes verdes):
+
+**Frente 1 — motor de fusão v2 com modelo de movimento** (`src/localizacao/motion-engine.ts`):
+- Diagnóstico: o centroide do v1 estima a tag no instante-médio-ponderado do ring (passado) → *lagga* tag em
+  movimento. v2 estima a **velocidade da TAG** (diferença dos centroides ponderados de duas janelas do ring —
+  cada centroide colapsa o vaivém do coletor) e **extrapola** a base até o instante atual, com EMA da
+  velocidade + ganho conservador + lead limitado (travas contra explosão por ruído do GPS).
+- **RMSE 11,28 m no cenário-gate** (v1 = 12,29 m). Honestidade: o subagente **rejeitou** um config que dava
+  10,08 m no seed 42 mas perdia em 5/7 outros seeds (overfit); escolheu por varredura de 12 seeds.
+
+**Frente 2 — suíte de cenários + benchmark** (`src/localizacao/scenarios.ts`, 9 presets variando ruído/
+alcance/seed/horizonte): torna "o motor é melhor?" uma pergunta sobre a suíte, não um seed.
+
+### Tabela de benchmark (RMSE m, cobertura 100% em todos)
+
+| | baseline | fusão v1 | movimento v2 |
+|---|---|---|---|
+| **média da suíte (9)** | **26,0** | **14,9** | **14,8** |
+| ganha em… | — | 8/9 | 5/9 (vs v1) |
+
+**Achado honesto (a suíte pagou o pão):**
+- A **fusão v1 é o ganho robusto**: ~43% melhor que o baseline na média; ganha em 8/9 (perde só em
+  `alcance-curto` 20 m, onde o "último GPS" já basta).
+- O **movimento v2 NÃO é vitória limpa sobre o v1**: **empata** no agregado (14,8 vs 14,9 — só −0,1 m) e
+  **perde em 4/9** (alcance-longo, horizonte-longo…) por *overshoot* da extrapolação; ganha onde o lag de
+  movimento/ruído domina. O ganho decisivo exige **ganho adaptativo por confiança da velocidade** — não
+  forçamos um salto que a medição não sustenta.
+
 ### Próximas fases (gated, ADR-012)
 
-1. **Coleta rotulada de campo** (ligar `BT_RECORD` + registrar posição-verdade) → destrava RMSE-vs-truth em
-   dado real e afere o ganho da fusão fora do sintético.
-2. **Modelo de movimento** na fusão (tag em deslocamento — o carroção): hoje o centroide lagga tag rápida.
+1. **v3 — extrapolação adaptativa**: modular o ganho pela confiança/consistência da velocidade estimada
+   (extrapolar forte só quando o movimento é coerente) → capturar o ganho do v2 sem o overshoot.
+2. **Coleta rotulada de campo** (`BT_RECORD` + posição-verdade) → RMSE-vs-truth em dado real.
 3. **Métricas de identidade** (IDF1, troca-de-ID) quando o cenário tiver múltiplas entidades/oclusão.
