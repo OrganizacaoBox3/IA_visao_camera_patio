@@ -82,9 +82,17 @@ const PINS: Record<
 };
 
 describe("replay-fusion (harness do associador de produção)", () => {
-  it("é determinístico: duas rodadas da suíte produzem números idênticos", () => {
-    expect(runFusionBenchmark()).toEqual(runFusionBenchmark());
-  });
+  // Timeout explícito e generoso (default do Vitest é 5000ms): esta suíte já tem 12 cenários de
+  // 240 passos cada, RODADOS DUAS VEZES aqui — margem apertada mesmo sem carga, e este teste já
+  // estourou o default sob contenção de CPU (várias verificações rodando juntas na mesma máquina).
+  // Não é falha de VALOR (os números batem quando roda isolado) — é margem de parede curta demais.
+  it(
+    "é determinístico: duas rodadas da suíte produzem números idênticos",
+    () => {
+      expect(runFusionBenchmark()).toEqual(runFusionBenchmark());
+    },
+    20000,
+  );
 
   it("parado: o guarda minMovement abstém SEMPRE — zero rótulo errado", () => {
     // Invariante do dono comprovada: sem movimento não há correlação confiável, e rótulo errado é
