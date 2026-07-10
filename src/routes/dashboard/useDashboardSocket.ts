@@ -40,6 +40,9 @@ export type DashboardSocket = {
   analysisEngines: Record<string, "hub" | "local">;
   // Sincronização ao vivo — revisão de tripwires por câmera (ADR-006).
   revByCamera: Map<string, number>;
+  // Sincronização ao vivo — revisão da CALIBRAÇÃO (homografia/station) por câmera. Mesmo idioma
+  // do revByCamera: `camcfg-updated {kind:"calibration"}` incrementa; a fusão tag↔pessoa re-busca.
+  calibrationRevByCamera: Map<string, number>;
   // Leituras BLE da estação (bt-readings) — getter estável p/ a fusão tag↔pessoa (caminho C).
   getBtReadings: () => BtReading[];
 };
@@ -66,6 +69,11 @@ export function useDashboardSocket({
   // Cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela câmera; o
   // número é repassado às tiles via `tripwiresRev` (re-busca dos tripwires). (ADR-006)
   const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
+  // Idem para a CALIBRAÇÃO da câmera (H em metros + station): sem isto, dashboards abertos ficavam
+  // com a homografia ANTIGA até remontar (useCameraTagLabels busca 1× por mount). (ADR-006)
+  const [calibrationRevByCamera, setCalibrationRevByCamera] = useState<Map<string, number>>(
+    new Map(),
+  );
   // Último id de foco anunciado ao hub. Ref (não state): mudá-lo não deve re-renderizar — é só
   // o "espelho" do que o servidor já sabe, usado p/ idempotência (não reemitir o mesmo id),
   // re-emit no reconnect (o servidor perde o foco no disconnect) e release no unmount.
@@ -160,11 +168,20 @@ export function useDashboardSocket({
     });
     // Sincronização ao vivo de config compartilhada (ADR-006). Evento aditivo na sala `dashboards`:
     //   • kind:"tripwires" → incrementa a revisão daquela câmera; a prop `tripwiresRev` faz a tile re-buscar.
+    //   • kind:"calibration" → idem para a homografia/station; a prop `calibrationRev` faz a fusão re-buscar.
     socket.on(
       "camcfg-updated",
-      (p: { kind: "tripwires" | "zones" | "camconfig"; cameraId: string }) => {
+      (p: { kind: "tripwires" | "zones" | "camconfig" | "calibration"; cameraId: string }) => {
         if (p?.kind === "tripwires" && typeof p.cameraId === "string") {
           setRevByCamera((prev) => {
+            const next = new Map(prev);
+            next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
+            return next;
+          });
+        } else if (p?.kind === "calibration" && typeof p.cameraId === "string") {
+          // Calibração salva em OUTRO posto: incrementa a rev → useCameraTagLabels re-busca o
+          // H/station daquela câmera (1 fetch por evento; grade e fullscreen deixam de ficar stale).
+          setCalibrationRevByCamera((prev) => {
             const next = new Map(prev);
             next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
             return next;
@@ -217,5 +234,13 @@ export function useDashboardSocket({
   // Getter estável das leituras BLE (identidade fixa → não quebra o memo de quem consome a fusão).
   const getBtReadings = useCallback(() => btReadingsRef.current, []);
 
-  return { socketRef, connected, statuses, analysisEngines, revByCamera, getBtReadings };
+  return {
+    socketRef,
+    connected,
+    statuses,
+    analysisEngines,
+    revByCamera,
+    calibrationRevByCamera,
+    getBtReadings,
+  };
 }

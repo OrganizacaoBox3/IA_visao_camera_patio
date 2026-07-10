@@ -24,7 +24,10 @@ import { describe, it, expect } from "vitest";
 // 1920→1950 (jul/09): toggle "malha da calibração" (grade do chão via homografia + pontos cadastrados)
 // na câmera ABERTA. O GROSSO (carga da calibração + estado/ref do toggle) foi EXTRAÍDO p/
 // src/camera/useCalibrationOverlay.ts; aqui sobrou a fiação (1 hook + 1 draw call + o Toggle no rodapé).
-const MAX_LINES = 1950;
+// 1950→1960 (jul/10): sync AO VIVO da calibração (fix de staleness — H/station não atualizavam até
+// remontar). O GROSSO (rev por câmera no socket + re-fetch) vive em useDashboardSocket/
+// useCameraTagLabels; aqui entrou SÓ a fiação da prop `calibrationRev` (doc + destructure + 1 arg).
+const MAX_LINES = 1960;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

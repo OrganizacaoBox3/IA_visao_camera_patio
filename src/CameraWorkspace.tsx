@@ -192,6 +192,10 @@ type Props = {
   /** Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só a câmera ABERTA (mode="full") usa —
    *  rotula a pessoa com o nome da tag. Ausente → sem rótulo de tag (só "Pessoa <id>"). */
   getReadings?: () => BtReading[];
+  /** SYNC AO VIVO da CALIBRAÇÃO (mesmo idioma do tripwiresRev/ADR-006): revisão incrementada pela
+   *  central a cada `camcfg-updated {kind:"calibration"}` → a fusão re-busca H/station. Ausente →
+   *  calibração carrega só ao abrir/trocar a câmera (comportamento anterior). */
+  calibrationRev?: number;
   /** Transporte do VÍDEO da câmera aberta: "webrtc" = <video-stream> (decode por HW) atrás de um
    *  canvas TRANSPARENTE; "mjpeg"/ausente = frames desenhados no canvas (caminho original). */
   transport?: "mjpeg" | "webrtc";
@@ -214,6 +218,7 @@ export function CameraWorkspace({
   analysisEngine = "local",
   getHubAnalysis,
   getReadings,
+  calibrationRev,
   transport = "mjpeg",
   onWebrtcFail,
 }: Props) {
@@ -374,6 +379,7 @@ export function CameraWorkspace({
     getHubAnalysis,
     getReadings,
     enabled: mode === "full" && !!getReadings,
+    calibrationRev,
   });
 
   // Malha da calibração (grade do chão via homografia + pontos cadastrados) — SÓ na câmera ABERTA.

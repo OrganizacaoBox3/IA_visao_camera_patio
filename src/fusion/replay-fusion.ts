@@ -2,10 +2,12 @@
 // sintéticos (sim.ts) e mede identidade (identity-metrics.ts). A alimentação é FIEL ao
 // useTagFusion de produção: tick sem leituras BLE é PULADO (nem push nem assign); com leituras,
 // push(buildFusionFrame(...)) + assign(ts) — mesmo caminho de código, mesmo timing de 500 ms.
-// A produção tem DOIS call-sites com alimentações DIFERENTES, e a suíte mede os dois:
-// - fullscreen: passa H calibrada + stationPx calibrado (cenários com stationPx do sim);
-// - CameraTile da grade: chama useTagFusion com H mas SEM stationPx → frame.ts cai no default
-//   (0.5, 1.0) = "estação junto da câmera" (cenário grade-sem-station, flag omitStationPx).
+// A suíte mede DUAS alimentações que existem na prática:
+// - calibrada completa: H calibrada + stationPx calibrado (cenários com stationPx do sim);
+// - câmera calibrada SEM ponto de estação configurado (cenário grade-sem-station, flag
+//   omitStationPx): H presente, stationPx omitido → frame.ts cai no default (0.5, 1.0) =
+//   "estação junto da câmera". Estado real possível; também era o comportamento do CameraTile
+//   da grade ANTES do fix de 2026-07-10.
 // Determinístico por construção: cenário vem de seed fixo; aqui não há relógio nem sorteio.
 // Responsabilidade única: só o replay + a suíte fixa de cenários; simular e medir moram ao lado.
 import { TagTrackAssociator } from "./associate";
@@ -22,8 +24,9 @@ export type FusionReplayResult = { ticks: IdentityTick[]; metrics: IdentityMetri
  * Reproduz um cenário no associador REAL, tick a tick, exatamente como a produção o alimentaria.
  * Todo tick PROCESSADO (com leituras) vira um IdentityTick avaliável; os pulados não existem
  * para a métrica (a produção também não decide nada neles).
- * `omitStationPx` reproduz o call-site do CameraTile da grade: H presente mas stationPx omitido
- * (frame.ts usa o default 0.5,1.0). Sem calibração (H null) o stationPx nunca é consumido.
+ * `omitStationPx` reproduz a câmera calibrada SEM ponto de estação configurado: H presente mas
+ * stationPx omitido (frame.ts usa o default 0.5,1.0). Sem calibração (H null) o stationPx nunca
+ * é consumido.
  */
 export function replayFusion(
   sc: SimFusionScenario,
@@ -84,9 +87,10 @@ export const FUSION_SCENARIOS: {
     seed: 42,
   },
   {
-    // Call-site do CameraTile da grade: H calibrada mas stationPx OMITIDO (default 0.5,1.0 do
-    // frame.ts) com a estação real no canto (0,0). Idêntico ao canonico fora isso — a diferença
-    // entre os dois é o custo medido de a grade não passar o station.
+    // Câmera calibrada SEM ponto de estação configurado: H presente mas stationPx OMITIDO
+    // (default 0.5,1.0 do frame.ts) com a estação real no canto (0,0). Estado real possível;
+    // também era o comportamento do CameraTile da grade ANTES do fix de 2026-07-10. Idêntico ao
+    // canonico fora isso — a diferença entre os dois é o custo medido de operar sem o station.
     name: "grade-sem-station",
     opts: { steps: STEPS, people: 3, tagged: 2, walk: "waypoint" },
     seed: 42,

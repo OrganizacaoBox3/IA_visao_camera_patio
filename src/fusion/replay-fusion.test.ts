@@ -21,22 +21,27 @@ const RATE_MARGIN = 0.02;
 
 /**
  * Pinos MEDIDOS em 2026-07-10 (seed/opts da suíte FUSION_SCENARIOS, 240 passos), APÓS: ruído
- * multiplicativo σ=5% na altura da caixa (sim.ts), sem-calibracao com stationAtCamera:true e o
- * cenário novo grade-sem-station. Piso: precision/coverage ≥ pino−RATE_MARGIN. Teto:
- * wrongRate ≤ pino+RATE_MARGIN; falseLabels/idSwitches ≤ valor medido (contadores exatos).
+ * multiplicativo σ=5% na altura da caixa (sim.ts), sem-calibracao com stationAtCamera:true, o
+ * cenário novo grade-sem-station, o DEFAULT NOVO `minMargin: 0.1` (guarda de ambiguidade top-2
+ * — torneio medido de 2026-07-10, números antes/depois no cabeçalho de associate.ts) E o fix de
+ * OCLUSÃO do scan da guarda (concorrentes vêm da janela inteira, não só do último frame — ver
+ * assign()). O fix moveu a suíte: wrong 344→332, correct 734→723, falsos rótulos 148→142 —
+ * regra do torneio segue satisfeita (wrong ≤70% de 612; correct ≥70% de 1014).
+ * Piso: precision/coverage ≥ pino−RATE_MARGIN. Teto: wrongRate ≤ pino+RATE_MARGIN;
+ * falseLabels/idSwitches ≤ valor medido (contadores exatos).
  */
 const PINS: Record<
   string,
   { precision: number; coverage: number; wrongRate: number; falseLabels: number; idSwitches: number }
 > = {
-  canonico: { precision: 0.814, coverage: 0.419, wrongRate: 0.064, falseLabels: 33, idSwitches: 1 },
+  canonico: { precision: 0.825, coverage: 0.34, wrongRate: 0.048, falseLabels: 23, idSwitches: 1 },
   parado: { precision: 1, coverage: 0, wrongRate: 0, falseLabels: 0, idSwitches: 0 },
-  bloco: { precision: 0.608, coverage: 0.335, wrongRate: 0.147, falseLabels: 15, idSwitches: 20 },
+  bloco: { precision: 0.82, coverage: 0.116, wrongRate: 0.017, falseLabels: 7, idSwitches: 0 },
   cruzamento: { precision: 0.784, coverage: 0.283, wrongRate: 0.078, falseLabels: 0, idSwitches: 1 },
-  "ruido-alto": { precision: 0.689, coverage: 0.216, wrongRate: 0.066, falseLabels: 28, idSwitches: 0 },
-  multidao: { precision: 0.498, coverage: 0.306, wrongRate: 0.205, falseLabels: 88, idSwitches: 31 },
-  "sem-calibracao": { precision: 0.718, coverage: 0.302, wrongRate: 0.08, falseLabels: 28, idSwitches: 4 },
-  "grade-sem-station": { precision: 0.492, coverage: 0.207, wrongRate: 0.144, falseLabels: 43, idSwitches: 2 },
+  "ruido-alto": { precision: 0.705, coverage: 0.184, wrongRate: 0.051, falseLabels: 22, idSwitches: 0 },
+  multidao: { precision: 0.598, coverage: 0.173, wrongRate: 0.077, falseLabels: 29, idSwitches: 3 },
+  "sem-calibracao": { precision: 0.713, coverage: 0.265, wrongRate: 0.072, falseLabels: 24, idSwitches: 1 },
+  "grade-sem-station": { precision: 0.459, coverage: 0.158, wrongRate: 0.125, falseLabels: 37, idSwitches: 0 },
 };
 
 describe("replay-fusion (harness do associador de produção)", () => {
@@ -78,10 +83,12 @@ describe("replay-fusion (harness do associador de produção)", () => {
   });
 
   it("bloco: registra o resultado sem forçar vitória (andar em bloco é fisicamente ambíguo)", () => {
-    // O ACHADO do harness (não um bug do teste): o associador FALA no caso fisicamente ambíguo em
-    // vez de abster — precisão medida 60,8% (linha de base honesta; era ~57% antes do ruído de bh,
-    // mesma física com outra realização do RNG). O gate acima impede a regressão silenciosa; este
-    // teste preserva o registro humano do número.
+    // HISTÓRICO do achado: o associador original FALAVA no caso fisicamente ambíguo (precisão
+    // 60,8%, 20 id-switches — a violação da invariante que o harness revelou). A guarda de
+    // ambiguidade top-2 (minMargin 0.1, default desde o torneio de 2026-07-10) o fez ABSTER:
+    // precisão 80,3% (82,0% após o fix de oclusão do scan da guarda), id-switch 0 — pagando
+    // cobertura (33,5%→12,3%→11,6%), o trade-off certo pela invariante do dono. Este teste
+    // preserva o registro humano do número medido.
     const m = metricsOf(runFusionBenchmark(), "bloco");
     console.log("bloco (medido):", JSON.stringify(m));
     expect(Number.isFinite(m.precision)).toBe(true);
@@ -100,5 +107,16 @@ describe("replay-fusion (harness do associador de produção)", () => {
     const estrito = metricsOf(runFusionBenchmark({ minConfidence: 0.9 }), "canonico");
     expect(estrito.coverage).toBeLessThan(padrao.coverage);
     expect(estrito).not.toEqual(padrao);
+  });
+
+  it("knob desligável: minMargin 0 devolve o comportamento antigo no bloco (fala mais, erra mais)", () => {
+    // Retrocompat MEDIDA da guarda de ambiguidade: desligada, o bloco volta a falar (cobertura
+    // sobe) ao preço da invariante (precisão cai, id-switches voltam) — 60,8%/33,5%/20 vs
+    // 82,0%/11,6%/0 com o default (pós-fix de oclusão; era 80,3%/12,3%/0 no torneio).
+    const comGuarda = metricsOf(runFusionBenchmark(), "bloco");
+    const semGuarda = metricsOf(runFusionBenchmark({ minMargin: 0 }), "bloco");
+    expect(semGuarda.coverage).toBeGreaterThan(comGuarda.coverage);
+    expect(semGuarda.precision).toBeLessThan(comGuarda.precision);
+    expect(semGuarda.idSwitches).toBeGreaterThan(comGuarda.idSwitches);
   });
 });

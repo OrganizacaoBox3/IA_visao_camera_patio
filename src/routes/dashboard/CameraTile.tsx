@@ -1,9 +1,8 @@
-import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
-import { getCalibration, type BtReading } from "../../api";
-import { type Matrix3 } from "../../vision/homography";
-import { useTagFusion } from "../../fusion/useTagFusion";
+import { type BtReading } from "../../api";
+import { useCameraTagLabels } from "../../fusion/useCameraTagLabels";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
@@ -51,6 +50,7 @@ function Go2rtcVideoTile({
   camId,
   getHubAnalysis,
   getReadings,
+  calibrationRev,
   onWebrtcFail,
 }: {
   camId: string;
@@ -59,6 +59,8 @@ function Go2rtcVideoTile({
   getHubAnalysis?: () => HubAnalysis | null;
   // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Ausente → sem rótulo de tag (só "Pessoa <id>").
   getReadings?: () => BtReading[];
+  // Sync ao vivo da CALIBRAÇÃO (idioma tripwiresRev/ADR-006): incremento → re-busca H/station.
+  calibrationRev?: number;
   // Detecção de fonte caída (go2rtc sem frames p/ esta câmera): chamado UMA vez com o id quando o
   // WebRTC não estabelece vídeo dentro da janela. O pai (DashboardPage) cai o tile pra MJPEG.
   // Ausente → sem fallback; o tile segue tentando WebRTC (comportamento atual).
@@ -143,21 +145,22 @@ function Go2rtcVideoTile({
     };
   }, [camId, onWebrtcFail]);
 
-  // Fusão tag↔pessoa (caminho C): carrega a homografia desta câmera (metros) e associa as leituras BLE
-  // aos tracks → rótulo na caixa. Desligada sem getReadings (grade sem estação) → labelFor sempre null.
-  const [calH, setCalH] = useState<Matrix3 | null>(null);
-  useEffect(() => {
-    let alive = true;
-    getCalibration(camId)
-      .then((c) => {
-        if (alive) setCalH(c?.H ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [camId]);
-  const { labelFor } = useTagFusion({ getHubAnalysis, getReadings, H: calH, enabled: !!getReadings });
+  // Fusão tag↔pessoa (caminho C): MESMO hook do fullscreen (useCameraTagLabels) — busca a calibração
+  // 1× por câmera (H em metros + `station`, o ponto do chão da estação BLE) e roda a fusão. Antes o
+  // tile duplicava a carga inline guardando SÓ o H (stationPx omitido → default 0.5,1.0 do frame.ts),
+  // e o harness mediu o custo: precisão 81,4% → 49,2% (docs/cientifica/harness-associacao-indoor.md).
+  // Sem getReadings (grade sem estação) fica desligada → labelFor sempre null (e nem busca calibração).
+  const labelForRef = useCameraTagLabels({
+    cameraId: camId,
+    getHubAnalysis,
+    getReadings,
+    enabled: !!getReadings,
+    calibrationRev,
+  });
+  // O TrackOverlay espera FUNÇÃO (dep de efeito), o hook devolve REF (p/ rAF do fullscreen): wrapper
+  // de identidade estável (dep = o ref, que nunca muda) lendo o ref por chamada — o efeito do overlay
+  // não re-arma e o React.memo dos tiles segue valendo.
+  const labelFor = useCallback((trackId: number) => labelForRef.current(trackId), [labelForRef]);
 
   return (
     <div className="tile-vp rtc-vp">
@@ -230,6 +233,10 @@ type CameraTileProps = {
   getHubAnalysis?: () => HubAnalysis | null;
   // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só o tile WebRTC usa; ausente → sem rótulo.
   getReadings?: () => BtReading[];
+  // Sync ao vivo da CALIBRAÇÃO (mesmo idioma do tripwiresRev): a central incrementa a cada
+  // `camcfg-updated {kind:"calibration"}` → a fusão do tile re-busca H/station em vez de ficar
+  // stale até remontar. OPCIONAL/retrocompatível; primitiva → amigável ao React.memo abaixo.
+  calibrationRev?: number;
   // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
   // canvas + relé socket.io. Por câmera (camcfg). Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
@@ -259,6 +266,7 @@ export const CameraTile = memo(function CameraTile({
   analysisEngine,
   getHubAnalysis,
   getReadings,
+  calibrationRev,
   transport,
   onWebrtcFail,
   onOpen,
@@ -285,6 +293,7 @@ export const CameraTile = memo(function CameraTile({
         camId={camera.id}
         getHubAnalysis={getHubAnalysis}
         getReadings={getReadings}
+        calibrationRev={calibrationRev}
         onWebrtcFail={onWebrtcFail}
       />
     </button>

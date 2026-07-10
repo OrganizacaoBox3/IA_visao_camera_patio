@@ -13,8 +13,12 @@ export function useCameraTagLabels(params: {
   getHubAnalysis?: () => HubAnalysis | null;
   getReadings?: () => BtReading[];
   enabled: boolean;
+  /** SYNC AO VIVO (mesmo idioma do tripwiresRev/ADR-006): revisão incrementada pela central a cada
+   *  `camcfg-updated {kind:"calibration"}` — cada incremento re-busca H/station (1 fetch por evento).
+   *  Ausente → comportamento atual preservado (busca 1× por mount). */
+  calibrationRev?: number;
 }) {
-  const { cameraId, getHubAnalysis, getReadings, enabled } = params;
+  const { cameraId, getHubAnalysis, getReadings, enabled, calibrationRev } = params;
 
   // Homografia da câmera (null = não calibrada → a fusão usa o proxy por tamanho de caixa) +
   // o ponto do chão onde fica a estação BLE (origem da correlação RSSI×distância; null = default).
@@ -33,7 +37,8 @@ export function useCameraTagLabels(params: {
     return () => {
       alive = false;
     };
-  }, [cameraId, enabled]);
+    // calibrationRev na dep: recalibrou em outro posto → re-busca (o guard `alive` cobre a corrida).
+  }, [cameraId, enabled, calibrationRev]);
 
   const { labelFor } = useTagFusion({
     getHubAnalysis,

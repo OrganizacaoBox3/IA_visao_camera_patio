@@ -87,11 +87,46 @@ Gate no `verify` (698 testes). Warmup de 8 s excluído; 120 s por cenário; pino
 4. **A premissa "estação junto da câmera" vale +27 pts** no modo sem calibração (71,8% vs 44,5% com
    estação no canto) — orientação de instalação a documentar para o usuário.
 
-### Próximos (agora mensuráveis pelo harness)
+## Upgrade medido (2026-07-10) — ✅ guarda top-2 adotada por torneio; Hungarian rejeitado por medição
 
-1. **Guarda de ambiguidade top-2** no associador (abster quando 1º≈2º) → deve elevar a precisão do
-   `bloco`/`multidão` às custas de cobertura — o trade-off certo pela invariante do dono.
-2. **Fix do `CameraTile`** (passar `stationPx` calibrado) — ganho medido de +32 pts esperando.
-3. **Associação ótima global** (Hungarian/transporte ótimo — dev.md §3) vs. guloso: medir na `multidão`.
-4. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável) e **multi-estação** — gated por hardware.
-5. **Dados reais**: gravar `analysis-tracks`+`bt-readings` reais e replayar pelo mesmo harness.
+Workflow multi-agente: fix do CameraTile ∥ laboratório do associador (torneio de 4+ configs pelo
+harness) → revisão adversarial dupla → 2 fixes dos achados → verify (708 testes) + e2e 10/10.
+
+### O torneio (regra declarada A PRIORI: wrong ≤70% do baseline E correct ≥70%)
+
+| config | wrong (suíte) | correct | precisão média | veredito |
+|---|---|---|---|---|
+| baseline (guloso puro) | 612 | 1014 | 70,0% | — |
+| **minMargin 0.10 (guloso)** | **344 → 332¹** | 734 → 723¹ | 73,4 → **73,8%¹** | **VENCEDOR (novo default)** |
+| minMargin 0.15 / 0.20 | 279 / 242 | 622 / 531 ✗ | 73,2 / 72,0% | abstém demais (regra b) |
+| **Hungarian (optimal) sozinho** | **642 ✗ (PIOR)** | 1003 | 69,3% | **rejeitado** |
+| optimal + m0.10 | 343 | 729 | 73,3% | perde o desempate |
+
+¹ após o fix do furo de oclusão da guarda (abaixo).
+
+**Efeito do default novo:** erros da suíte **−46%**, id-switches **59→6**, `bloco` 60,8→**82,0%** de
+precisão, `multidão` 49,8→59,8% — pagando cobertura (canonico 41,9→34,0%): exatamente o trade-off da
+invariante "rótulo errado é pior que nenhum". Perdedores declarados: `grade-sem-station` 49,2→45,9% e
+`sem-calibração` 71,8→71,3% (aceitos — regra agregada e a priori).
+
+**Achado científico honesto — Hungarian:** a atribuição ótima global SOZINHA é *pior* que o guloso
+(wrong +4,9%): maximizar a soma dos scores força pares medíocres que o guloso deixava de fora. Otimalidade
+sem guarda de ambiguidade piora a honestidade. Fica como knob (`optimal`) desligado; o degrau seguinte
+da literatura (Sinkhorn/transporte ótimo, dev.md) só faz sentido COM ambiguidade modelada.
+
+### Fixes de produção (achados da revisão adversarial, ambos verificados)
+
+- **CameraTile da grade** agora usa `useCameraTagLabels` (o mesmo caminho do fullscreen) → passa o
+  `stationPx` calibrado (+32 pts medidos esperando o operador marcar a estação).
+- **Calibração deixou de ficar stale**: `camcfg-updated {kind:"calibration"}` agora incrementa uma
+  rev por câmera (padrão ADR-006) que re-busca H/station na grade E no fullscreen.
+- **Furo de oclusão da guarda (reproduzido e corrigido)**: o scan de concorrentes agora vê TODAS as
+  pistas da janela (não só o último frame) — dono ocluso continua vetando o vizinho; fantasmas só
+  vetam, nunca recebem rótulo. Teste de regressão com evidência executada.
+
+### Próximos (mensuráveis pelo harness)
+
+1. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável — dev.md) e **multi-estação** — gated por hardware.
+2. **Dados reais**: gravar `analysis-tracks`+`bt-readings` reais e replayar pelo mesmo harness.
+3. **Sinkhorn/transporte ótimo com ambiguidade modelada** — só após o aprendizado do Hungarian acima.
+4. **Orientação de instalação** (estação junto da câmera, +27 pts) → documentar para o operador.

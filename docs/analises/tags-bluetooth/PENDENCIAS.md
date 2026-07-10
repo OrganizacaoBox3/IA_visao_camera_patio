@@ -43,19 +43,25 @@
 > O associador foi **medido pela primeira vez** (`src/fusion/replay-fusion.ts`, 8 cenários sintéticos,
 > gate no verify — `docs/cientifica/harness-associacao-indoor.md`). O ranking abaixo vem da medição.
 
-1. **Fix do `CameraTile` (grade) — passar `stationPx` calibrado à fusão.** O tile vivo usa o default
-   (0.5,1.0): custo MEDIDO = precisão 81,4%→49,2% (−32 pts), erros 2,2×. Barato e de alto impacto.
-2. **Guarda de ambiguidade top-2 no associador**: no `bloco` (pessoas lado a lado) o associador FALA em
-   vez de abster (precisão 60,8%, 20 id-switches; multidão 49,8%) — viola a invariante "rótulo errado é
-   pior que nenhum". Abster quando 1º≈2º score. Agora mensurável pelo harness.
-3. **Associação ótima global** (Hungarian/transporte ótimo, dev.md) vs. guloso — medir na `multidão`.
-4. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
+1. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
    estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
-5. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
-   `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (RMSE do sintético → real).
-6. **Distância absoluta** *(só se 1 estação + RSSI não bastar)*: IMU, UWB, trilateração multi-estação.
-7. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
+2. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
+   `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (sintético → real).
+3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.
+4. **Sinkhorn/transporte ótimo COM ambiguidade modelada** — o Hungarian puro foi MEDIDO e rejeitado
+   (pior que o guloso: otimalidade sem guarda piora a honestidade); fica de lição p/ a variante soft.
+5. **Distância absoluta** *(só se 1 estação + RSSI não bastar)*: IMU, UWB, trilateração multi-estação.
+6. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
    sem calibração (71,8% vs 44,5%) — medido.
+
+### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
+
+- ✅ **Guarda de ambiguidade top-2** (minMargin 0.1, novo default por torneio com regra a priori):
+  erros da suíte −46%, id-switches 59→6, `bloco` 60,8→82,0% de precisão; + fix do furo de oclusão
+  (dono ocluso segue vetando — reproduzido e testado).
+- ✅ **CameraTile passa `stationPx`** (usa `useCameraTagLabels`, o caminho do fullscreen) — +32 pts medidos.
+- ✅ **Calibração não fica mais stale** (rev por câmera via `camcfg-updated {kind:"calibration"}`, ADR-006).
+- ✅ **Hungarian medido e rejeitado como default** (wrong +4,9% vs guloso) — knob `optimal` existe, desligado.
 
 ## Limites honestos (não são bugs — física de 1 estação + RSSI)
 
