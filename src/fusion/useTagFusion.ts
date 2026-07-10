@@ -21,11 +21,16 @@ const TICK_MS = 500; // a fusão roda a ~2Hz — a associação é por JANELA, n
 export function useTagFusion({ getHubAnalysis, getReadings, H, stationPx, enabled = true }: Params) {
   const assoc = useRef<TagTrackAssociator | null>(null);
   const labels = useRef<Map<number, string>>(new Map());
+  // Espelho ADITIVO do mapa de rótulos: o CONJUNTO de tags já associadas a alguma pessoa
+  // (chave rotulo||mac — a mesma do FusionFrame). Consumido pelo plot de tags no chão p/
+  // SUPRIMIR o anel de quem já tem rótulo AR na caixa. Recomputado junto do mapa (2 Hz).
+  const assigned = useRef<ReadonlySet<string>>(new Set());
   if (!assoc.current) assoc.current = new TagTrackAssociator();
 
   useEffect(() => {
     if (!enabled || !getHubAnalysis || !getReadings) {
       labels.current = new Map();
+      assigned.current = new Set();
       return;
     }
     const a = assoc.current;
@@ -40,13 +45,18 @@ export function useTagFusion({ getHubAnalysis, getReadings, H, stationPx, enable
       const m = new Map<number, string>();
       for (const as of a.assign(now)) if (as.tag) m.set(as.trackId, as.tag);
       labels.current = m;
+      assigned.current = new Set(m.values());
     }, TICK_MS);
     return () => window.clearInterval(id);
   }, [getHubAnalysis, getReadings, H, stationPx, enabled]);
 
-  // labelFor estável (lê o ref) → não quebra o React.memo de quem consome o overlay.
+  // Getters estáveis (leem os refs) → não quebram o React.memo de quem consome o overlay.
   return useMemo(
-    () => ({ labelFor: (trackId: number): string | null => labels.current.get(trackId) ?? null }),
+    () => ({
+      labelFor: (trackId: number): string | null => labels.current.get(trackId) ?? null,
+      /** Tags (chave rotulo||mac) ATUALMENTE associadas a alguma pessoa — aditivo. */
+      assignedTags: (): ReadonlySet<string> => assigned.current,
+    }),
     [],
   );
 }

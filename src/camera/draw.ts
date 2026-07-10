@@ -18,6 +18,7 @@ import { type CineFrame } from "./cineBuffer";
 import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
 import { coveredByAny } from "../vision/nms";
 import { worldToPixel, type Matrix3, type Vec2 } from "../vision/homography";
+import type { FloorTagsView } from "../fusion/useFloorTags"; // type-only: sem ciclo (o hook não importa daqui)
 
 // Resultado por zona guardado p/ desenho + painel. Vive aqui (perto do desenho que o
 // consome) e é reimportado pelo CameraWorkspace; mover não muda comportamento.
@@ -523,6 +524,118 @@ export function drawCalibrationOverlay(
       ctx.fillText(tag, px + 9, py + 3);
     }
   }
+}
+
+// ── TAGS NO CHÃO (fusão BLE) — âncoras exatas, estação e ANÉIS de distância ──
+// Função FOLHA/pura: recebe a visão derivada (fusion/useFloorTags) e pinta UMA camada.
+//
+// COR: exceção LEGÍTIMA ao going-gray — este overlay pinta SOBRE VÍDEO (imagem arbitrária, não a
+// UI neutra); cinza/neutro some na cena. Croma aqui é CONTRASTE, não estado. Não há token --cam-*
+// p/ cores vivas de overlay (os --cam-* são superfície/scrim/texto) → constantes locais:
+//   âncoras (losango + sufixo)            = AMARELO vivo  (FLOOR_ANCHOR)
+//   anéis + rótulo "~X m" + estação       = CIANO vivo    (FLOOR_RING — distinto do azul
+//                                           --state-info #38bdf8 das caixas de pessoa)
+//   âncora calada há 15+ s                = VERMELHO --state-critical (anomalia real: âncora fixa
+//                                           deveria ser ouvida sempre; distinto do amarelo normal)
+// Textos sempre sobre SCRIM escuro (legível sobre vídeo claro). O anel segue TRACEJADO de
+// propósito: comunica incerteza — RSSI dá DISTÂNCIA à estação, não posição (floor-plot.ts).
+// Coords normalizadas 0..1 do frame → escaladas pelo retângulo de conteúdo (cr), como os demais.
+const FLOOR_ANCHOR = "#facc15"; // amarelo vivo (= hex do --state-warn-fg; aqui é contraste, não warn)
+const FLOOR_RING = "#22d3ee"; // ciano vivo
+const FLOOR_SCRIM = "rgba(2,6,10,0.82)"; // scrim mais denso que o --cam-overlay-scrim (texto colorido)
+
+// Cache de measureText por texto (mesma técnica do TrackOverlay): fonte fixa e textos repetidos por
+// muitos frames entre derivações (2 Hz); limpa se crescer demais (MACs/distâncias ao longo de horas).
+const floorTextW = new Map<string, number>();
+function floorTextWidth(ctx: CanvasRenderingContext2D, txt: string): number {
+  let w = floorTextW.get(txt);
+  if (w === undefined) {
+    if (floorTextW.size > 512) floorTextW.clear();
+    w = ctx.measureText(txt).width;
+    floorTextW.set(txt, w);
+  }
+  return w;
+}
+
+export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorTagsView) {
+  const critical = cssVar("--state-critical", "#ef4444");
+  ctx.save();
+  ctx.font = "10px ui-monospace, monospace";
+
+  // Estação: marcador ciano (ponto + círculo fino) — a referência dos anéis.
+  if (v.station) {
+    const sx = cr.x + v.station.px.x * cr.w,
+      sy = cr.y + v.station.px.y * cr.h;
+    ctx.fillStyle = FLOOR_RING;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = FLOOR_RING;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Anéis de distância: tracejado ciano + rótulo "nome · ~X m" no ponto do anel mais BAIXO
+  // visível (perto da câmera — legível sem cobrir o centro da cena). Pontos fora do quadro só
+  // saem do clip do canvas; fechar o path com pontos descartados (horizonte) vira uma corda
+  // reta — aceitável no tracejado (o anel continua comunicando "distância", não contorno).
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = FLOOR_RING;
+  for (const r of v.rings) {
+    if (r.pixels.length < 2) continue;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(cr.x + r.pixels[0].x * cr.w, cr.y + r.pixels[0].y * cr.h);
+    for (let i = 1; i < r.pixels.length; i++)
+      ctx.lineTo(cr.x + r.pixels[i].x * cr.w, cr.y + r.pixels[i].y * cr.h);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    let lp: Vec2 | null = null;
+    for (const p of r.pixels)
+      if (p.x >= 0.02 && p.x <= 0.98 && p.y >= 0.04 && p.y <= 0.96 && (!lp || p.y > lp.y)) lp = p;
+    if (lp) {
+      const dist = r.radiusM < 10 ? r.radiusM.toFixed(1) : String(Math.round(r.radiusM));
+      const txt = `${r.label} · ~${dist} m`;
+      const tw = floorTextWidth(ctx, txt) + 6;
+      const tx = cr.x + lp.x * cr.w - tw / 2,
+        ty = cr.y + lp.y * cr.h;
+      ctx.fillStyle = FLOOR_SCRIM;
+      ctx.fillRect(tx, ty - 6, tw, 13);
+      ctx.fillStyle = FLOOR_RING;
+      ctx.fillText(txt, tx + 3, ty + 4);
+    }
+  }
+  ctx.setLineDash([]);
+
+  // Âncoras: losango PEQUENO no px exato da calibração + sufixo do MAC (a.label, pré-computado
+  // na derivação). Amarelo vivo com leitura fresca; VERMELHO quando calada há 15+ s (anomalia).
+  for (const a of v.anchors) {
+    const ax = cr.x + a.px.x * cr.w,
+      ay = cr.y + a.px.y * cr.h;
+    const c = a.fresh ? FLOOR_ANCHOR : critical;
+    const R = 5;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay - R);
+    ctx.lineTo(ax + R, ay);
+    ctx.lineTo(ax, ay + R);
+    ctx.lineTo(ax - R, ay);
+    ctx.closePath();
+    ctx.fillStyle = FLOOR_SCRIM;
+    ctx.fill();
+    ctx.strokeStyle = c;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    const tw = floorTextWidth(ctx, a.label) + 6;
+    ctx.fillStyle = FLOOR_SCRIM;
+    ctx.fillRect(ax + 7, ay - 7, tw, 13);
+    ctx.fillStyle = c;
+    ctx.fillText(a.label, ax + 10, ay + 3);
+  }
+  ctx.restore();
 }
 
 // Grade de pintura (ao editar a máscara de uma zona).

@@ -5,6 +5,10 @@
 //   • Vazio → a mesma dica neutra do original ("Nenhuma tag visível…").
 //   • `leading` = nós opcionais renderizados ANTES dos botões, dentro do mesmo flex-wrap (ex.: o botão
 //     "Sem âncora" do passo de âncoras). Só aparece quando há tags (igual ao inline original).
+//   • `taken` (aditivo) = MAC MAIÚSCULO → papel que já ocupa a tag ("âncora do canto 2", "tag de
+//     referência"). Item ocupado fica VISÍVEL porém desabilitado com o papel ao lado do RSSI —
+//     escondê-lo leria como "tag fora de alcance". A seleção corrente vence o mapa (nunca se
+//     auto-desabilita). Papéis vêm de takenTags (src/camera/takenTags.ts).
 import type { ReactNode } from "react";
 import { Button } from "../ui";
 import type { BtReading } from "../api";
@@ -14,9 +18,10 @@ type Props = {
   selectedMac: string | null;
   onPick: (mac: string) => void;
   leading?: ReactNode;
+  taken?: ReadonlyMap<string, string>;
 };
 
-export function TagPicker({ readings, selectedMac, onPick, leading }: Props) {
+export function TagPicker({ readings, selectedMac, onPick, leading, taken }: Props) {
   if (readings.length === 0) {
     return <span className="text-[12px] text-text-muted">Nenhuma tag visível — verifique a estação.</span>;
   }
@@ -24,7 +29,25 @@ export function TagPicker({ readings, selectedMac, onPick, leading }: Props) {
     <div className="flex flex-wrap gap-1.5">
       {leading}
       {readings.map((r) => {
-        const selected = selectedMac === r.mac;
+        // MAC é hex — comparação de seleção sem sensibilidade a caixa (calibração salva pode diferir).
+        const selected = selectedMac?.toUpperCase() === r.mac.toUpperCase();
+        const role = selected ? undefined : taken?.get(r.mac.toUpperCase());
+        if (role) {
+          // Ocupada por outro papel: neutra e inerte (pointer-events-none → sem hover, cursor default).
+          return (
+            <Button
+              key={r.mac}
+              size="sm"
+              variant="ghost"
+              disabled
+              aria-pressed={false}
+              className="pointer-events-none"
+            >
+              {r.rotulo || r.mac} · {r.rssi} dBm
+              <span className="text-text-muted">— {role}</span>
+            </Button>
+          );
+        }
         return (
           <Button
             key={r.mac}

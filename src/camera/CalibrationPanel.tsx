@@ -27,6 +27,7 @@ import { useStationHealth } from "../fusion/useStationHealth";
 import { StationHealthChip } from "../fusion/StationHealthChip";
 import { useBleReadings } from "./useBleReadings";
 import { TagPicker } from "./TagPicker";
+import { takenTags } from "./takenTags";
 
 type Mode = "calibrar" | "medir";
 // dentro de "calibrar": marcar os 4 cantos, associar uma tag ÂNCORA a cada canto, o ponto da
@@ -265,7 +266,9 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     setCornerMacs([]);
   };
   // Nome legível de um MAC-âncora (rótulo cadastrado, se a tag está visível agora; senão o MAC).
-  const macName = (mac: string) => btReadings.find((r) => r.mac === mac)?.rotulo || mac;
+  // Caixa-insensitive: calibração salva pode diferir da leitura viva (mesma premissa do TagPicker).
+  const macName = (mac: string) =>
+    btReadings.find((r) => r.mac.toUpperCase() === mac.toUpperCase())?.rotulo || mac;
 
   async function save() {
     if (!liveH || !liveH.ok) return;
@@ -402,6 +405,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 readings={btReadings}
                 selectedMac={refTag?.mac ?? null}
                 onPick={(mac) => setRefTag((prev) => ({ mac, px: prev?.px ?? null }))}
+                taken={takenTags(cornerMacs, refTag?.mac ?? null, { step: "referencia" })}
               />
             </div>
           )}
@@ -443,6 +447,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                     readings={btReadings}
                     selectedMac={cornerMacs[anchorCorner] || null}
                     onPick={(mac) => setCornerMacs((m) => m.map((v, i) => (i === anchorCorner ? mac : v)))}
+                    taken={takenTags(cornerMacs, refTag?.mac ?? null, {
+                      step: "ancoras",
+                      corner: anchorCorner,
+                    })}
                     leading={
                       cornerMacs[anchorCorner] ? (
                         <Button

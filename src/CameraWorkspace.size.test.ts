@@ -27,7 +27,14 @@ import { describe, it, expect } from "vitest";
 // 1950→1960 (jul/10): sync AO VIVO da calibração (fix de staleness — H/station não atualizavam até
 // remontar). O GROSSO (rev por câmera no socket + re-fetch) vive em useDashboardSocket/
 // useCameraTagLabels; aqui entrou SÓ a fiação da prop `calibrationRev` (doc + destructure + 1 arg).
-const MAX_LINES = 1960;
+// 1960→2000 (jul/10): TAGS NO CHÃO na câmera aberta (âncoras exatas + estação + anéis de distância
+// BLE). O GROSSO foi EXTRAÍDO: dados/EMA/derivação em src/fusion/useFloorTags.ts (puro testado) e o
+// desenho em camera/draw.ts (drawFloorTags, folha); aqui sobrou fiação (1 hook + setter único do
+// toggle default-ON + 1 draw call no rAF + 1 Toggle "Tags" no rodapé, mesmo idioma da "Malha").
+// Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
+// a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
+// vazias e já induziu um falso "coube em 1930" numa revisão).
+const MAX_LINES = 2000;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

@@ -3,6 +3,7 @@ import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { type BtReading } from "../../api";
 import { useCameraTagLabels } from "../../fusion/useCameraTagLabels";
+import { useFloorTags } from "../../fusion/useFloorTags";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
@@ -150,7 +151,7 @@ function Go2rtcVideoTile({
   // tile duplicava a carga inline guardando SÓ o H (stationPx omitido → default 0.5,1.0 do frame.ts),
   // e o harness mediu o custo: precisão 81,4% → 49,2% (docs/cientifica/harness-associacao-indoor.md).
   // Sem getReadings (grade sem estação) fica desligada → labelFor sempre null (e nem busca calibração).
-  const labelForRef = useCameraTagLabels({
+  const { labelForRef, calibration, assignedTags } = useCameraTagLabels({
     cameraId: camId,
     getHubAnalysis,
     getReadings,
@@ -162,11 +163,29 @@ function Go2rtcVideoTile({
   // não re-arma e o React.memo dos tiles segue valendo.
   const labelFor = useCallback((trackId: number) => labelForRef.current(trackId), [labelForRef]);
 
+  // TAGS NO CHÃO (default LIGADO na grade quando há calibração + leituras): reusa a MESMA
+  // calibração já buscada acima (sem 2º fetch) + as leituras vivas do socket; tags já associadas
+  // a pessoa não ganham anel (o rótulo AR da caixa já as mostra). Sem dados → viewRef null.
+  // RESIDUAL consciente: na grade a camada só existe no tile WebRTC (TrackOverlay); o tile MJPEG
+  // (CameraWorkspace mode "tile") segue sem tags no chão — assimetria declarada, sem plano por ora.
+  const { viewRef: floorRef } = useFloorTags({
+    calibration,
+    getReadings,
+    getAssignedTags: assignedTags,
+    enabled: !!getReadings,
+  });
+  const getFloorTags = useCallback(() => floorRef.current, [floorRef]);
+
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
-      {/* Caixas do hub interpoladas, num <canvas> transparente exatamente sobre o vídeo. */}
-      <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} labelFor={labelFor} />
+      {/* Caixas do hub interpoladas + tags no chão, num <canvas> transparente sobre o vídeo. */}
+      <TrackOverlay
+        videoRef={ref}
+        getHubAnalysis={getHubAnalysis}
+        labelFor={labelFor}
+        getFloorTags={getFloorTags}
+      />
     </div>
   );
 }

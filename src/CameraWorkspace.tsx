@@ -13,6 +13,7 @@ import {
   Pause,
   PenLine,
   Play,
+  Radar,
   Snowflake,
   Timer,
   TriangleAlert,
@@ -55,6 +56,7 @@ import {
 import { loadCamConfig, getCameraCfg, setCameraCfg } from "./cameraConfig";
 import { ApiError, type BtReading } from "./api";
 import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
+import { useFloorTags } from "./fusion/useFloorTags";
 import { useCalibrationOverlay } from "./camera/useCalibrationOverlay";
 import {
   decodeMask,
@@ -109,6 +111,7 @@ import {
   drawZoneOverlays,
   drawTelemetryHud,
   drawCalibrationOverlay,
+  drawFloorTags,
   RISK_LABEL,
   type ZoneResult,
   type TrackBox,
@@ -374,13 +377,34 @@ export function CameraWorkspace({
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
 
   // Fusão tag↔pessoa (caminho C) — SÓ na câmera ABERTA: nome da tag no rótulo. Ref lido no rAF/draw.
-  const labelForRef = useCameraTagLabels({
+  // Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points) e as tags já
+  // associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
+  const { labelForRef, calibration: tagCalibration, assignedTags } = useCameraTagLabels({
     cameraId,
     getHubAnalysis,
     getReadings,
     enabled: mode === "full" && !!getReadings,
     calibrationRev,
   });
+
+  // TAGS NO CHÃO — âncoras dos cantos (posição exata), estação e anéis de distância BLE (fusion/
+  // useFloorTags; matemática em floor-plot.ts). viewRef lido no rAF/drawScene; toggle default
+  // LIGADO (o dado só existe quando há calibração + leituras — sem eles nada é desenhado), no
+  // MESMO idioma do HUD/malha: estado p/ a UI (pressed) + ref espelho p/ o laço de desenho.
+  const floorTags = useFloorTags({
+    calibration: tagCalibration,
+    getReadings,
+    getAssignedTags: assignedTags,
+    enabled: mode === "full" && !!getReadings,
+  });
+  const [floorOn, setFloorOnState] = useState(true);
+  const floorOnRef = useRef(true);
+  // Setter ÚNICO do toggle (idioma da "Malha"/useCalibrationOverlay): ref (rAF) + estado (UI)
+  // mudam numa só unidade — nenhum caminho escreve um sem o outro.
+  const setFloorOn = (v: boolean) => {
+    floorOnRef.current = v;
+    setFloorOnState(v);
+  };
 
   // Malha da calibração (grade do chão via homografia + pontos cadastrados) — SÓ na câmera ABERTA.
   // Toggle opt-in; refs (onRef/dataRef) lidos no rAF/drawScene sem re-armar o laço de desenho.
@@ -1171,6 +1195,14 @@ export function CameraWorkspace({
     // Heatmap de ocupação (camada, sob as geometrias) — grade normalizada da lib counting.ts.
     if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
 
+    // Tags no chão (toggle, default LIGADO): âncoras exatas + estação + anéis de distância BLE.
+    // Camada de FUNDO — desenha ANTES de caixas/zonas (espelha a grade/TrackOverlay: a geometria
+    // de pessoa vence a de chão). O rAF lê os refs; sem calibração/leituras o viewRef é null.
+    if (floorOnRef.current) {
+      const ft = floorTags.viewRef.current;
+      if (ft) drawFloorTags(ctx, cr, ft);
+    }
+
     // Suavização DISPLAY-ONLY das caixas do hub (TrackInterpolator, o MESMO puro da grade): a
     // bbox crua congela+salta na cadência do motor (~1fps). Invariante: a LÓGICA (contagem/
     // exclusão/tripwire/ocupação) JÁ RODOU sobre tracksRef EXATO; aqui só muda o que se VÊ.
@@ -1904,6 +1936,17 @@ export function CameraWorkspace({
               onPressedChange={calib.setOn}
             >
               <Grid3x3 size={16} strokeWidth={1.75} aria-hidden /> Malha
+            </Toggle>
+          </Tooltip>
+        )}
+        {/* Tags no chão: âncoras (posição exata) + estação + anéis de distância BLE. Default
+            LIGADO; some quando não há calibração/leituras. Cores VIVAS (exceção declarada ao
+            going-gray — overlay sobre vídeo; ver drawFloorTags); o anel tracejado comunica
+            incerteza (é distância, não posição); vermelho só p/ âncora calada (anomalia). */}
+        {floorTags.available && (
+          <Tooltip content="Tags no chão: âncoras dos cantos (posição exata), a estação BLE e um anel tracejado de distância p/ cada tag visível ainda não associada a uma pessoa — o anel é DISTÂNCIA (RSSI), não posição">
+            <Toggle aria-label="Tags no chão" pressed={floorOn} onPressedChange={setFloorOn}>
+              <Radar size={16} strokeWidth={1.75} aria-hidden /> Tags
             </Toggle>
           </Tooltip>
         )}

@@ -1,8 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import type { HubAnalysis } from "../../CameraWorkspace";
-import { getContentRect, cssVar } from "../../camera/draw";
+import { getContentRect, cssVar, drawFloorTags } from "../../camera/draw";
 import { TrackInterpolator } from "../../camera/interpolate";
+import type { FloorTagsView } from "../../fusion/useFloorTags";
 
 // ── Overlay de caixas SOBRE o <video-stream> (tiles WebRTC/go2rtc) ────────────────────────────────
 // Um <canvas> transparente exatamente sobre o vídeo do tile. Desenha as caixas de pessoa vindas do
@@ -24,10 +25,13 @@ type TrackOverlayProps = {
   // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o rótulo quando a associação
   // tem confiança; null = "não sei" → cai no "Pessoa <id>" de sempre. Ausente = feature desligada.
   labelFor?: (trackId: number) => string | null;
+  // TAGS NO CHÃO (fusion/useFloorTags): âncoras/estação/anéis de distância, desenhados SOB as
+  // caixas de pessoa. Getter estável lendo o ref do hook; null/ausente → camada não desenha.
+  getFloorTags?: () => FloorTagsView | null;
 };
 
 // Canvas transparente sobre o vídeo: pinta as caixas do hub interpoladas num rAF próprio.
-export function TrackOverlay({ videoRef, getHubAnalysis, labelFor }: TrackOverlayProps) {
+export function TrackOverlay({ videoRef, getHubAnalysis, labelFor, getFloorTags }: TrackOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -72,6 +76,16 @@ export function TrackOverlay({ videoRef, getHubAnalysis, labelFor }: TrackOverla
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);
 
+      // Letterbox: o <video> usa object-fit:contain; a caixa normalizada (0..1) é do FRAME, então
+      // mapeia-se no retângulo de conteúdo (frame ajustado na caixa do vídeo), não na caixa toda.
+      const cr = getContentRect(cw, ch, video.videoWidth, video.videoHeight);
+
+      // TAGS NO CHÃO — camada de FUNDO, sob as caixas de pessoa. Independe de haver tracks na
+      // cena (âncoras/anéis existem mesmo com o pátio vazio). Ligada por padrão quando o hook
+      // tem calibração + leituras (getter devolve a visão); sem dados devolve null e nada pinta.
+      const ft = getFloorTags?.() ?? null;
+      if (ft) drawFloorTags(ctx, cr, ft);
+
       // Plano de controle: ingere o payload do hub (dedupe por ts dentro do interpolador). Payload
       // ausente/velho → não ingere; as caixas vivas fazem fade e somem (não congelam).
       const hd = getHubAnalysis?.() ?? null;
@@ -79,11 +93,8 @@ export function TrackOverlay({ videoRef, getHubAnalysis, labelFor }: TrackOverla
         interp.ingest(hd, performance.now());
       }
       const drawn = interp.sample(performance.now());
-      if (!drawn.length) return; // sem tracks → nada desenhado (sem erro)
+      if (!drawn.length) return; // sem tracks → só a camada de chão (sem erro)
 
-      // Letterbox: o <video> usa object-fit:contain; a caixa normalizada (0..1) é do FRAME, então
-      // mapeia-se no retângulo de conteúdo (frame ajustado na caixa do vídeo), não na caixa toda.
-      const cr = getContentRect(cw, ch, video.videoWidth, video.videoHeight);
       ctx.lineWidth = 1.5;
       ctx.font = "10px monospace";
       for (const t of drawn) {
@@ -116,7 +127,7 @@ export function TrackOverlay({ videoRef, getHubAnalysis, labelFor }: TrackOverla
       cancelled = true;
       cancelAnimationFrame(raf);
     };
-  }, [videoRef, getHubAnalysis, labelFor]);
+  }, [videoRef, getHubAnalysis, labelFor, getFloorTags]);
 
   return <canvas ref={canvasRef} className="rtc-overlay" aria-hidden="true" />;
 }
