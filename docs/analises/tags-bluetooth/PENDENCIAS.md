@@ -47,8 +47,13 @@
    `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (sintético → real).
    **Ferramenta PRONTA (2026-07-10):** gravador `FUSION_RECORD` (`server/bt/session-recorder.js`) +
    loader (`src/fusion/session-loader.ts`); protocolo passo a passo em
-   `docs/cientifica/protocolo-teste-campo-indoor.md`. **Falta só executar a coleta.** É também o
-   dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 (abaixo) podem ser religados.
+   `docs/cientifica/protocolo-teste-campo-indoor.md`. **DEFERIDO pelo dono (2026-07-10)** — aguardando
+   disponibilidade para ir até a câmera; não é bloqueio técnico. É também o dado que decide se os
+   knobs `maxDistRatio`/`distWeight` da v4 (abaixo) podem ser religados.
+   - ⚠️ **Achado empírico enquanto isso** (análise das 4 âncoras com dado real de ~6h, sem precisar
+     de pessoas — ver `relatorio-especialista-2026-07-10.md` §Adendo): a âncora `…CE:3C` destoa
+     consistentemente (resíduo ~1,1–1,4 m em dois ajustes diferentes) — **checar fisicamente o que
+     está perto desse canto** (possível obstrução/multipath local).
 2. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
    estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
 3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.

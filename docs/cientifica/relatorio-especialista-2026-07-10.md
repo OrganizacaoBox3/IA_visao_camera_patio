@@ -174,3 +174,43 @@ cores, sem ambiguidade para o operador.
 
 Tudo medido é reproduzível: `npx vitest run src/fusion/replay-fusion.test.ts --reporter=verbose`
 imprime a tabela completa da suíte atual.
+
+## Adendo empírico (mesmo dia) — o modelo validado com dado REAL, sem esperar o teste de campo
+
+Resposta parcial à pergunta 4: o dono não pôde fazer o roteiro de caminhada hoje, mas as 4 tags-âncora
+JÁ têm posição-mundo conhecida na calibração real (`server/camcfg.json`) e já geraram RSSI real
+durante ~6h de gravação contínua (`server/bt/fusion-session.jsonl`, captura deixada ligada, não o
+roteiro deliberado). Isso é o suficiente para validar o modelo de propagação **sem precisar de
+pessoas andando** — as âncoras servem de verdade-terreno sozinhas. Análise independente (script
+descartável, não usa `floor-plot.ts` — validação cruzada deliberada):
+
+| Âncora | dist. real (m) | RSSI mediana (dBm) | desvio-padrão (dB) |
+|---|---|---|---|
+| `…CE:89` | 0,85 | −58 | 5,2 |
+| `…CE:5C` | 2,05 | −74 | 4,4 |
+| `…CE:5D` | 2,02 | −72 | 6,0 |
+| `…CE:3C` | 0,78 | −73 | 6,9 |
+
+**Achados:**
+
+1. **Ruído real (~5,6 dB médio) é PIOR que o assumido no experimento de circularidade (4 dB).** Se
+   o −6 dB de viés corporal já derrubou a v4 para 26%/1,8%, um ambiente com ruído de base mais alto
+   reforça — não enfraquece — a decisão de manter os knobs desligados.
+2. **O `rssi0` implícito varia 16 dB entre âncoras** (−59,5 a −75,4 dBm) — um único modelo global de
+   propagação é um ajuste pobre para o espaço: cada âncora vive uma condição de RF local diferente
+   (obstrução por máquina/prateleira específica). Isto é evidência empírica, não hipotética, de que
+   monitorar o resíduo POR âncora (§5, já implementado) é necessário, não perfeccionismo.
+3. **A âncora `…CE:3C` destoa nos dois ajustes testados** (offset-only: resíduo 1,13 m; 2 parâmetros:
+   1,36 m) — consistentemente a pior das 4, em ambas as abordagens. **Ação sugerida ao dono:** checar
+   fisicamente o que está perto desse canto (a imagem da câmera mostra uma cesta/mesa de trabalho
+   ali) — é o primeiro caso real de "âncora discordando", exatamente o que o indicador visual laranja
+   (§5) foi construído para sinalizar.
+4. **O span real de distância entre âncoras (0,42 década) passa, por pouco, o limiar de
+   identificabilidade** que o código usa (0,4 — abaixo disso só calibra o offset). Um ajuste de 2
+   parâmetros com dado real dá `n≈1,70` (vs. 2,2 assumido) — mas com só 4 pontos e span apertado,
+   este `n` não deve ser levado a sério como calibração; é mais um sinal de que o retângulo de
+   calibração pequeno (2,5×1,2 m) limita quanto o modelo pode aprender, reforçando a pergunta 2.
+
+Isto não substitui o teste de campo com pessoas (que mede a IDENTIDADE, não só a propagação), mas já
+é validação real de uma parte do sistema — e é reproduzível a qualquer momento sem precisar de
+ninguém na cena, só de as âncoras seguirem reportando.
