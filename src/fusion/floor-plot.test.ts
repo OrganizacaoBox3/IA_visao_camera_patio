@@ -2,7 +2,7 @@
 // Determinístico: dados sintéticos sem ruído (o fit exato TEM que recuperar rssi0/n) e uma
 // homografia REAL (computeHomography de 4 cantos) para validar o anel por round-trip.
 import { describe, it, expect } from "vitest";
-import { fitPathLoss, distFromRssi, ringPixels, type AnchorObs } from "./floor-plot";
+import { fitPathLoss, distFromRssi, anchorResidualM, ringPixels, type AnchorObs } from "./floor-plot";
 import {
   computeHomography,
   invertMatrix3,
@@ -186,6 +186,51 @@ describe("distFromRssi — inversão e clamps", () => {
       expect(d).toBeGreaterThanOrEqual(0.1);
       expect(d).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+describe("anchorResidualM — auto-diagnóstico (dist real vs prevista pelo MESMO modelo)", () => {
+  it("modelo perfeito (fit exato, sem ruído) → resíduo ~0 para cada âncora usada no fit", () => {
+    const rssi0 = -40;
+    const n = 2.0;
+    const obs = [1, 2, 4, 8].map((d) => anchorAt(d, rssiAt(rssi0, n, d)));
+    const model = fitPathLoss(obs, STATION);
+    for (const o of obs) {
+      expect(anchorResidualM(model, o, STATION)).toBeCloseTo(0, 8);
+    }
+  });
+
+  it("âncora com viés conhecido (RSSI destoa) → resíduo bate a conta manual |dPred − dReal|", () => {
+    const rssi0 = -40;
+    const n = 2.0;
+    const good = [1, 2, 8].map((d) => anchorAt(d, rssiAt(rssi0, n, d)));
+    // Âncora a 4 m de verdade, mas RSSI reportado como se estivesse a 4 m com +15 dB de erro
+    // (multipath) — "mente" sobre a própria distância.
+    const trueD = 4;
+    const liarRssi = rssiAt(rssi0, n, trueD) + 15;
+    const liar = anchorAt(trueD, liarRssi, "LIAR");
+    const model = fitPathLoss([...good, liar], STATION);
+    const dPredLiar = distFromRssi(model, liarRssi);
+    const expected = Math.abs(dPredLiar - trueD);
+    // A conta é EXATAMENTE a função — a asserção real está em anchorResidualM bater o cálculo
+    // manual, não em quem "vence" o fit com só 4 pontos (com poucas âncoras o outlier PUXA o
+    // ajuste e pode distorcer o resíduo das honestas também — o cenário "1 mentindo, demais
+    // baixas" com geometria mais realista está em useFloorTags.test.ts, que tem mais pontos e
+    // reflete a composição de produção).
+    expect(anchorResidualM(model, liar, STATION)).toBeCloseTo(expected, 10);
+    expect(expected).toBeGreaterThan(1.5); // a "mentira" deve mesmo destoar em metros
+  });
+
+  it("entradas inválidas (obs sem world/rssi, station inválida) → 0, nunca NaN/Infinity", () => {
+    const model = fitPathLoss(
+      [1, 2, 4, 8].map((d) => anchorAt(d, rssiAt(-40, 2.0, d))),
+      STATION,
+    );
+    expect(anchorResidualM(model, { mac: "X", world: { x: NaN, y: 0 }, rssi: -50 }, STATION)).toBe(0);
+    expect(anchorResidualM(model, { mac: "X", world: { x: 1, y: 0 }, rssi: NaN }, STATION)).toBe(0);
+    expect(
+      anchorResidualM(model, { mac: "X", world: { x: 1, y: 0 }, rssi: -50 }, { x: NaN, y: 0 }),
+    ).toBe(0);
   });
 });
 

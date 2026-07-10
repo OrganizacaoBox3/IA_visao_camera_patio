@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import type { BtReading, CalibrationPoint } from "../api";
 import { pixelToWorld, type Matrix3, type Vec2 } from "../vision/homography";
-import { distFromRssi, fitPathLoss, ringPixels, type AnchorObs } from "./floor-plot";
+import { anchorResidualM, distFromRssi, fitPathLoss, ringPixels, type AnchorObs } from "./floor-plot";
 
 /** Calibração no shape que este hook consome (exposto aditivamente por useCameraTagLabels). */
 export type FloorCalibration = {
@@ -20,8 +20,21 @@ export type FloorCalibration = {
   points: CalibrationPoint[];
 };
 
-/** `label` = sufixo do MAC PRÉ-computado aqui (2 Hz) — o desenho roda por frame e não deve refazer regex. */
-export type FloorAnchor = { mac: string; px: Vec2; fresh: boolean; label: string };
+/**
+ * `label` = sufixo do MAC PRÉ-computado aqui (2 Hz) — o desenho roda por frame e não deve refazer
+ * regex. `residualM` = auto-diagnóstico (backlog científico A4): |distância REAL da âncora à
+ * estação − distância que o modelo de path-loss PREVÊ pro RSSI dela| — a âncora conferindo o
+ * próprio modelo que ajuda a calibrar. `null` quando não há base honesta pra calcular: âncora não
+ * fresca (sem leitura viva) OU modelo ainda "default" (sem calibração própria — comparar contra um
+ * chute não diagnostica nada). Limiar de anomalia vive em camera/draw.ts (RESIDUAL_ANOMALY_M).
+ */
+export type FloorAnchor = {
+  mac: string;
+  px: Vec2;
+  fresh: boolean;
+  label: string;
+  residualM: number | null;
+};
 export type FloorRing = { mac: string; label: string; radiusM: number; pixels: Vec2[] };
 export type FloorTagsView = {
   anchors: FloorAnchor[];
@@ -103,13 +116,25 @@ export function deriveFloorView(args: {
     anchorKeys.add(k);
     const s = tags.get(k);
     const fresh = !!s && now - s.t < FRESH_MS;
-    anchors.push({ mac: p.mac, px: p.px, fresh, label: macSuffix(p.mac) });
+    anchors.push({ mac: p.mac, px: p.px, fresh, label: macSuffix(p.mac), residualM: null });
     if (fresh && s && stationWorld) anchorObs.push({ mac: p.mac, world: p.world, rssi: s.ema });
   }
 
   const rings: FloorRing[] = [];
   if (H && stationWorld) {
     const model = fitPathLoss(anchorObs, stationWorld);
+    // AUTO-DIAGNÓSTICO (A4): só faz sentido conferir o modelo contra si mesmo quando ele TEM
+    // calibração própria (source !== "default" — sem isso não há "resíduo", só o chute do
+    // regime default) — reusa o MESMO model deste tick, não reajusta nada. Só as âncoras que
+    // entraram no fit (fresh + par válido, ver loop acima) recebem residualM; as demais ficam
+    // null (sem leitura viva pra conferir).
+    if (model.source !== "default") {
+      for (const o of anchorObs) {
+        const residual = anchorResidualM(model, o, stationWorld);
+        const a = anchors.find((x) => macKey(x.mac) === macKey(o.mac));
+        if (a) a.residualM = residual;
+      }
+    }
     for (const [k, s] of tags) {
       if (now - s.t >= FRESH_MS) continue; // sumida → sem anel (não inventa presença)
       if (anchorKeys.has(k)) continue; // âncora: posição JÁ conhecida (losango, não anel)

@@ -153,6 +153,32 @@ export function distFromRssi(model: PathLossModel, rssi: number): number {
 }
 
 /**
+ * AUTO-DIAGNÓSTICO por âncora (backlog científico A4): uma âncora tem posição-mundo CONHECIDA —
+ * então, além de ALIMENTAR o fit, ela pode ser usada para CONFERIR o próprio fit: o modelo
+ * consegue prever a distância que a âncora já sabe que tem até a estação? `dReal` vem direto de
+ * `obs.world`/`stationWorld` (geometria, sem RSSI); `dPred` vem de `distFromRssi(model, obs.rssi)`
+ * (RSSI invertido pelo MESMO modelo que essa âncora ajudou a calibrar). Resíduo alto numa âncora
+ * só, com as demais batendo, é o sintoma clássico de "sensor mentindo" localizado — multipath ou
+ * obstrução justo NAQUELE ponto (analogia a data-snooping em geodésia: um observável que destoa
+ * do ajuste feito com todos, docs/cientifica/base.md:351).
+ *
+ * Retorno SEGURO nunca NaN: entradas inválidas (obs sem `world`/`rssi` finitos, `stationWorld`
+ * inválido, ou model ausente) devolvem 0 — não Infinity. Escolha deliberada: a ausência de dado
+ * não é EVIDÊNCIA de anomalia (um retorno "seguro" aqui tem que significar "sem alarme falso",
+ * não "alarme"); é o CHAMADOR (deriveFloorView) quem decide `residualM: null` quando não há base
+ * pra calcular (âncora não fresca / modelo ainda "default") — 0 aqui nunca deveria vazar como
+ * "resíduo zero calibrado" para a UI, só serve de piso defensivo.
+ */
+export function anchorResidualM(model: PathLossModel, obs: AnchorObs, stationWorld: Vec2): number {
+  const station = isVec(stationWorld) ? stationWorld : null;
+  if (!station || !obs || !isVec(obs.world) || !isFiniteNum(obs.rssi) || !model) return 0;
+  const dReal = Math.hypot(obs.world.x - station.x, obs.world.y - station.y);
+  const dPred = distFromRssi(model, obs.rssi);
+  if (!Number.isFinite(dReal) || !Number.isFinite(dPred)) return 0;
+  return Math.abs(dPred - dReal);
+}
+
+/**
  * Amostra `segments` pontos (default 48) do círculo de raio radiusM ao redor de stationWorld
  * NO MUNDO (metros) e projeta cada um em pixel via H⁻¹ (invertida UMA vez; mesmo contrato do
  * worldToPixel). CHEIRALITY: o w homogêneo (inv[6]·x + inv[7]·y + inv[8]) troca de sinal ao

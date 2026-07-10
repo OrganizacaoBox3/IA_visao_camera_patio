@@ -395,6 +395,21 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
               )}
             </div>
           )}
+          {/*
+           * Dica de instalação (indo-gray, sem alarme): MEDIDO no harness de replay
+           * (src/fusion/replay-fusion.ts, cenário "sem-calibracao") que estação JUNTO da câmera
+           * vs. distante vale +27 pontos de precisão (71,8% vs 44,5%) — ver
+           * docs/cientifica/harness-associacao-indoor.md. Isso vale para o modo SEM homografia
+           * calibrada; com a câmera já calibrada, o ganho vem de marcar o ponto certo da estação
+           * acima, não necessariamente de ela estar colada na câmera (ver "Limites honestos" em
+           * docs/analises/tags-bluetooth/PENDENCIAS.md). Por isso o texto abaixo não generaliza.
+           */}
+          {canConfigure && calStep === "estacao" && (
+            <Alert tone="info">
+              Sempre que possível, fixe a estação BLE bem perto da câmera. Isso ajuda o sistema a
+              reconhecer quem é quem enquanto esta câmera ainda não estiver calibrada.
+            </Alert>
+          )}
           {canConfigure && calStep === "referencia" && (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">

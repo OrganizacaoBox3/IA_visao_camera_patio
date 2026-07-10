@@ -544,6 +544,19 @@ const FLOOR_ANCHOR = "#facc15"; // amarelo vivo (= hex do --state-warn-fg; aqui 
 const FLOOR_RING = "#22d3ee"; // ciano vivo
 const FLOOR_SCRIM = "rgba(2,6,10,0.82)"; // scrim mais denso que o --cam-overlay-scrim (texto colorido)
 
+// AUTO-DIAGNÓSTICO por âncora (backlog científico A4, fusion/useFloorTags.ts FloorAnchor.residualM):
+// |distância real − distância prevista pelo modelo| acima disto = âncora "discordando" do modelo
+// que ELA MESMA ajuda a calibrar (multipath/obstrução naquele ponto, não câmera/rede em geral).
+// 1,5 m é a MESMA ordem de grandeza de DIST_BLEND_SCALE_M (fusion/associate.ts): erro mediano de
+// distância que ~4 dB de ruído de RSSI já induzem sozinho no modelo log-distância — abaixo disso
+// o desvio é "consistente com ruído normal"; acima, começa a cheirar a sensor mentindo.
+const RESIDUAL_ANOMALY_M = 1.5;
+// Âncora discordante: anel pontilhado LARANJA — deliberadamente DISTINTO do amarelo vivo
+// FLOOR_ANCHOR (âncora normal) e do vermelho --state-critical (âncora offline, sem leitura há
+// 15+ s): 3 estados, 3 cores — "normal" / "sinal estranho, mas viva" / "sumida". O operador não
+// pode confundir "essa âncora está mentindo" com "essa âncora está muda".
+const FLOOR_ANOMALY = "#f97316";
+
 // Cache de measureText por texto (mesma técnica do TrackOverlay): fonte fixa e textos repetidos por
 // muitos frames entre derivações (2 Hz); limpa se crescer demais (MACs/distâncias ao longo de horas).
 const floorTextW = new Map<string, number>();
@@ -612,11 +625,15 @@ export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorT
   ctx.setLineDash([]);
 
   // Âncoras: losango PEQUENO no px exato da calibração + sufixo do MAC (a.label, pré-computado
-  // na derivação). Amarelo vivo com leitura fresca; VERMELHO quando calada há 15+ s (anomalia).
+  // na derivação). Amarelo vivo com leitura fresca; VERMELHO quando calada há 15+ s (anomalia de
+  // AUSÊNCIA). Anomalia de SINAL (auto-diagnóstico A4: a âncora discorda do modelo que ela mesma
+  // calibra) é um problema DIFERENTE — âncora viva, mas RSSI incoerente — e ganha indicador
+  // PRÓPRIO (anel pontilhado laranja + "±Xm" no rótulo) para não ser confundida com "offline".
   for (const a of v.anchors) {
     const ax = cr.x + a.px.x * cr.w,
       ay = cr.y + a.px.y * cr.h;
     const c = a.fresh ? FLOOR_ANCHOR : critical;
+    const anomalous = a.fresh && a.residualM !== null && a.residualM > RESIDUAL_ANOMALY_M;
     const R = 5;
     ctx.beginPath();
     ctx.moveTo(ax, ay - R);
@@ -629,11 +646,25 @@ export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorT
     ctx.strokeStyle = c;
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    const tw = floorTextWidth(ctx, a.label) + 6;
+    if (anomalous) {
+      // Anel pontilhado laranja ao redor do losango — "sensor mentindo", distinto do losango
+      // vermelho de âncora muda.
+      ctx.save();
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = FLOOR_ANOMALY;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(ax, ay, R + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    const label = anomalous ? `${a.label} ±${a.residualM!.toFixed(1)}m` : a.label;
+    const labelColor = anomalous ? FLOOR_ANOMALY : c;
+    const tw = floorTextWidth(ctx, label) + 6;
     ctx.fillStyle = FLOOR_SCRIM;
     ctx.fillRect(ax + 7, ay - 7, tw, 13);
-    ctx.fillStyle = c;
-    ctx.fillText(a.label, ax + 10, ay + 3);
+    ctx.fillStyle = labelColor;
+    ctx.fillText(label, ax + 10, ay + 3);
   }
   ctx.restore();
 }

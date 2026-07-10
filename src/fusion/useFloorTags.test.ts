@@ -101,7 +101,15 @@ describe("deriveFloorView — âncoras, estação e anéis com as supressões do
     });
     expect(v.anchors).toHaveLength(3);
     // `label` sai PRÉ-computado na derivação (2 Hz) — o hot-path do desenho não refaz regex.
-    expect(v.anchors[0]).toEqual({ mac: "AA:00", px: { x: 0, y: 0 }, fresh: true, label: "AA00" });
+    // Só 1 âncora fresca aqui → fit cai no default (residualM null: comparar contra um chute
+    // não diagnostica nada — ver descrição de FloorAnchor.residualM).
+    expect(v.anchors[0]).toEqual({
+      mac: "AA:00",
+      px: { x: 0, y: 0 },
+      fresh: true,
+      label: "AA00",
+      residualM: null,
+    });
     expect(v.anchors[1].fresh).toBe(false); // AA:01 nunca foi ouvida
     expect(v.station).toEqual({ px: STATION });
   });
@@ -182,5 +190,84 @@ describe("deriveFloorView — âncoras, estação e anéis com as supressões do
     expect(v.rings).toHaveLength(0);
     expect(v.station).toBeNull();
     expect(v.anchors).toHaveLength(3);
+  });
+});
+
+describe("deriveFloorView — auto-diagnóstico por âncora (residualM, backlog científico A4)", () => {
+  // 4 âncoras com span suficiente (dmax/dmin = 8 ≥ 2.5 → fit completo "anchors", não
+  // "anchors-offset"/"default") — só com calibração própria o resíduo diagnostica algo
+  // (ver floor-plot.ts fitPathLoss). RSSI sintético SEM ruído pelo modelo log-distância.
+  const RSSI0 = -40;
+  const N = 2.0;
+  const rssiAt = (d: number): number => RSSI0 - 10 * N * Math.log10(d);
+  const ANCHOR_DEFS = [
+    { mac: "A1:00", d: 1 },
+    { mac: "A1:01", d: 2 },
+    { mac: "A1:02", d: 4 },
+    { mac: "A1:03", d: 8 },
+  ];
+  const anchorPointsFor = (defs: typeof ANCHOR_DEFS) =>
+    defs.map(({ mac, d }) => anchor(mac, STATION.x + d, STATION.y));
+
+  it("todas as âncoras consistentes com o modelo → resíduo baixo em todas (fit exato, sem ruído)", () => {
+    const tags = new Map<string, TagSignal>();
+    for (const { mac, d } of ANCHOR_DEFS) ingestReadings(tags, [reading(mac, rssiAt(d))], 0);
+    const v = deriveFloorView({
+      now: 0,
+      tags,
+      anchorPoints: anchorPointsFor(ANCHOR_DEFS),
+      H: H_ID,
+      station: STATION,
+      assigned: new Set(),
+    });
+    expect(v.anchors).toHaveLength(4);
+    for (const a of v.anchors) {
+      expect(a.residualM).not.toBeNull();
+      expect(a.residualM!).toBeLessThan(0.1);
+    }
+  });
+
+  it("1 âncora 'mentindo' (RSSI muito fora da curva das outras 3) → resíduo alto SÓ nela", () => {
+    const tags = new Map<string, TagSignal>();
+    for (const { mac, d } of ANCHOR_DEFS) {
+      // A1:03 está de fato a 8 m mas reporta RSSI de perto (-30 dBm) — multipath/obstrução
+      // simulado: "sensor mentindo" sobre a própria distância à estação.
+      const rssi = mac === "A1:03" ? -30 : rssiAt(d);
+      ingestReadings(tags, [reading(mac, rssi)], 0);
+    }
+    const v = deriveFloorView({
+      now: 0,
+      tags,
+      anchorPoints: anchorPointsFor(ANCHOR_DEFS),
+      H: H_ID,
+      station: STATION,
+      assigned: new Set(),
+    });
+    const liar = v.anchors.find((a) => a.mac === "A1:03")!;
+    const others = v.anchors.filter((a) => a.mac !== "A1:03");
+    expect(liar.residualM).not.toBeNull();
+    expect(liar.residualM!).toBeGreaterThan(1.5); // limiar de anomalia (camera/draw.ts RESIDUAL_ANOMALY_M)
+    for (const a of others) {
+      expect(a.residualM).not.toBeNull();
+      expect(a.residualM!).toBeLessThan(1.5);
+      expect(a.residualM!).toBeLessThan(liar.residualM!);
+    }
+  });
+
+  it("âncora sem leitura viva (não fresca) → residualM null mesmo com modelo calibrado pelas demais", () => {
+    const tags = new Map<string, TagSignal>();
+    for (const { mac, d } of ANCHOR_DEFS.slice(0, 3)) ingestReadings(tags, [reading(mac, rssiAt(d))], 0);
+    // A1:03 nunca reportou — sem base honesta pra comparar previsão × realidade.
+    const v = deriveFloorView({
+      now: 0,
+      tags,
+      anchorPoints: anchorPointsFor(ANCHOR_DEFS),
+      H: H_ID,
+      station: STATION,
+      assigned: new Set(),
+    });
+    const missing = v.anchors.find((a) => a.mac === "A1:03")!;
+    expect(missing.fresh).toBe(false);
+    expect(missing.residualM).toBeNull();
   });
 });

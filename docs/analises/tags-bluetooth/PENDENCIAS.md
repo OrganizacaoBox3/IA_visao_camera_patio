@@ -54,8 +54,6 @@
 3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.
 4. **Sinkhorn/transporte ótimo COM ambiguidade modelada** — o Hungarian puro foi MEDIDO e rejeitado
    (pior que o guloso: otimalidade sem guarda piora a honestidade); fica de lição p/ a variante soft.
-5. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
-   sem calibração (71,8% vs 44,5%) — medido.
 
 ### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
 
@@ -79,6 +77,10 @@
   caminho. Gate (`maxDistRatio`) e blend (`distWeight`) ficam como knobs de PESQUISA desligados,
   com 2 sentinelas de viés permanentes no harness (`ancoras-multidao-bias`, `ancoras-mismatch-n`).
   Detalhes: `docs/cientifica/harness-associacao-indoor.md` §v4.
+- ✅ **Orientação de instalação documentada na UI**: passo "Estação BLE" da calibração
+  (`CalibrationPanel.tsx`) ganhou dica (`Alert tone="info"`) para fixar a estação BLE junto da
+  câmera — texto honesto e escopado ao modo sem calibração (medido: +27 pts, 71,8% vs 44,5%, ver
+  `docs/cientifica/harness-associacao-indoor.md`); comentário no código cita a fonte do número.
 
 ## Limites honestos (não são bugs — física de 1 estação + RSSI)
 
