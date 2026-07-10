@@ -153,12 +153,34 @@
      erro-segundos-em-memória da sentinela durante-memória (14,5s) é **mais que o DOBRO** da
      sentinela na confirmação (6s) — exatamente a direção prevista (memória é o pior caso, mais
      tempo pra exibir errado sem correção precoce). Números fixos, reproduzíveis, no teste.
-   - ⬜ **(4b) torneio** com a regra a priori do escopo (erro-segundos ≤ baseline sem persistência,
-     cobertura de experiência ≥ N× o baseline NA MESMA UNIDADE — tempo, não por-tick de hoje —,
-     sobrevive às 2 sentinelas, ganho decomposto). Falta: rodar a política de memória sobre a suíte
-     inteira de cenários (não só os 2 de sentinela) e comparar contra o baseline sem persistência
-     usando as MESMAS métricas. Próximo passo.
-   - ⬜ **(5) revisão adversarial** antes de qualquer default em produção.
+   - ✅🔬🔴 **(4b) torneio — RODADO, e a v1 (defaults atuais) NÃO PASSA a regra a priori em
+     agregado** (`src/fusion/persistence-tournament.test.ts`, 13 testes, PINS honestos — não
+     forçados a passar). Suíte inteira (12 cenários) medida, baseline (associador cru, sem
+     persistência) × com-memória, mesma unidade de tempo:
+     - **Eixo 1 (erro-segundos ≤ baseline): PASSA.** Agregado 209 000ms → 95 500ms.
+     - **Eixo 2 (cobertura de experiência ≥ N× baseline, N≥1): FALHA.** Agregado 20,84% → 13,88%
+       (multiplicador ≈0,67× — CAIU, não subiu).
+     - **Causa raiz (achada pela quebra por cenário, não chutada)**: em multidão
+       (multidao/ancoras-multidao/ancoras-multidao-bias/ancoras-mismatch-n), a barra de
+       confirmação (`confirmMargin:0,4` por `confirmTicks:3` consecutivos) é estrita demais pro
+       regime de correlação mais ruidoso desses cenários — o track NUNCA confirma, e a memória
+       fica ZERADA (0% cobertura, 0 erro) exatamente onde o baseline por-tick conseguia acertar
+       OCASIONALMENTE (16-25% de cobertura ali). A decomposição por transição confirma que o
+       canal legítimo existe (abstenção→acerto: 239 500ms, >>10× a regressão correto→errado: só
+       8 000ms) — o mecanismo NÃO está "quebrado", só está OTIMIZADO para o caso simples
+       (canonico/sem-calibração melhoram) e mal-calibrado pro caso denso.
+     - **CONCLUSÃO, sem meias-palavras: v1 como está NÃO é candidato a default.** Precisa de
+       retuning dos parâmetros de confirmação (ex.: barra adaptativa à densidade da cena, ou
+       `confirmMargin` mais permissivo com `confirmTicks` maior compensando) numa PRÓXIMA rodada
+       de torneio — não decidido aqui por chute; fica registrado como o próximo passo real antes
+       de (5). Mesma disciplina do v4: achado negativo documentado com a mesma força que um
+       achado positivo, nada escondido.
+   - ⬜ **(4c) retuning dos parâmetros de confirmação** — calibrar `confirmMargin`/`confirmTicks`
+     (ou desenhar uma barra adaptativa à densidade/nº de tags concorrentes) contra o achado do
+     torneio (4b): o v1 atual otimiza o caso simples às custas do caso denso. Retornar ao torneio
+     (4b) depois de qualquer mudança — a régua já existe (`persistence-tournament.test.ts`).
+   - ⬜ **(5) revisão adversarial** antes de qualquer default em produção — só depois de (4c) e um
+     torneio que passe os dois eixos da regra a priori.
 10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
     `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
     respeitada). Método: casar morte de track com nascimento de track NOVO próximo no tempo (≤15-30s)

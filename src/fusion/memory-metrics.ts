@@ -105,3 +105,69 @@ export function computeCorrectionLatencies(
   }
   return out;
 }
+
+// ── Decomposição de transição (regra institucionalizada, v4): todo ganho agregado tem de se
+// explicar por tipo — aqui, especificamente, se o ganho de cobertura vem de CONVERTER abstenção em
+// acerto (o canal legítimo que a persistência promete) ou de reembaralhar decisões que já existiam
+// sem persistência (o que não seria ganho real, só sorte redistribuída). ──
+
+export type TransitionTick = {
+  ts: number;
+  truthTagByTrack: Readonly<Record<number, string | null>>;
+  /** Decisão SEM persistência (o que o associador falaria sozinho, tick a tick). */
+  baseline: readonly { trackId: number; label: string | null }[];
+  /** Decisão COM a política de memória. */
+  withMemory: readonly { trackId: number; label: string | null }[];
+};
+
+export type TransitionMs = {
+  abstainToCorrect: number; // o canal LEGÍTIMO de ganho (persistência preenchendo abstenção)
+  abstainToWrong: number; // custo: memória "inventou" errado onde antes era honesto "não sei"
+  correctToWrong: number; // REGRESSÃO grave: persistência estragou uma decisão que já estava certa
+  wrongToCorrect: number; // bônus: persistência corrigiu um erro que o baseline cometia
+  correctToCorrect: number;
+  wrongToWrong: number;
+  abstainToAbstain: number;
+};
+
+type Verdict = "correct" | "wrong" | "abstain";
+function classify(label: string | null, truth: string | null | undefined): Verdict | null {
+  if (truth === undefined || truth === null) return null; // fantasma/sem tag — fora do escopo
+  if (label === null) return "abstain";
+  return label === truth ? "correct" : "wrong";
+}
+
+const ZERO_TRANSITIONS: TransitionMs = {
+  abstainToCorrect: 0,
+  abstainToWrong: 0,
+  correctToWrong: 0,
+  wrongToCorrect: 0,
+  correctToCorrect: 0,
+  wrongToWrong: 0,
+  abstainToAbstain: 0,
+};
+
+/** Mesma convenção de peso por intervalo (dt entre ticks consecutivos) de `computeMemoryMetrics`. */
+export function computeTransitionMs(ticks: readonly TransitionTick[]): TransitionMs {
+  const out = { ...ZERO_TRANSITIONS };
+  for (let i = 0; i < ticks.length - 1; i++) {
+    const dt = ticks[i + 1].ts - ticks[i].ts;
+    if (dt <= 0) continue;
+    const tick = ticks[i];
+    const baseByTrack = new Map(tick.baseline.map((b) => [b.trackId, b.label]));
+    for (const m of tick.withMemory) {
+      const truth = tick.truthTagByTrack[m.trackId];
+      const before = classify(baseByTrack.get(m.trackId) ?? null, truth);
+      const after = classify(m.label, truth);
+      if (before === null || after === null) continue;
+      if (before === "abstain" && after === "correct") out.abstainToCorrect += dt;
+      else if (before === "abstain" && after === "wrong") out.abstainToWrong += dt;
+      else if (before === "correct" && after === "wrong") out.correctToWrong += dt;
+      else if (before === "wrong" && after === "correct") out.wrongToCorrect += dt;
+      else if (before === "correct" && after === "correct") out.correctToCorrect += dt;
+      else if (before === "wrong" && after === "wrong") out.wrongToWrong += dt;
+      else out.abstainToAbstain += dt;
+    }
+  }
+  return out;
+}
