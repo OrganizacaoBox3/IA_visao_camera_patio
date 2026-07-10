@@ -158,6 +158,16 @@
     ambiguidade sistematicamente (nunca subestima) e pode explicar parte da taxa de conflito alta,
     em cima da colisão de assinatura 1-D. Não é bug (é simplificação defensável); registrado para
     informar a leitura do shuffle-baseline (item 7) e de qualquer refinamento futuro do dustbin.
+12. **Bancada de simulação** (proposta do dono, `docs/cientifica/simulador.md`, avaliada e planejada
+    2026-07-10 — plano em `C:\Users\crist\.claude\plans\peppy-wondering-garden.md`): generaliza
+    `sim.ts` em World Spec JSON (mundos paramétricos, física calibrada pelos números já minerados
+    nesta sessão — τ de autocorrelação, offsets regionais, viés corporal) + player visual (2 vistas
+    sincronizadas) + modo de anotação que alimenta o teste de campo (item 2) via `SessionTruth`. Não
+    duplica o simulador existente (generaliza `SimOpts`/`simulateFusionScenario`); risco técnico
+    principal é reproduzir os 8 cenários pinados BIT-A-BIT antes de qualquer física nova (gate
+    isolado, "passo zero"). **Trilha P (player, não toca `sim.ts`) pode rodar AGORA em paralelo** ao
+    item 9 (persistência); **Trilha M (World Spec, mexe em `sim.ts`) espera o item 9 fechar** — dono
+    único por arquivo por rodada, mesma lição do `session-loader.ts`.
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 
