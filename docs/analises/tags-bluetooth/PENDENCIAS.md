@@ -84,28 +84,35 @@
 7. ✅🔬 **Reliability diagram + taxa de conflito** — CONSTRUÍDOS 2026-07-10 (task #13). `conflictRate`
    NÃO é baixa (46,9% no canônico, ~90-98% em multidão) — **corrigiu a suposição do especialista** de
    que seria rara com poucas tags. Reliability é honestamente monotônico em `multidao`.
-8. 🔬 **Hungarian+dustbin — ELEVADO de "gated" para EXPERIMENTO IMEDIATO** (2026-07-10, o próprio
-   gatilho do item 7 acabou de estourar o limiar): a taxa de conflito alta muda a leitura — não é
-   "Sinkhorn standalone" (recalibrado, Pergunta 1), é **atribuição com abstenção dentro da
-   otimização** (dustbin do SuperGlue / unbalanced OT). Diferente do v4: é política de decisão sobre
-   os MESMOS scores que o guloso já consome — não introduz física nova, logo estruturalmente menos
-   vulnerável à circularidade (as 2 sentinelas de viés rodam mesmo assim; disciplina não abre exceção).
-   **Desenho**: custo da lixeira DERIVADO da curva de calibração (aceitar par só quando a precisão
-   empírica implicada pela margem ≥ alvo de produto) — não é knob livre. Regra a priori: erro total ≤
-   baseline, cobertura ≥ baseline, sobrevive às sentinelas, ganho decomposto OBRIGATORIAMENTE como
-   conversão abstenção→acerto (lição do v4, não reembaralhamento de acertos entre pares).
-   **Pré-requisito em andamento**: curva de reliability SEM o corte de minMargin (task em progresso)
-   — o custo do dustbin deriva dela.
+8. 🔬 **Hungarian+dustbin — REBAIXADO de volta para GATED** (correção de sequenciamento, especialista
+   2026-07-10, revisão do escopo de persistência): a taxa de conflito alta (item 7) segue sendo o
+   gatilho quantitativo, mas o **custo da lixeira seria calibrado contra uma paisagem de conflictRate
+   que está prestes a mudar** — o item 9 (persistência) reduz o pool ativo a cada confirmação, o que
+   baixa `conflictRate` por construção. Calibrar o dustbin contra o número de HOJE seria calibrar
+   contra um mundo já obsoleto quando o dustbin entrasse em produção. **Gate corrigido: construir e
+   medir o item 9 primeiro → re-medir `conflictRate` com persistência ligada → só então tornear o
+   dustbin com o número pós-persistência.** Desenho do custo (derivado da curva de calibração, não
+   knob livre) e regra a priori (erro total ≤ baseline, cobertura ≥ baseline, sobrevive às sentinelas,
+   ganho decomposto como conversão abstenção→acerto) seguem valendo, só a ORDEM mudou.
 9. **Persistência de rótulo no track** (produto — não ciência, mas rodada própria tipo v4) — escopo
-   escrito em `docs/cientifica/escopo-persistencia-rotulo.md` (máquina de estados, métricas novas —
-   cobertura de experiência/erro-segundos/latência de correção — sentinela de id-switch-na-
-   confirmação). **Construção e torneio começam já** (não é física nova); o **DEFAULT em produção**
-   fica condicionado a dado (ou proxy) de id-switch com gente de verdade — diferente do hello world
-   solo (item 2), que não testa ambiguidade multi-pessoa.
-10. **Fragmentação de tracks como proxy de id-switch** — minerável JÁ na gravação passiva que
-    recomeçou (morte+renascimento de track próximos no tempo/espaço), sem verdade anotada. Não
-    captura troca SILENCIOSA entre 2 pessoas que se cruzam, mas calibra a ordem de grandeza real da
-    instabilidade do tracker (hoje só chutada pelo simulador) — alimenta o gate do item 9.
+   escrito em `docs/cientifica/escopo-persistencia-rotulo.md`, **REVISADO E APROVADO pelo especialista
+   (2026-07-10)** com 3 correções incorporadas: (i) "sem conflito" na confirmação é LOCAL ao par
+   track/tag (`Assignment.hadConflict`), não o `conflictRate` agregado de tick — senão multidão nunca
+   confirmaria nada; (ii) **sentinela DUPLA** — id-switch-na-confirmação E id-switch-durante-`memória`
+   (o pior caso real: troca silenciosa de ID do tracker num cruzamento, sem salto físico detectável,
+   persistindo até o timeout); (iii) o `timeout` do estado `memória` vem da mineração de fragmentação
+   (item 10), NÃO da curva de reliability (que calibra confiança de entrada, não sobrevivência de
+   crença) — **isso torna o item 10 uma DEPENDÊNCIA desta rodada, não mais um item independente**.
+   Ordem de construção corrigida: (1) minerar fragmentação → (2) máquina de estados → (3) sentinela
+   dupla → (4) torneio → (5) revisão adversarial. **Construção e torneio começam já** (não é física
+   nova); o **DEFAULT em produção** fica condicionado a dado (ou proxy) de id-switch com gente de
+   verdade — diferente do hello world solo (item 2), que não testa ambiguidade multi-pessoa.
+10. **Fragmentação de tracks como proxy de id-switch — REPRIORIZADO: agora é o PRIMEIRO passo de
+    construção do item 9** (não mais item independente/paralelo) — o `timeout` do estado `memória`
+    não tem de onde vir sem esta mineração. Minerável JÁ na gravação passiva que recomeçou
+    (morte+renascimento de track próximos no tempo/espaço), sem verdade anotada. Não captura troca
+    SILENCIOSA entre 2 pessoas que se cruzam, mas calibra a ordem de grandeza real da instabilidade
+    do tracker (hoje só chutada pelo simulador).
 11. **Achado de código (2026-07-10, verificado por leitura, não suposição)**: o cálculo de
     margem/conflito (`associate.ts`) usa a matriz de score ESTÁTICA (pré-resolução gulosa) — um
     concorrente "fantasma" já consumido por OUTRO par ainda conta como rival. Isso **superestima**

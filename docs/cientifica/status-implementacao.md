@@ -17,6 +17,18 @@ futuro, não só o que já rodou:
 2. **Todo ganho agregado deve ser decomposto por tipo de erro antes de virar default.** O ganho do v4
    inteiro vinha de "âncora não confundida com pessoa" — não da física de distância que a narrativa
    original alegava. Ganho que não se explica mecanicamente é ganho escondendo a própria causa.
+3. **Gravação de campo é artefato imutável e append-only** — nenhum agente tem poder de deleção sobre
+   sessões de gravação real. Nasceu de um incidente real (perda de ~7h de dado de campo por um `rm -f`
+   sobre arquivo sob escrita ativa); mitigação em camadas no `session-recorder.js` (segmentação por
+   hora + backup periódico). Detalhes e runbook: `CLAUDE.md` §3 Invariantes.
+4. **Todo teste de hipótese exige controle positivo antes de interpretar qualquer nulo** — demonstrar
+   que a manipulação consegue mover ALGUMA métrica que sabidamente deveria mover; se o controle
+   positivo falha, o experimento é ritual, não medição. Nasceu do próprio especialista admitindo um
+   erro de nível de abstração no desenho do shuffle-baseline: embaralhar NOMES de tag (permutação de
+   colunas da matriz de score) é matematicamente incapaz de mudar `conflictRate` — o desenho correto
+   precisaria quebrar a correspondência FÍSICA RSSI↔trajetória (ex.: deslocamento temporal circular),
+   não só o rótulo de identidade. Ver `src/fusion/shuffle-baseline.ts` (achado negativo provado,
+   não só medido) e `docs/analises/tags-bluetooth/PENDENCIAS.md` (previsão a).
 
 ### Recalibrações do material original (assumidas pelo próprio especialista)
 
