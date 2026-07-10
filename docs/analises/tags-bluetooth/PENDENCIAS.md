@@ -51,6 +51,21 @@
    perguntas de viés/GP. O roteiro completo de 6 min (`protocolo-teste-campo-indoor.md`) continua
    sendo o padrão-ouro quando houver disponibilidade — **ambos DEFERIDOS pelo dono**, não bloqueio
    técnico. É também o dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 podem ser religados.
+   - 🔴 **PRIMEIRA TENTATIVA REAL (2026-07-10) — SEM SUCESSO, registrado honestamente**: câmera nova
+     conectada, calibrada, tag cadastrada com nome. Achado antes desta tentativa: a grade (dashboard)
+     nunca ligava a fusão tag↔pessoa nos tiles MJPEG (bug de wiring — `CameraWorkspace mode="tile"`
+     não recebia `getReadings`/`calibrationRev`; só a câmera aberta em tela cheia e o tile WebRTC
+     tinham a fusão ligada) — CORRIGIDO (`CameraWorkspace.tsx`/`CameraTile.tsx`, commit deste dia).
+     Confirmado que o fix funcionou: o anel BLE (que depende da MESMA calibração/leituras) passou a
+     aparecer na grade. **Mas o rótulo da pessoa segue "Pessoa `<id>`" mesmo depois do fix, mesmo
+     pedindo caminhada contínua de ~10-15s sem parar** — ou seja, o problema NÃO é mais wiring, é a
+     ASSOCIAÇÃO em si (`assign()`) não atingindo confiança para falar com corpo/RSSI real. Causa
+     raiz AINDA NÃO diagnosticada (candidatos: `minMovement`/`windowMs` calibrados só no simulador
+     não baterem com a cadência real de RSSI da estação; sinal fraco/instável na posição real da
+     estação; environment com multipath pior que o assumido) — **não investigado a fundo ainda**
+     porque o dono pausou o teste para seguir com a bancada de simulação. Fica pendente: quando
+     houver disponibilidade, instrumentar (logar o score/correlação bruta em vez de só a decisão
+     final) para achar exatamente qual guarda está barrando a fala.
 3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
    - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
      `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),
