@@ -62,6 +62,16 @@ export type SimOpts = {
    *  n ≠ 2,2 descasa do n que o fit assume no regime anchors-offset (span estreito). Afeta
    *  pessoas E âncoras — o canal é um só. Não consome RNG (byte-compat com default). */
   channelN?: number;
+  /** SENTINELA DE PERSISTÊNCIA (docs/cientifica/escopo-persistencia-rotulo.md, Mordida 2): força
+   *  uma troca DETERMINÍSTICA de trackId entre duas pessoas num tick exato — sem sorteio, sem RNG
+   *  consumido (byte-compat: ausente = comportamento intacto). Diferente de `idSwitchOnCross`
+   *  (probabilístico, disparado por proximidade física): aqui o CHAMADOR escolhe o instante exato
+   *  (ex.: o tick em que uma política de memória confirmou a crença) — o mecanismo de injeção
+   *  cirúrgica que o escopo da persistência e o §3 de docs/cientifica/simulador.md (campo `inject`)
+   *  pedem. Não valida proximidade física: é responsabilidade do chamador escolher um `tickIndex`
+   *  onde as duas pessoas estejam próximas (senão a troca gera um salto físico detectável, que é
+   *  um cenário de sentinela DIFERENTE, não o "sem salto" da Mordida 2). */
+  forceSwitchAt?: { tickIndex: number; personA: number; personB: number };
 };
 
 // ——— PRNG determinístico (mesmo padrão de src/localizacao/simulate.ts) ———
@@ -312,6 +322,17 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
 
   for (let i = 0; i < steps; i++) {
     const positions = movers.current();
+
+    // Sentinela de persistência (Mordida 2): troca FORÇADA e determinística, sem RNG — aplicada
+    // ANTES da leitura de trackIdOfPerson[p] desta tick, mesmo ponto onde idSwitchOnCross aplicaria
+    // a troca probabilística (consistência: os dois mecanismos alteram o MESMO estado, na MESMA
+    // fase do tick). `personA`/`personB` são índices de PESSOA (0-based), não trackId.
+    const fs = opts.forceSwitchAt;
+    if (fs && fs.tickIndex === i) {
+      const t = trackIdOfPerson[fs.personA];
+      trackIdOfPerson[fs.personA] = trackIdOfPerson[fs.personB];
+      trackIdOfPerson[fs.personB] = t;
+    }
 
     if (opts.idSwitchOnCross) {
       for (let a = 0; a < people; a++) {

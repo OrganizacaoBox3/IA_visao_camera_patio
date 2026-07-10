@@ -132,10 +132,21 @@
      Mordida 3) — contradição FRACA não derruba ativamente (v1, backstop é só o timeout). Morte de
      track = ausência no array de assignments → remove a crença. **Ainda NÃO** wired em
      `useTagFusion.ts`/produção (por design — torneia no harness antes; ver escopo doc).
-   - ⬜ **(3) sentinela dupla** (id-switch-na-confirmação + id-switch-durante-memória, Mordida 2) —
-     estender `sim.ts`/`replay-fusion.ts`. Próximo passo.
+   - ✅🔬 **(3) sentinela dupla — FEITA e a Mordida 2 COMPROVADA, não só implementada**
+     (`src/fusion/sim.ts` ganhou `forceSwitchAt` — troca determinística de trackId, sem RNG, no
+     tick exato que o chamador escolher, byte-compat quando ausente; `src/fusion/
+     persistence-sentinel.ts` acha o instante certo por replay-e-descobre: confirma → procura
+     proximidade física real entre as 2 pessoas numa janela — só injeta quando acha um tick
+     "sem salto", senão devolve `null` honesto). 6 testes verdes, **cenário determinístico
+     (seed=1, "cruzamento")**: sentinela 1 (id-switch na confirmação) injeta no tick 6 — a crença
+     CONFIRMA o rótulo ERRADO já ao nascer (a evidência que fecha a confirmação vem de antes da
+     troca) e segue errada por ≥4 ticks medidos; sentinela 2 (id-switch durante memória, sustain=4
+     ticks) injeta no tick 76 — crença errada por ≥10 ticks medidos, corrigindo só no tick 95 (9,5s
+     depois da injeção) — **mais lento que a sentinela 1**, na direção que a previsão do
+     especialista registrava (memória é o pior caso). Números fixos/reproduzíveis, não achados por
+     sorte — documentados no teste.
    - ⬜ **(4) torneio** com a regra a priori (métricas novas: cobertura de experiência, erro-segundos
-     por estado de origem, latência de correção — ainda não existem no harness).
+     por estado de origem, latência de correção — ainda não existem no harness). Próximo passo.
    - ⬜ **(5) revisão adversarial** antes de qualquer default em produção.
 10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
     `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
