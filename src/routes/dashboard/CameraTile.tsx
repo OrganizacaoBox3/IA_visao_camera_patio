@@ -166,8 +166,6 @@ function Go2rtcVideoTile({
   // TAGS NO CHÃO (default LIGADO na grade quando há calibração + leituras): reusa a MESMA
   // calibração já buscada acima (sem 2º fetch) + as leituras vivas do socket; tags já associadas
   // a pessoa não ganham anel (o rótulo AR da caixa já as mostra). Sem dados → viewRef null.
-  // RESIDUAL consciente: na grade a camada só existe no tile WebRTC (TrackOverlay); o tile MJPEG
-  // (CameraWorkspace mode "tile") segue sem tags no chão — assimetria declarada, sem plano por ora.
   const { viewRef: floorRef } = useFloorTags({
     calibration,
     getReadings,
@@ -338,6 +336,11 @@ export const CameraTile = memo(function CameraTile({
       tripwiresRev={tripwiresRev}
       analysisEngine={analysisEngine}
       getHubAnalysis={getHubAnalysis}
+      // Fusão tag↔pessoa (caminho C) — mesma simetria que o tile WebRTC já tinha (Go2rtcVideoTile
+      // acima): antes só a câmera aberta em tela cheia recebia isto; o tile MJPEG da grade ficava
+      // preso em "Pessoa <id>" mesmo com a estação BLE configurada.
+      getReadings={getReadings}
+      calibrationRev={calibrationRev}
       onOpen={openSelf}
       onAlert={onAlert}
     />

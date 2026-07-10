@@ -192,8 +192,8 @@ type Props = {
   /** Getter ESTÁVEL do último `analysis-tracks` (tracks/zonas do MOTOR do hub). Consumido com
    *  engine==="hub" em ambos os modos: a instância vira espelho e não agenda o coco local. */
   getHubAnalysis?: () => HubAnalysis | null;
-  /** Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só a câmera ABERTA (mode="full") usa —
-   *  rotula a pessoa com o nome da tag. Ausente → sem rótulo de tag (só "Pessoa <id>"). */
+  /** Leituras BLE da estação (fusão tag↔pessoa, caminho C) — rotula a pessoa com o nome da tag em
+   *  QUALQUER modo (full OU tile) quando fornecido. Ausente → sem rótulo de tag (só "Pessoa <id>"). */
   getReadings?: () => BtReading[];
   /** SYNC AO VIVO da CALIBRAÇÃO (mesmo idioma do tripwiresRev/ADR-006): revisão incrementada pela
    *  central a cada `camcfg-updated {kind:"calibration"}` → a fusão re-busca H/station. Ausente →
@@ -376,14 +376,17 @@ export function CameraWorkspace({
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
 
-  // Fusão tag↔pessoa (caminho C) — SÓ na câmera ABERTA: nome da tag no rótulo. Ref lido no rAF/draw.
-  // Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points) e as tags já
-  // associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
+  // Fusão tag↔pessoa (caminho C) — nome da tag no rótulo, em QUALQUER modo (full/tile) quando o
+  // chamador fornece getReadings (antes só rodava em mode="full" — assimetria declarada que a
+  // grade MJPEG ficava sem rótulo de tag; a grade WebRTC já rodava isto por tile via
+  // useCameraTagLabels/Go2rtcVideoTile, então o custo por tile já era pago ali sem problema).
+  // Ref lido no rAF/draw. Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points)
+  // e as tags já associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
   const { labelForRef, calibration: tagCalibration, assignedTags } = useCameraTagLabels({
     cameraId,
     getHubAnalysis,
     getReadings,
-    enabled: mode === "full" && !!getReadings,
+    enabled: !!getReadings,
     calibrationRev,
   });
 
@@ -395,7 +398,7 @@ export function CameraWorkspace({
     calibration: tagCalibration,
     getReadings,
     getAssignedTags: assignedTags,
-    enabled: mode === "full" && !!getReadings,
+    enabled: !!getReadings,
   });
   const [floorOn, setFloorOnState] = useState(true);
   const floorOnRef = useRef(true);
