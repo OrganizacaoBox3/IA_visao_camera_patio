@@ -18,6 +18,7 @@ import {
   MapPin,
   PanelLeftClose,
   PanelLeftOpen,
+  PlayCircle,
   Ruler,
   Search,
   ShieldCheck,
@@ -239,6 +240,9 @@ export function AppShell() {
         ...(canConfigure
           ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes", short: "Saúde" }]
           : []),
+        // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia, mesmo
+        // RBAC de Saúde alarmes (canConfigure: engenheiro/superadmin).
+        ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Replay (sim)" }] : []),
         ...(user.papel === "superadmin"
           ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
           : []),
