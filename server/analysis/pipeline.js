@@ -25,6 +25,7 @@
 
 const { attributeZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
+const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 
 // Turno da fábrica. DUPLICAÇÃO DECLARADA de src/report/calc/common.ts:8 (front):
 // mudou o turno lá, mude AQUI — senão a contagem "flow" diverge do relatório.
@@ -137,6 +138,10 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
         if (n > acc.peak) acc.peak = n;
       }
     }
+
+    // Gravação OPT-IN da sessão de fusão (FUSION_RECORD): tracks CRUS desta rodada, ANTES do gate de
+    // espectador (o teste de campo grava mesmo sem dashboard aberto). Fail-safe: jamais lança.
+    sessionRecorder.recordTracks(st.id, now, tracks);
 
     // Overlay servido: roda TODA rodada com espectador (inclusive 0 tracks — o
     // dashboard precisa da rodada vazia p/ apagar caixas), mesmo sem zona/linha.

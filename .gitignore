@@ -80,5 +80,7 @@ server/bt/bt-tags.json
 server/bt/bt-locations.json
 # Gravação event-sourcing OPT-IN das leituras BLE (BT_RECORD) — só metadados, matéria-prima do replay.
 server/bt/bt-recording.jsonl
+# Gravação OPT-IN da sessão de fusão indoor câmera+BLE (FUSION_RECORD) — só metadados (tracks/MAC/RSSI/H).
+server/bt/fusion-session.jsonl
 tc22-scanner/build/
 tc22-scanner/debug.keystore

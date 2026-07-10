@@ -5,6 +5,7 @@ const btReadings = require("../bt/bt-readings");
 const btLocations = require("../bt/bt-locations");
 const btTags = require("../bt/bt-tags");
 const recorder = require("../bt/recorder");
+const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 const users = require("../users");
 
 // Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita
@@ -37,6 +38,9 @@ async function handle(req, res, ctx) {
       ts: Date.now(),
       readings: enriched,
     });
+    // Gravação OPT-IN da sessão de fusão indoor (FUSION_RECORD): SEMPRE — com ou sem lat/lon (indoor
+    // não tem GPS; o recorder.record abaixo só cobre o modelo AirTag). Fail-safe: jamais lança.
+    sessionRecorder.recordReadings(body.stationId, Date.now(), enriched);
     // Modelo AirTag: se o batch traz a posição do celular (lat/lon), toda tag vista AGORA está nela.
     // Guarda a última localização por tag (last-known) e relaya o snapshot ao mapa. LGPD: só metadado.
     const lat = Number(body.lat);

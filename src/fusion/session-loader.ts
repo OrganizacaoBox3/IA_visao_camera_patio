@@ -1,0 +1,322 @@
+// Loader da GRAVAÇÃO DE CAMPO da fusão (Frente B): converte o JSONL gravado pelo servidor
+// (server/bt/fusion-session.jsonl — linhas "cal"/"trk"/"ble", SÓ metadados, LGPD) no
+// SimFusionScenario que o harness de replay já consome (replay-fusion.ts) — assim o associador
+// DE PRODUÇÃO roda sobre dados REAIS pelo MESMO caminho de código do gate sintético.
+// Responsabilidade única: parse + resample fiel à produção. Simular, associar e medir moram ao lado.
+//
+// Decisões documentadas (fidelidade à produção, não conveniência):
+// - RESAMPLE em grade de tickMs (default 500 ms, o TICK_MS do useTagFusion): a produção NÃO consome
+//   evento a evento — a cada tick ela lê o estado ACUMULADO dos snapshots. Fiel ao cliente real:
+//   • tracks: o último "trk" da câmera vale ATÉ O PRÓXIMO (o getter do hub devolve o último payload
+//     cru, SEM gate de idade; rodadas VAZIAS são gravadas pelo recorder e já representam "sem
+//     detecção"). NENHUM tick é emitido antes do primeiro "trk" da câmera — antes disso a produção
+//     nem teria `hd` (useTagFusion retorna cedo sem o getHubAnalysis).
+//   • readings: cada evento "ble" SUBSTITUI o snapshot INTEIRO (useDashboardSocket:152-154 faz
+//     `btReadingsRef.current = p.readings` — sem merge por MAC, sem staleness); o último batch vale
+//     até o próximo. Batch vazio → tick com readings [] → replayFusion PULA o tick, espelhando o
+//     `!readings.length` do useTagFusion.
+// - VERDADE GLOBAL em todo tick: o assign() de produção decide também em ticks de rodada vazia
+//   (currentTrackIds cai no último frame NÃO-vazio da janela — associate.ts); filtrar a verdade
+//   pelos tracks presentes no tick deixaria essas decisões escaparem da métrica. Anexar a anotação
+//   inteira é inócuo: a métrica só avalia trackIds presentes nos assignments.
+// - Timestamps REBASEADOS para t0=0: a gravação usa epoch (Date.now); a produção alimenta o
+//   associador com performance.now (começa perto de 0) e o warmupMs das métricas é ABSOLUTO.
+//   Rebasear preserva os deltas (tudo que o associador usa) e mantém o warmup significativo.
+// - `rotulo` é sempre null no replay: o recorder nem o grava (minimização LGPD — só {mac, rssi});
+//   a identidade da tag é SEMPRE o MAC em MAIÚSCULO, porque a verdade-terreno é anotada por MAC.
+//   Isso DIFERE da produção com rótulos cadastrados em dois pontos: (1) a string do tag participa
+//   da ordem lexicográfica das colunas e do desempate do guloso no associador; (2) em produção,
+//   rotulo DUPLICADO em MACs distintos FUNDE as séries de RSSI (frame.ts usa rotulo||mac como
+//   chave). Sem mapa mac→rotulo por ora (YAGNI) — declarado, não escondido.
+// - Linha suja é PULADA sem lançar (dado real vem sujo); item inválido dentro de tracks/readings é
+//   descartado sem derrubar a linha. Loader nunca lança por dado ruim — devolve o que deu pra ler.
+// - SANEAMENTO de ts: evento com ts além de ±24 h do ts MEDIANO é descartado (relógio suspeito —
+//   ex.: 0 misturado a epoch); e a grade tem teto duro de 500 000 posições (trunca com
+//   console.warn). Sem isso, um outlier geraria bilhões de ticks (OOM) — "nunca trava" inclui isso.
+// - Sem cameraId explícito, vale a PRIMEIRA câmera vista no arquivo; "trk"/"cal" de outras câmeras
+//   são ignorados (inclusive na grade de ticks). "ble" não filtra por stationId (MVP = 1 estação;
+//   com várias, cada evento substitui o snapshot inteiro — exatamente o que o cliente vê do
+//   bt-readings do hub).
+// - Vários "cal" da câmera: o ÚLTIMO vence (recalibração sobrescreve, como a config de produção).
+//   station null/ausente → stationPx default (0.5, 1.0), o MESMO default do frame.ts ("estação
+//   junto da câmera") — replayFusion só o consome com H não-null; H null → proxy de caixa.
+// - Cauda menor que um tick após o último tick da grade é descartada: a produção só a veria no
+//   tick SEGUINTE, que não existe na gravação.
+// - Descarte NUNCA é mudo: o retorno traz `diag` ADITIVO (linhas totais/descartadas, câmeras vistas)
+//   e console.warn sinaliza >1 câmera no arquivo ou cameraId pedido que não casa nada.
+import { replayFusion } from "./replay-fusion";
+import type { FusionConfig } from "./associate";
+import type { SimFusionScenario, SimTick } from "./sim";
+import type { DrawTrack, RawReading } from "./frame";
+import type { IdentityMetrics } from "./identity-metrics";
+import type { Matrix3, Vec2 } from "../vision/homography";
+
+/** Verdade-terreno anotada MANUALMENTE pós-coleta: trackId REAL → MAC da tag (null = pessoa SEM tag).
+ *  Tracks não anotados ficam FORA do truthTagByTrack — a métrica os ignora como fantasmas. */
+export type SessionTruth = Record<number, string | null>;
+
+export type SessionLoadOpts = {
+  /** Câmera a replayar; default = a primeira vista no arquivo. */
+  cameraId?: string;
+  /** Período da grade de resample (ms); default 500 = TICK_MS do useTagFusion. */
+  tickMs?: number;
+};
+
+/** Diagnóstico ADITIVO do parse — descarte nunca é mudo (câmera errada ≠ métricas zeradas sem sinal). */
+export type SessionDiag = {
+  /** Linhas recebidas (inclui vazias/sujas). */
+  linesTotal: number;
+  /** Linhas que NÃO viraram evento (vazias, corrompidas, tipo desconhecido, campos inválidos). */
+  linesDropped: number;
+  /** Eventos "cal"/"trk" válidos por cameraId visto no arquivo (>1 chave = câmera trocando de id?). */
+  cameras: Record<string, number>;
+};
+
+/** SimFusionScenario + diagnóstico do parse. Aditivo — quem espera SimFusionScenario segue servido. */
+export type LoadedFusionSession = SimFusionScenario & { diag: SessionDiag };
+
+const DEFAULT_TICK_MS = 500; // TICK_MS do useTagFusion de produção
+const DEFAULT_STATION_PX: Vec2 = { x: 0.5, y: 1.0 }; // mesmo default do frame.ts (estação junto da câmera)
+const TS_OUTLIER_MS = 24 * 60 * 60 * 1000; // evento além de ±24 h do ts mediano = relógio suspeito
+const MAX_TICKS = 500_000; // teto duro da grade (nunca OOM por ts ruim/tickMs minúsculo)
+
+// ——— Eventos internos (a linha JSONL já validada e normalizada) ———
+
+type CalEvent = { t: "cal"; ts: number; cameraId: string; H: Matrix3 | null; station: Vec2 | null };
+type TrkEvent = { t: "trk"; ts: number; cameraId: string; tracks: DrawTrack[] };
+type BleEvent = { t: "ble"; ts: number; readings: RawReading[] };
+type SessionEvent = CalEvent | TrkEvent | BleEvent;
+
+// ——— Guards de parse (dado real vem sujo — validar tudo, nunca lançar) ———
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+/** H da linha "cal": null ou array de 9 números finitos. undefined = inválido (linha suja). */
+function parseH(v: unknown): Matrix3 | null | undefined {
+  if (v === null) return null;
+  if (!Array.isArray(v) || v.length !== 9 || !v.every(isFiniteNumber)) return undefined;
+  return [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]];
+}
+
+/** station da linha "cal": null/ausente → null (default documentado); objeto {x,y} finito → Vec2. */
+function parseStation(v: unknown): Vec2 | null | undefined {
+  if (v === null || v === undefined) return null;
+  const o = asRecord(v);
+  if (!o || !isFiniteNumber(o.x) || !isFiniteNumber(o.y)) return undefined;
+  return { x: o.x, y: o.y };
+}
+
+/** Um item de tracks: {id, bbox:[x,y,w,h]} — inválido é descartado sem derrubar a linha. */
+function parseTrack(v: unknown): DrawTrack | null {
+  const o = asRecord(v);
+  if (!o || !isFiniteNumber(o.id)) return null;
+  const b = o.bbox;
+  if (!Array.isArray(b) || b.length !== 4 || !b.every(isFiniteNumber)) return null;
+  return { id: o.id, bbox: [b[0], b[1], b[2], b[3]] };
+}
+
+/** Um item de readings: {mac, rssi} — rotulo é sempre null (identidade = MAC maiúsculo; ver cabeçalho). */
+function parseReading(v: unknown): RawReading | null {
+  const o = asRecord(v);
+  if (!o || typeof o.mac !== "string" || o.mac.length === 0 || !isFiniteNumber(o.rssi)) return null;
+  return { mac: o.mac.toUpperCase(), rotulo: null, rssi: o.rssi };
+}
+
+/** Parse de UMA linha JSONL → evento tipado, ou null se a linha é suja (pulada + contada no diag). */
+function parseLine(line: string): SessionEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch {
+    return null; // linha truncada/corrompida — dado real vem sujo
+  }
+  const o = asRecord(raw);
+  if (!o || !isFiniteNumber(o.ts)) return null;
+
+  if (o.t === "cal") {
+    if (typeof o.cameraId !== "string" || o.cameraId.length === 0) return null;
+    const H = parseH(o.H);
+    const station = parseStation(o.station);
+    if (H === undefined || station === undefined) return null;
+    return { t: "cal", ts: o.ts, cameraId: o.cameraId, H, station };
+  }
+  if (o.t === "trk") {
+    if (typeof o.cameraId !== "string" || o.cameraId.length === 0) return null;
+    if (!Array.isArray(o.tracks)) return null;
+    const tracks: DrawTrack[] = [];
+    for (const item of o.tracks) {
+      const trk = parseTrack(item);
+      if (trk) tracks.push(trk);
+    }
+    return { t: "trk", ts: o.ts, cameraId: o.cameraId, tracks };
+  }
+  if (o.t === "ble") {
+    if (!Array.isArray(o.readings)) return null;
+    const readings: RawReading[] = [];
+    for (const item of o.readings) {
+      const r = parseReading(item);
+      if (r) readings.push(r);
+    }
+    return { t: "ble", ts: o.ts, readings };
+  }
+  return null; // tipo desconhecido — contrato aditivo: eventos novos não derrubam o loader
+}
+
+/** ts mediano (mediana inferior) de uma lista NÃO-vazia de eventos — âncora do saneamento ±24 h. */
+function medianTs(events: SessionEvent[]): number {
+  const ts = events.map((e) => e.ts).sort((a, b) => a - b);
+  return ts[(ts.length - 1) >> 1];
+}
+
+/**
+ * Converte a gravação de campo (linhas do JSONL) no SimFusionScenario que replayFusion consome
+ * (+ `diag` aditivo do parse). Resample fiel à produção: grade de tickMs a partir do primeiro
+ * evento saneado; cada tick carrega o último "trk" da câmera (vale até o próximo; nada é emitido
+ * antes do primeiro "trk") e o último batch "ble" INTEIRO (cada evento substitui o snapshot —
+ * batch vazio → replayFusion pula o tick). `truth` é a anotação manual pós-coleta
+ * (trackId → MAC | null), anexada GLOBALMENTE a todo tick (ver cabeçalho); MACs normalizados a
+ * MAIÚSCULO dos dois lados. Nunca lança por dado ruim; ts fora de ±24 h do mediano é descartado
+ * e a grade tem teto de 500 000 ticks.
+ */
+export function parseFusionSession(
+  lines: string[],
+  truth: SessionTruth,
+  opts?: SessionLoadOpts,
+): LoadedFusionSession {
+  const tickMs =
+    opts?.tickMs !== undefined && isFiniteNumber(opts.tickMs) && opts.tickMs > 0
+      ? opts.tickMs
+      : DEFAULT_TICK_MS;
+
+  // Parse na ordem do arquivo (a "primeira câmera vista" é decidida ANTES de ordenar por ts).
+  const parsed: SessionEvent[] = [];
+  const cameras: Record<string, number> = {};
+  let linesDropped = 0;
+  for (const line of lines) {
+    const ev = parseLine(line);
+    if (!ev) {
+      linesDropped++;
+      continue;
+    }
+    parsed.push(ev);
+    if (ev.t === "cal" || ev.t === "trk") cameras[ev.cameraId] = (cameras[ev.cameraId] ?? 0) + 1;
+  }
+  const diag: SessionDiag = { linesTotal: lines.length, linesDropped, cameras };
+
+  // Câmera do replay: a pedida, ou a primeira vista num "cal"/"trk" do arquivo.
+  let cameraId = opts?.cameraId;
+  if (cameraId === undefined) {
+    for (const ev of parsed) {
+      if (ev.t === "cal" || ev.t === "trk") {
+        cameraId = ev.cameraId;
+        break;
+      }
+    }
+  }
+
+  // Descarte nunca é mudo: sinaliza arquivo multi-câmera e cameraId pedido que não casa nada.
+  const cameraIds = Object.keys(cameras);
+  if (cameraIds.length > 1)
+    console.warn(
+      `session-loader: ${cameraIds.length} câmeras no arquivo (${cameraIds.join(", ")}) — replay usa "${cameraId}"`,
+    );
+  if (opts?.cameraId !== undefined && !(opts.cameraId in cameras))
+    console.warn(
+      `session-loader: cameraId "${opts.cameraId}" não aparece em nenhum "cal"/"trk" — métricas sairão zeradas`,
+    );
+
+  // Só os eventos que a produção desta câmera veria; saneados por ts e ordenados (gravação pode
+  // intercalar e relógio pode vir sujo — ver cabeçalho).
+  let events = parsed.filter((ev) => ev.t === "ble" || ev.cameraId === cameraId);
+  if (events.length > 0) {
+    const median = medianTs(events);
+    const sane = events.filter((ev) => Math.abs(ev.ts - median) <= TS_OUTLIER_MS);
+    if (sane.length < events.length)
+      console.warn(
+        `session-loader: ${events.length - sane.length} evento(s) com ts além de ±24h do mediano descartado(s) (relógio suspeito)`,
+      );
+    events = sane;
+  }
+  events.sort((a, b) => a.ts - b.ts);
+
+  // Calibração: o ÚLTIMO "cal" da câmera vence; station null → default do frame.ts (documentado).
+  let H: Matrix3 | null = null;
+  let stationPx: Vec2 = DEFAULT_STATION_PX;
+  for (const ev of events) {
+    if (ev.t === "cal") {
+      H = ev.H;
+      stationPx = ev.station ?? DEFAULT_STATION_PX;
+    }
+  }
+
+  // Verdade GLOBAL (MAC maiúsculo), construída UMA vez e anexada a todo tick — a métrica só avalia
+  // trackIds presentes nos assignments, e o assign() decide até em ticks de rodada vazia.
+  const truthTagByTrack: Record<number, string | null> = {};
+  for (const [key, mac] of Object.entries(truth)) {
+    const id = Number(key);
+    if (Number.isFinite(id)) truthTagByTrack[id] = mac === null ? null : mac.toUpperCase();
+  }
+
+  const ticks: SimTick[] = [];
+  if (events.length > 0) {
+    const t0 = events[0].ts;
+    const tEnd = events[events.length - 1].ts;
+    let i = 0; // ponteiro de consumo dos eventos (cada um é aplicado UMA vez, em ordem)
+    let lastTrk: DrawTrack[] | null = null; // null até o 1º "trk" — antes disso a produção nem teria hd
+    let lastBle: RawReading[] = []; // último batch INTEIRO (cada evento substitui o snapshot)
+    let slots = 0; // posições de grade consumidas (teto duro — nunca OOM)
+
+    for (let tickTs = t0; tickTs <= tEnd; tickTs += tickMs) {
+      if (slots >= MAX_TICKS) {
+        console.warn(
+          `session-loader: grade truncada em ${MAX_TICKS} ticks (ts suspeitos ou tickMs muito pequeno)`,
+        );
+        break;
+      }
+      slots++;
+
+      // Aplica todos os eventos até o instante da grade (a produção lê o estado acumulado no tick).
+      while (i < events.length && events[i].ts <= tickTs) {
+        const ev = events[i];
+        if (ev.t === "trk") lastTrk = ev.tracks;
+        else if (ev.t === "ble") lastBle = ev.readings;
+        i++;
+      }
+
+      // Sem nenhum "trk" ainda = produção sem hd → tick não existe (useTagFusion retorna cedo).
+      if (lastTrk === null) continue;
+
+      // ts REBASEADO (t0=0) — preserva deltas e mantém o warmupMs das métricas significativo.
+      // tracks/readings/verdade são REFERÊNCIAS compartilhadas (snapshots imutáveis no replay).
+      ticks.push({ ts: tickTs - t0, tracks: lastTrk, readings: lastBle, truthTagByTrack });
+    }
+  }
+
+  return { ticks, H, stationPx, diag };
+}
+
+/**
+ * Açúcar da Frente B: parse da gravação + replayFusion DE PRODUÇÃO (mesma alimentação do gate
+ * sintético — tick sem BLE é pulado, push+assign nos demais) + métricas de identidade.
+ * `warmupMs` repassado ao replay (sessões reais curtas podem pedir warmup menor que os 8 s default).
+ */
+export function replayFusionSession(
+  lines: string[],
+  truth: SessionTruth,
+  cfg?: FusionConfig,
+  opts?: SessionLoadOpts & { warmupMs?: number },
+): { metrics: IdentityMetrics; scenario: LoadedFusionSession } {
+  const scenario = parseFusionSession(lines, truth, opts);
+  const { metrics } = replayFusion(scenario, cfg, opts?.warmupMs);
+  return { metrics, scenario };
+}
