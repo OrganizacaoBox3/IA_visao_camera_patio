@@ -187,4 +187,60 @@ describe("replay-fusion (harness do associador de produção)", () => {
         metricsOf(rowsOff, name),
       );
   });
+
+  describe("reliability diagram SEM o corte de minMargin (pedido do especialista científico)", () => {
+    // reliabilityBins já existe (identity-metrics.ts) e roda hoje com a guarda de PRODUÇÃO ligada
+    // (minMargin default 0.1) — o especialista quer a curva com a margem CRUA (minMargin:0, TODA
+    // decisão fala, mesmo margem baixíssima) para ver o formato completo e onde o corte de 0.1
+    // "cai" nela. Não precisa NENHUMA mudança de código: computeIdentityMetrics já aceita qualquer
+    // config; só roda o benchmark duas vezes (produção vs cru) e relata as duas curvas lado a lado.
+    const scenarios = ["canonico", "multidao", "bloco"];
+
+    function fmtCurve(bins: { marginMin: number; marginMax: number; correct: number; wrong: number; accuracy: number }[]): string {
+      return bins
+        .map(
+          (b) =>
+            `[${b.marginMin.toFixed(1)}-${b.marginMax.toFixed(1)}) n=${b.correct + b.wrong} ` +
+            `(c=${b.correct},w=${b.wrong}) acc=${(b.accuracy * 100).toFixed(1)}%`,
+        )
+        .join("  |  ");
+    }
+
+    it("mede e relata: curva crua (minMargin:0) vs curva de produção (minMargin:0.1) em canonico/multidao/bloco", () => {
+      const rowsProd = runFusionBenchmark(); // minMargin default (0.1)
+      const rowsCru = runFusionBenchmark({ minMargin: 0 }); // guarda desligada — fala sempre
+
+      console.log("\nreliability diagram — cru (minMargin:0) vs produção (minMargin:0.1):");
+      for (const name of scenarios) {
+        const cru = metricsOf(rowsCru, name).reliabilityBins;
+        const prod = metricsOf(rowsProd, name).reliabilityBins;
+        console.log(`  ${name}:`);
+        console.log(`    cru      : ${fmtCurve(cru)}`);
+        console.log(`    produção : ${fmtCurve(prod)}`);
+
+        // Nunca NaN, sempre 5 bins, em ambas as curvas.
+        expect(cru).toHaveLength(5);
+        expect(prod).toHaveLength(5);
+        for (const b of [...cru, ...prod]) expect(Number.isNaN(b.accuracy)).toBe(false);
+
+        // A curva de produção é a curva CRUA restrita às decisões com margem ≥ 0.1 — logo os
+        // bins 1..4 (margem ≥0.2, onde o corte de 0.1 não filtra nada dentro do bin) devem ter os
+        // MESMOS contadores nas duas curvas; só o bin 0 ([0,0.2)) pode diferir, porque é o único
+        // que contém tanto decisões abaixo de 0.1 (censuradas na produção) quanto entre
+        // [0.1,0.2) (mantidas). Prova estrutural de que "produção" = "cru" menos o que o corte
+        // tirou do bin 0 (nunca ADICIONA decisão que o cru não tinha).
+        for (let i = 1; i < 5; i++) {
+          expect(prod[i].correct).toBe(cru[i].correct);
+          expect(prod[i].wrong).toBe(cru[i].wrong);
+        }
+        expect(prod[0].correct + prod[0].wrong).toBeLessThanOrEqual(cru[0].correct + cru[0].wrong);
+      }
+
+      console.log(
+        "\n  veredito: ver o relato completo devolvido pelo teste (console acima) — " +
+          "checar monotonicidade bin-a-bin da curva crua e onde a accuracy cruza a faixa " +
+          "que minMargin:0.1 corta (bin 0, [0,0.2)).\n",
+      );
+    });
+  });
 });

@@ -115,13 +115,31 @@
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 
-- **(a)** Taxa de conflito sob shuffle (embaralhar RSSI entre tags) ficará PRÓXIMA da real em
-  `multidao`; no `canonico`, a real ficará VISIVELMENTE ABAIXO do shuffle (scores carregam informação
-  real ali). Em teste (Frente C, 2026-07-10).
+- **(a) FALSEADA — mas por prova matemática, não fraqueza estatística** (`src/fusion/shuffle-baseline.ts`,
+  2026-07-10): `shuffleConflictRate` deu **bit-a-bit idêntico** à taxa real em TODOS os cenários testados
+  (canonico/multidao/bloco/cruzamento/ruido-alto) e TODOS os seeds (≥6). Motivo provado, não medido: o
+  `hadConflict`/`conflictRate` (`associate.ts`) é calculado inteiramente da matriz de scores por
+  (pista,tag) — nunca olha nome de tag nem verdade. Renomear tags por bijeção fixa é permutação de
+  COLUNAS da matriz; margem top-2 e "houve conflito" são invariantes a qualquer permutação de colunas —
+  não existe shuffle desse tipo capaz de mudar o resultado. **O desenho testado é estruturalmente cego
+  a essa pergunta.** Um baseline de verdade precisaria quebrar a CORRESPONDÊNCIA FÍSICA RSSI↔trajetória
+  (ex.: ruído independente da posição), não só renomear identidade — registrado como direção futura,
+  fora do escopo de hoje. As funções (`shuffledScenario`/`meanShuffleConflictRate`) ficam como ferragem
+  reusável para esse baseline futuro corrigido.
 - **(b)** Alongar a janela de correlação (`windowMs`) derruba a taxa de conflito MAIS do que melhora a
-  precisão média — ataca a colisão, não o ruído.
+  precisão média — ataca a colisão, não o ruído. Não testado ainda.
 - **(c)** A segunda estação, quando existir, derrubará a taxa de conflito desproporcionalmente ao
-  ganho de precisão — duplica a dimensão do espaço de assinatura.
+  ganho de precisão — duplica a dimensão do espaço de assinatura. Gated por hardware.
+
+### Reliability diagram SEM o corte de produção (minMargin:0) — medido 2026-07-10
+
+Comparado à curva de produção (minMargin 0.1) nos 3 cenários mais relevantes: o corte sempre melhora
+SÓ o bin mais baixo (bins 1-4 são idênticos entre cru e produção, por construção — a margem não
+depende do corte, só a filtragem final depende). Onde o corte MAIS vale: `bloco` — bin 0 cru é
+quase cara-ou-coroa (59,3%, n=216); com o corte de produção vira 85,0% (n=40, o maior salto dos três)
+— exatamente o caso ambíguo que motivou a guarda originalmente. Em `canonico`/`multidao` o ganho é
+mais modesto. `canonico` cru tem uma leve NÃO-monotonicidade nos 3 primeiros bins (80,0%→77,8%→74,3%
+antes de subir) — provavelmente ruído de amostra pequena, não inversão estrutural.
 
 ### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
 
