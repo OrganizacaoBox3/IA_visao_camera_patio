@@ -163,6 +163,31 @@ describe("simulateFusionScenario", () => {
     expect(sCam.stationPx.y).toBeCloseTo(0.92, 4);
   });
 
+  it("anchors → 4 tags-âncora FIXAS: física exata, posições exportadas, verdade e tracks intactos", () => {
+    // Retângulo 2,5×1,2 m centrado na estação (0,0) → as 4 âncoras a hypot(1,25; 0,6) ≈ 1,3865 m
+    // (span ESTREITO deliberado — espelha o campo real; fitPathLoss cai no regime anchors-offset).
+    const s = simulateFusionScenario({ walk: "parado", anchors: true, rssiNoiseDb: 0, dropoutP: 0 }, 5);
+    expect(s.anchors).toHaveLength(4);
+    const dAnchor = Math.hypot(1.25, 0.6);
+    for (const a of s.anchors!) {
+      expect(Math.hypot(a.world.x, a.world.y)).toBeCloseTo(dAnchor, 9);
+    }
+    const expected = Math.round(-45 - 22 * Math.log10(dAnchor));
+    for (const tick of s.ticks) {
+      // Leituras das âncoras vêm DEPOIS das tags de pessoa, com o MESMO modelo log-distância.
+      const anchorReadings = tick.readings.filter((r) => r.mac.startsWith("FX:"));
+      expect(anchorReadings.map((r) => r.mac)).toEqual(["FX:01", "FX:02", "FX:03", "FX:04"]);
+      for (const r of anchorReadings) expect(r.rssi).toBe(expected); // estáticas + ruído 0 → exato
+      // Âncora NÃO é pessoa: nunca vira track nem entra na verdade.
+      expect(tick.tracks.every((t) => t.id < 3)).toBe(true);
+      expect(Object.values(tick.truthTagByTrack)).not.toContain("FX:01");
+    }
+    // Sem a flag: nem âncoras nas leituras, nem o campo aditivo no retorno (contrato preservado).
+    const plain = simulateFusionScenario({ walk: "parado", rssiNoiseDb: 0, dropoutP: 0 }, 5);
+    expect(plain.anchors).toBeUndefined();
+    expect(plain.ticks[0].readings.some((r) => r.mac.startsWith("FX:"))).toBe(false);
+  });
+
   it("dropout derruba detecções em alguns ticks; dropout 0 detecta todo mundo sempre", () => {
     const withDrop = simulateFusionScenario({ walk: "parado", dropoutP: 0.3, pxJitter: 0 }, 9);
     const counts = withDrop.ticks.map((t) => t.tracks.length);

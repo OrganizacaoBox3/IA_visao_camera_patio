@@ -13,12 +13,22 @@ type Params = {
   getReadings?: () => RawReading[] | null; // leituras BLE da estação (global)
   H: Matrix3 | null; // homografia da câmera (null = fallback por tamanho de caixa)
   stationPx?: Vec2; // ponto do chão da estação (0..1); undefined = default do frame.ts
+  /** MACs (MAIÚSCULOS) das tags-âncora CADASTRADAS — excluídas das leituras antes da fusão
+   *  (âncora tem posição conhecida, jamais está numa pessoa; ver buildFusionFrame). ADITIVO. */
+  excludeTags?: ReadonlySet<string>;
   enabled?: boolean;
 };
 
 const TICK_MS = 500; // a fusão roda a ~2Hz — a associação é por JANELA, não por frame
 
-export function useTagFusion({ getHubAnalysis, getReadings, H, stationPx, enabled = true }: Params) {
+export function useTagFusion({
+  getHubAnalysis,
+  getReadings,
+  H,
+  stationPx,
+  excludeTags,
+  enabled = true,
+}: Params) {
   const assoc = useRef<TagTrackAssociator | null>(null);
   const labels = useRef<Map<number, string>>(new Map());
   // Espelho ADITIVO do mapa de rótulos: o CONJUNTO de tags já associadas a alguma pessoa
@@ -41,14 +51,14 @@ export function useTagFusion({ getHubAnalysis, getReadings, H, stationPx, enable
       const readings = getReadings();
       if (!hd || !readings || !readings.length) return;
       const now = performance.now();
-      a.push(buildFusionFrame(hd.tracks, readings, H, now, stationPx));
+      a.push(buildFusionFrame(hd.tracks, readings, H, now, stationPx, excludeTags));
       const m = new Map<number, string>();
       for (const as of a.assign(now)) if (as.tag) m.set(as.trackId, as.tag);
       labels.current = m;
       assigned.current = new Set(m.values());
     }, TICK_MS);
     return () => window.clearInterval(id);
-  }, [getHubAnalysis, getReadings, H, stationPx, enabled]);
+  }, [getHubAnalysis, getReadings, H, stationPx, excludeTags, enabled]);
 
   // Getters estáveis (leem os refs) → não quebram o React.memo de quem consome o overlay.
   return useMemo(

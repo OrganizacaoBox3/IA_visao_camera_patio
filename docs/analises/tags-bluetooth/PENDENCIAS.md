@@ -43,18 +43,18 @@
 > O associador foi **medido pela primeira vez** (`src/fusion/replay-fusion.ts`, 8 cenários sintéticos,
 > gate no verify — `docs/cientifica/harness-associacao-indoor.md`). O ranking abaixo vem da medição.
 
-1. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
-   estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
-2. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
+1. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
    `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (sintético → real).
    **Ferramenta PRONTA (2026-07-10):** gravador `FUSION_RECORD` (`server/bt/session-recorder.js`) +
    loader (`src/fusion/session-loader.ts`); protocolo passo a passo em
-   `docs/cientifica/protocolo-teste-campo-indoor.md`. **Falta só executar a coleta.**
+   `docs/cientifica/protocolo-teste-campo-indoor.md`. **Falta só executar a coleta.** É também o
+   dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 (abaixo) podem ser religados.
+2. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
+   estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
 3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.
 4. **Sinkhorn/transporte ótimo COM ambiguidade modelada** — o Hungarian puro foi MEDIDO e rejeitado
    (pior que o guloso: otimalidade sem guarda piora a honestidade); fica de lição p/ a variante soft.
-5. **Distância absoluta** *(só se 1 estação + RSSI não bastar)*: IMU, UWB, trilateração multi-estação.
-6. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
+5. **Orientação de instalação a documentar**: estação JUNTO da câmera vale +27 pts de precisão no modo
    sem calibração (71,8% vs 44,5%) — medido.
 
 ### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
@@ -72,6 +72,13 @@
   Revisão adversarial: anel-fantasma no horizonte (cheirality) e identificabilidade do fit corrigidos.
 - ✅ **UX das âncoras na calibração**: tag já usada (âncora de outro canto / referência) aparece
   DESABILITADA com o papel visível — não some (sumiria = "fora de alcance") nem confunde.
+- ✅ **v4 — evidência de distância absoluta (tags-âncora calibram o RSSI)**: implementada, torneada,
+  **revertida pela revisão adversarial** (circularidade sim↔fit provada — com viés corporal real a
+  v4 ligada piora drasticamente, precisão 26%/cobertura 1,8%). Decisão final e ADOTADA: **tags-âncora
+  nunca são candidatas a pessoa** (`excludeTags`) — captura o ganho real sem modelo de RSSI no
+  caminho. Gate (`maxDistRatio`) e blend (`distWeight`) ficam como knobs de PESQUISA desligados,
+  com 2 sentinelas de viés permanentes no harness (`ancoras-multidao-bias`, `ancoras-mismatch-n`).
+  Detalhes: `docs/cientifica/harness-associacao-indoor.md` §v4.
 
 ## Limites honestos (não são bugs — física de 1 estação + RSSI)
 

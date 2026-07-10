@@ -130,3 +130,50 @@ da literatura (Sinkhorn/transporte ótimo, dev.md) só faz sentido COM ambiguida
 2. **Dados reais**: gravar `analysis-tracks`+`bt-readings` reais e replayar pelo mesmo harness.
 3. **Sinkhorn/transporte ótimo com ambiguidade modelada** — só após o aprendizado do Hungarian acima.
 4. **Orientação de instalação** (estação junto da câmera, +27 pts) → documentar para o operador.
+
+## v4 — evidência de distância ABSOLUTA (tags-âncora calibram o RSSI) — 2026-07-10
+
+A tese do dono: *"não basta a antena — as tags fixas são sensores de calibração"* (dev.md/base.md,
+GP-kriging/LANDMARC de ordem-zero — ver `status-implementacao.md`). Implementada, torneada, e a
+**revisão adversarial DERRUBOU a adoção do mecanismo mais ambicioso** — um caso didático de ciência
+funcionando: o torneio disse sim, a auditoria proveu que era circular, a decisão final ficou honesta.
+
+### O que o torneio "adotou" e por que foi revertido
+
+Contrato aditivo: `TagReading.distM?` (distância absoluta estimada via `floor-plot.ts`, calibrado
+pelas âncoras) + `TrackDist.metric?` (a pista está em metros reais, não proxy). Dois mecanismos
+opcionais no `FusionConfig`: **gate** (`maxDistRatio`, veta par com distância inconsistente,
+log-espaço) e **blend** (`distWeight`, repondera por consistência física). O torneio (regra a
+priori) promoveu gate 2,5+blend 0,3 a default: wrong 546→411, precisão média 70,8%→75,4%.
+
+**A revisão adversarial reproduziu e provou dois vícios:**
+1. **Circularidade sim↔fit**: o simulador gera RSSI com o MESMO modelo log-distância que o fit
+   assume — o torneio media o mecanismo no mundo onde ele é ótimo por construção. Com −6 dB de
+   atenuação corporal só nas tags de pessoa (viés real que o sim não tinha), a v4 ligada
+   **despencou para 26% de precisão / 1,8% de cobertura** — pior que desligada.
+2. **Decomposição do ganho**: TODO o ganho medido vinha de **âncoras deixando de grudar em
+   pessoas** (falsos-rótulos de âncora 73→1 e 78→0); o erro pessoa↔pessoa **subiu** com gate/blend
+   ligados — a narrativa "distância absoluta separa pessoas" não se sustentava.
+
+### Decisão final: mecanismo simples e imune a viés, gate/blend viram pesquisa
+
+- **✅ Adotado por default**: tags-âncora cadastradas **nunca são candidatas a pessoa**
+  (`excludeTags` em `buildFusionFrame`/`useCameraTagLabels` — posição já conhecida, oferecê-las ao
+  associador só gera falso-rótulo). Captura o ganho real sem nenhum modelo de RSSI no caminho.
+- **⬜ `maxDistRatio`/`distWeight` DESLIGADOS por default** — ficam como knobs de pesquisa aguardando
+  dados de campo (viés corporal real, expoente do canal real). Semântica corrigida mesmo desligados:
+  blend nunca resgata par que a correlação recusaria; par vetado pelo gate segue concorrendo na
+  guarda top-2 (veta sem liberar a tag pro vizinho); gate em log-espaço (erro de RSSI é
+  multiplicativo, não aditivo).
+- **Sentinelas de viés no harness** (permanentes): `ancoras-multidao-bias` (−6 dB só em pessoa) e
+  `ancoras-mismatch-n` (expoente do canal 3,0 ≠ 2,2 do modelo) — com os knobs OFF comportam-se como
+  o cenário normal (imunes por construção); qualquer futura re-adoção do gate/blend terá que
+  sobreviver a elas. Medido: ligá-los sobe a precisão no caso normal (+5,7 pts na multidão) mas
+  **derruba a cobertura pela metade** sob viés real (22,0%→10,2%) — o preço que só aparece com dado
+  honesto, exatamente o que a circularidade escondia.
+
+### Lição de processo (a registrar)
+
+Um torneio com regra a priori **não substitui** revisão adversarial que injeta o mundo real (viés,
+mismatch) no cenário sintético. A suíte de sentinelas de viés vira parte permanente do harness —
+sem elas, o próximo mecanismo "aprovado no torneio" pode ter o mesmo vício invisível.

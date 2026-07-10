@@ -23,10 +23,19 @@ const RATE_MARGIN = 0.02;
  * Pinos MEDIDOS em 2026-07-10 (seed/opts da suíte FUSION_SCENARIOS, 240 passos), APÓS: ruído
  * multiplicativo σ=5% na altura da caixa (sim.ts), sem-calibracao com stationAtCamera:true, o
  * cenário novo grade-sem-station, o DEFAULT NOVO `minMargin: 0.1` (guarda de ambiguidade top-2
- * — torneio medido de 2026-07-10, números antes/depois no cabeçalho de associate.ts) E o fix de
+ * — torneio medido de 2026-07-10, números antes/depois no cabeçalho de associate.ts), o fix de
  * OCLUSÃO do scan da guarda (concorrentes vêm da janela inteira, não só do último frame — ver
- * assign()). O fix moveu a suíte: wrong 344→332, correct 734→723, falsos rótulos 148→142 —
- * regra do torneio segue satisfeita (wrong ≤70% de 612; correct ≥70% de 1014).
+ * assign()) E a EVIDÊNCIA ABSOLUTA v4 — MEDIDA E RETIRADA DOS DEFAULTS (revisão adversarial de
+ * 2026-07-10 provou circularidade sim↔fit; ver cabeçalho de associate.ts). `maxDistRatio` e
+ * `distWeight` ficam DESLIGADOS por default (0) — os pinos abaixo são o associador SÓ com
+ * correlação + a EXCLUSÃO de âncoras (`excludeTags`, imune a viés — o ganho real). Os 8 cenários
+ * SEM âncoras têm números IDÊNTICOS aos anteriores à v4 (sem distM/metric nada muda). Os
+ * `ancoras-*` medem o associador COM a exclusão no ar: `ancoras-canonico`/`ancoras-multidao` são
+ * o caso normal; `ancoras-multidao-bias` (−6 dB de atenuação corporal só nas tags de PESSOA) e
+ * `ancoras-mismatch-n` (expoente do canal 3,0 ≠ 2,2 do modelo) são as SENTINELAS DE VIÉS — com
+ * os knobs desligados elas se comportam como o cenário normal (a exclusão de âncoras não lê
+ * distM, é imune por construção); qualquer futura re-adoção do gate/blend terá que continuar
+ * saudável nelas (ver o teste "knobs v4" abaixo, que mede o custo de ligá-los).
  * Piso: precision/coverage ≥ pino−RATE_MARGIN. Teto: wrongRate ≤ pino+RATE_MARGIN;
  * falseLabels/idSwitches ≤ valor medido (contadores exatos).
  */
@@ -42,6 +51,34 @@ const PINS: Record<
   multidao: { precision: 0.598, coverage: 0.173, wrongRate: 0.077, falseLabels: 29, idSwitches: 3 },
   "sem-calibracao": { precision: 0.713, coverage: 0.265, wrongRate: 0.072, falseLabels: 24, idSwitches: 1 },
   "grade-sem-station": { precision: 0.459, coverage: 0.158, wrongRate: 0.125, falseLabels: 37, idSwitches: 0 },
+  "ancoras-canonico": {
+    precision: 0.832,
+    coverage: 0.336,
+    wrongRate: 0.0453,
+    falseLabels: 12,
+    idSwitches: 0,
+  },
+  "ancoras-multidao": {
+    precision: 0.713,
+    coverage: 0.22,
+    wrongRate: 0.0589,
+    falseLabels: 22,
+    idSwitches: 1,
+  },
+  "ancoras-multidao-bias": {
+    precision: 0.713,
+    coverage: 0.22,
+    wrongRate: 0.0589,
+    falseLabels: 22,
+    idSwitches: 1,
+  },
+  "ancoras-mismatch-n": {
+    precision: 0.866,
+    coverage: 0.289,
+    wrongRate: 0.0298,
+    falseLabels: 16,
+    idSwitches: 0,
+  },
 };
 
 describe("replay-fusion (harness do associador de produção)", () => {
@@ -98,7 +135,7 @@ describe("replay-fusion (harness do associador de produção)", () => {
   it("diagnóstico: tabela completa da suíte (leitura humana)", () => {
     const rows = runFusionBenchmark();
     console.log(`\n${formatIdentityTable(rows)}\n`);
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(12); // 8 legados + ancoras-canonico/multidao + 2 sentinelas de viés
   });
 
   it("knobs são plugáveis: minConfidence 0.9 derruba a cobertura do canonico", () => {
@@ -118,5 +155,36 @@ describe("replay-fusion (harness do associador de produção)", () => {
     expect(semGuarda.coverage).toBeGreaterThan(comGuarda.coverage);
     expect(semGuarda.precision).toBeLessThan(comGuarda.precision);
     expect(semGuarda.idSwitches).toBeGreaterThan(comGuarda.idSwitches);
+  });
+
+  it("knobs v4 (gate+blend) são OPCIONAIS e desligados por default — ligá-los é um trade-off, não graça", () => {
+    // DEFAULT hoje é OFF (maxDistRatio:0, distWeight:0) — a linha de base já é o associador
+    // "sem v4"; este teste mede o CUSTO/BENEFÍCIO de ligar os knobs explicitamente (o que
+    // qualquer futura re-adoção terá de enfrentar). Medido em 2026-07-10 (maxDistRatio:2.5 +
+    // distWeight:0.3): nos 2 cenários NORMAIS com âncoras a precisão sobe um pouco
+    // (ancoras-canonico 83,2%→87,3%; ancoras-multidao 71,3%→77,0%) com leve custo de cobertura.
+    // Mas nas SENTINELAS DE VIÉS a cobertura DESPENCA: ancoras-multidao-bias (−6 dB corporal)
+    // 22,0%→10,2% (quase METADE) e ancoras-mismatch-n (canal com n≠modelo) 28,9%→18,5% — a razão
+    // exata pela qual os knobs ficam OFF (ver cabeçalho de associate.ts: circularidade sim↔fit).
+    // Os 8 cenários SEM âncoras não mudam NADA (sem distM/metric o mecanismo é inerte).
+    const rowsOff = runFusionBenchmark(); // default
+    const rowsOn = runFusionBenchmark({ maxDistRatio: 2.5, distWeight: 0.3 });
+
+    const multOff = metricsOf(rowsOff, "ancoras-multidao");
+    const multOn = metricsOf(rowsOn, "ancoras-multidao");
+    expect(multOn.precision).toBeGreaterThan(multOff.precision); // ganho no caso normal…
+
+    const biasOff = metricsOf(rowsOff, "ancoras-multidao-bias");
+    const biasOn = metricsOf(rowsOn, "ancoras-multidao-bias");
+    // …mas sob viés corporal real (sentinela) a cobertura desaba MUITO mais que no caso normal —
+    // o preço que só aparece com dado que o sim honesto injeta de propósito.
+    const coverageDropNormal = multOff.coverage - multOn.coverage;
+    const coverageDropBias = biasOff.coverage - biasOn.coverage;
+    expect(coverageDropBias).toBeGreaterThan(coverageDropNormal * 2);
+
+    for (const name of ["canonico", "bloco", "multidao", "sem-calibracao", "grade-sem-station"])
+      expect(metricsOf(rowsOn, name), `${name}: v4 deve ser inerte sem distM`).toEqual(
+        metricsOf(rowsOff, name),
+      );
   });
 });

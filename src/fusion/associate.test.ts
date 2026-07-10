@@ -8,9 +8,14 @@
 // (minMargin 0.1) — provam que a guarda não silencia quem tem margem de sobra. Inclui o furo de
 // OCLUSÃO reproduzido em 2026-07-10: dono da tag ausente só do último frame não pode liberar o
 // rótulo p/ o vizinho de bloco (concorrentes da guarda vêm da JANELA inteira, não só do frame).
+// E a EVIDÊNCIA ABSOLUTA v4 (gate maxDistRatio + blend distWeight) — knobs de PESQUISA,
+// DESLIGADOS por default desde a revisão adversarial de 2026-07-10 (circularidade sim↔fit
+// provada; ver cabeçalho de associate.ts). Testados aqui LIGANDO a config explicitamente:
+// consistente passa, inconsistente zera, distM ausente/proxy = inerte mesmo com o knob ligado.
 import { describe, it, expect } from "vitest";
 import {
   TagTrackAssociator,
+  type FusionConfig,
   type FusionFrame,
   type TagReading,
   type TrackDist,
@@ -234,6 +239,102 @@ describe("TagTrackAssociator — guarda de ambiguidade top-2 (minMargin)", () =>
     const res = a.assign();
     expect(res.find((r) => r.trackId === 1)!.tag).toBe("AA");
     expect(res.find((r) => r.trackId === 2)!.tag).toBe("BB");
+  });
+});
+
+describe("TagTrackAssociator — evidência de distância absoluta (v4: gate + blend, knobs de PESQUISA)", () => {
+  // DESLIGADOS por default (ver cabeçalho do arquivo — revisão adversarial provou circularidade
+  // sim↔fit). Estes testes exercitam o MECANISMO ligando os knobs explicitamente na config —
+  // não é o comportamento de produção, é a garantia de que o knob, quando ligado, faz o que diz.
+  const N = 10;
+  // maxDistRatio=2 (log10≈0,301) separa limpo os dois cenários abaixo (medianas calculadas):
+  // gapM=0,3 → mediana |log10(distM/dist)| ≈ 0,036 (passa); gapM=5 → ≈ 0,387 (veta).
+  const GATE_ON: FusionConfig = { maxDistRatio: 2, distWeight: 0.3 };
+  /** 1 pista em metros REAIS (metric) afastando-se 1→6 m + 1 tag cujo RSSI acompanha; o distM da
+   *  tag fica a `gapM` metros da distância da pista (o desvio que o gate/blend enxergam). */
+  const framesWithGap = (gapM: number, metric: boolean) =>
+    makeFrames(N, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: ramp(1, 6, i, N), ...(metric ? { metric: true } : {}) }],
+      readings: [{ tag: "AA", rssi: ramp(-50, -75, i, N), distM: ramp(1, 6, i, N) + gapM }],
+    }));
+
+  it("par CONSISTENTE passa pelo gate: câmera 3 m, RSSI calibrado ~3,3 m → associa", () => {
+    const a = new TagTrackAssociator(GATE_ON); // knob ligado explicitamente (default = desligado)
+    for (const f of framesWithGap(0.3, true)) a.push(f);
+    const [r] = a.assign();
+    expect(r.tag).toBe("AA");
+    // Blend: gaps(i) = distM−dist = gapM constante (0,3) p/ toda amostra → mediana = 0,3.
+    // (1−0,3)·1 + 0,3·exp(−0,3/1,5) ≈ 0,95 — consistência quase perfeita mantém score alto.
+    expect(r.confidence).toBeGreaterThan(0.9);
+  });
+
+  it("par INCONSISTENTE zera: câmera diz 1→6 m, RSSI calibrado diz +5 m → score 0, tag null", () => {
+    // A correlação é PERFEITA (a tendência engana), mas o VALOR absoluto denuncia: não é essa tag.
+    const a = new TagTrackAssociator(GATE_ON);
+    for (const f of framesWithGap(5, true)) a.push(f);
+    const [r] = a.assign();
+    expect(r.tag).toBeNull();
+    expect(r.confidence).toBe(0); // gate zera o par — nem "chegou perto"
+  });
+
+  it("distM AUSENTE = comportamento IDÊNTICO ao pré-v4, MESMO com o knob ligado (retrocompat dura)", () => {
+    // Mesmos frames sem distM: saída com os knobs v4 EXPLICITAMENTE ligados tem de ser
+    // byte-idêntica à saída com eles desligados — sem a evidência, o mecanismo não pode existir.
+    const build = (cfg?: ConstructorParameters<typeof TagTrackAssociator>[0]) => {
+      const a = new TagTrackAssociator(cfg);
+      for (const f of makeFrames(N, 0, 500, (i) => ({
+        tracks: [
+          { trackId: 1, dist: ramp(1, 6, i, N), metric: true },
+          { trackId: 2, dist: ramp(6, 1, i, N), metric: true },
+        ],
+        readings: [
+          { tag: "AA", rssi: ramp(-50, -75, i, N) },
+          { tag: "BB", rssi: ramp(-75, -50, i, N) },
+        ],
+      }))) {
+        a.push(f);
+      }
+      return a.assign();
+    };
+    expect(build()).toEqual(build(GATE_ON));
+  });
+
+  it("modo PROXY (pista sem metric) = gate INERTE mesmo com o knob ligado e gap absurdo", () => {
+    // Sem homografia a distância da pista é proxy 1/bh — comparar proxy com metros seria físico
+    // de mentira. O gap de 5 m que zeraria o par métrico NÃO pode zerar o par proxy, MESMO com
+    // o gate explicitamente ligado (align() só popula gaps/logGaps quando track.metric===true).
+    const a = new TagTrackAssociator(GATE_ON);
+    for (const f of framesWithGap(5, false)) a.push(f);
+    const [r] = a.assign();
+    expect(r.tag).toBe("AA"); // a correlação continua mandando, como pré-v4
+    expect(r.confidence).toBeGreaterThan(0.9);
+  });
+
+  it("blend REPONDERA: gap maior (abaixo do gate) → confiança menor, sem derrubar a associação", () => {
+    const conf = (gapM: number) => {
+      // Só o blend ligado (gate desligado) — isola o efeito da reponderação.
+      const a = new TagTrackAssociator({ distWeight: 0.3 });
+      for (const f of framesWithGap(gapM, true)) a.push(f);
+      const [r] = a.assign();
+      expect(r.tag).toBe("AA");
+      return r.confidence;
+    };
+    expect(conf(2.0)).toBeLessThan(conf(0.1)); // exp(−gap/1,5) decresce com o gap
+  });
+
+  it("blend NÃO resgata quem as guardas de correlação recusaram (parado + distM consistente → null)", () => {
+    // Invariante preservada: com 1 estação a distância absoluta é um ANEL — sozinha não
+    // desambigua. Pessoa parada segue "não sei" mesmo com distM batendo certinho.
+    const a = new TagTrackAssociator();
+    for (const f of makeFrames(N, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: 3 + (i % 2) * 0.03, metric: true }],
+      readings: [{ tag: "AA", rssi: -60 + (i % 3), distM: 3 }],
+    }))) {
+      a.push(f);
+    }
+    const [r] = a.assign();
+    expect(r.tag).toBeNull();
+    expect(r.confidence).toBe(0);
   });
 });
 

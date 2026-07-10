@@ -17,9 +17,17 @@ mas prescrevem os quatro mecanismos que materializam exatamente essa ideia:
 | A4 | **Cold-start física→aprendido + auto-auditoria NIS** — âncora com distância conhecida detecta "sensor mentindo"/deriva e dispara recalibração | dev.md:7,23 | 🟡 cold-start log-distance ✅ (é o que fizemos); `stationHealth` faz drift da refTag (NIS-zero); falta o **resíduo contínuo por âncora** exposto como saúde do modelo |
 
 **Síntese:** a tese do dono ("não basta a antena; as fixas são sensores de calibração") é exatamente A2+A4.
-O upgrade imediato que os docs sustentam: **evidência de distância absoluta no associador** (câmera diz
-3,1 m; RSSI calibrado pelas âncoras diz ~3,3 m → 2ª evidência p/ o QUEM) + **resíduo por âncora** como
-auto-auditoria. Ambos mensuráveis pelo harness. (Task #3 da todo list.)
+
+**Atualização 2026-07-10 (v4 implementada e TESTADA):** a evidência de distância absoluta no
+associador (câmera diz 3,1 m; RSSI calibrado pelas âncoras diz ~3,3 m → 2ª evidência p/ o QUEM) foi
+construída, torneada E **revertida pela revisão adversarial** — circularidade sim↔fit provada (com
+viés corporal real, a v4 ligada piora drasticamente). Decisão final: o mecanismo simples e imune a
+viés foi adotado (**tags-âncora nunca são candidatas a pessoa** — captura o ganho real sem modelo de
+RSSI no caminho); gate/blend de distância absoluta ficam como **knobs de pesquisa desligados**,
+aguardando dado de campo real para o A4 (viés corporal, expoente do canal). Detalhes e números:
+`harness-associacao-indoor.md` §v4. Isso muda A4 de 🟡 para: cold-start ✅, exclusão de âncoras ✅
+(o ganho real, capturado), resíduo/gate por distância 🟡 (implementado, correto, mas OFF até haver
+dado real — o teste de campo do dono é o próximo passo que decide se liga).
 
 ## Processo (dev.md — as 7 decisões de engenharia)
 
@@ -66,7 +74,8 @@ auto-auditoria. Ambos mensuráveis pelo harness. (Task #3 da todo list.)
 
 ## Backlog priorizado (do que falta, pelo critério valor÷esforço dos próprios docs)
 
-1. ⬜→ **v4 do associador: evidência de distância absoluta** (A2+A4 aplicados ao QUEM) — task #3, mensurável já.
+1. ✅ **v4 do associador: exclusão de âncoras** (o ganho real, imune a viés) — feito 2026-07-10.
+   🟡 gate/blend de distância absoluta implementados mas OFF (aguardando dado de campo real).
 2. ⬜ **Resíduo por âncora como saúde do modelo** (NIS-lite, A4) — barato, expõe "sensor mentindo" na UI.
 3. ⬜ **∩ navegável no anel** (A1, meia-entrega de fatores de mapa): recortar o anel pelo polígono de chão da cena.
 4. ⬜ **Métricas que faltam no harness**: IDF1 formal, recuperação pós-oclusão, calibração de incerteza.

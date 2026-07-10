@@ -26,7 +26,15 @@ export type SimTick = {
   readings: RawReading[];
   truthTagByTrack: Record<number, string | null>;
 };
-export type SimFusionScenario = { ticks: SimTick[]; H: Matrix3 | null; stationPx: Vec2 };
+/** Tag-âncora FIXA (v4): MAC + posição-mundo VERDADEIRA (metros) — o "gabarito" de calibração. */
+export type SimAnchor = { mac: string; world: Vec2 };
+export type SimFusionScenario = {
+  ticks: SimTick[];
+  H: Matrix3 | null;
+  stationPx: Vec2;
+  /** ADITIVO (v4): posições-verdade das tags-âncora — presente só com SimOpts.anchors. */
+  anchors?: SimAnchor[];
+};
 export type SimWalk = "waypoint" | "parado" | "bloco" | "cruzamento";
 export type SimOpts = {
   steps?: number;
@@ -41,6 +49,19 @@ export type SimOpts = {
   uncalibrated?: boolean;
   /** true = estação BLE instalada junto da câmera (premissa do caminho C do frame.ts); ver cabeçalho. */
   stationAtCamera?: boolean;
+  /** true (v4) = emite 4 tags-âncora ESTÁTICAS nos cantos de um retângulo 2,5×1,2 m ao redor da
+   *  estação (espelha o campo real do dono — span ESTREITO de distâncias, regime anchors-offset
+   *  do fitPathLoss), com o MESMO modelo log-distância + mesmo ruído das tags de pessoa. */
+  anchors?: boolean;
+  /** SENTINELA DE VIÉS (revisão adversarial de 2026-07-10): offset constante em dB aplicado SÓ
+   *  ao RSSI das tags de PESSOA — a atenuação corporal que o campo real tem e o modelo do fit
+   *  não vê (foi este knob, a −6 dB, que provou a circularidade sim↔fit e derrubou gate/blend
+   *  dos defaults). Não consome RNG: default 0 ⇒ cenário byte-idêntico ao sem o knob. */
+  personRssiBiasDb?: number;
+  /** SENTINELA DE VIÉS 2: expoente de path-loss do CANAL (o mundo), default 2,2. Um canal com
+   *  n ≠ 2,2 descasa do n que o fit assume no regime anchors-offset (span estreito). Afeta
+   *  pessoas E âncoras — o canal é um só. Não consome RNG (byte-compat com default). */
+  channelN?: number;
 };
 
 // ——— PRNG determinístico (mesmo padrão de src/localizacao/simulate.ts) ———
@@ -100,6 +121,14 @@ const MIN_DIST_M = 0.3;
 
 /** MACs das tags, atribuídas às pessoas 0..tagged-1 nesta ordem. */
 const MACS = ["AA:AA", "BB:BB", "CC:CC", "DD:DD", "EE:EE", "FF:FF"];
+
+// Tags-âncora (v4): 4 emissoras FIXAS nos cantos de um retângulo 2,5×1,2 m centrado na ORIGEM do
+// RSSI (a estação) — espelha o campo real do dono. Consequência deliberada: as 4 ficam à MESMA
+// distância (≈1,39 m) da estação → span de log10(d) ~0 → fitPathLoss cai no regime
+// "anchors-offset" (só o rssi0 é calibrável), exatamente como no campo real de span estreito.
+const ANCHOR_MACS = ["FX:01", "FX:02", "FX:03", "FX:04"];
+const ANCHOR_HALF_W = 1.25; // metade dos 2,5 m
+const ANCHOR_HALF_H = 0.6; // metade dos 1,2 m
 
 // ——— Caminhadas (posição-verdade de cada pessoa por tick) ———
 
@@ -235,6 +264,10 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const pxJitter = opts.pxJitter ?? 0.004;
   const dropoutP = opts.dropoutP ?? 0.05;
   const walk = opts.walk ?? "waypoint";
+  // Sentinelas de viés (ver SimOpts): offsets/expoentes DETERMINÍSTICOS — nenhum consumo de RNG,
+  // então cenários sem os knobs preservam o stream byte-a-byte (pinos antigos intactos).
+  const personRssiBiasDb = opts.personRssiBiasDb ?? 0;
+  const channelN = opts.channelN ?? PATH_LOSS_N;
 
   // Calibração pela matemática REAL (solver DLT da produção). Falha aqui = geometria fixa quebrada
   // → erro explícito, nunca NaN mudo.
@@ -249,6 +282,23 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const movers = createMovers(walk, people, rng);
   // Origem física do RSSI: estação do canto (default) ou junto da câmera (caminho C do frame.ts).
   const rssiOrigin = opts.stationAtCamera ? CAMERA_WORLD : STATION_WORLD;
+
+  // Tags-âncora (v4): retângulo 2,5×1,2 m centrado na origem do RSSI. São só emissoras BLE —
+  // NÃO viram tracks de câmera (âncora é ferragem fixa, não pessoa) e NÃO entram na verdade
+  // (nenhuma pessoa as carrega). Os sorteios de ruído delas vêm DEPOIS dos das pessoas em cada
+  // tick — cenários sem anchors preservam o stream de RNG byte-a-byte (pinos antigos intactos).
+  const anchors: SimAnchor[] | null = opts.anchors
+    ? [
+        { x: -ANCHOR_HALF_W, y: -ANCHOR_HALF_H },
+        { x: ANCHOR_HALF_W, y: -ANCHOR_HALF_H },
+        { x: ANCHOR_HALF_W, y: ANCHOR_HALF_H },
+        { x: -ANCHOR_HALF_W, y: ANCHOR_HALF_H },
+      ].map((off, k) => ({
+        mac: ANCHOR_MACS[k],
+        world: { x: rssiOrigin.x + off.x, y: rssiOrigin.y + off.y },
+      }))
+    : null;
+  const lastAnchorRssi = new Array<number>(anchors ? anchors.length : 0).fill(0);
 
   // Tracker: trackId = índice da pessoa, até um id-switch trocar (e a troca vale dali em diante).
   const trackIdOfPerson: number[] = [];
@@ -309,17 +359,36 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     // BLE: RSSI recalculado a cada rssiPeriodTicks (default 1 Hz); entre atualizações o tick REPETE
     // o último valor — fiel ao snapshot bt-readings da produção. Todas as tags emitem sempre.
     // A origem do RSSI é a estação (0,0) ou a CÂMERA (4,-2) quando stationAtCamera (ver cabeçalho).
+    // Viés corporal (personRssiBiasDb) entra SÓ aqui — tag de pessoa é atenuada pelo corpo.
     const readings: RawReading[] = [];
     for (let p = 0; p < tagged; p++) {
       if (i % rssiPeriodTicks === 0) {
         const d = Math.hypot(positions[p].x - rssiOrigin.x, positions[p].y - rssiOrigin.y);
         const rssi =
           RSSI_1M_DBM -
-          10 * PATH_LOSS_N * Math.log10(Math.max(d, MIN_DIST_M)) +
+          10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
+          personRssiBiasDb +
           randn(rng) * rssiNoiseDb;
         lastRssi[p] = Math.round(rssi);
       }
       readings.push({ mac: MACS[p], rotulo: null, rssi: lastRssi[p] });
+    }
+    // Âncoras (v4): MESMO canal (channelN), mesmo ruído, mesma cadência das tags de pessoa —
+    // distância FIXA à origem (elas não se movem) e SEM o viés corporal (ferragem fixa não tem
+    // corpo na frente — é exatamente essa assimetria que o fit não enxerga). Entram como
+    // leituras normais: a produção também as vê nas leituras BLE.
+    if (anchors) {
+      for (let k = 0; k < anchors.length; k++) {
+        if (i % rssiPeriodTicks === 0) {
+          const d = Math.hypot(anchors[k].world.x - rssiOrigin.x, anchors[k].world.y - rssiOrigin.y);
+          const rssi =
+            RSSI_1M_DBM -
+            10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
+            randn(rng) * rssiNoiseDb;
+          lastAnchorRssi[k] = Math.round(rssi);
+        }
+        readings.push({ mac: anchors[k].mac, rotulo: null, rssi: lastAnchorRssi[k] });
+      }
     }
 
     // Ground truth do tick: qual PESSOA (logo, qual tag) está sob cada trackId agora.
@@ -330,5 +399,7 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     movers.advance();
   }
 
-  return { ticks, H: opts.uncalibrated ? null : H, stationPx };
+  const out: SimFusionScenario = { ticks, H: opts.uncalibrated ? null : H, stationPx };
+  if (anchors) out.anchors = anchors; // campo ADITIVO — ausente quando o cenário não tem âncoras
+  return out;
 }

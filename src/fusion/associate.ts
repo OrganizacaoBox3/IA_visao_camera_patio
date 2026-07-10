@@ -31,10 +31,43 @@
 // 344 → 332 · correct 734 → 723 (71,3% do baseline 1014 — regra do torneio segue satisfeita) ·
 // precisão média 73,4% → 73,8% · falsos rótulos 148 → 142.
 //
+// EVIDÊNCIA ABSOLUTA v4 — MEDIDA E RETIRADA DOS DEFAULTS (revisão adversarial de 2026-07-10):
+// o torneio v4 tinha promovido gate+blend a default (na suíte com âncoras: wrong 546→411,
+// precisão média 70,8%→75,4%). A revisão adversarial PROVOU dois vícios nessa evidência:
+// 1. CIRCULARIDADE: o sim gera o RSSI com o MESMO modelo log-distância que o fit assume — o
+//    torneio media o mecanismo no mundo onde ele é ótimo por construção. No experimento com
+//    −6 dB de atenuação corporal SÓ nas tags de pessoa (viés que o campo real tem e o sim não
+//    tinha), a v4 ligada DESPENCOU p/ 26% de precisão / 1,8% de cobertura — PIOR que desligada.
+// 2. DECOMPOSIÇÃO DO GANHO: todo o ganho vinha de âncoras deixando de grudar em pessoas
+//    (falsos rótulos de âncora 73→1 e 78→0 nos dois cenários com âncoras); o wrong
+//    pessoa↔pessoa SUBIU +23% com gate/blend ligados.
+// DECISÃO: gate (`maxDistRatio`) e blend (`distWeight`) DESLIGADOS por default — ficam como
+// knobs de PESQUISA aguardando dados de CAMPO (viés corporal real, expoente n real do canal,
+// n de amostras real). O ganho verdadeiro (âncoras fora do jogo) é capturado por um mecanismo
+// simples e IMUNE a viés de RSSI: tags-âncora CADASTRADAS nunca são candidatas — excluídas das
+// leituras ANTES da fusão (`excludeTags` em frame.ts). As sentinelas de viés do harness
+// (cenários `ancoras-multidao-bias`/`ancoras-mismatch-n` em replay-fusion.ts) são o gate
+// permanente: qualquer re-adoção futura do gate/blend terá que sobreviver a elas.
+// Mesmo desligados, os knobs tiveram a semântica corrigida (achados da mesma revisão):
+// (a) blend não resgata par abaixo de minConfidence; (b) par vetado pelo gate segue
+// concorrendo na guarda top-2; (c) gate em LOG-espaço. Detalhes/residuais em pairScore().
+//
 // Responsabilidade única: só a associação. Sem deps, sem UI, sem socket, sem DOM.
 
-export type TagReading = { tag: string; rssi: number }; // id da tag (MAC/rótulo) + RSSI dBm
-export type TrackDist = { trackId: number; dist: number }; // pessoa rastreada + distância-à-estação (m ou proxy monotônico)
+export type TagReading = {
+  tag: string; // id da tag (MAC/rótulo)
+  rssi: number; // RSSI dBm
+  /** Estimativa ABSOLUTA da distância tag→estação (m), via modelo calibrado pelas âncoras
+   *  (floor-plot.ts). OPCIONAL — ausente = comportamento pré-v4 intacto (retrocompat dura). */
+  distM?: number;
+};
+export type TrackDist = {
+  trackId: number; // pessoa rastreada
+  dist: number; // distância-à-estação (m ou proxy monotônico)
+  /** true = `dist` está em METROS reais (homografia calibrada), não no proxy 1/bh. A evidência
+   *  absoluta (gate/blend) SÓ se aplica com metric=true — proxy não é comparável a distM. */
+  metric?: boolean;
+};
 export type FusionFrame = { ts: number; readings: TagReading[]; tracks: TrackDist[] };
 export type Assignment = { trackId: number; tag: string | null; confidence: number }; // tag=null → "não sei"
 
@@ -45,6 +78,17 @@ export type FusionConfig = {
   minMovement?: number; // variância mínima de distância p/ a correlação valer (parado = ambíguo)
   minMargin?: number; // guarda de ambiguidade top-2 (0 = desligada) — ver doc em assign()
   optimal?: boolean; // atribuição ótima global (Hungarian) no lugar do guloso — ver chooseOptimal()
+  /** GATE de consistência física da evidência absoluta — knob de PESQUISA, DESLIGADO por
+   *  default (0 = desligado; ativo só se > 1; ver cabeçalho — por que saiu dos defaults).
+   *  FATOR multiplicativo máximo tolerado entre distM (RSSI calibrado) e dist (câmera): veta o
+   *  par quando a mediana de |log10(distM/dist)| na janela excede log10(maxDistRatio).
+   *  LOG-espaço porque o erro de RSSI é MULTIPLICATIVO em distância (ε dB → fator 10^(ε/(10·n)))
+   *  — um limiar em metros absolutos apertava demais longe e afrouxava demais perto. */
+  maxDistRatio?: number;
+  /** BLEND da evidência absoluta — knob de PESQUISA, DESLIGADO por default (0 = desligado):
+   *  score = (1−w)·(−corr) + w·exp(−gap/escala), SÓ quando a correlação sozinha já passa de
+   *  minConfidence (jamais resgata par que a correlação recusaria). Ver pairScore(). */
+  distWeight?: number;
 };
 
 type ResolvedConfig = Required<FusionConfig>;
@@ -56,7 +100,18 @@ const DEFAULTS: ResolvedConfig = {
   minMovement: 0.25, // variância (m²) — ~0,5 m de desvio-padrão de movimento
   minMargin: 0.1, // guarda de ambiguidade LIGADA por default — decisão MEDIDA (ver cabeçalho)
   optimal: false, // Hungarian medido e não promovido (ver cabeçalho); knob disponível
+  maxDistRatio: 0, // gate DESLIGADO — knob de pesquisa; a revisão adversarial provou circularidade (ver cabeçalho)
+  distWeight: 0, // blend DESLIGADO — idem; ambos aguardam dados de campo p/ re-medição honesta
 };
+
+// Escala do blend (m): exp(−gap/escala). 1,5 m ≈ erro mediano de distância que 4 dB de ruído de
+// RSSI induzem no modelo log-distância (n=2,2) na faixa de operação (2–6 m) — gap dessa ordem é
+// "consistente com o ruído", muito acima disso a consistência decai rápido.
+const DIST_BLEND_SCALE_M = 1.5;
+
+// Piso do log-ratio do gate (mesmo piso DIST_MIN_M do floor-plot): abaixo de 0,1 m nem câmera
+// nem RSSI discriminam distância — sem o piso, dist→0 explodiria o ratio de qualquer par.
+const GATE_MIN_DIST_M = 0.1;
 
 const EPS = 1e-9;
 
@@ -96,17 +151,36 @@ function pearson(
   return { corr: sxy / denom, varY };
 }
 
-/** Amostra alinhada de uma pista: distância no instante ts. */
-type Sample = { ts: number; value: number };
+/** Amostra alinhada de uma pista: distância no instante ts (+ se está em metros REAIS). */
+type DistSample = { ts: number; value: number; metric: boolean };
+/** Amostra de uma tag: RSSI no instante ts (+ distM calibrado, quando existe). */
+type RssiSample = { ts: number; value: number; distM?: number };
 
-/** Casa cada amostra de distância com o RSSI da tag MAIS PRÓXIMO no tempo (a câmera é a série guia). */
+/** Mediana (assume xs não-vazio) — robusta a outliers de RSSI, ao contrário da média. */
+function median(xs: readonly number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/**
+ * Casa cada amostra de distância com o RSSI da tag MAIS PRÓXIMO no tempo (a câmera é a série guia).
+ * Também coleta os resíduos da evidência absoluta nos pares onde a pista está em metros REAIS
+ * (metric) E a tag tem distM calibrado — pares proxy/sem-calibração ficam de fora (proxy não é
+ * comparável a metro; gate/blend nunca se aplicam a eles):
+ *  - gaps: |dist_pista − distM_tag| em METROS (consumido pelo blend);
+ *  - logGaps: |log10(distM/dist)| em DÉCADAS, com piso de 0,1 m nos dois lados (consumido pelo
+ *    gate — o erro de RSSI é multiplicativo, ver FusionConfig.maxDistRatio).
+ */
 function align(
-  distSeries: readonly Sample[],
-  rssiSeries: readonly Sample[],
-): { rssi: number[]; dist: number[] } {
+  distSeries: readonly DistSample[],
+  rssiSeries: readonly RssiSample[],
+): { rssi: number[]; dist: number[]; gaps: number[]; logGaps: number[] } {
   const rssi: number[] = [];
   const dist: number[] = [];
-  if (rssiSeries.length === 0) return { rssi, dist };
+  const gaps: number[] = [];
+  const logGaps: number[] = [];
+  if (rssiSeries.length === 0) return { rssi, dist, gaps, logGaps };
   for (const d of distSeries) {
     let best = rssiSeries[0];
     let bestDt = Math.abs(rssiSeries[0].ts - d.ts);
@@ -119,12 +193,32 @@ function align(
     }
     dist.push(d.value);
     rssi.push(best.value);
+    if (d.metric && best.distM !== undefined && Number.isFinite(best.distM)) {
+      gaps.push(Math.abs(d.value - best.distM));
+      logGaps.push(
+        Math.abs(
+          Math.log10(Math.max(best.distM, GATE_MIN_DIST_M) / Math.max(d.value, GATE_MIN_DIST_M)),
+        ),
+      );
+    }
   }
-  return { rssi, dist };
+  return { rssi, dist, gaps, logGaps };
 }
 
 /** Par escolhido pela atribuição 1-1, como índices na matriz de scores [linha=pista, coluna=tag]. */
 type Pair = { i: number; j: number };
+
+/**
+ * Evidência de um par (track, tag):
+ *  - `score`: efetivo — decide a escolha 1-1 e vira a confiança reportada (0 = par vetado/recusado);
+ *  - `guard`: o score PRÉ-GATE, usado como CONCORRENTE na guarda de margem top-2. Par vetado pelo
+ *    gate marca score 0 mas SEGUE concorrendo na guarda com o valor que tinha — vetar um par não
+ *    pode LIBERAR a tag p/ o vizinho com margem cheia (achado medido na revisão adversarial de
+ *    2026-07-10: wrong pessoa↔pessoa +62% no gate-só, por des-veto). guard === score sempre que
+ *    não há veto (knobs desligados ⇒ idênticos por construção).
+ */
+type PairEvidence = { score: number; guard: number };
+const NO_EVIDENCE: PairEvidence = { score: 0, guard: 0 };
 
 /** Elegível p/ FALAR: score positivo e ≥ minConfidence (mesma regra do guloso original). */
 function eligible(score: number, minConfidence: number): boolean {
@@ -274,22 +368,65 @@ export class TagTrackAssociator {
   }
 
   /**
-   * Score de um par (track, tag) na janela: -corr(RSSI, distância), em [0..1].
-   * Devolve 0 (não casa) quando qualquer guarda de honestidade falha:
+   * Evidência de um par (track, tag) na janela: score = -corr(RSSI, distância), em [0..1].
+   * Devolve NO_EVIDENCE quando qualquer guarda de honestidade falha:
    *  - amostras de menos (pista OU tag) → não dá pra confiar;
    *  - distância quase parada (variância < minMovement) → ambíguo;
    *  - RSSI constante → correlação indefinida.
+   *
+   * EVIDÊNCIA ABSOLUTA (knobs de PESQUISA `maxDistRatio`/`distWeight`, DESLIGADOS por default —
+   * ver cabeçalho: a revisão adversarial provou circularidade sim↔fit e ganho decomposto): além
+   * da TENDÊNCIA (correlação), o VALOR da distância vira evidência quando o modelo RSSI→distância
+   * está calibrado pelas âncoras. Só se aplica com ≥minSamples pares métricos alinhados (pista em
+   * METROS reais — metric:true — E tag com distM); ausente distM ou modo proxy → correlação pura.
+   * Semântica CORRIGIDA pelos achados da mesma revisão (vale mesmo com os knobs desligados):
+   *  - BLEND (`distWeight` w): score = (1−w)·(−corr) + w·exp(−mediana_gap/1,5 m), aplicado SÓ
+   *    quando base ≥ minConfidence — JAMAIS resgata par que a correlação recusaria (achado: com
+   *    gap≈0 a barra efetiva caía de 0,5 p/ 0,286, e gap≈0 é condição de ANEL — mesma distância
+   *    — não de identidade). RESIDUAL declarado: o blend ainda pode DERRUBAR abaixo da barra um
+   *    par aprovado (reponderar p/ baixo é o propósito) e segue reponderando ENTRE candidatos
+   *    válidos — sob viés de RSSI ele repondera na direção errada; por isso está desligado.
+   *  - GATE (`maxDistRatio` r): veto quando a mediana de |log10(distM/dist)| > log10(r) —
+   *    LOG-espaço porque o erro de RSSI é multiplicativo em distância (limiar em metros absolutos
+   *    apertava longe e afrouxava perto). Par vetado devolve {score:0, guard:pré-gate}: veta sem
+   *    liberar a tag p/ o vizinho (ver PairEvidence). RESIDUAL declarado: sob viés corporal real
+   *    o gate veta o DONO verdadeiro — vira abstenção (não erro), mas derruba a cobertura; por
+   *    isso está desligado até haver medição de campo do viés.
+   * DECISÃO DE HONESTIDADE preservada: gate e blend NUNCA resgatam par que as guardas de
+   * correlação já recusaram. Com 1 estação a distância absoluta é um ANEL (simétrica) — sozinha
+   * não desambigua mesma-distância; só VETA inconsistência ou REPONDERA candidato já validado.
    */
-  private pairScore(distSeries: Sample[], rssiSeries: Sample[]): number {
-    const { minSamples, minMovement } = this.cfg;
-    if (distSeries.length < minSamples || rssiSeries.length < minSamples) return 0;
-    const { rssi, dist } = align(distSeries, rssiSeries);
-    if (rssi.length < minSamples) return 0;
+  private pairScore(distSeries: DistSample[], rssiSeries: RssiSample[]): PairEvidence {
+    const { minSamples, minMovement, minConfidence, maxDistRatio, distWeight } = this.cfg;
+    if (distSeries.length < minSamples || rssiSeries.length < minSamples) return NO_EVIDENCE;
+    const { rssi, dist, gaps, logGaps } = align(distSeries, rssiSeries);
+    if (rssi.length < minSamples) return NO_EVIDENCE;
     const p = pearson(rssi, dist);
-    if (p === null) return 0; // série constante
-    if (p.varY < minMovement) return 0; // pessoa (quase) parada → ambíguo, "não sei"
+    if (p === null) return NO_EVIDENCE; // série constante
+    if (p.varY < minMovement) return NO_EVIDENCE; // pessoa (quase) parada → ambíguo, "não sei"
     // -corr: casamento físico (RSSI cai com distância) → corr<0 → score>0.
-    return Math.max(0, Math.min(1, -p.corr));
+    const base = Math.max(0, Math.min(1, -p.corr));
+    const gateOn = maxDistRatio > 1; // fator ≤ 1 não é limiar físico plausível → desligado
+    // Evidência absoluta: exige série métrica suficiente (mesma régua minSamples da correlação).
+    if ((gateOn || distWeight > 0) && gaps.length >= minSamples) {
+      // Blend só repondera quem a correlação sozinha já aprovaria (nunca resgata — ver docstring).
+      const blended =
+        distWeight > 0 && base >= minConfidence
+          ? Math.max(
+              0,
+              Math.min(
+                1,
+                (1 - distWeight) * base +
+                  distWeight * Math.exp(-median(gaps) / DIST_BLEND_SCALE_M),
+              ),
+            )
+          : base;
+      // Gate em log-espaço: par fisicamente inconsistente é vetado, mas mantém o guard pré-gate.
+      if (gateOn && median(logGaps) > Math.log10(maxDistRatio))
+        return { score: 0, guard: blended };
+      return { score: blended, guard: blended };
+    }
+    return { score: base, guard: base };
   }
 
   /**
@@ -300,7 +437,9 @@ export class TagTrackAssociator {
    *
    * 2. GUARDA DE AMBIGUIDADE TOP-2 (knob `minMargin`; 0 = desligada). Formulação exata
    *    (decisão deliberada, documentada de propósito): a guarda é POR PAR ESCOLHIDO, contra o
-   *    melhor concorrente na matriz CRUA de scores (antes da 1-1), nos DOIS eixos:
+   *    melhor concorrente na matriz de GUARDA (scores PRÉ-GATE, antes da 1-1 — par vetado pelo
+   *    gate segue concorrendo com o valor que tinha, ver PairEvidence; sem gate/blend as duas
+   *    matrizes são idênticas), nos DOIS eixos:
    *      marginPista = score(pista,tag) − melhor score da MESMA pista com OUTRA tag;
    *      marginTag   = score(pista,tag) − melhor score da MESMA tag com OUTRA pista.
    *    O par só fala se min(marginPista, marginTag) ≥ minMargin. Quando o par escolhido é o
@@ -333,8 +472,8 @@ export class TagTrackAssociator {
 
     // Séries por pista e por tag dentro da janela. TODAS as pistas do buffer entram (não só as
     // correntes): as ausentes do último frame ainda concorrem no scan da guarda (ver docstring).
-    const distByTrack = new Map<number, Sample[]>();
-    const rssiByTag = new Map<string, Sample[]>();
+    const distByTrack = new Map<number, DistSample[]>();
+    const rssiByTag = new Map<string, RssiSample[]>();
     for (const f of this.buffer) {
       for (const t of f.tracks) {
         let arr = distByTrack.get(t.trackId);
@@ -342,7 +481,7 @@ export class TagTrackAssociator {
           arr = [];
           distByTrack.set(t.trackId, arr);
         }
-        arr.push({ ts: f.ts, value: t.dist });
+        arr.push({ ts: f.ts, value: t.dist, metric: t.metric === true });
       }
       for (const r of f.readings) {
         let arr = rssiByTag.get(r.tag);
@@ -350,17 +489,22 @@ export class TagTrackAssociator {
           arr = [];
           rssiByTag.set(r.tag, arr);
         }
-        arr.push({ ts: f.ts, value: r.rssi });
+        const s: RssiSample = { ts: f.ts, value: r.rssi };
+        if (r.distM !== undefined) s.distM = r.distM;
+        arr.push(s);
       }
     }
 
-    // Matriz COMPLETA de scores (linha=pista em ordem de trackId, coluna=tag em ordem lex; zeros
-    // incluídos) — base única p/ a escolha 1-1, a guarda de margem e o "quão perto chegou" do null.
+    // Matrizes COMPLETAS (linha=pista em ordem de trackId, coluna=tag em ordem lex; zeros
+    // incluídos): `score` (efetivo — escolha 1-1, confiança, "quão perto chegou" do null) e
+    // `guard` (pré-gate — só os concorrentes da guarda de margem; idênticas sem gate/blend).
     const tags = [...rssiByTag.keys()].sort();
-    const score: number[][] = currentTracks.map((id) => {
+    const evidence: PairEvidence[][] = currentTracks.map((id) => {
       const distSeries = distByTrack.get(id) ?? [];
       return tags.map((tag) => this.pairScore(distSeries, rssiByTag.get(tag) ?? []));
     });
+    const score: number[][] = evidence.map((row) => row.map((e) => e.score));
+    const guard: number[][] = evidence.map((row) => row.map((e) => e.guard));
 
     const { minConfidence, minMargin, optimal } = this.cfg;
     const chosen = optimal
@@ -368,21 +512,22 @@ export class TagTrackAssociator {
       : chooseGreedy(score, minConfidence);
 
     // Melhor concorrente FANTASMA por tag: pistas com amostras na janela mas fora do último
-    // frame (flicker/oclusão). Só alimentam o scan da guarda — nunca a escolha 1-1 nem a saída.
+    // frame (flicker/oclusão). Só alimentam o scan da guarda — nunca a escolha 1-1 nem a saída
+    // (e concorrem pelo guard pré-gate: veto não silencia concorrente, ver PairEvidence).
     const currentSet = new Set(currentTracks);
     const ghostBestByTag = new Array<number>(tags.length).fill(0);
     if (minMargin > 0 && chosen.length > 0) {
       for (const [id, distSeries] of distByTrack) {
         if (currentSet.has(id)) continue;
         for (let j = 0; j < tags.length; j++) {
-          const s = this.pairScore(distSeries, rssiByTag.get(tags[j]) ?? []);
-          if (s > ghostBestByTag[j]) ghostBestByTag[j] = s;
+          const e = this.pairScore(distSeries, rssiByTag.get(tags[j]) ?? []);
+          if (e.guard > ghostBestByTag[j]) ghostBestByTag[j] = e.guard;
         }
       }
     }
 
-    // Guarda de ambiguidade top-2 (formulação documentada acima). Máximo sobre conjunto vazio = 0
-    // (sem concorrente algum, a margem é o próprio score).
+    // Guarda de ambiguidade top-2 (formulação documentada acima; concorrentes vêm da matriz de
+    // GUARDA). Máximo sobre conjunto vazio = 0 (sem concorrente algum, a margem é o próprio score).
     const accepted =
       minMargin <= 0
         ? chosen
@@ -390,11 +535,11 @@ export class TagTrackAssociator {
             const s = score[i][j];
             let bestOtherTag = 0;
             for (let jj = 0; jj < tags.length; jj++) {
-              if (jj !== j && score[i][jj] > bestOtherTag) bestOtherTag = score[i][jj];
+              if (jj !== j && guard[i][jj] > bestOtherTag) bestOtherTag = guard[i][jj];
             }
             let bestOtherTrack = ghostBestByTag[j]; // fantasmas da janela também concorrem (fix)
             for (let ii = 0; ii < currentTracks.length; ii++) {
-              if (ii !== i && score[ii][j] > bestOtherTrack) bestOtherTrack = score[ii][j];
+              if (ii !== i && guard[ii][j] > bestOtherTrack) bestOtherTrack = guard[ii][j];
             }
             return s - bestOtherTag >= minMargin && s - bestOtherTrack >= minMargin;
           });

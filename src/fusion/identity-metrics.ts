@@ -26,6 +26,11 @@ export type IdentityMetrics = {
   abstained: number; // tinha tag mas disse "não sei" (honesto, não é erro)
   trueAbstain: number; // não tinha tag e disse "não sei" (o comportamento certo)
   falseLabels: number; // rotulou quem NÃO tinha tag (erro grave; também conta em wrong)
+  /** ADITIVO (revisão adversarial v4): rótulo de tag-ÂNCORA colado numa pessoa — o modo de erro
+   *  que a exclusão de âncoras (frame.ts/excludeTags) zera por construção. SUBCONJUNTO de wrong
+   *  (wrong segue sendo o total); 0 quando opts.anchorMacs não é passado. A decomposição existe
+   *  porque foi ela que revelou que TODO o ganho do gate/blend era este contador caindo. */
+  wrongAnchor: number;
   precision: number; // correct/(correct+wrong); 1 quando nunca falou
   coverage: number; // correct/opportunities; 0 sem oportunidades
   wrongRate: number; // wrong / TODAS as decisões avaliadas (opportunities+trueAbstain+falseLabels)
@@ -37,12 +42,15 @@ export type IdentityMetrics = {
  * associador ainda não encheu — medir antes seria injusto). Assignment cujo trackId NÃO tem
  * entrada na verdade do tick é track fantasma: fora do escopo desta métrica (nem contadores,
  * nem sequência de id-switch).
+ * `anchorMacs` (ADITIVO): chaves de tag-âncora — a MESMA chave do Assignment.tag (no harness,
+ * o MAC; a comparação é literal, sem normalização) — p/ decompor o wrongAnchor do wrong total.
  */
 export function computeIdentityMetrics(
   ticks: IdentityTick[],
-  opts?: { warmupMs?: number },
+  opts?: { warmupMs?: number; anchorMacs?: ReadonlySet<string> },
 ): IdentityMetrics {
   const warmupMs = opts?.warmupMs ?? 8000;
+  const anchorMacs = opts?.anchorMacs;
 
   let ticksEvaluated = 0;
   let opportunities = 0;
@@ -51,6 +59,7 @@ export function computeIdentityMetrics(
   let abstained = 0;
   let trueAbstain = 0;
   let falseLabels = 0;
+  let wrongAnchor = 0;
   let idSwitches = 0;
 
   // Rótulo do track na sua ÚLTIMA aparição avaliada (para detectar a troca não-null → não-null).
@@ -79,6 +88,10 @@ export function computeIdentityMetrics(
         wrong++;
       }
 
+      // Decomposição: rótulo de ÂNCORA numa pessoa (sempre errado — âncora é ferragem fixa).
+      // Cobre os dois ramos de wrong acima (truth ≠ tag e falso-rótulo); subconjunto de wrong.
+      if (a.tag !== null && a.tag !== truth && anchorMacs?.has(a.tag)) wrongAnchor++;
+
       // id-switch: só não-null → OUTRO não-null entre aparições consecutivas do track.
       // rótulo→null e null→rótulo não contam (logo rótulo→null→mesmo rótulo = 0 trocas).
       const prev = lastLabel.get(a.trackId);
@@ -97,6 +110,7 @@ export function computeIdentityMetrics(
     abstained,
     trueAbstain,
     falseLabels,
+    wrongAnchor,
     precision: spoke === 0 ? 1 : correct / spoke, // nunca falou → honesto, não é erro
     coverage: opportunities === 0 ? 0 : correct / opportunities,
     wrongRate: decisions === 0 ? 0 : wrong / decisions,
@@ -113,6 +127,7 @@ export function formatIdentityTable(rows: { scenario: string; m: IdentityMetrics
     "errado",
     "absteve",
     "falso-rótulo",
+    "âncora-errada",
     "precisão %",
     "cobertura %",
     "id-switch",
@@ -124,6 +139,7 @@ export function formatIdentityTable(rows: { scenario: string; m: IdentityMetrics
     String(m.wrong),
     String(m.abstained),
     String(m.falseLabels),
+    String(m.wrongAnchor),
     (m.precision * 100).toFixed(1),
     (m.coverage * 100).toFixed(1),
     String(m.idSwitches),
