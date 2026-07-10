@@ -4,6 +4,7 @@
 const btReadings = require("../bt/bt-readings");
 const btLocations = require("../bt/bt-locations");
 const btTags = require("../bt/bt-tags");
+const recorder = require("../bt/recorder");
 const users = require("../users");
 
 // Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita
@@ -48,6 +49,10 @@ async function handle(req, res, ctx) {
         phone: { lat, lon, acc: Number.isFinite(acc) ? acc : null },
         tags: btLocations.snapshot(),
       });
+      // Event-sourcing OPT-IN (BT_RECORD) p/ o harness de replay do motor de localização (ADR-012).
+      // Aditivo, fail-safe, só metadados: não altera a resposta nem bloqueia se falhar. Só relatórios
+      // COM posição (lat/lon) são úteis ao motor, então gravamos aqui, depois de persistir/relayar.
+      recorder.record({ ts: Date.now(), lat, lon, acc, tags: enriched });
     }
     json(res, 200, { ok: true, n: enriched.length });
     return true;

@@ -78,5 +78,7 @@ eval/model-comparison.json
 archive.zip
 server/bt/bt-tags.json
 server/bt/bt-locations.json
+# Gravação event-sourcing OPT-IN das leituras BLE (BT_RECORD) — só metadados, matéria-prima do replay.
+server/bt/bt-recording.jsonl
 tc22-scanner/build/
 tc22-scanner/debug.keystore

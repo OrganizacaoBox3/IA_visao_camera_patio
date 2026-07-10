@@ -74,9 +74,31 @@ Métricas do **motor-baseline v0** no cenário-gate (60 instantes, ruído GPS 5 
 **24,4 m é o alvo a superar.** Qualquer motor de fusão (RSSI×movimento, âncoras, homografia) que baixe esse
 RMSE no mesmo cenário é, por definição, uma melhoria medida — não uma alegação.
 
+## Fase 1 (2026-07-09) — ✅ gravação real + motor de fusão v1 (paralelizada)
+
+Duas frentes independentes (propriedade de arquivo exclusiva, contrato da Fase 0 fixo), integradas num
+`verify` único (654 testes verdes):
+
+**Frente A — gravação de dado REAL** (event-sourcing opt-in, metadados-only/LGPD):
+- `server/bt/recorder.js` — grava 1 linha JSONL por relatório do coletor, **só com `BT_RECORD` ligado**
+  (OFF por default), whitelist `{ts,lat,lon,acc,tags[mac,rssi,rotulo]}`, **nunca** frame/imagem, fail-safe
+  (jamais lança no ingest). Arquivo `server/bt/bt-recording.jsonl` (gitignored). Ligado no `/api/bt/reading`
+  de forma aditiva, só para relatórios COM posição.
+- `src/localizacao/recording.ts` — loader **puro** `parseRecording(lines)`/`toRecording(lines)`: JSONL →
+  `EvidenceBatch[]`, pula linha suja sem lançar. Dado real **não tem ground truth** → `truth: []` (RMSE
+  espera rótulo, fase posterior); o harness ainda replaya qualquer motor sobre os batches reais.
+
+**Frente B — motor de fusão v1** (`src/localizacao/fusion-engine.ts`), novo `LocalizationEngine`:
+- Física de 1 estação: RSSI forte ⇒ coletor perto da tag ⇒ GPS informativo. Estima a posição como
+  **centroide das posições recentes do coletor ponderado por proximidade** (peso `1/(dEst²+1)`, `dEst=-rssi-40`),
+  ring de 8 leituras/tag no `memo`. Puro/determinístico.
+- **RMSE 12,29 m vs. 24,4 m do baseline — ~metade do erro**, medido no mesmo cenário/seed (o teste compara
+  fusão < baseline diretamente). **Honestidade:** o ganho é sintético (RSSI limpo); em campo (RSSI ruidoso/
+  não-monotônico) tende a ser menor — é v1, como previsto.
+
 ### Próximas fases (gated, ADR-012)
 
-1. **Gravação de dado REAL** (event-sourcing opt-in do `/api/bt/reading`, metadados-only/LGPD) → alimenta o
-   mesmo harness com cenários reais.
-2. **Motor de fusão v1** (RSSI×proximidade + modelo de movimento) como novo `LocalizationEngine`.
+1. **Coleta rotulada de campo** (ligar `BT_RECORD` + registrar posição-verdade) → destrava RMSE-vs-truth em
+   dado real e afere o ganho da fusão fora do sintético.
+2. **Modelo de movimento** na fusão (tag em deslocamento — o carroção): hoje o centroide lagga tag rápida.
 3. **Métricas de identidade** (IDF1, troca-de-ID) quando o cenário tiver múltiplas entidades/oclusão.

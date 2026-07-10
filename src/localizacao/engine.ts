@@ -6,7 +6,14 @@ import type { LocatedEntity } from "./entity";
 import type { EvidenceBatch } from "./evidence";
 
 /** Estado interno do motor. Opaco ao harness — o baseline usa um Map; o motor futuro terá seu grafo. */
-export type EngineState = { entities: Map<string, LocatedEntity> };
+export type EngineState = {
+  entities: Map<string, LocatedEntity>;
+  /**
+   * Estado PRIVADO do motor entre batches (ex.: ring de leituras recentes p/ fusão). Opaco ao harness e
+   * ao contrato — cada motor define sua forma e faz o cast. O baseline ignora. Aditivo: não quebra ninguém.
+   */
+  memo?: unknown;
+};
 
 /** Um motor de localização: consome um batch + o estado anterior, devolve o novo estado. Puro. */
 export type LocalizationEngine = (batch: EvidenceBatch, prev: EngineState) => EngineState;
