@@ -8,7 +8,9 @@
 // que hoje só o simulador produz — coleta rotulada de campo é uma FASE POSTERIOR. Por isso toRecording
 // entrega truth vazio (a métrica não é aplicável até haver rótulo).
 import type { EvidenceBatch } from "./evidence";
+import type { LatLon } from "./entity";
 import type { Recording } from "./replay";
+import type { TruthPoint } from "./simulate";
 
 // Forma de UMA linha gravada (espelha server/bt/recorder.js). Campos frouxos (unknown): validamos em runtime,
 // porque o arquivo pode ter sido escrito por versões diferentes ou editado à mão.
@@ -77,4 +79,24 @@ export function parseRecording(lines: string[]): EvidenceBatch[] {
  */
 export function toRecording(lines: string[]): Recording {
   return { batches: parseRecording(lines), truth: [] };
+}
+
+/**
+ * Recording ROTULADO p/ RMSE-vs-truth em DADO REAL de campo, no protocolo mais simples: TAGS ESTÁTICAS em
+ * pontos MEDIDOS. `staticTruth` = { MAC → posição-verdade fixa } (o lat/lon do ponto onde a tag foi
+ * fincada, medido uma vez). A verdade é a mesma em todo instante (a tag não se move), então cada batch
+ * ganha o mesmo mapa de posições. Só as tags em `staticTruth` entram na métrica — leituras de tags não
+ * medidas são ignoradas (não há verdade p/ elas). Este é o gancho que transforma a gravação bruta (sem
+ * ground truth) numa medida real, sem depender de simulação.
+ *
+ * Para tag em MOVIMENTO (ex.: o carroção) a verdade varia no tempo → exige uma trilha temporizada
+ * (posição-verdade por instante); fica p/ um segundo protocolo. Aqui cobrimos o caso estático, que já
+ * responde "o v1/v3 localiza uma tag parada a partir do coletor móvel, em campo?".
+ */
+export function labeledRecording(lines: string[], staticTruth: Record<string, LatLon>): Recording {
+  const batches = parseRecording(lines);
+  const positions: Record<string, LatLon> = {};
+  for (const [mac, pos] of Object.entries(staticTruth)) positions[mac.toUpperCase()] = pos;
+  const truth: TruthPoint[] = batches.map((b) => ({ ts: b.ts, positions }));
+  return { batches, truth };
 }

@@ -1,6 +1,8 @@
 // Loader da gravação BLE (recording.ts): round-trip do JSONL gravado → EvidenceBatch[] + skip de linha suja.
 import { describe, it, expect } from "vitest";
-import { parseRecording, toRecording } from "./recording";
+import { labeledRecording, parseRecording, toRecording } from "./recording";
+import { replay } from "./replay";
+import { baselineEngine } from "./engine";
 
 // Uma linha JSONL como o server/bt/recorder.js escreve (metadados-only).
 const rec = (o: Record<string, unknown>) => JSON.stringify(o);
@@ -67,5 +69,27 @@ describe("parseRecording", () => {
 
     expect(r.truth).toEqual([]);
     expect(r.batches).toHaveLength(1);
+  });
+});
+
+describe("labeledRecording (RMSE-vs-truth de campo, tags estáticas)", () => {
+  it("anexa a posição-verdade fixa a cada instante e fica medível pelo harness", () => {
+    // Coletor sempre a ~1 m de leste da tag AA (verdade em 0,0); o baseline estampa o GPS do coletor.
+    const dLon1m = 1 / (111_320 * Math.cos(0)); // 1 m em graus de lon no equador
+    const lines = [
+      rec({ ts: 1000, lat: 0, lon: dLon1m, tags: [{ mac: "AA", rssi: -41 }] }),
+      rec({ ts: 2000, lat: 0, lon: dLon1m, tags: [{ mac: "AA", rssi: -41 }] }),
+    ];
+
+    const r = labeledRecording(lines, { AA: { lat: 0, lon: 0 } });
+    expect(r.batches).toHaveLength(2);
+    expect(r.truth).toHaveLength(2);
+    expect(r.truth[0]).toEqual({ ts: 1000, positions: { AA: { lat: 0, lon: 0 } } });
+
+    // O harness já computa RMSE real: baseline estampa o coletor (~1 m da verdade) → RMSE ≈ 1 m.
+    const m = replay(r, baselineEngine);
+    expect(m.coverage).toBe(1);
+    expect(m.positionRmseM).toBeGreaterThan(0.5);
+    expect(m.positionRmseM).toBeLessThan(1.5);
   });
 });
