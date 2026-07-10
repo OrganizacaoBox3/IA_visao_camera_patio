@@ -47,6 +47,9 @@
    estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
 2. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
    `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (sintético → real).
+   **Ferramenta PRONTA (2026-07-10):** gravador `FUSION_RECORD` (`server/bt/session-recorder.js`) +
+   loader (`src/fusion/session-loader.ts`); protocolo passo a passo em
+   `docs/cientifica/protocolo-teste-campo-indoor.md`. **Falta só executar a coleta.**
 3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.
 4. **Sinkhorn/transporte ótimo COM ambiguidade modelada** — o Hungarian puro foi MEDIDO e rejeitado
    (pior que o guloso: otimalidade sem guarda piora a honestidade); fica de lição p/ a variante soft.
