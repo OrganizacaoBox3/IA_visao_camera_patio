@@ -127,9 +127,41 @@ alcance/seed/horizonte): torna "o motor é melhor?" uma pergunta sobre a suíte,
   movimento/ruído domina. O ganho decisivo exige **ganho adaptativo por confiança da velocidade** — não
   forçamos um salto que a medição não sustenta.
 
+## Fase 3 (2026-07-09) — ✅ torneio de extrapolação adaptativa (v3) + teto físico
+
+Duas hipóteses de v3 exploradas **em paralelo** (torneio — a medição decide), ambas medidas na mesma suíte
+de 9 cenários contra o v1:
+- **A — confiança por consistência** (coerência direcional² × proximidade): média **14,65 m**.
+- **B — confiança por resíduo** (controlador do ganho pelo resíduo de predição + gate de confiança da base):
+  média **14,35 m**. **Vencedor** (`src/localizacao/guarded-engine.ts`). O A foi descartado (dívida evitada).
+
+### Tabela final (RMSE m — média da suíte de 9)
+
+| baseline | fusão v1 | movimento v2 | **guarded v3** |
+|---|---|---|---|
+| 26,0 | 14,9 | 14,8 (empata) | **14,35 (−3,7% vs v1)** |
+
+O v3 vence o v1 em **5/9** (inclusive `alcance-curto`, onde nem o v1 batia o baseline) e perde **só nos 4
+do teto**.
+
+### O achado que importa — o TETO FÍSICO (o real deliverable da Fase 3)
+
+Varredura de ganho fixo (0→1) **provou** que 4 cenários têm **ganho ótimo de extrapolação = 0**
+(`alcance-longo`, `seed-123`, `horizonte-longo`, `ruido-alto-alcance-longo`). Extrapolação **não pode**
+ajudar ali — não é falha de tuning, é o **limite físico de 1 estação + RSSI**. O caminho ALÉM disso é
+**âncora/multi-estação** (mais sensores), **não mais esperteza de extrapolação**. Isso quantifica, com
+número, a física que o ADR-012 vinha afirmando.
+
+### Veredito honesto (o que NÃO fazemos)
+
+O ganho do v3 é **modesto (~3,7%)**, **sintético** (RSSI limpo) e os limiares de confiança do guarded estão
+**afinados à geometria da suíte** (não transferem cegos p/ campo). Por isso **o v1 (fusão) segue a referência/
+default**; o v3 é **candidato de pesquisa**, adotável só quando **dado de campo** (recorder da Fase 1) o
+validar. Nenhum desses motores está no caminho ao vivo ainda (a UI usa o heurístico de `adapters.ts`).
+
 ### Próximas fases (gated, ADR-012)
 
-1. **v3 — extrapolação adaptativa**: modular o ganho pela confiança/consistência da velocidade estimada
-   (extrapolar forte só quando o movimento é coerente) → capturar o ganho do v2 sem o overshoot.
-2. **Coleta rotulada de campo** (`BT_RECORD` + posição-verdade) → RMSE-vs-truth em dado real.
+1. **Coleta rotulada de campo** (`BT_RECORD` + posição-verdade) → RMSE-vs-truth REAL: aí sim se decide se o
+   v3 (ou qualquer refino) paga fora do sintético.
+2. **Âncora/multi-estação** — o único caminho contra o teto físico (não mais extrapolação).
 3. **Métricas de identidade** (IDF1, troca-de-ID) quando o cenário tiver múltiplas entidades/oclusão.
