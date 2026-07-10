@@ -107,6 +107,21 @@
    dupla → (4) torneio → (5) revisão adversarial. **Construção e torneio começam já** (não é física
    nova); o **DEFAULT em produção** fica condicionado a dado (ou proxy) de id-switch com gente de
    verdade — diferente do hello world solo (item 2), que não testa ambiguidade multi-pessoa.
+   - ✅ **(1) mineração de fragmentação** — feita, ver item 10.
+   - ✅ **(2) máquina de estados** — `src/fusion/label-memory.ts` (`LabelMemoryPolicy`), pura, 15
+     testes verdes. candidata→confirmada exige N=3 ticks consecutivos de fala QUALIFICADA (margem
+     ≥0,4 — bin de alta confiança do reliability diagram, mais estrito que o `minMargin` de fala do
+     associador — E `hadConflict:false`, LOCAL por par, Mordida 1). Confirmada→memória quando
+     evidência fresca some; memória→confirmada na reentrada (mesma barra); quebra por contradição
+     sustentada (N=3 ticks de outra tag qualificada) ou por timeout (12s, candidato da mineração,
+     Mordida 3) — contradição FRACA não derruba ativamente (v1, backstop é só o timeout). Morte de
+     track = ausência no array de assignments → remove a crença. **Ainda NÃO** wired em
+     `useTagFusion.ts`/produção (por design — torneia no harness antes; ver escopo doc).
+   - ⬜ **(3) sentinela dupla** (id-switch-na-confirmação + id-switch-durante-memória, Mordida 2) —
+     estender `sim.ts`/`replay-fusion.ts`. Próximo passo.
+   - ⬜ **(4) torneio** com a regra a priori (métricas novas: cobertura de experiência, erro-segundos
+     por estado de origem, latência de correção — ainda não existem no harness).
+   - ⬜ **(5) revisão adversarial** antes de qualquer default em produção.
 10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
     `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
     respeitada). Método: casar morte de track com nascimento de track NOVO próximo no tempo (≤15-30s)
