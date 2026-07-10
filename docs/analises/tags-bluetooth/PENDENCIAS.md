@@ -107,12 +107,36 @@
    dupla → (4) torneio → (5) revisão adversarial. **Construção e torneio começam já** (não é física
    nova); o **DEFAULT em produção** fica condicionado a dado (ou proxy) de id-switch com gente de
    verdade — diferente do hello world solo (item 2), que não testa ambiguidade multi-pessoa.
-10. **Fragmentação de tracks como proxy de id-switch — REPRIORIZADO: agora é o PRIMEIRO passo de
-    construção do item 9** (não mais item independente/paralelo) — o `timeout` do estado `memória`
-    não tem de onde vir sem esta mineração. Minerável JÁ na gravação passiva que recomeçou
-    (morte+renascimento de track próximos no tempo/espaço), sem verdade anotada. Não captura troca
-    SILENCIOSA entre 2 pessoas que se cruzam, mas calibra a ordem de grandeza real da instabilidade
-    do tracker (hoje só chutada pelo simulador).
+10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
+    `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
+    respeitada). Método: casar morte de track com nascimento de track NOVO próximo no tempo (≤15-30s)
+    e no espaço (centro do bbox, dist≤0,15 normalizado), condicionado a `maxDisp≥0,06` durante a vida
+    do track morto (ver caveat abaixo — o motivo do filtro).
+    - **Achado prévio que quase contaminou a medição**: dos 312 tracks distintos vistos na câmera com
+      sinal (90 min), **metade (157/312) tinha deslocamento total <0,02** (normalizado) — quase certo
+      artefato de tracker sobre objeto parado/ruído, não pessoa andando. Medir fragmentação sem
+      filtrar isso teria inflado o proxy com "flicker" de coisa parada (193 candidatos brutos, número
+      descartado). Filtrando para tracks com movimento real (`maxDisp≥0,06`): 92 mortes de track
+      "móvel" em 90 min (uma única câmera tinha sinal na janela gravada; a segunda câmera ficou vazia
+      no período).
+    - **Resultado condicionado**: 35-46/92 mortes de track móvel (38-50%, sensível à janela de
+      casamento) acham um renascimento próximo — ou seja, a MAIORIA (50-62%) das mortes de track com
+      movimento real são saídas de cena genuínas, não fragmentação. Gap temporal das que religam:
+      mediana 6,5-9,1 s, p75 12,0-14,9 s, p90 13-18 s (a distribuição NÃO converge limpo ao alargar a
+      janela de 15s→30s — a cauda continua crescendo, sinal de que o casamento por proximidade
+      espaço-temporal é um proxy ruidoso, não uma medição definitiva).
+    - **Parâmetro candidato para o `timeout` do estado `memória` (v1, a revisar com dado de campo
+      real): ~12 s** — na zona mediana-a-p75 da janela de 15s (a mais conservadora/menos contaminada
+      pela própria largura da janela de busca). Ordem de grandeza, não número definitivo — mesma
+      ressalva que o especialista já havia registrado ("calibra a ordem de grandeza, não a verdade").
+    - **Limitação honesta, registrada para não virar acidente**: (i) sem verdade anotada, não dá pra
+      distinguir "id-switch real durante cruzamento de 2 pessoas" de "tracker perdeu e reencontrou a
+      MESMA pessoa" — ambos os casos entram como "candidato"; (ii) a gravação disponível tinha muito
+      pouca atividade humana real (grande parte dos tracks era ruído estático) — o número de eventos
+      úteis é pequeno (92 mortes móveis, 35-46 candidatos) para uma estatística robusta; (iii) só 1
+      câmera teve sinal na janela gravada. **O teste de campo com gente de verdade (item 2) continua
+      sendo a fonte que resolveria isso de vez** — este proxy destrava a construção agora com um valor
+      defensável, não substitui o dado real.
 11. **Achado de código (2026-07-10, verificado por leitura, não suposição)**: o cálculo de
     margem/conflito (`associate.ts`) usa a matriz de score ESTÁTICA (pré-resolução gulosa) — um
     concorrente "fantasma" já consumido por OUTRO par ainda conta como rival. Isso **superestima**

@@ -140,7 +140,14 @@ SILENCIOSA entre duas pessoas que se cruzam (só verdade anotada mede isso), mas
 grandeza real da instabilidade do tracker, que o simulador hoje só chuta, e é exatamente o número que
 falta para escolher `timeout` sem inventar. **Consequência prática: mineração de fragmentação deixa
 de ser um item independente do backlog — vira DEPENDÊNCIA da máquina de estados** (o `timeout` não
-tem de onde vir sem ela). Isso corrige a ordem de execução abaixo.
+tem de outro lugar para vir). Isso corrige a ordem de execução abaixo.
+
+**Mineração FEITA (2026-07-10, leitura pura de `fusion-session.jsonl`, sem tocar no arquivo)** — ver
+`PENDENCIAS.md` item 10 para o método e as ressalvas completas. Achado honesto: metade dos tracks da
+câmera era ruído estático (deslocamento≈0), filtrado antes de medir; do restante (92 mortes de track
+com movimento real em 90 min), só 38-50% religam perto no espaço/tempo — a distribuição do gap NÃO
+converge limpo (sensível à janela de busca). **`timeout` v1 candidato: ~12 s** (zona mediana-a-p75,
+ordem de grandeza — não valor definitivo; revisar com dado de campo real de gente cruzando).
 
 ## Próximo passo (ordem corrigida pelo especialista, 2026-07-10)
 
