@@ -4,6 +4,39 @@
 > `pedido_caderno.md`, `caderno-provas-visuais.html`) cruzada com o código no `main`.
 > **Doc vivo** — atualizar quando um item mudar de coluna. Legenda: ✅ feito · 🟡 parcial · ⬜ pendente.
 
+## Princípios institucionalizados (do especialista, em resposta ao relatório consolidado, 2026-07-10)
+
+Duas regras da casa, nascidas da revisão adversarial que derrubou o v4 — valem para **todo** mecanismo
+futuro, não só o que já rodou:
+
+1. **Nenhum mecanismo novo entra sem uma sentinela adversarial que viole o pressuposto físico que ele
+   compartilha com o simulador.** O v4 foi aprovado por um torneio honesto porque o simulador e o
+   mecanismo nasceram do mesmo modelo mental (log-distância) — o torneio media o mecanismo no único
+   universo onde ele é ótimo por construção. As sentinelas de viés (`ancoras-multidao-bias`,
+   `ancoras-mismatch-n`) já institucionalizam isso na prática; esta é a regra nomeada.
+2. **Todo ganho agregado deve ser decomposto por tipo de erro antes de virar default.** O ganho do v4
+   inteiro vinha de "âncora não confundida com pessoa" — não da física de distância que a narrativa
+   original alegava. Ganho que não se explica mecanicamente é ganho escondendo a própria causa.
+
+### Recalibrações do material original (assumidas pelo próprio especialista)
+
+- **Sinkhorn "standalone" não se sustenta.** A formulação de Sinkhorn como generalização direta do
+  Hungarian pressupõe implicitamente a MESMA função objetivo do Hungarian (maximizar soma de scores,
+  todo mundo atribuído) — que nunca continha a invariante "rótulo errado é pior que nenhum". O
+  Hungarian *puro*, medido, piora o guloso+guarda exatamente por isso. O degrau correto não é Sinkhorn
+  isolado: é **atribuição com abstenção dentro da otimização** (dustbin do SuperGlue / unbalanced
+  optimal transport), com **gatilho quantitativo mensurável**: taxa de ticks com conflito de
+  atribuição real (cadeias de conflito entre ≥2 tags disputando o mesmo track) — hoje baixa, com
+  poucas tags. Enquanto for baixa, o item fica no gelo por número, não por intuição.
+- **"Fatores de mapa = maior salto de precisão" só valia para uma arquitetura onde BLE também vota na
+  posição** (factor graph clássico). Na arquitetura real do projeto (câmera=posição via homografia,
+  BLE=identidade via correlação), o `∩navegável` **não alimenta a associação de forma significativa**
+  — a posição da pessoa visível já vem certa da câmera, e o anel de uma estação é isotrópico (não tem
+  direção pra vetar "do outro lado da parede"). **Reetiquetado: item de PRODUTO** (anéis honestos
+  visualmente — tag fora de vista aparece em corredor plausível, não dentro de máquina), não degrau
+  científico. Só volta a ser alavanca de precisão quando existir estimador de posição que não seja a
+  câmera (multi-estação, ou predição na oclusão com prior de movimento que o associador ainda não tem).
+
 ## O foco do dono: usar as TAGS FIXAS a nosso favor (com 1 antena)
 
 **Nota de fidelidade:** os docs não usam o vocabulário "reference tags/LANDMARC/correção diferencial" —
@@ -11,9 +44,9 @@ mas prescrevem os quatro mecanismos que materializam exatamente essa ideia:
 
 | # | Mecanismo prescrito | Onde nos docs | Status |
 |---|---|---|---|
-| A1 | **Set-membership: anel BLE ∩ setor câmera ∩ navegável** — "região garantida, não aposta" | caderno §3; base.md:183,342 | 🟡 anel ✅ (`floor-plot.ts`); **geometria ∩navegável pura ✅** (`floor-polygon.ts` — point-in-polygon + recorte do anel por polígono, 100% testável, sem câmera); falta a UI de desenhar/persistir o polígono e ligar no `useFloorTags.ts`/`draw.ts` (fase futura); ∩ setor da câmera fica de baixo valor com 1 câmera só (tudo visível já está no FOV) |
+| A1 | **Set-membership: anel BLE ∩ setor câmera ∩ navegável** — "região garantida, não aposta" | caderno §3; base.md:183,342 | 🟡 anel ✅ (`floor-plot.ts`); **geometria ∩navegável pura ✅** (`floor-polygon.ts` — point-in-polygon + recorte do anel por polígono, 100% testável, sem câmera); falta a UI de desenhar/persistir o polígono e ligar no `useFloorTags.ts`/`draw.ts` (fase futura). **RECALIBRADO pelo especialista (2026-07-10): item de PRODUTO, não degrau científico** — na arquitetura real (câmera=posição), o ∩navegável não alimenta a associação (o anel de 1 estação é isotrópico, sem direção pra vetar; a posição de quem é visível já vem certa da câmera). Só volta a ser alavanca de precisão com estimador de posição não-câmera (multi-estação ou predição na oclusão) |
 | A2 | **GP/kriging: âncoras fixas → mapa de propagação auto-aprendido** com incerteza calibrada — "o mapa é aprendido, não configurado" | caderno §5; base.md:175,344,370 | 🟡 **versão de ordem-zero entregue hoje**: `fitPathLoss` ajusta o log-distance continuamente pelas 4 âncoras. Falta o campo GP completo (incerteza por ponto) — e exige âncoras mais espalhadas (span atual 0,7–1,6 m é estreito) |
-| A3 | **Fatores de mapa** (paredes/corredores/navegável) — "carregam mais bits que o BLE"; "maior salto de precisão por esforço" | exploracao.md:16; pedido_caderno:200 | ⬜ nada usa a planta como restrição ainda |
+| A3 | **Fatores de mapa** (paredes/corredores/navegável) — "carregam mais bits que o BLE"; "maior salto de precisão por esforço" | exploracao.md:16; pedido_caderno:200 | ⬜ nada usa a planta como restrição ainda. **RECALIBRADO pelo especialista**: essa promessa valia para factor graph clássico (BLE também vota na posição) — na arquitetura real (BLE só decide identidade), fatores de mapa não têm o mesmo efeito. Só relevante de novo com estimador de posição não-câmera |
 | A4 | **Cold-start física→aprendido + auto-auditoria NIS** — âncora com distância conhecida detecta "sensor mentindo"/deriva e dispara recalibração | dev.md:7,23 | 🟡 cold-start log-distance ✅ (é o que fizemos); `stationHealth` faz drift da refTag (NIS-zero); falta o **resíduo contínuo por âncora** exposto como saúde do modelo |
 
 **Síntese:** a tese do dono ("não basta a antena; as fixas são sensores de calibração") é exatamente A2+A4.

@@ -138,6 +138,63 @@ distância das âncoras atuais? Set-membership ∩navegável é mesmo a priorida
 Qual viés corporal realista validar em campo? Vale desenhar a arquitetura do smoother antes de ter
 dado acumulado?
 
+## 9.5. Resposta do especialista (mesmo dia) + mineração das 6h que ele sugeriu
+
+O especialista devolveu uma reavaliação completa deste relatório — íntegra em
+`relatorio-especialista-resposta-2026-07-10.md`. Dois destaques imediatos:
+
+1. **Duas regras institucionalizadas** (aplicam-se a todo mecanismo futuro, não só ao v4):
+   (i) nenhum mecanismo novo entra sem uma **sentinela adversarial** que viole o pressuposto físico
+   que ele compartilha com o simulador (formaliza o que as sentinelas de viés já faziam); (ii) todo
+   **ganho agregado deve ser decomposto por tipo de erro** antes de virar default (formaliza a
+   decomposição que revelou que o ganho do v4 era só "âncora não confundida com pessoa"). Ver
+   `status-implementacao.md` §Princípios institucionalizados.
+2. **Duas recalibrações do material original, assumidas pelo próprio especialista**: (a) Sinkhorn
+   "standalone" não se sustenta — o degrau correto é **atribuição com abstenção dentro da
+   otimização** (dustbin do SuperGlue / unbalanced optimal transport), com gatilho quantitativo
+   (taxa de conflito de atribuição, baixa hoje com poucas tags); (b) "fatores de mapa = maior salto
+   de precisão" valia para uma arquitetura onde BLE também vota na posição — na nossa (câmera=posição,
+   BLE=identidade) o `∩navegável` é **item de produto** (anéis honestos visualmente), não alavanca
+   científica — reetiquetado no backlog.
+
+### Mineração das 6h reais (pedido do especialista — sem precisar de ninguém em campo)
+
+Três análises sobre as leituras RSSI das 4 âncoras ao longo de ~7,1h de gravação contínua:
+
+**(1) Quedas transientes de RSSI** (proxy de atenuação corporal — algo passando entre a âncora e a
+estação, sem precisar de protocolo nenhum):
+
+| Âncora | quedas (limiar 8 dB) | profundidade média | duração mediana |
+|---|---|---|---|
+| `…CE:89` | 422 | 12,5 dB (máx. 33) | 2,1 s |
+| `…CE:5C` | 268 | 11,8 dB (máx. 30) | 4,1 s |
+| `…CE:5D` | 32 | 12,6 dB (máx. 29) | 6,2 s |
+| `…CE:3C` | **490 (a mais)** | 12,6 dB (máx. 31) | 4,1 s |
+
+A profundidade média (~12 dB) bate na faixa que o especialista estimou da literatura (4–10 dB médio,
+picos >20 dB) — ligeiramente acima da média, mas dentro do envelope, com o pico batendo exatamente a
+previsão de pior caso. A duração (2–6 s) é a mesma ordem de grandeza da janela de correlação do
+associador (`windowMs=8000`), o que é tranquilizador — não desproporcional.
+
+**(2) Autocorrelação temporal do ruído** (o simulador assume ruído independente amostra-a-amostra; o
+mundo real não é): autocorrelação em 2 s fica entre **0,49 e 0,94** dependendo da âncora, decaindo
+para 0,16–0,69 em 10 s. **Confirma o ponto do especialista**: leituras próximas no tempo NÃO são
+independentes — o nº de amostras "efetivamente independentes" dentro da janela de 8 s do associador é
+menor do que a contagem bruta sugere (`minSamples=5` pode estar otimista). Ressalva honesta: `…CE:5D`
+teve poucas amostras (4436 vs. ~7900 das demais) e autocorrelação anormalmente alta (0,94 em 2 s) —
+pode ser efeito de reamostragem esparsa, não um sinal físico real; não tratar como conclusivo sozinho.
+
+**(3) Cross-correlação entre âncoras**: 28–34% das quedas de cada âncora coincidem (±3 s) com quedas
+em OUTRA âncora (evento global — algo perto da própria estação); 66–72% são **isoladas** (obstrução
+LOCAL daquela âncora específica). Confirma que a maioria dos eventos é local — exatamente o que o
+resíduo-por-âncora (§ implementado) foi desenhado para capturar.
+
+**Bimodalidade da `…CE:3C`**: o histograma mostra **um modo principal com cauda pesada à esquerda**
+(leituras ocasionais muito mais fracas), não dois picos distintos — combinado com ela ter o MAIOR
+número de quedas (490, quase 1 a cada 52 s), a leitura mais honesta é **obstrução intermitente
+frequente** (gente passando/mexendo perto daquele canto com regularidade), não um multipath
+estrutural constante. Consistente com a suspeita anterior (mesa/cesta de trabalho perto do canto).
+
 ## 9. Onde encontrar mais detalhe
 
 - Narrativa completa do dia, com o experimento de circularidade passo a passo: `relatorio-especialista-2026-07-10.md`

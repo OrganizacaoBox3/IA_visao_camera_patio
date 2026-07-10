@@ -38,27 +38,46 @@
   extrapolação ótimo = 0 → limite de 1 estação+RSSI; caminho além = **âncora/multi-estação**, não mais extrapolação.
   **Default segue o v1** (ganho do v3 é modesto/sintético/afinado à suíte) — v3 é candidato até **dado de campo** validar.
 
-## Pendente (priorizado — re-ranqueado 2026-07-10 pelos NÚMEROS do harness de associação)
+## Pendente (priorizado — REORDENADO 2026-07-10 pelo especialista, em resposta ao relatório consolidado)
 
-> O associador foi **medido pela primeira vez** (`src/fusion/replay-fusion.ts`, 8 cenários sintéticos,
-> gate no verify — `docs/cientifica/harness-associacao-indoor.md`). O ranking abaixo vem da medição.
+> Ver `docs/cientifica/relatorio-especialista-resposta-2026-07-10.md` (resposta integral) e
+> `status-implementacao.md` §Princípios institucionalizados. Ordem por valor imediato/esforço, não por
+> ambição — o campo (real) sempre antes de qualquer coisa construída em cima de fundação sintética.
 
-1. **Validação de campo**: câmera calibrada + estação + pessoas com tags → gravar
-   `analysis-tracks`+`bt-readings` reais e **replayar pelo mesmo harness** (sintético → real).
-   **Ferramenta PRONTA (2026-07-10):** gravador `FUSION_RECORD` (`server/bt/session-recorder.js`) +
-   loader (`src/fusion/session-loader.ts`); protocolo passo a passo em
-   `docs/cientifica/protocolo-teste-campo-indoor.md`. **DEFERIDO pelo dono (2026-07-10)** — aguardando
-   disponibilidade para ir até a câmera; não é bloqueio técnico. É também o dado que decide se os
-   knobs `maxDistRatio`/`distWeight` da v4 (abaixo) podem ser religados.
-   - ⚠️ **Achado empírico enquanto isso** (análise das 4 âncoras com dado real de ~6h, sem precisar
-     de pessoas — ver `relatorio-especialista-2026-07-10.md` §Adendo): a âncora `…CE:3C` destoa
-     consistentemente (resíduo ~1,1–1,4 m em dois ajustes diferentes) — **checar fisicamente o que
-     está perto desse canto** (possível obstrução/multipath local).
-2. **Multi-estação / cross-camera**: mapear **câmera → estação local**; a fusão usa só o RSSI da
-   estação da área. Destrava "continua sendo ela ao trocar de câmera". (Gated por hardware.)
-3. **Set-membership** (anel BLE ∩ cone câmera ∩ navegável, dev.md) — o próximo degrau científico.
-4. **Sinkhorn/transporte ótimo COM ambiguidade modelada** — o Hungarian puro foi MEDIDO e rejeitado
-   (pior que o guloso: otimalidade sem guarda piora a honestidade); fica de lição p/ a variante soft.
+1. ✅ **Mineração das 6h reais** (quedas transientes/autocorrelação/cross-âncora) — FEITO, ver abaixo.
+2. **Hello world de campo (2 min, o próprio dono sozinho, 1 tag no bolso)** — verdade trivial (todo
+   track é ele), zero coordenação. Mede viés corporal real + correlação RSSI×distância com corpo de
+   verdade + taxa de abstenção com alvo único. Não mede ambiguidade multi-pessoa, mas já destrava as
+   perguntas de viés/GP. O roteiro completo de 6 min (`protocolo-teste-campo-indoor.md`) continua
+   sendo o padrão-ouro quando houver disponibilidade — **ambos DEFERIDOS pelo dono**, não bloqueio
+   técnico. É também o dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 podem ser religados.
+3. **Contrato de gravação/pseudo-label** (session-recorder): decisões do associador com margem +
+   candidatos rejeitados por tick, versão do algoritmo/knobs por sessão, offset de relógio hub↔TC22.
+   Definir "episódio-candidato a pseudo-label" (margem alta sustentada, sem conflito, sem id-switch).
+   Uma página de contrato — "código se refatora, dado não gravado se perdeu para sempre".
+4. **Espalhar as âncoras em distâncias log-espaçadas** (ex.: 0,5/1,5/4/8 m à estação, não um retângulo
+   compacto) — barato, destrava a identificabilidade do expoente `n` e amplia a malha de auditoria de
+   resíduo (uma âncora perto do canto da `…CE:3C` separaria obstrução local de deriva da estação).
+   Requer acesso físico — mesma disponibilidade do item 2.
+5. **Set-membership ∩navegável** — RECALIBRADO: item de **produto** (anéis visualmente honestos), não
+   degrau científico nesta arquitetura (câmera=posição já não precisa da restrição de mapa; anel de 1
+   estação é isotrópico). Geometria pura já pronta (`floor-polygon.ts`); falta só a UI.
+6. **Multi-estação** — gated (hardware é barato — ESP32/Android aposentado bastam — mas o custo real é
+   que cada estação nova precisa da própria calibração/auditoria de deriva, como as 4 âncoras atuais
+   já provam). Depois do campo, não antes.
+7. **Sinkhorn/transporte ótimo COM modelo de ambiguidade** (não standalone — ver recalibração da
+   Pergunta 1) — GATED por um **gatilho quantitativo mensurável**: taxa de ticks com conflito de
+   atribuição real (≥2 tags disputando o mesmo track). Hoje baixa (poucas tags); enquanto for baixa,
+   fica no gelo por número, não por intuição. Métrica em construção (task #13).
+8. **Reliability diagram (calibração de confiança)** — a margem top-2 é honesta (margem alta ⇒ erro
+   raro de verdade)? Barato sobre o harness existente; a invariante do produto inteira repousa nisso.
+   Em construção (task #13).
+9. **Persistência de rótulo no track** (alavanca de PRODUTO, não ciência) — hoje a cobertura (12-34%)
+   é *por tick de decisão*; um rótulo confirmado com margem alta poderia persistir no track até
+   morte/contradição forte/timeout, multiplicando a **cobertura de experiência** (o que o operador vê)
+   sem falar mais vezes nem sacrificar a invariante. Possivelmente o maior ganho percebido por esforço
+   do backlog inteiro — precisa de escopo cuidadoso (definir "morte"/"contradição forte"/timeout) antes
+   de ir a produção, tratado como rodada própria tipo v4 (construir+medir+revisão adversarial).
 
 ### Feito em 2026-07-10 (upgrade medido pelo harness — ver `docs/cientifica/harness-associacao-indoor.md`)
 
@@ -86,6 +105,16 @@
   (`CalibrationPanel.tsx`) ganhou dica (`Alert tone="info"`) para fixar a estação BLE junto da
   câmera — texto honesto e escopado ao modo sem calibração (medido: +27 pts, 71,8% vs 44,5%, ver
   `docs/cientifica/harness-associacao-indoor.md`); comentário no código cita a fonte do número.
+- ✅ **Geometria pura do set-membership ∩navegável** (`floor-polygon.ts`): point-in-polygon + recorte
+  do anel por polígono, 100% testado, ZERO consumidores em produção ainda (falta a UI — recalibrado
+  como item de produto, não ciência, ver §Princípios institucionalizados em `status-implementacao.md`).
+- ✅ **Mineração das 6h reais** (sem precisar de pessoas): quedas transientes de RSSI por âncora =
+  proxy de atenuação corporal (profundidade média ~12 dB, dentro do envelope estimado pelo
+  especialista); autocorrelação temporal alta (0,49-0,94 em 2 s) — confirma que o ruído real NÃO é
+  independente amostra-a-amostra como o simulador assume; cross-âncora mostra 66-72% das quedas são
+  LOCAIS (não evento global) — valida o desenho do resíduo-por-âncora; `…CE:3C` tem o maior nº de
+  quedas (490 em 7h) com distribuição de cauda pesada (obstrução intermitente, não multipath
+  estrutural constante). Detalhes: `docs/cientifica/relatorio-consolidado-2026-07-10.md` §9.5.
 
 ## Limites honestos (não são bugs — física de 1 estação + RSSI)
 
