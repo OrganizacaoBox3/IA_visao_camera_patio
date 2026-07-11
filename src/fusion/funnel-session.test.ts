@@ -184,8 +184,11 @@ describe.skipIf(!FILE)("funil de vetos — gravação de campo (FUNNEL_FILE)", (
       if (movVars.length > 0) {
         const s = [...movVars].sort((a, b) => a - b);
         const q = (f: number) => s[Math.min(s.length - 1, Math.floor(f * s.length))];
+        // Limiar lido dos thresholds REAIS do funil (não hardcoded — pegou desatualizado 1x quando
+        // o default mudou 0,25→0,15 e o texto seguiu dizendo 0,25 enquanto o motor usava 0,15).
+        const minMovement = funnels.find((f) => f.pairs.length > 0)?.pairs[0]?.thresholds.minMovement;
         out.push(
-          `movVar nos pares que chegaram ao gate de movimento (n=${s.length}): p50=${q(0.5).toFixed(4)} p90=${q(0.9).toFixed(4)} max=${s[s.length - 1].toFixed(4)} | limiar minMovement=0.25 (m² com H; proxy² sem H)`,
+          `movVar nos pares que chegaram ao gate de movimento (n=${s.length}): p50=${q(0.5).toFixed(4)} p90=${q(0.9).toFixed(4)} max=${s[s.length - 1].toFixed(4)} | limiar minMovement=${minMovement ?? "?"} (m² com H; proxy² sem H)`,
         );
       }
       if (spokeByPair.size > 0) {
