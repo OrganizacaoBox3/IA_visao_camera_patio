@@ -303,15 +303,18 @@
         `replayFusion(simulateFusionScenario(...))` — motor único, nada reimplementado. Primeira
         família concreta: `FAMILY_PRECISION_VS_PEOPLE` (people 2..7). CI roda eixo reduzido; a
         curva completa fica atrás de `FAMILY_FULL=1`.
-      - **🔬 ACHADO da curva completa (20 seeds/ponto) contra a previsão (b) do escopo do
-        simulador ("a curva precisão×pessoas tem JOELHO, não declive linear")**: na PRECISÃO
-        MÉDIA o declive é suave (89,6%→72,2% de 2 a 7 pessoas, ~3-5pp/pessoa, sem joelho óbvio) —
-        mas a DECOMPOSIÇÃO conta outra história: `wrong` acelera não-linearmente (10→26→45→59→70→87)
-        e a cobertura cai quase pela metade (41%→17,7%). Leitura honesta: se há joelho, ele
-        aparece na decomposição/cobertura, não na média de precisão — mais uma confirmação de que
-        "todo ganho (ou perda) agregado deve ser decomposto" (regra institucionalizada nº2); a
-        média sozinha teria escondido a não-linearidade. Previsão (b) do simulador.md:
-        PARCIALMENTE confirmada, com a nuance acima registrada.
+      - **🔬 Previsão (b) do escopo ("a curva precisão×pessoas tem JOELHO") — ⚠️ LEITURA
+        RETIFICADA pela revisão adversarial da Fase 4 (2026-07-11)**: a leitura original deste
+        item ("wrong acelera 10→87, o joelho aparece na decomposição") NÃO sobreviveu à
+        normalização — o crescimento era majoritariamente do DENOMINADOR (nº de decisões cresce
+        ~3,5× no eixo). Normalizado, `wrongRate` SATURA (2,4%→5,3%→platô ~5,5%), curva côncava —
+        o oposto de aceleração; e `people=2` é incomparável (1 tag → swap impossível). **Veredito
+        corrigido: previsão (b) mais próxima de REFUTADA** — o que degrada com densidade são
+        cobertura (41%→17,7%) e precisão (89,6%→72,2%), em declive suave. Ironia registrada: a
+        leitura errada usou a bandeira da "regra da decomposição" enquanto caía na armadilha da
+        contagem absoluta — a regra certa é decompor EM TAXAS quando o eixo muda o nº de
+        oportunidades. Correção estrutural: `FamilyPoint` agora carrega `wrongRate`/`swap`/
+        `opportunities` (a armadilha não se repete).
       - **(B) Modo anotação — núcleo puro** (`src/fusion/player/annotation.ts`, 10 testes):
         estado imutável de anotação (trackId → mac|null|ausente — os TRÊS estados de
         `SessionTruth` preservados), export com MAC normalizado, import pra retomar sessão,
@@ -320,8 +323,10 @@
         faltava pro dia do teste de campo (item 2) — anotar o roteiro de 6min em minutos.
       - ✅🔬 **Fase 3, segunda leva (2 frentes paralelas, 2026-07-11)**:
         - **3 famílias novas** (`families.ts`): ×ruído (rssiNoiseDb 2..12 — degrada suave, 95,2%→
-          55,1%, sem joelho), ×viés corporal (peakDb 0..24 — **o eixo mais agressivo medido**:
-          84%→14,7%) e ×erro de cadastro de âncora. Knob novo `anchorPosErrorM` em `sim.ts`
+          55,1%, sem joelho), ×viés corporal (⚠️ RETRATADA E RE-MEDIDA — ver revisão adversarial
+          da Fase 4 abaixo: a curva original "84%→14,7%" mediu um mundo com o SINAL do viés
+          invertido; a curva correta é NÃO-MONOTÔNICA: 84%→~90% em 4-12dB → 80,4% em 24dB)
+          e ×erro de cadastro de âncora. Knob novo `anchorPosErrorM` em `sim.ts`
           (modela posAssumed≠posReal do §3 — desloca SÓ o cadastro exportado, física intacta,
           byte-compat).
         - **🔬 PREVISÃO (c) DO ESCOPO — CONFIRMADA COM NÚMEROS** ("erro de posição de âncora move

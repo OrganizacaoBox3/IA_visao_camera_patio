@@ -47,11 +47,22 @@ export function clearAssignment(s: AnnotationState, trackId: number): Annotation
 
 /** Exporta o `SessionTruth` que `replayFusionSession` consome. MACs normalizados a MAIÚSCULO
  *  (e sem espaços nas pontas) AQUI — o estado em edição guarda o que o anotador digitou; a
- *  convenção do session-loader vale na fronteira de saída. */
+ *  convenção do session-loader vale na fronteira de saída.
+ *
+ *  MAC que trima para VAZIO (ex.: só espaços, input esquecido) NÃO sai no export — a entrada é
+ *  tratada como NÃO anotada. Exportar `""` seria pior nos dois destinos: no SessionTruth ele lê
+ *  como "pessoa com tag inalcançável" (infla wrong/abstained na métrica) e o próprio
+ *  parseSessionTruthJson o descarta no re-import (quebrando o round-trip). Alternativa rejeitada:
+ *  lançar — export não deve explodir por um input esquecido; descartar preserva o resto. */
 export function exportSessionTruth(s: AnnotationState): SessionTruth {
   const truth: SessionTruth = {};
   for (const [trackId, mac] of Object.entries(s.assignments)) {
-    truth[Number(trackId)] = mac === null ? null : mac.trim().toUpperCase();
+    if (mac === null) {
+      truth[Number(trackId)] = null;
+      continue;
+    }
+    const norm = mac.trim().toUpperCase();
+    if (norm.length > 0) truth[Number(trackId)] = norm;
   }
   return truth;
 }

@@ -23,9 +23,12 @@ export type WorldDomain = { minX: number; minY: number; maxX: number; maxY: numb
 /** Domínio do simulador (FLOOR_PAIRS de sim.ts: chão 8×6 m) — e o fallback da gravação real. */
 export const SYNTH_WORLD_DOMAIN: WorldDomain = { minX: 0, minY: 0, maxX: 8, maxY: 6 };
 
-/** Primeiros N ticks amostrados no bounding box (500 ms/tick → ~16 min de gravação; barato e
- *  suficiente pro roteiro de campo de minutos — declarado, não escondido: quem andar além do
- *  enquadramento inicial numa sessão de horas desenha fora da borda, sem quebrar nada). */
+/** Primeiros N ticks COM TRACKS amostrados no bounding box (500 ms/tick → ~16 min de atividade;
+ *  ticks vazios não consomem o orçamento — gravação que começa com o galpão vazio, câmera ligada
+ *  antes do roteiro, não gasta a amostra à toa e o domínio ainda cobre os tracks quando aparecem.
+ *  O teto vale só pro trabalho caro (projeção por tick com tracks); pular tick vazio é O(1).
+ *  Limitação declarada, não escondida: quem andar além do enquadramento dos primeiros N ticks
+ *  ATIVOS numa sessão de horas desenha fora da borda, sem quebrar nada). */
 const DEFAULT_SAMPLE_TICKS = 2000;
 /** Folga (m) em volta do bounding box — pontos na borda não colam no limite do canvas. */
 const DEFAULT_PAD_M = 0.5;
@@ -43,8 +46,9 @@ export function collectTrackIds(ticks: readonly SimTick[]): number[] {
 /**
  * Domínio-mundo da planta para uma gravação REAL: bounding box das posições-mundo projetadas
  * (pés dos tracks via derivePlayerFrame — o MESMO ponto que a planta desenha) dos primeiros
- * `sampleTicks` ticks, mais a estação BLE, com folga `padM` e vão mínimo `minSpanM` por eixo
- * (expandido em torno do centro). Fallback SYNTH_WORLD_DOMAIN quando não há H ou nada projeta.
+ * `sampleTicks` ticks QUE CONTÊM TRACKS (ticks vazios são pulados sem consumir o orçamento),
+ * mais a estação BLE, com folga `padM` e vão mínimo `minSpanM` por eixo (expandido em torno
+ * do centro). Fallback SYNTH_WORLD_DOMAIN quando não há H ou nada projeta.
  */
 export function sessionWorldDomain(
   ticks: readonly SimTick[],
@@ -70,8 +74,10 @@ export function sessionWorldDomain(
   };
 
   add(pixelToWorld(H, stationPx)); // a estação também mora na planta (mesma projeção do frame)
-  const n = Math.min(ticks.length, sampleTicks);
-  for (let i = 0; i < n; i++) {
+  let budget = sampleTicks; // só tick COM tracks consome — o vazio (galpão vazio no início) é pulado
+  for (let i = 0; i < ticks.length && budget > 0; i++) {
+    if (ticks[i].tracks.length === 0) continue;
+    budget--;
     const frame = derivePlayerFrame(ticks[i], H, stationPx);
     for (const t of frame.planta) add(t.worldPos);
   }
@@ -99,8 +105,11 @@ export function sessionWorldDomain(
 /**
  * Parse defensivo do .json de SessionTruth (o export do modo anotação, reimportado noutra
  * sentada). `null` = arquivo inválido (não-JSON ou raiz não-objeto). Entradas individuais
- * inválidas (chave não-numérica, valor que não é string não-vazia nem null) são DESCARTADAS
- * em silêncio — mesmo espírito do session-loader: devolve o que deu pra ler, nunca lança.
+ * inválidas são DESCARTADAS em silêncio — mesmo espírito do session-loader: devolve o que
+ * deu pra ler, nunca lança. Chave só vale como INTEIRO decimal (/^-?\d+$/): `Number("")` é 0
+ * e corromperia a anotação do track 0; "0x10"/"1e3"/"1.5" viram ids que nunca saíram de um
+ * export nosso — tudo isso é descartado. MACs válidos entram TRIMADOS e em MAIÚSCULO (a mesma
+ * convenção do session-loader/exportSessionTruth — a identidade da tag é o MAC em maiúsculo).
  */
 export function parseSessionTruthJson(text: string): SessionTruth | null {
   let raw: unknown;
@@ -112,10 +121,13 @@ export function parseSessionTruthJson(text: string): SessionTruth | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const truth: SessionTruth = {};
   for (const [key, value] of Object.entries(raw)) {
+    if (!/^-?\d+$/.test(key)) continue;
     const id = Number(key);
-    if (!Number.isFinite(id)) continue;
     if (value === null) truth[id] = null;
-    else if (typeof value === "string" && value.trim().length > 0) truth[id] = value;
+    else if (typeof value === "string") {
+      const mac = value.trim().toUpperCase();
+      if (mac.length > 0) truth[id] = mac;
+    }
   }
   return truth;
 }

@@ -78,8 +78,12 @@ if (res.status === 0 && start >= 0) {
   for (let i = start + 1; i < lines.length && /^\s{2,}\S/.test(lines[i]); i++)
     block.push(lines[i].trimEnd());
   console.log(`\n${block.join("\n")}\n`);
-  console.log("legenda: precisão média [IC 95% bootstrap] | decomposição: wrong (pessoa↔pessoa),");
-  console.log("falseLabels (rótulo em quem não tem tag), idSwitches (instabilidade temporal).");
+  console.log("legenda: precisão média [IC 95% bootstrap] | wrongRate = wrong/decisões [IC 95%] —");
+  console.log("a taxa, imune ao eixo mudar o nº de oportunidades | decomposição: wrong (total,");
+  console.log("inclui falseLabels), swap (pessoa↔pessoa real = wrong−falseLabels por seed),");
+  console.log("falseLabels (rótulo em quem não tem tag), idSwitches (instabilidade temporal),");
+  console.log("oportunidades (média por run — o denominador). Nota: 'IC 95%' bootstrap percentil");
+  console.log("com n=20 tem cobertura real ~88–93% (ver cabeçalho de src/fusion/families.ts).");
   process.exit(0);
 }
 

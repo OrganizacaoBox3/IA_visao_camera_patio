@@ -16,10 +16,24 @@
 //   o IC gaussiano (±1,96·σ/√n) mentiria nas bordas. O PRNG do bootstrap é um LCG seedado PRÓPRIO
 //   (mesma disciplina de sim.ts — zero Math.random), com seed derivado do ÍNDICE do ponto no eixo:
 //   o sorteio da reamostragem nunca se mistura com o RNG dos cenários e é idêntico a cada execução.
+//   SUBCOBERTURA CONHECIDA (achado M2, revisão adversarial da Fase 4, 2026-07-11): bootstrap
+//   percentil com n pequeno SUBCOBRE — o rótulo "IC 95%" tem cobertura real medida de ~88–93% com
+//   n=20 (≈87,8% p/ distribuição tipo-precisão; ≈92,9% tipo-contagem). Suficiente pra leitura de
+//   CURVA (tendência/joelho), insuficiente pra teste de hipótese rigoroso — testes de hipótese
+//   usem margens folgadas ou aumentem n.
 // - Decomposição por tipo de erro OBRIGATÓRIA (regra da casa, §7.1): além de precisão/cobertura, a
 //   curva carrega wrong, falseLabels e idSwitches (os totais do run, como IdentityMetrics já conta)
 //   — uma queda de precisão sem a decomposição não diz SE o erro é confusão pessoa↔pessoa (wrong),
 //   rótulo em quem não tem tag (falseLabels) ou instabilidade temporal (idSwitches).
+// - TAXAS junto das contagens (achado C1, revisão adversarial da Fase 4, 2026-07-11): contagem
+//   ABSOLUTA de erro num eixo que muda o Nº DE OPORTUNIDADES é armadilha de leitura — na família
+//   ×pessoas, wrong 10→87 pareceu "aceleração de erro", mas o nº de decisões cresce ~3,5× ao longo
+//   do eixo; normalizado por decisões (wrong/decisões), o erro SATURA (2,4%→5,3%→platô ~5,5%).
+//   Por isso cada ponto carrega também: `wrongRate` (a taxa que IdentityMetrics JÁ computa e era
+//   descartada aqui), `swap` (wrong−falseLabels POR SEED, antes de agregar — o pessoa↔pessoa REAL,
+//   já que falseLabels é SUBCONJUNTO de wrong em identity-metrics.ts) e `opportunities` (o
+//   denominador — permite qualquer releitura da curva). Cuidado ao comparar: people=2 tem 1 só tag
+//   ⇒ swap é IMPOSSÍVEL ali (wrong=falseLabels por construção); o ponto não é comparável aos demais.
 // - Pinos: curvas novas NÃO nascem pinadas — "curvas novas ganham pinos próprios quando
 //   estabilizarem" (§7.1). Os 12 pinos antigos ficam intocados (replay-fusion.test.ts).
 //
@@ -44,6 +58,19 @@ export type FamilyPoint = {
   wrong: BootstrapCi;
   falseLabels: BootstrapCi;
   idSwitches: BootstrapCi;
+  /**
+   * wrong/decisões — a TAXA que identity-metrics.ts já computa por run. Leitura imune à armadilha
+   * da contagem absoluta (achado C1 do cabeçalho): num eixo que muda o nº de oportunidades, é ela
+   * (não `wrong`) que diz se o erro acelera ou satura.
+   */
+  wrongRate: BootstrapCi;
+  /**
+   * wrong−falseLabels POR SEED (subtraído ANTES de agregar) — a confusão pessoa↔pessoa REAL,
+   * já que falseLabels é subconjunto de wrong (identity-metrics.ts conta falso-rótulo nos dois).
+   */
+  swap: BootstrapCi;
+  /** Média de oportunidades (decisões onde a pessoa tinha tag) — o denominador pra releituras. */
+  opportunities: BootstrapCi;
 };
 
 export type FamilyResult = { name: string; axisName: string; points: FamilyPoint[] };
@@ -137,6 +164,9 @@ export function runFamily(family: ParametricFamily, opts?: RunFamilyOpts): Famil
     const wrong: number[] = [];
     const falseLabels: number[] = [];
     const idSwitches: number[] = [];
+    const wrongRate: number[] = [];
+    const swap: number[] = [];
+    const opportunities: number[] = [];
     for (const seed of seeds) {
       const m = replayFusion(simulateFusionScenario(simOpts, seed), opts?.cfg).metrics;
       precision.push(m.precision);
@@ -144,11 +174,15 @@ export function runFamily(family: ParametricFamily, opts?: RunFamilyOpts): Famil
       wrong.push(m.wrong);
       falseLabels.push(m.falseLabels);
       idSwitches.push(m.idSwitches);
+      wrongRate.push(m.wrongRate);
+      swap.push(m.wrong - m.falseLabels); // por seed, ANTES de agregar (ver doc do campo)
+      opportunities.push(m.opportunities);
     }
-    // Um stream de bootstrap POR PONTO (seed = base + índice no eixo), consumido pelas 5 métricas
-    // em ordem fixa. O contrato garantido é reprodutibilidade da MESMA chamada (mesma família +
-    // mesmos opts ⇒ mesmos bits) — mudar eixo/seeds/resamples muda o IC legitimamente (é outra
-    // medição), nunca por sorteio escondido.
+    // Um stream de bootstrap POR PONTO (seed = base + índice no eixo), consumido pelas 8 métricas
+    // em ordem fixa — as 3 novas (wrongRate/swap/opportunities) DEPOIS das 5 originais, então os
+    // ICs antigos permanecem bit-idênticos. O contrato garantido é reprodutibilidade da MESMA
+    // chamada (mesma família + mesmos opts ⇒ mesmos bits) — mudar eixo/seeds/resamples muda o IC
+    // legitimamente (é outra medição), nunca por sorteio escondido.
     const rng = lcg(BOOTSTRAP_SEED_BASE + i);
     return {
       axisValue,
@@ -158,6 +192,9 @@ export function runFamily(family: ParametricFamily, opts?: RunFamilyOpts): Famil
       wrong: bootstrapCi(wrong, rng, resamples),
       falseLabels: bootstrapCi(falseLabels, rng, resamples),
       idSwitches: bootstrapCi(idSwitches, rng, resamples),
+      wrongRate: bootstrapCi(wrongRate, rng, resamples),
+      swap: bootstrapCi(swap, rng, resamples),
+      opportunities: bootstrapCi(opportunities, rng, resamples),
     };
   });
 

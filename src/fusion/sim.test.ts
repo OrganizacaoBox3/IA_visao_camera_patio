@@ -229,6 +229,24 @@ describe("simulateFusionScenario", () => {
     expect(simulateFusionScenario({ ...opts, anchorPosErrorM: 0 }, 5)).toEqual(baseline);
   });
 
+  it("guarda de MARGEM do anchorPosErrorM: span de log10(d cadastro→estação) < 0,4 década no eixo 0..2 m", () => {
+    // Varredura adversarial de 2026-07-11: o pior span do eixo é 0,3802 década (pico em e≈1,39 m)
+    // — a só 5% do limiar de 0,4 década que troca o regime do fitPathLoss (anchors-offset ↔ fit
+    // completo). Este teste sela que o regime NÃO flipa no meio da curva; se ANCHOR_HALF_W/H (aqui)
+    // ou o SPAN_MIN_DECADES (do fit) mudarem e o span estourar, quebra aqui com aviso, não muda o
+    // regime silenciosamente. Calculado das posições EXPORTADAS (o cadastro que o fit consome),
+    // com a estação default em (0,0) — sem importar constante privada.
+    for (const e of [0, 0.5, 1, 1.39, 1.5, 2]) {
+      const sc = simulateFusionScenario(
+        { walk: "parado", anchors: true, anchorPosErrorM: e, steps: 1 },
+        5,
+      );
+      const logs = sc.anchors!.map((a) => Math.log10(Math.hypot(a.world.x, a.world.y)));
+      const span = Math.max(...logs) - Math.min(...logs);
+      expect(span, `anchorPosErrorM=${e}: span=${span.toFixed(4)}`).toBeLessThan(0.4);
+    }
+  });
+
   it("dropout derruba detecções em alguns ticks; dropout 0 detecta todo mundo sempre", () => {
     const withDrop = simulateFusionScenario({ walk: "parado", dropoutP: 0.3, pxJitter: 0 }, 9);
     const counts = withDrop.ticks.map((t) => t.tracks.length);
@@ -311,11 +329,41 @@ describe("simulateFusionScenario — ruído AR(1) do RSSI (Fase 2 da bancada, τ
     expect(empirical).toBeGreaterThan(0.5);
   });
 
-  it("ausente → byte-compat total (mesmo consumo de RNG, mesmo cenário) com o comportamento anterior", () => {
+  it("determinismo preservado com o novo estado interno (rssiNoiseAr1/rssiAr1Seeded)", () => {
+    // NOTA (revisão adversarial de 2026-07-11): duas execuções da MESMA versão do código só provam
+    // determinismo, não byte-compat com o comportamento ANTERIOR. A byte-compat real (knob ausente
+    // = stream de RNG/saída intactos) é garantida pelos 12 pinos do CI (replay-fusion.test.ts /
+    // world-spec.test.ts), que travam a saída histórica.
     const opts = { walk: "cruzamento" as const, idSwitchOnCross: true, people: 2, tagged: 2 };
     const a = simulateFusionScenario(opts, 7);
     const b = simulateFusionScenario(opts, 7);
-    expect(a).toEqual(b); // determinismo — não quebrado pelo novo estado interno (rssiNoiseAr1)
+    expect(a).toEqual(b); // determinismo — não quebrado pelo novo estado interno
+  });
+
+  it("1ª atualização nasce no estado ESTACIONÁRIO: var do tick 0 entre seeds ≈ rssiNoiseDb², não (1-ρ²)·rssiNoiseDb²", () => {
+    // τ=32s, Δt=1s → ρ=exp(-1/32)≈0,969; (1-ρ²)≈0,061. ANTES da correção (revisão adversarial de
+    // 2026-07-11), o estado AR(1) partia de 0 e a 1ª atualização saía com var (1-ρ²)·σ² ≈ 0,97 dB²
+    // (σ=4 default) — sub-ruidosa por ~16×, convergindo à var nominal só depois de vários τ
+    // (var[k]=1-ρ^2k). Agora a 1ª atualização semeia ε puro: var ≈ σ² = 16 dB² desde o 1º sample
+    // (a quantização a inteiro soma ~1/12 dB², desprezível nas margens abaixo).
+    const tauS = 32;
+    const seeds = 200;
+    const first: number[] = [];
+    for (let s = 1; s <= seeds; s++) {
+      const sc = simulateFusionScenario(
+        { walk: "parado", people: 1, tagged: 1, steps: 1, rssiNoiseTauS: tauS },
+        s,
+      );
+      first.push(sc.ticks[0].readings[0].rssi);
+    }
+    const mean = first.reduce((a, b) => a + b, 0) / seeds;
+    const variance = first.reduce((a, b) => a + (b - mean) ** 2, 0) / (seeds - 1);
+    const sigma2 = 4 * 4; // rssiNoiseDb default 4 → σ² = 16 dB²
+    const rho = Math.exp(-1 / tauS); // Δt = rssiPeriodTicks(2)×500ms = 1s
+    const varAntiga = (1 - rho * rho) * sigma2; // ≈ 0,97 dB² — o transitório sub-ruidoso de antes
+    expect(variance).toBeGreaterThan(sigma2 * 0.6); // ~1·σ², com folga p/ ruído de amostragem
+    expect(variance).toBeLessThan(sigma2 * 1.6);
+    expect(variance).toBeGreaterThan(varAntiga * 5); // e MUITO longe do comportamento antigo
   });
 });
 
@@ -431,7 +479,9 @@ describe("simulateFusionScenario — física medida da Fase 2, ligada de ponta a
     );
     const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
     const rssiComViés = comViés.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
-    expect(rssiComViés).toBe(rssiBase + 6); // pessoa parada → heading zero → só o piso (meanDb)
+    // Atenuação corporal SUBTRAI (bodyBiasDb devolve dB positivos de atenuação — mesma convenção
+    // do obstacleDb). Corrigido na revisão adversarial de 2026-07-11: o sinal original somava.
+    expect(rssiComViés).toBe(rssiBase - 6); // pessoa parada → heading zero → só o piso (meanDb)
   });
 });
 

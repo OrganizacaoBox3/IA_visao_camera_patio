@@ -57,6 +57,19 @@ describe("annotation (modo anotação — núcleo puro)", () => {
     expect(exportSessionTruth(s)).toEqual({ 1: "AA:BB:CC:DD:EE:FF", 2: null });
   });
 
+  it('exportSessionTruth() OMITE MAC que trima para vazio ("   " = input esquecido, não "" na verdade)', () => {
+    // "" no SessionTruth leria como "pessoa com tag inalcançável" (infla wrong/abstained) e o
+    // parseSessionTruthJson o descartaria no re-import — melhor nem sair no export.
+    let s = assignTag(initialAnnotationState(), 1, "   ");
+    s = assignTag(s, 2, "aa:bb:cc:dd:ee:ff");
+    s = assignTag(s, 3, null);
+    const truth = exportSessionTruth(s);
+    expect(truth).toEqual({ 2: "AA:BB:CC:DD:EE:FF", 3: null });
+    expect(1 in truth).toBe(false);
+    // Round-trip: export → import → export continua idêntico (o "   " não volta como "").
+    expect(exportSessionTruth(importSessionTruth(truth))).toEqual(truth);
+  });
+
   it("importSessionTruth() retoma uma anotação salva, editável em seguida", () => {
     const saved: SessionTruth = { 1: "AA:BB:CC:DD:EE:FF", 2: null };
     let s = importSessionTruth(saved);

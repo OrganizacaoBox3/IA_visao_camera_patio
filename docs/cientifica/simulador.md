@@ -117,10 +117,13 @@ JSON declarativo, versionado, um arquivo por mundo. Blocos e parâmetros (fonte 
 
 ## 4. Física — o que entra e o que deliberadamente fica fora
 
-**RSSI por leitura:** `rssi = pathLoss(d) + regionOffset(pos) + bodyBias(θ, placement) −
+**RSSI por leitura:** `rssi = pathLoss(d) + regionOffset(pos) − bodyBias(θ, placement) −
 Σ atenuação(obstáculos cruzados no segmento tag→estação) + ruído AR(1)(σ, τ)`.
 θ = ângulo entre a orientação do corpo (derivada da direção de caminhada) e a linha tag→estação;
 o lado do corpo onde a tag está (placement) decide quando o corpo sombreia.
+> Nota de revisão (corrigido na revisão adversarial da Fase 4, 2026-07-11): atenuação corporal
+> SUBTRAI — o texto original somava `bodyBias` ao RSSI, o que faria o corpo na frente da tag
+> DEIXAR o sinal mais forte. A implementação (`sim.ts`) foi corrigida junto.
 
 **Oclusão visual estruturada:** pessoa cujo segmento até a câmera cruza obstáculo com
 `occludesVision` → track em dropout enquanto durar; na SAÍDA da oclusão e em cruzamentos

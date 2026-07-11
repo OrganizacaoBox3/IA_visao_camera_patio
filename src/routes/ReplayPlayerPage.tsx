@@ -11,7 +11,7 @@ import { FUSION_SCENARIOS } from "../fusion/replay-fusion";
 import { simulateFusionScenario } from "../fusion/sim";
 import type { SimFusionScenario } from "../fusion/sim";
 import { parseFusionSession } from "../fusion/session-loader";
-import type { LoadedFusionSession } from "../fusion/session-loader";
+import type { LoadedFusionSession, SessionTruth } from "../fusion/session-loader";
 import { derivePlayerFrame } from "../fusion/player/derive-player-frame";
 import type { PlayerFrame } from "../fusion/player/derive-player-frame";
 import {
@@ -101,13 +101,17 @@ function drawPlanta(
   for (const t of frame.planta) {
     if (!t.worldPos) continue;
     const [x, y] = worldToCanvas(t.worldPos.x, t.worldPos.y, domain, w, h);
+    // TRÊS estados da verdade (annotation.ts): mac = com tag; null = "sem tag" EXPLÍCITO (decisão
+    // do anotador — precisa parecer diferente de não-anotado, senão ele não vê que a anotação
+    // pegou); chave ausente = não anotado.
+    const annotated = t.id in frame.truthTagByTrack;
     const truth = frame.truthTagByTrack[t.id];
-    ctx.fillStyle = truth ? "#4ade80" : "#94a3b8"; // verde = tem tag-verdade; cinza = pessoa sem tag
+    ctx.fillStyle = truth ? "#4ade80" : annotated ? "#f59e0b" : "#94a3b8"; // verde | âmbar | cinza
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#e2e8f0";
-    ctx.fillText(truth ? `${t.id} · ${truth}` : `${t.id}`, x + 8, y - 8);
+    ctx.fillText(truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`, x + 8, y - 8);
   }
 }
 
@@ -127,9 +131,15 @@ function drawCamera(canvas: HTMLCanvasElement | null, frame: PlayerFrame | null)
     const px = x * w;
     const py = y * h;
     ctx.strokeRect(px, py, bw * w, bh * h);
+    // Mesmos TRÊS estados da planta: com tag (verde), "sem tag" explícito (âmbar), não anotado.
+    const annotated = t.id in frame.truthTagByTrack;
     const truth = frame.truthTagByTrack[t.id];
-    ctx.fillStyle = "#bae6fd";
-    ctx.fillText(truth ? `${t.id} · ${truth}` : `${t.id}`, px + 2, Math.max(10, py - 4));
+    ctx.fillStyle = truth ? "#4ade80" : annotated ? "#f59e0b" : "#bae6fd";
+    ctx.fillText(
+      truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`,
+      px + 2,
+      Math.max(10, py - 4),
+    );
   }
 }
 
@@ -158,7 +168,7 @@ export function ReplayPlayerPage() {
   const totalTicks = scenario.ticks.length;
 
   // Sintético: domínio fixo 8×6 m (FLOOR_PAIRS de sim.ts). Real: bounding box das posições-mundo
-  // projetadas dos primeiros N ticks (session-view.ts), com fallback pro 8×6 sem H.
+  // projetadas dos primeiros N ticks COM TRACKS (session-view.ts), com fallback pro 8×6 sem H.
   const domain: WorldDomain = useMemo(
     () =>
       session
@@ -244,8 +254,22 @@ export function ReplayPlayerPage() {
         setNotice(`"${file.name}" não é um SessionTruth válido (JSON objeto trackId → MAC | null).`);
         return;
       }
-      setAnnotation(importSessionTruth(truth));
-      setNotice(null);
+      // annotation.ts fica puro/agnóstico; a PÁGINA (que conhece a gravação carregada) filtra
+      // entradas de tracks que não existem nela — senão inflam o resumo e re-exportam invisíveis.
+      const known = new Set(trackIds);
+      const filtered: SessionTruth = {};
+      let dropped = 0;
+      for (const [key, mac] of Object.entries(truth)) {
+        const id = Number(key);
+        if (known.has(id)) filtered[id] = mac;
+        else dropped++;
+      }
+      setAnnotation(importSessionTruth(filtered));
+      setNotice(
+        dropped > 0
+          ? `${dropped} entrada(s) de tracks inexistentes nesta gravação foram ignoradas.`
+          : null,
+      );
     } catch {
       setNotice(`Falha ao ler o arquivo "${file.name}".`);
     }

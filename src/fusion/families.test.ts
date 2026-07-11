@@ -81,27 +81,44 @@ describe("runFamily — infraestrutura", () => {
       ciIsCoherent(p.wrong);
       ciIsCoherent(p.falseLabels);
       ciIsCoherent(p.idSwitches);
+      ciIsCoherent(p.wrongRate);
+      ciIsCoherent(p.swap);
+      ciIsCoherent(p.opportunities);
       // Taxas vivem em [0,1]; contadores da decomposição nunca negativos.
       expect(p.precision.lo).toBeGreaterThanOrEqual(0);
       expect(p.precision.hi).toBeLessThanOrEqual(1);
       expect(p.coverage.lo).toBeGreaterThanOrEqual(0);
       expect(p.coverage.hi).toBeLessThanOrEqual(1);
+      expect(p.wrongRate.lo).toBeGreaterThanOrEqual(0);
+      expect(p.wrongRate.hi).toBeLessThanOrEqual(1);
       expect(p.wrong.lo).toBeGreaterThanOrEqual(0);
       expect(p.falseLabels.lo).toBeGreaterThanOrEqual(0);
       expect(p.idSwitches.lo).toBeGreaterThanOrEqual(0);
+      // swap = wrong−falseLabels por seed; como falseLabels ⊂ wrong, nunca negativo.
+      expect(p.swap.lo).toBeGreaterThanOrEqual(0);
+      expect(p.opportunities.lo).toBeGreaterThanOrEqual(0);
     }
   });
 });
 
-/** Curva em texto pra diagnóstico humano (o log é o instrumento, não console.log de produção). */
+/**
+ * Curva em texto pra diagnóstico humano (o log é o instrumento, não console.log de produção).
+ * wrongRate (taxa, com IC) e swap (pessoa↔pessoa real) entram junto das contagens — achado C1:
+ * contagem absoluta em eixo que muda o nº de oportunidades engana a leitura (ver families.ts).
+ * CONTRATO com scripts/family.mjs: o parser do CLI reconhece o bloco pela linha-título
+ * "<nome> (N seeds/ponto):" + linhas indentadas (2+ espaços) — mudou o formato, atualize lá junto.
+ */
 function fmtCurve(r: ReturnType<typeof runFamily>): string {
   const lines = r.points.map(
     (p) =>
       `  ${r.axisName}=${p.axisValue}: precisão ${(p.precision.mean * 100).toFixed(1)}% ` +
       `[${(p.precision.lo * 100).toFixed(1)}, ${(p.precision.hi * 100).toFixed(1)}]  ` +
       `cobertura ${(p.coverage.mean * 100).toFixed(1)}%  ` +
-      `wrong ${p.wrong.mean.toFixed(1)}  falseLabels ${p.falseLabels.mean.toFixed(1)}  ` +
-      `idSwitches ${p.idSwitches.mean.toFixed(1)}`,
+      `wrongRate ${(p.wrongRate.mean * 100).toFixed(1)}% ` +
+      `[${(p.wrongRate.lo * 100).toFixed(1)}, ${(p.wrongRate.hi * 100).toFixed(1)}]  ` +
+      `wrong ${p.wrong.mean.toFixed(1)}  swap ${p.swap.mean.toFixed(1)}  ` +
+      `falseLabels ${p.falseLabels.mean.toFixed(1)}  idSwitches ${p.idSwitches.mean.toFixed(1)}  ` +
+      `oportunidades ${p.opportunities.mean.toFixed(1)}`,
   );
   return [`${r.name} (${r.points[0]?.seeds.length ?? 0} seeds/ponto):`, ...lines].join("\n");
 }
@@ -116,6 +133,9 @@ describe("FAMILY_PRECISION_VS_PEOPLE — ponta a ponta", () => {
       expect(p.seeds).toEqual([1, 2, 3, 4, 5]);
       ciIsCoherent(p.precision);
       ciIsCoherent(p.coverage);
+      ciIsCoherent(p.wrongRate);
+      ciIsCoherent(p.swap);
+      ciIsCoherent(p.opportunities);
       // O associador tem de FALAR alguma coisa avaliável em cada ponto (cobertura > 0) — um zero
       // aqui indicaria cenário quebrado (ex.: nenhum tick processado), não densidade alta.
       expect(p.coverage.mean).toBeGreaterThan(0);
@@ -134,6 +154,9 @@ describe("FAMILY_PRECISION_VS_PEOPLE — ponta a ponta", () => {
       for (const p of r.points) {
         expect(p.seeds).toHaveLength(20);
         ciIsCoherent(p.precision);
+        ciIsCoherent(p.wrongRate);
+        ciIsCoherent(p.swap);
+        ciIsCoherent(p.opportunities);
       }
     },
     120_000,
@@ -150,6 +173,9 @@ describe("FAMILY_PRECISION_VS_NOISE — ponta a ponta", () => {
       expect(p.seeds).toEqual([1, 2, 3, 4, 5]);
       ciIsCoherent(p.precision);
       ciIsCoherent(p.coverage);
+      ciIsCoherent(p.wrongRate);
+      ciIsCoherent(p.swap);
+      ciIsCoherent(p.opportunities);
       expect(p.coverage.mean).toBeGreaterThan(0); // ver nota no teste de pessoas
     }
   }, 30_000);
@@ -163,6 +189,9 @@ describe("FAMILY_PRECISION_VS_NOISE — ponta a ponta", () => {
       for (const p of r.points) {
         expect(p.seeds).toHaveLength(20);
         ciIsCoherent(p.precision);
+        ciIsCoherent(p.wrongRate);
+        ciIsCoherent(p.swap);
+        ciIsCoherent(p.opportunities);
       }
     },
     120_000,
@@ -179,6 +208,9 @@ describe("FAMILY_PRECISION_VS_BODY_BIAS — ponta a ponta", () => {
       expect(p.seeds).toEqual([1, 2, 3, 4, 5]);
       ciIsCoherent(p.precision);
       ciIsCoherent(p.coverage);
+      ciIsCoherent(p.wrongRate);
+      ciIsCoherent(p.swap);
+      ciIsCoherent(p.opportunities);
       expect(p.coverage.mean).toBeGreaterThan(0);
     }
   }, 30_000);
@@ -192,6 +224,9 @@ describe("FAMILY_PRECISION_VS_BODY_BIAS — ponta a ponta", () => {
       for (const p of r.points) {
         expect(p.seeds).toHaveLength(20);
         ciIsCoherent(p.precision);
+        ciIsCoherent(p.wrongRate);
+        ciIsCoherent(p.swap);
+        ciIsCoherent(p.opportunities);
       }
     },
     180_000,
@@ -212,8 +247,18 @@ describe("FAMILY_PRECISION_VS_ANCHOR_ERROR — previsão falseável (c) do escop
     for (const p of r.points) {
       ciIsCoherent(p.precision);
       ciIsCoherent(p.coverage);
+      ciIsCoherent(p.wrongRate);
+      ciIsCoherent(p.swap);
+      ciIsCoherent(p.opportunities);
       expect(p.coverage.mean).toBeGreaterThan(0);
     }
+    // PODER DO TESTE — nota honesta (revisão adversarial da Fase 4, 2026-07-11): exigir
+    // NÃO-sobreposição de dois IC95 é um critério muito conservador (≈ p<0,01), e com n=8 seeds
+    // os ICs são largos — este sentinela só detecta acoplamento GROSSEIRO; um acoplamento
+    // moderado (que desloca a média menos do que a largura dos ICs) PASSARIA despercebido.
+    // O sinal forte de verdade é a decomposição de erro BIT-IDÊNTICA entre os extremos do eixo
+    // (verificada na leitura humana da curva completa), não este overlap. Mantido como sentinela
+    // barato de CI: "verde" ≠ prova de desacoplamento fino, "vermelho" = achado grosseiro real.
     // ICs 95% se sobrepõem ⇔ nenhuma evidência de que o erro de cadastro move a identidade.
     const overlap = p0.precision.lo <= pMax.precision.hi && pMax.precision.lo <= p0.precision.hi;
     expect(
@@ -238,6 +283,9 @@ describe("FAMILY_PRECISION_VS_ANCHOR_ERROR — previsão falseável (c) do escop
       for (const p of r.points) {
         expect(p.seeds).toHaveLength(20);
         ciIsCoherent(p.precision);
+        ciIsCoherent(p.wrongRate);
+        ciIsCoherent(p.swap);
+        ciIsCoherent(p.opportunities);
       }
     },
     180_000,

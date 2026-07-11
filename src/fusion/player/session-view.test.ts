@@ -80,6 +80,31 @@ describe("sessionWorldDomain (enquadramento da planta pra gravação real)", () 
     const d = sessionWorldDomain([], H_ID, { x: 4, y: 5 }, { padM: 0, minSpanM: 2 });
     expect(d).toEqual({ minX: 3, minY: 4, maxX: 5, maxY: 6 });
   });
+
+  it("gravação que começa VAZIA (câmera ligada antes do roteiro): ticks vazios não consomem o orçamento — o domínio cobre os tracks que vêm depois", () => {
+    // 2000 ticks vazios (o DEFAULT_SAMPLE_TICKS inteiro) e SÓ DEPOIS os tracks. A amostragem
+    // cronológica antiga devolvia um domínio só com a estação → tudo desenhava fora do canvas.
+    const empty = Array.from({ length: 2000 }, (_, i) => tick(i * 500, []));
+    const ticks = [
+      ...empty,
+      tick(2000 * 500, [{ id: 1, bbox: [1, 1, 2, 2] }]), // pé (2,3)
+      tick(2001 * 500, [{ id: 2, bbox: [8, 5, 2, 3] }]), // pé (9,8)
+    ];
+    const d = sessionWorldDomain(ticks, H_ID, STATION, { padM: 0, minSpanM: 0 });
+    expect(d.maxX).toBe(9);
+    expect(d.maxY).toBe(8);
+  });
+
+  it("o teto conta ticks COM tracks: vazios no meio não gastam a amostra, e o corte ainda vale", () => {
+    const ticks = [
+      tick(0, []), // vazio — não consome
+      tick(500, [{ id: 1, bbox: [1, 1, 2, 2] }]), // pé (2,3) — consome o orçamento de 1
+      tick(1000, [{ id: 1, bbox: [99, 99, 2, 2] }]), // pé (100,101) — além do corte
+    ];
+    const d = sessionWorldDomain(ticks, H_ID, { x: 2, y: 3 }, { sampleTicks: 1, padM: 0, minSpanM: 0 });
+    expect(d.maxX).toBe(2);
+    expect(d.maxY).toBe(3);
+  });
 });
 
 describe("parseSessionTruthJson (import do modo anotação)", () => {
@@ -109,5 +134,26 @@ describe("parseSessionTruthJson (import do modo anotação)", () => {
 
   it("objeto vazio é válido (anotação zerada)", () => {
     expect(parseSessionTruthJson("{}")).toEqual({});
+  });
+
+  it('chave "" NÃO vira track 0 (Number("")===0 corromperia a anotação do track 0)', () => {
+    const raw = JSON.stringify({ "": "AA:BB:CC:DD:EE:FF", "0": "00:11:22:33:44:55" });
+    expect(parseSessionTruthJson(raw)).toEqual({ 0: "00:11:22:33:44:55" });
+  });
+
+  it("chave só vale como inteiro decimal: hex, notação científica e fração são descartadas", () => {
+    const raw = JSON.stringify({
+      "0x10": "AA:AA:AA:AA:AA:AA", // Number() daria 16
+      "1e3": "BB:BB:BB:BB:BB:BB", // Number() daria 1000
+      "1.5": "CC:CC:CC:CC:CC:CC", // Number() daria 1.5
+      "7": "DD:DD:DD:DD:DD:DD",
+      "-2": null, // inteiro negativo passa no /^-?\d+$/ (defensivo, ids reais são >= 0)
+    });
+    expect(parseSessionTruthJson(raw)).toEqual({ 7: "DD:DD:DD:DD:DD:DD", "-2": null });
+  });
+
+  it("valor entra TRIMADO e em MAIÚSCULO (convenção do MAC do session-loader)", () => {
+    const raw = JSON.stringify({ "1": "  aa:bb:cc:dd:ee:ff  " });
+    expect(parseSessionTruthJson(raw)).toEqual({ 1: "AA:BB:CC:DD:EE:FF" });
   });
 });

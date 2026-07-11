@@ -66,7 +66,12 @@ export type SimOpts = {
    *  em direções FIXAS alternadas por índice (+x, +y, −x, −y — SEM consumir RNG; ausente/0 =
    *  byte-compat total). A física de GERAÇÃO do RSSI continua usando a posição REAL da ferragem —
    *  o erro existe só no que o operador "cadastrou". É o knob da previsão falseável (c) do §8:
-   *  erro de cadastro deve mover auditoria/anéis, NUNCA a precisão de identidade. */
+   *  erro de cadastro deve mover auditoria/anéis, NUNCA a precisão de identidade.
+   *  MARGEM ESTREITA (varredura adversarial de 2026-07-11): no eixo 0..2 m, o span de log10 das
+   *  distâncias cadastro→estação chega a 0,3802 década (pico em e≈1,39 m) — a 5% do limiar de
+   *  0,4 década que faz o fitPathLoss trocar de regime (anchors-offset ↔ fit completo). Se
+   *  ANCHOR_HALF_W/H aqui ou o SPAN_MIN_DECADES do fit mudarem, o regime pode flipar no MEIO da
+   *  curva silenciosamente; há um teste-guarda em sim.test.ts selando span < 0,4 no eixo todo. */
   anchorPosErrorM?: number;
   /** SENTINELA DE VIÉS (revisão adversarial de 2026-07-10): offset constante em dB aplicado SÓ
    *  ao RSSI das tags de PESSOA — a atenuação corporal que o campo real tem e o modelo do fit
@@ -92,7 +97,10 @@ export type SimOpts = {
    *  o comportamento de sempre (byte-compat — pinos antigos intactos, mesmo consumo de RNG).
    *  Presente = `noise[t] = ρ·noise[t-1] + √(1-ρ²)·ε[t]` (ε~N(0,1) iid, ρ=exp(-Δt/τ) — Δt é o
    *  período real entre atualizações de RSSI, `rssiPeriodTicks`×500ms), preservando a MESMA
-   *  variância (rssiNoiseDb) só adicionando correlação temporal. FONTE: mineração das 6h reais
+   *  variância (rssiNoiseDb) só adicionando correlação temporal — verdadeiro desde o 1º sample:
+   *  a 1ª atualização de cada tag semeia o estado estacionário (`noise = ε` puro, var 1) em vez
+   *  de recursar a partir de 0, que deixaria o transitório sub-ruidoso (correção da revisão
+   *  adversarial de 2026-07-11; mesmo consumo de RNG). FONTE: mineração das 6h reais
    *  (`docs/cientifica/relatorio-consolidado-2026-07-10.md` §9.5) mediu autocorrelação de 0,49-0,94
    *  em lag de 2s — invertendo ρ(Δt)=exp(-Δt/τ) pros dois extremos dá τ≈2,8s a τ≈32s (faixa LARGA,
    *  não um número limpo — a mineração cobriu regimes de obstrução bem diferentes por âncora).
@@ -138,6 +146,12 @@ export type SimOpts = {
    *  parede pode bloquear visão sem atenuar RF de verdade, ou vice-versa — depende do material;
    *  quem monta o cenário decide). Múltiplos obstáculos cruzados SOMAM a atenuação de RF (mesma
    *  convenção de `rssiRegions`). Não consome RNG (geometria pura) — byte-compat quando ausente.
+   *  SEMÂNTICA DE "DENTRO" (decisão de modelagem declarada, não corrigida): o teste é cruzamento
+   *  de ARESTA — um segmento inteiramente DENTRO do polígono não cruza aresta nenhuma, então
+   *  pessoa dentro do obstáculo com câmera/estação TAMBÉM dentro = obstáculo transparente
+   *  (false/0); pessoa dentro com estação fora = o segmento cruza a borda uma vez = atenuação
+   *  CHEIA. E os walkers IGNORAM obstáculos — pessoas atravessam máquinas (obstáculo não é
+   *  barreira de movimento); obstáculo que contenha a estação deve ser modelado como rssiRegions.
    *  FORA DE ESCOPO v1 (documentado, não escondido): o acoplamento "id-switch elevado na SAÍDA da
    *  oclusão" que `docs/cientifica/simulador.md` §4 propõe fica pra uma rodada futura — exige
    *  estado extra (há quanto tempo a pessoa estava oculta) que este incremento não adiciona;
@@ -382,10 +396,13 @@ const PLACEMENT_OFFSET_DEG: Record<"peito" | "bolso-esq" | "bolso-dir", number> 
 /**
  * Viés corporal direcional (dB) — ver docstring de SimOpts.bodyBias. `heading` é a direção de
  * movimento (proxy da orientação do corpo); {x:0,y:0} (pessoa sem heading conhecido — "parado", ou
- * 1º tick) faz `angleBetweenDeg` devolver 0°, e o modelo cai no PIOR caso (shadow=1 — conservador:
- * sem saber a orientação, assume a pior, não a melhor) seria errado; por isso `heading` zero é
- * tratado à parte aqui: devolve só `meanDb` (o piso), documentado como a simplificação honesta de
- * v1 para o caso sem heading real (não inventamos uma orientação que não existe).
+ * 1º tick) é tratado à parte: devolve só `meanDb` (o piso), a simplificação honesta de v1 para o
+ * caso sem heading real (não inventamos uma orientação que não existe). A guarda existe por
+ * CLAREZA/robustez — contrato explícito "sem heading → piso" —, NÃO porque o caminho geral
+ * erraria: sem ela, `angleBetweenDeg` devolveria 0° (theta=0 → diffFromWorst=180 → shadow≈0,0015
+ * com angWidthDeg=60) e o resultado já seria ≈meanDb por coincidência numérica; preferimos o
+ * contrato dito a depender dela. (Docstring corrigida na revisão adversarial de 2026-07-11 — a
+ * versão original afirmava, errado, que o caminho geral cairia no pior caso/shadow=1.)
  * Exportada (testável isolada) — mesmo padrão de fitPathLoss/distFromRssi em floor-plot.ts.
  */
 export function bodyBiasDb(
@@ -561,10 +578,14 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const armed = new Map<string, boolean>();
 
   const lastRssi: number[] = new Array<number>(tagged).fill(0);
-  // Estado do ruído AR(1) por tag de pessoa (ver SimOpts.rssiNoiseTauS) — 0 até a 1ª atualização,
-  // igual a um ε~N(0,1) já teria média 0. Só usado quando o knob está presente; ausente = cada
+  // Estado do ruído AR(1) por tag de pessoa (ver SimOpts.rssiNoiseTauS). A 1ª atualização de cada
+  // tag semeia o estado ESTACIONÁRIO (`noise = ε` puro, var 1) — sem isso, partir de 0 e recursar
+  // `ρ·prev + √(1-ρ²)·ε` deixaria o transitório SUB-ruidoso (var[k] = 1-ρ^2k; com τ=32s, var=0,45
+  // aos 8s). Corrigido na revisão adversarial de 2026-07-11; mesmo consumo de RNG (o ε da 1ª
+  // atualização já era sorteado). Só usado quando o knob está presente; ausente = cada
   // "atualização" reatribui `eps` puro (IID), byte-idêntico ao `randn(rng)` inline de sempre.
   const rssiNoiseAr1 = new Array<number>(tagged).fill(0);
+  const rssiAr1Seeded = new Array<boolean>(tagged).fill(false);
   const rssiUpdateDtS = (rssiPeriodTicks * TICK_MS) / 1000;
   const rssiAr1Rho =
     opts.rssiNoiseTauS !== undefined ? Math.exp(-rssiUpdateDtS / opts.rssiNoiseTauS) : null;
@@ -657,19 +678,25 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
       if (i % rssiPeriodTicks === 0) {
         const d = Math.hypot(positions[p].x - rssiOrigin.x, positions[p].y - rssiOrigin.y);
         // AR(1) (ver SimOpts.rssiNoiseTauS): rho=null → eps puro, IID, byte-idêntico ao
-        // `randn(rng) * rssiNoiseDb` de sempre. rho!=null → correlaciona com o valor anterior,
-        // preservando a MESMA variância (rssiNoiseDb) — só a mineração das 6h reais mostrou que o
-        // ruído de campo não é IID amostra-a-amostra, e este é o desvio calibrado por isso.
+        // `randn(rng) * rssiNoiseDb` de sempre. rho!=null → 1ª atualização semeia o estado
+        // ESTACIONÁRIO (eps puro, var 1 desde o 1º sample — ver comentário em rssiNoiseAr1);
+        // depois correlaciona com o valor anterior, preservando a MESMA variância (rssiNoiseDb) —
+        // só a mineração das 6h reais mostrou que o ruído de campo não é IID amostra-a-amostra,
+        // e este é o desvio calibrado por isso.
         const eps = randn(rng);
         rssiNoiseAr1[p] =
-          rssiAr1Rho === null
+          rssiAr1Rho === null || !rssiAr1Seeded[p]
             ? eps
             : rssiAr1Rho * rssiNoiseAr1[p] + Math.sqrt(1 - rssiAr1Rho * rssiAr1Rho) * eps;
+        rssiAr1Seeded[p] = true;
         // Offset regional (Fase 2, ver SimOpts.rssiRegions) — 0 sem regiões cadastradas, sem custo.
         const regionDb = rssiRegions.length ? regionOffsetAt(positions[p], rssiRegions) : 0;
         // Viés corporal direcional (Fase 2, ver SimOpts.bodyBias) — 0 sem o knob. Coexiste com
         // personRssiBiasDb (a sentinela achatada do v4) só se o chamador ligar os dois de
         // propósito; nenhum dos dois desliga o outro automaticamente (decisão do chamador).
+        // bodyBiasDb devolve dB POSITIVOS de ATENUAÇÃO → SUBTRAI do RSSI (mesma convenção do
+        // obstacleDb abaixo). Corrigido na revisão adversarial de 2026-07-11: o original SOMAVA
+        // (sinal invertido — corpo na frente deixava o sinal MAIS forte).
         const bodyDb = bodyBias
           ? bodyBiasDb(
               lastHeading[p],
@@ -686,7 +713,7 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
           RSSI_1M_DBM -
           10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
           personRssiBiasDb +
-          regionDb +
+          regionDb -
           bodyDb -
           obstacleDb +
           rssiNoiseAr1[p] * rssiNoiseDb;
