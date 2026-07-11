@@ -84,7 +84,14 @@ public class MainActivity extends Activity {
     static final String SUFFIX_TAGS = "/api/bt/tags";        // endpoint de listagem de nomes (pull do hub)
     static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
     static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
-    static final long POST_EVERY_MS = 2000;      // envio ao hub
+    // 2000→500ms (2026-07-11, diagnóstico do funil de campo): o scanner já roda LOW_LATENCY
+    // (quase contínuo), mas onScanResult guarda só a ÚLTIMA leitura por MAC e este período de
+    // envio descartava o resto — o associador via ~3,9 leituras DISTINTAS por janela de 8s
+    // (inter-arrival medido: ~2,06s, cravado no POST, não na tag). Com o ruído autocorrelacionado
+    // do campo (ρ~0,7 @2s), isso vale <1 ponto estatisticamente independente por janela — o canal
+    // de identidade ficava no limite físico. 500ms ≈ 4× leituras distintas, custo: +1,5 req/s na
+    // LAN (trivial) e nada de bateria de tag (a tag já anunciava mais rápido que o envio).
+    static final long POST_EVERY_MS = 500;       // envio ao hub
     static final long SYNC_NAMES_MS = 15000;     // pull periódico dos nomes do hub (servidor = fonte)
     static final long SAVE_LOCS_EVERY_TICKS = 15; // persiste a réplica de localização a cada N ticks (se mudou)
     static final long REFRESH_MS = 1000;         // refresh da tela (vida)

@@ -138,8 +138,55 @@
        persistência NÃO mudou: ratio 0,68 vs 0,67, v1 segue reprovada).
      - **Falta para fechar o hello world**: o dono repetir a caminhada COM o default novo no ar
        (rebuild/restart do front) e ver o rótulo na tela; gravar; anotar no player; processar
-       (task #4). A hipótese direcional (perna corpo-entre vs livre) pode ser testada na mesma
-       gravação.
+       (task #4). A caminhada agora paga **QUATRO contas** (especialista, resposta ao laudo):
+       verdade anotável, viés corporal real, teste direcional, e **ρ do resíduo da tag MÓVEL**
+       (a autocorrelação medida veio de âncoras paradas — inclui o canal lento; a tag móvel
+       atravessa o fading e deve descorrelacionar mais rápido; o ρ que importa pro n_eff ainda
+       não foi medido).
+   - 🔬 **RESPOSTA DO ESPECIALISTA AO LAUDO (2026-07-11) — o mapa novo, em execução**:
+     - **Raiz comum dos gates**: minSamples+minMovement+minConfidence são três proxies discretos
+       de UM teste — significância da correlação dado o nº de pontos INDEPENDENTES. Com ρ~0,7 @2s,
+       as ~3,9 leituras distintas da janela valem **~0,7 ponto independente** — explica por que o
+       campo precisou de −0,91 pra falar (espúrio |r|>0,5 é rotina com n_eff dessa ordem). Gate
+       reformulado: Fisher z=atanh(r), falar exige |z| ≥ z_crit·√(1/(n_eff−3)), n_eff mínimo ~5-6.
+       E o gate de movimento vira **std(log₁₀ d) em DÉCADAS** (adimensional — escala-aware por
+       construção; limiar do ruído medido: ~0,25 década p/ SNR=1, prática 0,12-0,18; correlacionar
+       RSSI×log(d) é o modelo físico e o r do par verdadeiro sobe de graça). **EM EXECUÇÃO**:
+       knobs de pesquisa OFF + torneio no harness (rodada de recalibração dos gates; pinos só se
+       re-derivam conscientemente).
+     - **CADÊNCIA — ASSASSINO Nº 2 LOCALIZADO COM ENDEREÇO (diagnóstico nosso, mesma noite)**: o
+       TC22 já roda `SCAN_MODE_LOW_LATENCY` (quase contínuo) — mas `POST_EVERY_MS=2000` no app +
+       `onScanResult` guardando só a ÚLTIMA leitura por MAC descartava todo o resto (o
+       inter-arrival de ~2,06s cravado em TODAS as tags é o POST, não o advertising). **CORRIGIDO:
+       500ms** (≈4× leituras distintas/janela; custo +1,5 req/s na LAN, zero bateria de tag).
+       ⚠️ **PENDENTE DO DONO: rebuildar e reinstalar o APK do TC22** (tc22-scanner/build.sh).
+       Nunca interpolar RSSI (inventa pontos, infla n, enviesa r) — regra registrada.
+     - **Grade (P*,K) da persistência**: roda AGORA em sintético como exploração de forma;
+       NENHUM default promovido até a curva de calibração ter âncora real (hello world = ponta
+       esparsa; regime denso fica sintético com ressalva declarada). **EM EXECUÇÃO** (reliability
+       estratificada por regime + barra por precisão-implicada + janela limpa via hadConflict).
+     - **Viés direcional como feature**: desenho anti-v4 ARQUIVADO (4 passos: confirmação física →
+       score auxiliar isolado medido por AUC sobre dado real anotado, nunca sim → torneio com
+       sentinelas de placement/multipath → decomposição exigindo ganho vindo dos empates). A
+       variável latente "orientação" a câmera JÁ mede (heading do track) — a feature mínima é
+       corr(resíduo-de-RSSI, cos(heading vs direção track→estação)). **ROI: perde pra 2ª estação**
+       — teste físico é grátis na caminhada; o esforço vai pra estação.
+     - **🔺 2ª ESTAÇÃO PROMOVIDA: de "gated por hardware" para O ITEM DE MAIOR VALOR POR REAL
+       INVESTIDO do backlog** (~R$30 de ESP32 contra um canal de identidade que a física mostrou
+       estar no limite). Desenho decisivo do especialista, registrado para execução: (i) hardware:
+       ESP32/NimBLE via MQTT ou Android aposentado — a correlação é INVARIANTE a offset de rssi0
+       entre receptores (os 16dB de spread são irrelevantes aqui); requisito duro é RELÓGIO (NTP
+       monitorado; 1s de offset a 1,2m/s = 1,2m de erro de pareamento); (ii) geometria: gradientes
+       radiais cruzando a ~90° no centro da área útil (nunca perto da estação A); (iii) software:
+       o contrato de gravação JÁ carrega `stationId` por batch — falta o software de fusão
+       multi-estação (séries por (tag,station) + fusão por SOMA DE FISHER-Z, que o gate de
+       significância já acomoda); (iv) protocolo: a mesma caminhada gravada pelas duas estações;
+       depois sessão de 2-3 pessoas; (v) análise: replay contrafactual em 3 colunas (A só, B só,
+       A+B), regra a priori FIXADA ANTES: precisão(A+B) ≥ máx(A,B), cobertura ≥1,5×, conflictRate
+       ≤0,6×. **PREVISÃO REGISTRADA (cobrar)**: a razão de decaimento geométrico da cobertura
+       (0,846/pessoa com 1 estação) SOBE visivelmente com A+B — se mover, valida que o teto era
+       DIMENSIONAL, e trilateração/fator BLE de posição/factor graph (T1) ganham alicerce medido
+       de graça na mesma gravação.
 3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
    - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
      `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),
