@@ -62,20 +62,24 @@ function runScenario(def: (typeof FUSION_SCENARIOS)[number]): ScenarioResult {
   };
 }
 
-// PINS por cenário (2026-07-10) — cobertura em %, 1 casa decimal; wrongMs em ms.
+// PINS por cenário — cobertura em %, 1 casa decimal; wrongMs em ms.
+// RE-PINADOS 2026-07-11 (minMovement 0,25→0,15, mudança de default por evidência de campo — ver
+// DEFAULTS de associate.ts). O quadro QUALITATIVO não mudou: v1 segue NÃO passando a regra a
+// priori (ratio de cobertura 0,68 vs 0,67 antes; erro-segundos segue caindo; multidão segue
+// zerando a confirmação). Os números originais de 2026-07-10 vivem no git.
 const PINS: Record<string, { baseCov: number; memCov: number; baseWrongMs: number; memWrongMs: number }> = {
-  canonico: { baseCov: 32.4, memCov: 33.5, baseWrongMs: 4000, memWrongMs: 12500 },
+  canonico: { baseCov: 35.2, memCov: 37.8, baseWrongMs: 6500, memWrongMs: 12500 },
   parado: { baseCov: 0, memCov: 0, baseWrongMs: 0, memWrongMs: 0 },
-  bloco: { baseCov: 10.9, memCov: 5.4, baseWrongMs: 2000, memWrongMs: 0 },
-  cruzamento: { baseCov: 27.3, memCov: 24.0, baseWrongMs: 23500, memWrongMs: 41000 },
-  "ruido-alto": { baseCov: 17.8, memCov: 17.2, baseWrongMs: 8500, memWrongMs: 13500 },
-  multidao: { baseCov: 16.2, memCov: 5.3, baseWrongMs: 35500, memWrongMs: 0 },
-  "sem-calibracao": { baseCov: 26.7, memCov: 29.8, baseWrongMs: 11000, memWrongMs: 4500 },
-  "grade-sem-station": { baseCov: 32.4, memCov: 33.5, baseWrongMs: 4000, memWrongMs: 12500 },
-  "ancoras-canonico": { baseCov: 28.2, memCov: 21.0, baseWrongMs: 17500, memWrongMs: 11500 },
-  "ancoras-multidao": { baseCov: 18.9, memCov: 7.5, baseWrongMs: 41000, memWrongMs: 0 },
-  "ancoras-multidao-bias": { baseCov: 18.9, memCov: 7.5, baseWrongMs: 41000, memWrongMs: 0 },
-  "ancoras-mismatch-n": { baseCov: 24.8, memCov: 8.2, baseWrongMs: 21000, memWrongMs: 0 },
+  bloco: { baseCov: 10.5, memCov: 0.0, baseWrongMs: 2000, memWrongMs: 0 },
+  cruzamento: { baseCov: 27.6, memCov: 24.0, baseWrongMs: 23500, memWrongMs: 41500 },
+  "ruido-alto": { baseCov: 20.2, memCov: 23.3, baseWrongMs: 12500, memWrongMs: 20000 },
+  multidao: { baseCov: 16.6, memCov: 5.3, baseWrongMs: 36500, memWrongMs: 0 },
+  "sem-calibracao": { baseCov: 27.0, memCov: 29.8, baseWrongMs: 11000, memWrongMs: 3500 },
+  "grade-sem-station": { baseCov: 35.2, memCov: 37.8, baseWrongMs: 6500, memWrongMs: 12500 },
+  "ancoras-canonico": { baseCov: 28.2, memCov: 21.0, baseWrongMs: 19500, memWrongMs: 11500 },
+  "ancoras-multidao": { baseCov: 18.7, memCov: 7.5, baseWrongMs: 42000, memWrongMs: 0 },
+  "ancoras-multidao-bias": { baseCov: 18.7, memCov: 7.5, baseWrongMs: 42000, memWrongMs: 0 },
+  "ancoras-mismatch-n": { baseCov: 24.4, memCov: 8.2, baseWrongMs: 21500, memWrongMs: 0 },
 };
 
 describe("torneio da persistência — PINS honestos (v1 NÃO passa a regra a priori em agregado)", () => {
@@ -137,14 +141,14 @@ describe("torneio da persistência — PINS honestos (v1 NÃO passa a regra a pr
 
     // Regra a priori, eixo 1 (erro-segundos ≤ baseline): PASSA.
     expect(memAgg.wrongMs).toBeLessThanOrEqual(baseAgg.wrongMs);
-    expect(memAgg.wrongMs).toBe(95500);
-    expect(baseAgg.wrongMs).toBe(209000);
+    expect(memAgg.wrongMs).toBe(101500);
+    expect(baseAgg.wrongMs).toBe(223500);
 
     // Regra a priori, eixo 2 (cobertura ≥ N× baseline, N≥1): FALHA — registrado, não escondido.
-    // v1 como está reduz a cobertura agregada pra ~0,67× o baseline (multidão zera cobertura que o
+    // v1 como está reduz a cobertura agregada pra ~0,68× o baseline (multidão zera cobertura que o
     // baseline por-tick conseguia ocasionalmente) — não é candidato a default sem retuning.
     expect(memCoverage).toBeLessThan(baseCoverage);
-    expect(Math.round((memCoverage / baseCoverage) * 100) / 100).toBe(0.67);
+    expect(Math.round((memCoverage / baseCoverage) * 100) / 100).toBe(0.68);
 
     // Decomposição (regra institucionalizada): o canal legítimo (abstenção→acerto) É maior que a
     // regressão grave (correto→errado) — o ganho onde existe é genuíno, só não é suficiente.

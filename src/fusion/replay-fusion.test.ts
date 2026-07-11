@@ -45,12 +45,17 @@ const PINS: Record<
 > = {
   canonico: { precision: 0.825, coverage: 0.34, wrongRate: 0.048, falseLabels: 23, idSwitches: 1 },
   parado: { precision: 1, coverage: 0, wrongRate: 0, falseLabels: 0, idSwitches: 0 },
-  bloco: { precision: 0.82, coverage: 0.116, wrongRate: 0.017, falseLabels: 7, idSwitches: 0 },
+  // bloco re-pinado 2026-07-11 (minMovement 0,25→0,15, 1º dado de campo — ver DEFAULTS de
+  // associate.ts): precisão 82,0→80,0%, falseLabels 7→8 — o custo localizado ACEITO no torneio da
+  // mudança (agregado neutro; `parado` segue 100% abstenção; o campo real destravou com corr -0,91).
+  bloco: { precision: 0.80, coverage: 0.112, wrongRate: 0.019, falseLabels: 8, idSwitches: 0 },
   cruzamento: { precision: 0.784, coverage: 0.283, wrongRate: 0.078, falseLabels: 0, idSwitches: 1 },
   "ruido-alto": { precision: 0.705, coverage: 0.184, wrongRate: 0.051, falseLabels: 22, idSwitches: 0 },
   multidao: { precision: 0.598, coverage: 0.173, wrongRate: 0.077, falseLabels: 29, idSwitches: 3 },
   "sem-calibracao": { precision: 0.713, coverage: 0.265, wrongRate: 0.072, falseLabels: 24, idSwitches: 1 },
-  "grade-sem-station": { precision: 0.459, coverage: 0.158, wrongRate: 0.125, falseLabels: 37, idSwitches: 0 },
+  // grade-sem-station re-pinado 2026-07-11 (minMovement 0,25→0,15): falseLabels 37→39 — o outro
+  // custo localizado aceito na mudança de default (agregado neutro; ver DEFAULTS de associate.ts).
+  "grade-sem-station": { precision: 0.453, coverage: 0.158, wrongRate: 0.128, falseLabels: 39, idSwitches: 0 },
   "ancoras-canonico": {
     precision: 0.832,
     coverage: 0.336,
@@ -62,14 +67,14 @@ const PINS: Record<
     precision: 0.713,
     coverage: 0.22,
     wrongRate: 0.0589,
-    falseLabels: 22,
+    falseLabels: 23, // 22→23 no re-pin de 2026-07-11 (minMovement 0,25→0,15 — ver DEFAULTS de associate.ts)
     idSwitches: 1,
   },
   "ancoras-multidao-bias": {
     precision: 0.713,
     coverage: 0.22,
     wrongRate: 0.0589,
-    falseLabels: 22,
+    falseLabels: 23, // 22→23 no re-pin de 2026-07-11 (minMovement 0,25→0,15 — ver DEFAULTS de associate.ts)
     idSwitches: 1,
   },
   "ancoras-mismatch-n": {

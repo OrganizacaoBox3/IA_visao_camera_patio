@@ -113,7 +113,7 @@ const CLIENT_FUSION_CONFIG_MIRROR = {
   windowMs: 8000,
   minSamples: 5,
   minConfidence: 0.5,
-  minMovement: 0.25,
+  minMovement: 0.15, // 0,25→0,15 em 2026-07-11 (evidência de campo + torneio — ver associate.ts DEFAULTS)
   minMargin: 0.1,
   optimal: false,
   maxDistRatio: 0,

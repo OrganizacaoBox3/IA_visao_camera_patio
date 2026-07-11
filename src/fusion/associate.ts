@@ -177,7 +177,15 @@ const DEFAULTS: ResolvedConfig = {
   windowMs: 8000,
   minSamples: 5,
   minConfidence: 0.5,
-  minMovement: 0.25, // variância (m²) — ~0,5 m de desvio-padrão de movimento
+  // 0,25 → 0,15 (2026-07-11, PRIMEIRO dado de campo real): o funil de diagnóstico (diagnoseFunnel)
+  // provou que 0,25 era FISICAMENTE IMPASSÁVEL numa sala real de ~4×5m (movVar máximo de caminhada
+  // real ampla: 0,228 — zero falas em 4.195 avaliações), enquanto o replay contrafactual da MESMA
+  // caminhada com 0,15 falou 28× com corr até -0,91 (a física validada em campo pela 1ª vez).
+  // Torneio sintético (12 cenários): 0,15 é NEUTRO no agregado (73,0% = 73,0%); `parado` segue
+  // 100% abstenção (variância de gente parada é ~0, bem abaixo do gate — o caso que o knob protege
+  // continua protegido); custo localizado: bloco 82,0→80,0% de precisão. Evidência dupla
+  // (campo + torneio) — o rito da casa pra mudança de default. Espelho: session-recorder.js.
+  minMovement: 0.15, // variância (m²) — ~0,39 m de desvio-padrão de movimento
   minMargin: 0.1, // guarda de ambiguidade LIGADA por default — decisão MEDIDA (ver cabeçalho)
   optimal: false, // Hungarian medido e não promovido (ver cabeçalho); knob disponível
   maxDistRatio: 0, // gate DESLIGADO — knob de pesquisa; a revisão adversarial provou circularidade (ver cabeçalho)

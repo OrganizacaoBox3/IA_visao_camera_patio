@@ -117,6 +117,29 @@
        erro de entrada — avisar na UI); (3) pesquisa: `minMovement` adaptativo à escala da cena;
        (4) `windowMs`/`minSamples` cientes da cadência real de ~2s do BLE (contar leituras
        DISTINTAS, não ticks).
+   - ✅🔬 **SEGUNDA RODADA DE CAMPO (2026-07-11, mesma noite) — A FÍSICA VALIDADA E O DEFAULT
+     MUDADO PELO RITO COMPLETO.** O dono recalibrou (chão visível agora projeta ~4,4×5,0m —
+     escala plausível, problema de unidade resolvido) e caminhou radialmente. Sequência:
+     - Funil pós-recalibração: `movVar` saltou de max 0,049 pra **max 0,228** — mas ainda ZERO
+       falas: o gate `minMovement=0,25` (calibrado no galpão sintético 8×6m) continuava
+       impassável numa sala real de ~4×5m. Veredito migrou de "execução" para "knob".
+     - **REPLAY CONTRAFACTUAL da mesma caminhada** (sem tocar produção): com `minMovement=0,15`,
+       **28 falas com correlação até -0,91** — a pista do dono casou com a tag `CE:5D`
+       repetidamente. **A correlação RSSI×distância está VALIDADA COM CORPO REAL pela primeira
+       vez.** A cascata a jusante se comportou (âncoras morrem honestamente em série-constante;
+       margem filtra empates); a cadência BLE de ~2s não impediu corr forte com movimento amplo.
+     - **Torneio sintético da mudança** (12 cenários): 0,15 é NEUTRO no agregado (73,0%=73,0%);
+       `parado` segue 100% abstenção (o caso que o knob protege — variância de gente parada é ~0);
+       custo localizado: bloco 82,0→80,0%, falseLabels +1-2 em 3 cenários.
+     - **DEFAULT MUDADO: `minMovement` 0,25→0,15** (`associate.ts` + espelho no
+       `session-recorder.js`), com evidência dupla (campo + torneio) e re-pinagem consciente dos
+       gates afetados (`replay-fusion.test.ts`: bloco/grade-sem-station/ancoras-multidao*;
+       `persistence-tournament.test.ts`: PINS re-medidos — o quadro qualitativo do torneio da
+       persistência NÃO mudou: ratio 0,68 vs 0,67, v1 segue reprovada).
+     - **Falta para fechar o hello world**: o dono repetir a caminhada COM o default novo no ar
+       (rebuild/restart do front) e ver o rótulo na tela; gravar; anotar no player; processar
+       (task #4). A hipótese direcional (perna corpo-entre vs livre) pode ser testada na mesma
+       gravação.
 3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
    - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
      `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),
