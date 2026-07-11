@@ -274,10 +274,27 @@
       da função pura `bodyBiasDb` + integração ponta-a-ponta) provam: pior/melhor caso batem
       `peakDb`/`meanDb`; a colocação da tag rotaciona a direção efetiva; o valor nunca extrapola
       o intervalo [meanDb, peakDb]; pessoa parada usa só o piso; byte-compat quando ausente.
-      **Restante da Fase 2**: oclusão estruturada (a única peça que falta) — precisa de obstáculos
-      geométricos que o simulador ainda não tem (bloquear visão E atenuar RF por segmento
-      cruzado) — é o incremento mais dependente de generalizar geometria (paredes/obstáculos),
-      naturalmente o último dos quatro.
+    - ✅🔬 **Fase 2, quarto e ÚLTIMO incremento — oclusão ESTRUTURADA (obstáculos)** (`sim.ts`,
+      knob `obstacles`, opt-in, por pedido explícito do dono de fechar a Fase 2 inteira nesta
+      sessão): polígonos de mundo com dois papéis independentes por obstáculo — `occludesVision`
+      (dropout ESTRUTURADO, determinístico: segmento pessoa→câmera cruza o polígono → o tracker
+      simplesmente não vê, mesmo efeito de `dropoutP` mas pela geometria, não sorteio) e
+      `rfAttenDb` (atenuação de RF somada ao RSSI quando o segmento pessoa/âncora→estação cruza —
+      múltiplos obstáculos cruzados SOMAM, mesma convenção de `rssiRegions`). Reusa
+      `segmentIntersectsPolygon` (novo primitivo puro, algoritmo clássico de interseção de
+      segmentos) contra as arestas do polígono. 8 testes novos (primitivo de interseção + bloqueio
+      de visão + atenuação de RF isolada + soma de múltiplos obstáculos + byte-compat).
+      **FORA DE ESCOPO v1, documentado no código, não escondido**: o acoplamento "id-switch
+      elevado na SAÍDA da oclusão" que `simulador.md` §4 propõe fica pra uma rodada futura — exige
+      estado extra (há quanto tempo a pessoa estava oculta) que este incremento não adiciona;
+      `idSwitchOnCross` (proximidade física) segue sendo o único mecanismo de id-switch hoje,
+      independente deste knob.
+    - **FASE 2 COMPLETA** — os quatro incrementos de física medida (ruído AR(1), offsets
+      regionais, viés corporal direcional, oclusão estruturada) estão prontos, testados (73 novos
+      testes em `sim.ts`/`sim.test.ts` ao todo nesta rodada) e **todos** byte-compat com os 12
+      cenários pinados (nenhum default mudou). Nenhuma família/curva calibrada foi criada ainda
+      com eles — isso é Fase 3 (famílias paramétricas, ≥20 seeds/ponto, IC — próximo passo natural
+      quando houver prioridade pra isso) ou o teste de campo real decidindo os valores finais.
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 

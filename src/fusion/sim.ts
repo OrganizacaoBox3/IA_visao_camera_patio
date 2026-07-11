@@ -117,6 +117,20 @@ export type SimOpts = {
   /** Lado do corpo onde a tag fica, por ÍNDICE de pessoa (0-based) — só relevante com `bodyBias`.
    *  Ausente por pessoa = "peito" (default neutro: tag na frente do corpo, na direção do heading). */
   tagPlacement?: Record<number, "peito" | "bolso-esq" | "bolso-dir">;
+  /** FÍSICA MEDIDA (Fase 2, último incremento) — obstáculos como polígonos de mundo (metros):
+   *  `occludesVision` bloqueia a CÂMERA (dropout ESTRUTURADO — o segmento pessoa→câmera cruza o
+   *  polígono, então o tracker simplesmente não vê, o mesmo efeito de `dropoutP` mas determinístico
+   *  pela geometria em vez de sorteio) e/ou `rfAttenDb` atenua o RF (somado ao RSSI quando o
+   *  segmento pessoa→estação cruza o polígono). Os dois papéis são INDEPENDENTES por obstáculo (uma
+   *  parede pode bloquear visão sem atenuar RF de verdade, ou vice-versa — depende do material;
+   *  quem monta o cenário decide). Múltiplos obstáculos cruzados SOMAM a atenuação de RF (mesma
+   *  convenção de `rssiRegions`). Não consome RNG (geometria pura) — byte-compat quando ausente.
+   *  FORA DE ESCOPO v1 (documentado, não escondido): o acoplamento "id-switch elevado na SAÍDA da
+   *  oclusão" que `docs/cientifica/simulador.md` §4 propõe fica pra uma rodada futura — exige
+   *  estado extra (há quanto tempo a pessoa estava oculta) que este incremento não adiciona;
+   *  `idSwitchOnCross` (proximidade física) segue sendo o único mecanismo de id-switch disponível
+   *  hoje, independente deste knob. */
+  obstacles?: { poly: Polygon; occludesVision?: boolean; rfAttenDb?: number }[];
 };
 
 // ——— PRNG determinístico (mesmo padrão de src/localizacao/simulate.ts) ———
@@ -367,6 +381,79 @@ export function bodyBiasDb(
   return bias.meanDb + (bias.peakDb - bias.meanDb) * shadow;
 }
 
+/** Orientação de 3 pontos (sinal da área do triângulo ×2) — 0 = colineares. Primitivo clássico de
+ *  interseção de segmentos, sem dependência externa. */
+function orient(p: Vec2, q: Vec2, r: Vec2): number {
+  return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+}
+
+/** `q` está dentro da caixa-envoltória de `p`-`r` — só chamado quando `p`,`q`,`r` já são colineares
+ *  (orient=0), pra decidir se o ponto colinear cai DENTRO do segmento ou fora do prolongamento. */
+function onSegment(p: Vec2, q: Vec2, r: Vec2): boolean {
+  return (
+    Math.min(p.x, r.x) <= q.x &&
+    q.x <= Math.max(p.x, r.x) &&
+    Math.min(p.y, r.y) <= q.y &&
+    q.y <= Math.max(p.y, r.y)
+  );
+}
+
+/** Os segmentos `p1-p2` e `p3-p4` se cruzam — caso geral (orientações opostas dos dois pares) +
+ *  casos degenerados colineares (raros com coordenadas de ponto flutuante, mas tratados pra nunca
+ *  dar falso-negativo numa aresta exatamente alinhada). Algoritmo clássico (CLRS), sem novidade. */
+function segmentsIntersect(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2): boolean {
+  const o1 = orient(p1, p2, p3);
+  const o2 = orient(p1, p2, p4);
+  const o3 = orient(p3, p4, p1);
+  const o4 = orient(p3, p4, p2);
+  if (o1 > 0 !== o2 > 0 && o3 > 0 !== o4 > 0 && o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0)
+    return true;
+  if (o1 === 0 && onSegment(p1, p3, p2)) return true;
+  if (o2 === 0 && onSegment(p1, p4, p2)) return true;
+  if (o3 === 0 && onSegment(p3, p1, p4)) return true;
+  if (o4 === 0 && onSegment(p3, p2, p4)) return true;
+  return false;
+}
+
+/** O segmento `a`-`b` cruza ALGUMA aresta do polígono — usado pra "linha de visão bloqueada" e
+ *  "linha RF atravessa obstáculo" (oclusão estruturada, ver SimOpts.obstacles). Exportada
+ *  (testável isolada) — mesmo padrão de fitPathLoss/distFromRssi em floor-plot.ts. */
+export function segmentIntersectsPolygon(a: Vec2, b: Vec2, poly: Polygon): boolean {
+  const n = poly.length;
+  if (n < 3) return false;
+  for (let i = 0; i < n; i++) {
+    if (segmentsIntersect(a, b, poly[i], poly[(i + 1) % n])) return true;
+  }
+  return false;
+}
+
+/** true se o segmento pessoa→câmera cruza ALGUM obstáculo com `occludesVision` (dropout
+ *  estruturado, ver SimOpts.obstacles). */
+function visionOccludedBy(
+  personWorld: Vec2,
+  cameraWorld: Vec2,
+  obstacles: readonly { poly: Polygon; occludesVision?: boolean; rfAttenDb?: number }[],
+): boolean {
+  for (const o of obstacles) {
+    if (o.occludesVision && segmentIntersectsPolygon(personWorld, cameraWorld, o.poly)) return true;
+  }
+  return false;
+}
+
+/** Soma o `rfAttenDb` de TODO obstáculo cujo polígono o segmento pessoa/âncora→estação cruza
+ *  (sobreposição soma — mesma convenção de `regionOffsetAt`). */
+function rfAttenuationDb(
+  emitterWorld: Vec2,
+  stationWorld: Vec2,
+  obstacles: readonly { poly: Polygon; occludesVision?: boolean; rfAttenDb?: number }[],
+): number {
+  let total = 0;
+  for (const o of obstacles) {
+    if (o.rfAttenDb && segmentIntersectsPolygon(emitterWorld, stationWorld, o.poly)) total += o.rfAttenDb;
+  }
+  return total;
+}
+
 // ——— O simulador ———
 
 /**
@@ -393,6 +480,7 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const rssiRegions = opts.rssiRegions ?? [];
   const bodyBias = opts.bodyBias;
   const tagPlacement = opts.tagPlacement ?? {};
+  const obstacles = opts.obstacles ?? [];
 
   // Calibração pela matemática REAL (solver DLT da produção). Falha aqui = geometria fixa quebrada
   // → erro explícito, nunca NaN mudo.
@@ -503,6 +591,10 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     const tracks: DrawTrack[] = [];
     for (let p = 0; p < people; p++) {
       if (rng() < dropoutP) continue;
+      // Oclusão ESTRUTURADA (ver SimOpts.obstacles): segmento pessoa→câmera cruza um obstáculo
+      // occludesVision → dropout determinístico (mesmo efeito de dropoutP, mas pela geometria, não
+      // sorteio). Sem obstáculos, `obstacles.length===0` pula o teste — custo zero, byte-compat.
+      if (obstacles.length && visionOccludedBy(positions[p], CAMERA_WORLD, obstacles)) continue;
       const px = worldToPixel(H, positions[p]);
       if (!px) continue; // horizonte — não acontece na área útil, mas nunca NaN mudo
       const fx = px.x + randn(rng) * pxJitter;
@@ -546,12 +638,17 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
               bodyBias,
             )
           : 0;
+        // Oclusão ESTRUTURADA — atenuação de RF (ver SimOpts.obstacles): soma o rfAttenDb de todo
+        // obstáculo cujo segmento pessoa→estação cruza. Independente do bloqueio de visão acima
+        // (uma parede pode existir sem atenuar RF de verdade, ou vice-versa).
+        const obstacleDb = obstacles.length ? rfAttenuationDb(positions[p], rssiOrigin, obstacles) : 0;
         const rssi =
           RSSI_1M_DBM -
           10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
           personRssiBiasDb +
           regionDb +
-          bodyDb +
+          bodyDb -
+          obstacleDb +
           rssiNoiseAr1[p] * rssiNoiseDb;
         lastRssi[p] = Math.round(rssi);
       }
@@ -560,16 +657,21 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     // Âncoras (v4): MESMO canal (channelN), mesmo ruído, mesma cadência das tags de pessoa —
     // distância FIXA à origem (elas não se movem) e SEM o viés corporal (ferragem fixa não tem
     // corpo na frente — é exatamente essa assimetria que o fit não enxerga). Entram como
-    // leituras normais: a produção também as vê nas leituras BLE. Offset REGIONAL se aplica (a
-    // âncora também está fisicamente num lugar do prédio, sujeito à mesma condição de rádio local).
+    // leituras normais: a produção também as vê nas leituras BLE. Offset REGIONAL e atenuação de
+    // OBSTÁCULO se aplicam (a âncora também está fisicamente num lugar do prédio, sujeita à mesma
+    // condição de rádio local e a paredes entre ela e a estação).
     if (anchors) {
       for (let k = 0; k < anchors.length; k++) {
         if (i % rssiPeriodTicks === 0) {
           const d = Math.hypot(anchors[k].world.x - rssiOrigin.x, anchors[k].world.y - rssiOrigin.y);
           const regionDb = rssiRegions.length ? regionOffsetAt(anchors[k].world, rssiRegions) : 0;
+          const obstacleDb = obstacles.length
+            ? rfAttenuationDb(anchors[k].world, rssiOrigin, obstacles)
+            : 0;
           const rssi =
             RSSI_1M_DBM -
-            10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
+            10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) -
+            obstacleDb +
             regionDb +
             randn(rng) * rssiNoiseDb;
           lastAnchorRssi[k] = Math.round(rssi);

@@ -4,7 +4,12 @@
 // RSSI (estação no canto × junto da câmera), dropout e id-switch. O simulador é o sensor do
 // harness — se ele mentir, o harness inteiro mente.
 import { describe, expect, it } from "vitest";
-import { bodyBiasDb, regionOffsetAt, simulateFusionScenario } from "./sim";
+import {
+  bodyBiasDb,
+  regionOffsetAt,
+  segmentIntersectsPolygon,
+  simulateFusionScenario,
+} from "./sim";
 import type { SimTick } from "./sim";
 import { pixelToWorld } from "../vision/homography";
 import type { Matrix3, Vec2 } from "../vision/homography";
@@ -391,5 +396,101 @@ describe("simulateFusionScenario — física medida da Fase 2, ligada de ponta a
     const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
     const rssiComViés = comViés.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
     expect(rssiComViés).toBe(rssiBase + 6); // pessoa parada → heading zero → só o piso (meanDb)
+  });
+});
+
+describe("segmentIntersectsPolygon — primitivo de linha de visão/RF (Fase 2, oclusão estruturada)", () => {
+  const box: Vec2[] = [
+    { x: 2, y: -1 },
+    { x: 3, y: -1 },
+    { x: 3, y: 0.5 },
+    { x: 2, y: 0.5 },
+  ];
+
+  it("segmento que atravessa o polígono → true", () => {
+    expect(segmentIntersectsPolygon({ x: 1, y: 1.5 }, { x: 4, y: -2 }, box)).toBe(true);
+  });
+
+  it("segmento que NÃO chega perto do polígono → false", () => {
+    expect(segmentIntersectsPolygon({ x: 10, y: 10 }, { x: 20, y: 20 }, box)).toBe(false);
+  });
+
+  it("polígono inválido (<3 pontos) → sempre false, nunca lança", () => {
+    expect(segmentIntersectsPolygon({ x: 1, y: 1.5 }, { x: 4, y: -2 }, [])).toBe(false);
+  });
+});
+
+describe("simulateFusionScenario — oclusão estruturada (obstáculos, Fase 2, último incremento)", () => {
+  // "parado", pessoa 0 fica em (1, 1.5) — grade fixa de createMovers (mesma usada nos testes de
+  // rssiRegions/bodyBias acima). CAMERA_WORLD=(4,-2), STATION_WORLD=(0,0) — ver constantes de sim.ts.
+  const opts = { walk: "parado" as const, people: 1, tagged: 1, steps: 4 };
+
+  it("occludesVision bloqueia a detecção (dropout ESTRUTURADO) — segmento pessoa→câmera cruza", () => {
+    const boxNaLinhaDeVisao: Vec2[] = [
+      { x: 2, y: -1 },
+      { x: 3, y: -1 },
+      { x: 3, y: 0.5 },
+      { x: 2, y: 0.5 },
+    ];
+    const comObstaculo = simulateFusionScenario(
+      { ...opts, obstacles: [{ poly: boxNaLinhaDeVisao, occludesVision: true }] },
+      1,
+    );
+    expect(comObstaculo.ticks.every((t) => t.tracks.length === 0)).toBe(true);
+
+    const semObstaculo = simulateFusionScenario(opts, 1);
+    expect(semObstaculo.ticks.every((t) => t.tracks.length === 1)).toBe(true);
+  });
+
+  it("rfAttenDb atenua o RSSI quando o segmento pessoa→estação cruza (sem afetar a visão)", () => {
+    const boxNaLinhaDeRf: Vec2[] = [
+      { x: 0.3, y: 0.5 },
+      { x: 0.7, y: 0.5 },
+      { x: 0.7, y: 1.0 },
+      { x: 0.3, y: 1.0 },
+    ];
+    const baseline = simulateFusionScenario(opts, 1);
+    const comObstaculo = simulateFusionScenario(
+      { ...opts, obstacles: [{ poly: boxNaLinhaDeRf, rfAttenDb: 10 }] },
+      1,
+    );
+    const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    const rssiComObstaculo = comObstaculo.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    expect(rssiComObstaculo).toBe(rssiBase - 10);
+    // sem occludesVision, a caixa não mexe na detecção da câmera.
+    expect(comObstaculo.ticks.every((t) => t.tracks.length === 1)).toBe(true);
+  });
+
+  it("múltiplos obstáculos cruzados SOMAM a atenuação de RF (mesma convenção de rssiRegions)", () => {
+    const boxA: Vec2[] = [
+      { x: 0.3, y: 0.5 },
+      { x: 0.7, y: 0.5 },
+      { x: 0.7, y: 1.0 },
+      { x: 0.3, y: 1.0 },
+    ];
+    const boxB: Vec2[] = [
+      { x: 0.1, y: 0.1 },
+      { x: 0.4, y: 0.1 },
+      { x: 0.4, y: 0.4 },
+      { x: 0.1, y: 0.4 },
+    ];
+    const baseline = simulateFusionScenario(opts, 1);
+    const comDois = simulateFusionScenario(
+      {
+        ...opts,
+        obstacles: [
+          { poly: boxA, rfAttenDb: 10 },
+          { poly: boxB, rfAttenDb: 4 },
+        ],
+      },
+      1,
+    );
+    const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    const rssiComDois = comDois.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    expect(rssiComDois).toBe(rssiBase - 14);
+  });
+
+  it("sem obstáculos (ausente) → byte-compat total", () => {
+    expect(simulateFusionScenario(opts, 1)).toEqual(simulateFusionScenario(opts, 1));
   });
 });
