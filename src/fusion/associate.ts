@@ -92,6 +92,58 @@ export type Assignment = {
   hadConflict?: boolean;
 };
 
+/** ADITIVO (funil de vetos instrumentado, 2026-07-11 — diagnóstico do 1º teste de campo que
+ *  falhou em silêncio): qual gate da CADEIA DE VETOS matou um par (track, tag) — na ORDEM exata
+ *  em que pairScore() e assign() os aplicam. "SPOKE" = o par falou (nenhum veto).
+ *  NOTA (knob de pesquisa): par vetado pelo gate de consistência (`maxDistRatio`, DESLIGADO por
+ *  default) zera o score e aparece aqui como "belowMinConfidence" — declarado, não escondido
+ *  (o gate não roda no campo hoje; se for religado, ganha verdict próprio ADITIVO). */
+export type FunnelVerdict =
+  | "distSamples<minSamples" // a PISTA tem amostras de menos na janela
+  | "rssiSamples<minSamples" // a TAG tem amostras de menos na janela
+  | "aligned<minSamples" // pós-align sobrou menos que minSamples (defensivo — espelha pairScore)
+  | "constantSeries" // pearson indefinida (RSSI ou distância constante)
+  | "lowMovement" // varY < minMovement (pessoa quase parada → ambíguo)
+  | "belowMinConfidence" // score não alcançou minConfidence (ou foi zerado pelo gate — ver nota)
+  | "lostTieBreak" // elegível, mas perdeu a atribuição 1-1 p/ outro par (linha/coluna tomada)
+  | "belowMinMargin" // escolhido na 1-1, mas a guarda de ambiguidade top-2 recusou
+  | "SPOKE"; // falou: é exatamente o par que assign() reporta com tag não-null
+
+/** Limiares vigentes no instante do diagnóstico (a régua de cada gate do funil). */
+export type FunnelThresholds = {
+  windowMs: number;
+  minSamples: number;
+  minConfidence: number;
+  minMovement: number;
+  minMargin: number;
+};
+
+/** Uma linha do funil: o estado de UM par (pista corrente, tag) em todos os elos da cadeia. */
+export type PairFunnel = {
+  trackId: number;
+  tag: string;
+  /** Amostras de distância da pista na janela. */
+  distSamples: number;
+  /** Amostras de RSSI da tag na janela. */
+  rssiSamples: number;
+  /** Amostras alinhadas (pós-align — a série que a correlação de fato consome). */
+  alignedSamples: number;
+  /** Span temporal (ms) coberto pelos samples alinhados (a série de distância é a guia). */
+  spanMs: number;
+  /** varY do pearson — a variância de distância que o minMovement corta. null = não chegou lá
+   *  (amostras de menos) ou correlação indefinida (série constante). */
+  movVar: number | null;
+  /** r de Pearson (RSSI × distância). null = indefinida (série constante) ou não computável. */
+  corr: number | null;
+  /** Score EFETIVO do par — o MESMO pairScore().score do caminho real (0 = vetado nas guardas). */
+  score: number;
+  /** Margem top-2 (mesma matemática da guarda de assign()) quando o par foi ESCOLHIDO na 1-1;
+   *  null quando nem chegou à escolha. */
+  margin: number | null;
+  verdict: FunnelVerdict;
+  thresholds: FunnelThresholds;
+};
+
 /** Limiar FIXO (instrumentação, não é knob) pra `Assignment.hadConflict`: margem abaixo disto com
  *  concorrente real presente conta como "disputa competitiva" pelo mesmo track vencedor. Escolhido
  *  por ser 3× o default operacional de `minMargin` (0.1) — folga suficiente pra capturar "quase
@@ -608,6 +660,160 @@ export class TagTrackAssociator {
       // nenhum candidato alcançou minConfidence: abstenção por FALTA de evidência, não por empate.
       return { trackId: id, tag: null, confidence, margin: 0, hadConflict: false };
     });
+  }
+
+  /**
+   * FUNIL DE VETOS INSTRUMENTADO (ADITIVO, 2026-07-11 — pedido do especialista científico após o
+   * 1º teste de campo falhar em silêncio): "a decisão final é o fim de uma CADEIA DE VETOS, e o
+   * silêncio pode morrer em qualquer elo". Devolve, por par (pista corrente, tag na janela), o
+   * estado em CADA elo — n amostras → span → movVar → corr → score → margem → verdict do gate que
+   * matou (ou "SPOKE").
+   *
+   * FONTE ÚNICA, SEM RECÁLCULO PARALELO: usa as MESMAS funções do caminho real — align/pearson
+   * p/ os intermediários, pairScore() p/ o score efetivo, chooseGreedy/chooseOptimal + a mesma
+   * matemática de margem (concorrentes de guarda + fantasmas da janela) p/ os verdicts pós-score.
+   * Um par com verdict "SPOKE" é EXATAMENTE o par que assign(now) reportaria com tag não-null.
+   *
+   * SÓ LEITURA: não poda o buffer nem muda estado algum — chamar diagnoseFunnel(now) antes de
+   * assign(now) não altera o resultado de assign (a janela é filtrada localmente com o MESMO
+   * predicado do prune).
+   */
+  diagnoseFunnel(now?: number): PairFunnel[] {
+    const ref = now ?? this.latestTs();
+    if (ref === null) return [];
+    const lo = ref - this.cfg.windowMs;
+    const frames = this.buffer.filter((f) => f.ts >= lo && f.ts <= ref);
+
+    // Pistas correntes: as do frame mais recente com pistas (mesma regra de currentTrackIds()).
+    let latest: FusionFrame | null = null;
+    for (const f of frames) {
+      if (f.tracks.length === 0) continue;
+      if (latest === null || f.ts > latest.ts) latest = f;
+    }
+    if (latest === null) return [];
+    const idSet = new Set<number>();
+    for (const t of latest.tracks) idSet.add(t.trackId);
+    const currentTracks = [...idSet].sort((a, b) => a - b);
+
+    // Séries por pista/tag na janela — MESMA construção do assign() (fantasmas incluídos).
+    const distByTrack = new Map<number, DistSample[]>();
+    const rssiByTag = new Map<string, RssiSample[]>();
+    for (const f of frames) {
+      for (const t of f.tracks) {
+        let arr = distByTrack.get(t.trackId);
+        if (!arr) {
+          arr = [];
+          distByTrack.set(t.trackId, arr);
+        }
+        arr.push({ ts: f.ts, value: t.dist, metric: t.metric === true });
+      }
+      for (const r of f.readings) {
+        let arr = rssiByTag.get(r.tag);
+        if (!arr) {
+          arr = [];
+          rssiByTag.set(r.tag, arr);
+        }
+        const s: RssiSample = { ts: f.ts, value: r.rssi };
+        if (r.distM !== undefined) s.distM = r.distM;
+        arr.push(s);
+      }
+    }
+    const tags = [...rssiByTag.keys()].sort();
+    if (tags.length === 0) return [];
+
+    // Matrizes de evidência + escolha 1-1 + fantasmas + margens: o MESMO caminho do assign().
+    const evidence: PairEvidence[][] = currentTracks.map((id) => {
+      const distSeries = distByTrack.get(id) ?? [];
+      return tags.map((tag) => this.pairScore(distSeries, rssiByTag.get(tag) ?? []));
+    });
+    const score: number[][] = evidence.map((row) => row.map((e) => e.score));
+    const guard: number[][] = evidence.map((row) => row.map((e) => e.guard));
+
+    const { windowMs, minSamples, minConfidence, minMovement, minMargin, optimal } = this.cfg;
+    const chosen = optimal
+      ? chooseOptimal(score, minConfidence)
+      : chooseGreedy(score, minConfidence);
+
+    const currentSet = new Set(currentTracks);
+    const ghostBestByTag = new Array<number>(tags.length).fill(0);
+    if (chosen.length > 0) {
+      for (const [id, distSeries] of distByTrack) {
+        if (currentSet.has(id)) continue;
+        for (let j = 0; j < tags.length; j++) {
+          const e = this.pairScore(distSeries, rssiByTag.get(tags[j]) ?? []);
+          if (e.guard > ghostBestByTag[j]) ghostBestByTag[j] = e.guard;
+        }
+      }
+    }
+
+    const chosenByKey = new Map<string, { margin: number; accepted: boolean }>();
+    for (const { i, j } of chosen) {
+      const s = score[i][j];
+      let bestOtherTag = 0;
+      for (let jj = 0; jj < tags.length; jj++) {
+        if (jj !== j && guard[i][jj] > bestOtherTag) bestOtherTag = guard[i][jj];
+      }
+      let bestOtherTrack = ghostBestByTag[j];
+      for (let ii = 0; ii < currentTracks.length; ii++) {
+        if (ii !== i && guard[ii][j] > bestOtherTrack) bestOtherTrack = guard[ii][j];
+      }
+      const margin = Math.min(s - bestOtherTag, s - bestOtherTrack);
+      chosenByKey.set(`${i}:${j}`, { margin, accepted: minMargin <= 0 || margin >= minMargin });
+    }
+
+    const thresholds: FunnelThresholds = {
+      windowMs,
+      minSamples,
+      minConfidence,
+      minMovement,
+      minMargin,
+    };
+    const out: PairFunnel[] = [];
+    for (let i = 0; i < currentTracks.length; i++) {
+      const distSeries = distByTrack.get(currentTracks[i]) ?? [];
+      for (let j = 0; j < tags.length; j++) {
+        const rssiSeries = rssiByTag.get(tags[j]) ?? [];
+        const aligned = align(distSeries, rssiSeries);
+        const alignedSamples = aligned.rssi.length;
+        let spanMs = 0;
+        if (alignedSamples > 0) {
+          let tsMin = Infinity;
+          let tsMax = -Infinity;
+          for (const d of distSeries) {
+            if (d.ts < tsMin) tsMin = d.ts;
+            if (d.ts > tsMax) tsMax = d.ts;
+          }
+          spanMs = tsMax - tsMin;
+        }
+        const p = alignedSamples >= 2 ? pearson(aligned.rssi, aligned.dist) : null;
+        const s = score[i][j];
+        const ck = chosenByKey.get(`${i}:${j}`);
+        // A cadeia de vetos, na ORDEM exata de pairScore() → chooseGreedy/Optimal → guarda:
+        let verdict: FunnelVerdict;
+        if (distSeries.length < minSamples) verdict = "distSamples<minSamples";
+        else if (rssiSeries.length < minSamples) verdict = "rssiSamples<minSamples";
+        else if (alignedSamples < minSamples) verdict = "aligned<minSamples";
+        else if (p === null) verdict = "constantSeries";
+        else if (p.varY < minMovement) verdict = "lowMovement";
+        else if (ck !== undefined) verdict = ck.accepted ? "SPOKE" : "belowMinMargin";
+        else verdict = eligible(s, minConfidence) ? "lostTieBreak" : "belowMinConfidence";
+        out.push({
+          trackId: currentTracks[i],
+          tag: tags[j],
+          distSamples: distSeries.length,
+          rssiSamples: rssiSeries.length,
+          alignedSamples,
+          spanMs,
+          movVar: p === null ? null : p.varY,
+          corr: p === null ? null : p.corr,
+          score: s,
+          margin: ck === undefined ? null : ck.margin,
+          verdict,
+          thresholds,
+        });
+      }
+    }
+    return out;
   }
 
   /** Maior ts no buffer (null se vazio). */

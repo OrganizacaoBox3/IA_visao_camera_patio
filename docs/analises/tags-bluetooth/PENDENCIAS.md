@@ -51,6 +51,17 @@
    perguntas de viés/GP. O roteiro completo de 6 min (`protocolo-teste-campo-indoor.md`) continua
    sendo o padrão-ouro quando houver disponibilidade — **ambos DEFERIDOS pelo dono**, não bloqueio
    técnico. É também o dado que decide se os knobs `maxDistRatio`/`distWeight` da v4 podem ser religados.
+   **A mesma caminhada agora acumula TRÊS funções (especialista, 2026-07-11)**: (a) verdade anotável
+   — a UI de anotação do player está pronta; (b) viés corporal real; (c) **teste direcional da
+   hipótese do viés-como-feature**: num trajeto radial ida-e-volta (mesma geometria, placement
+   fixo), a perna corpo-entre deve ter RSSI sistematicamente menor (esperado 4-12dB) E correlação
+   RSSI×distância MAIS FORTE que a perna livre. A curva não-monotônica da bancada (viés moderado
+   melhora precisão 84→90%) fica registrada como **direção CONDICIONADA a essa confirmação física —
+   PROIBIDO tornear no sim antes dela** (seria a v4 com outro chapéu: mecanismo e gerador
+   compartilhando o mesmo cardioide especificado); mesmo depois, o torneio exigirá sentinelas que
+   quebrem o pressuposto direcional (placement sorteado por sessão, multipath descorrelacionante).
+   ROI honesto do especialista: explorar a feature exige estimar orientação+placement (latentes
+   novas); uma segunda estação compra dimensão de assinatura sem inferir nada.
    - 🔴 **PRIMEIRA TENTATIVA REAL (2026-07-10) — SEM SUCESSO, registrado honestamente**: câmera nova
      conectada, calibrada, tag cadastrada com nome. Achado antes desta tentativa: a grade (dashboard)
      nunca ligava a fusão tag↔pessoa nos tiles MJPEG (bug de wiring — `CameraWorkspace mode="tile"`
@@ -63,9 +74,49 @@
      raiz AINDA NÃO diagnosticada (candidatos: `minMovement`/`windowMs` calibrados só no simulador
      não baterem com a cadência real de RSSI da estação; sinal fraco/instável na posição real da
      estação; environment com multipath pior que o assumido) — **não investigado a fundo ainda**
-     porque o dono pausou o teste para seguir com a bancada de simulação. Fica pendente: quando
-     houver disponibilidade, instrumentar (logar o score/correlação bruta em vez de só a decisão
-     final) para achar exatamente qual guarda está barrando a fala.
+     porque o dono pausou o teste para seguir com a bancada de simulação.
+   - 🔬 **PLANO DE DIAGNÓSTICO definido pelo especialista (2026-07-11): instrumentar o FUNIL, não
+     o score** — a decisão final é o fim de uma cadeia de vetos; o silêncio pode morrer em
+     qualquer elo. Registro por tick e por par (tag,track): n_pares na janela → span temporal →
+     movStd do track → r → score → margem → gate que vetou. Candidatos ordenados por
+     probabilidade×discriminabilidade: (1) **cadência real** — BLE de campo (advertising+scan
+     window+dedup) pode entregar menos leituras/janela que o `minSamples` assume; comparar
+     inter-arrival real (a mineração das 6h tem a distribuição) com o que o associador exige — se
+     n_pares morre no gate 1, nada a jusante importa; (2) **relógio/latência** — ts de chegada no
+     hub + jitter desalinha os pares (rssi,dist) e dilui r; teste discriminante: cross-correlação
+     com lag variável — pico de |r| em lag≠0 é assinatura de relógio, e o próprio lag é a
+     correção; (3) **multipath em movimento** — σ 5,6dB foi medido em âncoras PARADAS; tag móvel
+     atravessa fading espacial; assinatura: σ da tag móvel >> σ das âncoras, r subindo com janela
+     maior; (4) **escala do minMovement** — calibrado em sim; homografia real pode produzir metros
+     diferentes → movStd real sob o limiar com a pessoa visivelmente andando. **E o diagnóstico
+     NÃO espera corpo presente**: se a caminhada frustrada foi gravada (FUSION_RECORD estava
+     ligado no hub na época), o replay com o funil instrumentado roda sobre ela HOJE.
+   - ✅🔬 **FUNIL RODADO SOBRE A GRAVAÇÃO REAL (2026-07-11) — ASSASSINO LOCALIZADO EM MINUTOS,
+     exatamente como o especialista previu.** Ferramenta: `diagnoseFunnel()` aditivo em
+     `associate.ts` (por par: n_samples → span → movVar → r → score → margem → veredito, reusando
+     a MESMA matemática do assign) + `diagnoseFusionSession()` + `npm run funnel` (leitura pura do
+     arquivo de campo). Resultado na câmera do teste frustrado (`cam-8a95ac6090`, H calibrada,
+     18,7 min, 12 pistas):
+     - **9.877 ticks×par avaliados, ZERO SPOKE** — o silêncio reproduzido offline.
+     - **Histograma de vetos: lowMovement 80,5% · constantSeries 15,1% · poucos samples 4,3%.
+       NENHUM par jamais chegou ao score** — o funil morre antes de existir correlação.
+     - **CAUSA RAIZ: a ESCALA da homografia.** A cena inteira projeta em ~0,9×1,3 "metros" — a
+       calibração foi salva em unidade errada (dimensões do retângulo não estavam em metros
+       reais). `movVar` máximo da sessão INTEIRA = 0,214, contra `minMovement=0,25` (≈0,5m de
+       desvio): **o gate de movimento era fisicamente impassável — o rótulo NUNCA poderia falar
+       com esta calibração**, por mais que a pessoa andasse.
+     - **Contraprova**: a câmera SEM calibração (`cam-6da58c2c5e`, proxy 1/bh, 147 min) FALA —
+       3.329 ticks×par SPOKE, ~300 episódios de rótulo (movVar p90=2,14 no proxy).
+     - **Assassino nº 2 (real, não fatal): cadência BLE** — inter-arrival mediano do batch =
+       2.063ms → só ~3,9 leituras DISTINTAS por janela de 8s (o tick de 500ms repete o último
+       batch; o gate de contagem passa com amostras-escada). Produz o `constantSeries` alto e
+       dilui r — mas não explica o zero absoluto.
+     - **AÇÕES**: (1) IMEDIATA (dono): recalibrar a `cam-8a95ac6090` com os pontos do retângulo
+       em METROS REAIS — o teste de campo pode ser repetido no mesmo dia; (2) produto: validar a
+       unidade no fluxo de calibração (um retângulo de <2m de lado num galpão é quase certamente
+       erro de entrada — avisar na UI); (3) pesquisa: `minMovement` adaptativo à escala da cena;
+       (4) `windowMs`/`minSamples` cientes da cadência real de ~2s do BLE (contar leituras
+       DISTINTAS, não ticks).
 3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
    - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
      `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),
@@ -175,12 +226,36 @@
        de torneio — não decidido aqui por chute; fica registrado como o próximo passo real antes
        de (5). Mesma disciplina do v4: achado negativo documentado com a mesma força que um
        achado positivo, nada escondido.
-   - ⬜ **(4c) retuning dos parâmetros de confirmação** — calibrar `confirmMargin`/`confirmTicks`
-     (ou desenhar uma barra adaptativa à densidade/nº de tags concorrentes) contra o achado do
-     torneio (4b): o v1 atual otimiza o caso simples às custas do caso denso. Retornar ao torneio
-     (4b) depois de qualquer mudança — a régua já existe (`persistence-tournament.test.ts`).
+   - ⬜ **(4c) retuning — PLANO DEFINIDO pelo especialista (2026-07-11): mudar a VARIÁVEL da
+     barra, não o número.** A falha de multidão não é "0,4 é alto demais" — é que margem absoluta
+     é um proxy cuja taxa de câmbio varia com o regime (densidade comprime margens). Plano:
+     (1) estratificar a curva de reliability por regime (estratificador mais barato: nº de
+     candidatos avaliáveis no tick; binário denso/esparso já serve); (2) a barra vira
+     **"precisão-implicada ≥ P\* por K ticks de fala qualificada"** — se margem 0,22 em multidão
+     historicamente entrega 93% de acerto, ela confirma em multidão (a adaptatividade EMERGE da
+     condicionalização, sem função ad-hoc de nº de tags); (3) grade de busca sobre (P\*, K) ∈
+     {0,90; 0,95; 0,98} × {2; 3; 4} — 9 células, regra a priori como filtro, dois parâmetros com
+     semântica probabilística em vez de dois números mágicos; (4) **emenda v2 da confirmação
+     (nascida do achado "crença nasce já errada")**: janela de confirmação LIMPA — nenhum evento
+     de proximidade <0,4m entre os K ticks que a fecham (ataca o modo de nascimento tóxico,
+     custa quase nada de cobertura). **Previsão registrada do especialista**: com a barra
+     condicionada, a confirmação volta a fechar em multidão e a cobertura de experiência supera
+     o baseline por-tick no agregado mantendo erro-segundos abaixo — porque a decomposição
+     (abstenção→acerto 239.500ms >> correto→errado 8.000ms) diz que o defeito é de câmbio, não
+     de motor. Se nem assim houver célula que satisfaça os dois eixos em todos os regimes, ISSO
+     é a evidência de que o denso exige política própria. Retornar ao torneio (4b) — régua
+     pinada em `persistence-tournament.test.ts`.
    - ⬜ **(5) revisão adversarial** antes de qualquer default em produção — só depois de (4c) e um
      torneio que passe os dois eixos da regra a priori.
+   - 🔬 **Diagnóstico unificador (especialista, 2026-07-11)**: a falha da persistência em multidão
+     e a refutação da previsão (b) são o MESMO fenômeno — densidade comprime margens; a margem
+     alimenta tanto a fala quanto a confirmação; num sistema com abstenção, colisão vira SILÊNCIO,
+     não erro (por isso wrongRate satura e quem sangra é a cobertura). **Corolário verificado
+     (2026-07-11, dados da família ×pessoas já medida)**: a cobertura decai GEOMETRICAMENTE —
+     razão consecutiva 0,846±0,030 (quase constante, 2→7 pessoas), ~15%/pessoa adicional.
+     Não-linear em nível (exponencial), coerente com colisão comprimindo margens continuamente,
+     mas SEM joelho/limiar crítico. O corolário do especialista ("a não-linearidade deve estar na
+     cobertura") fica confirmado na forma exponencial, não na forma de quebra de regime.
 10. ✅🔬 **Fragmentação de tracks como proxy de id-switch — MINERADA 2026-07-10** (leitura pura de
     `server/bt/fusion-session.jsonl`, sem escrever/mover/apagar nada nele — invariante de gravação
     respeitada). Método: casar morte de track com nascimento de track NOVO próximo no tempo (≤15-30s)

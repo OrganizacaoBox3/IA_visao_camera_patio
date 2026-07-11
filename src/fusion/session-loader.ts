@@ -50,7 +50,9 @@
 //   retorno (aditivo a `SimFusionScenario`); "último vence" se houver mais de uma (mesmo padrão do
 //   "cal"). Gravações ANTIGAS sem essa linha continuam funcionando idênticas — `meta` sai `null`.
 import { replayFusion } from "./replay-fusion";
-import type { FusionConfig } from "./associate";
+import { TagTrackAssociator } from "./associate";
+import type { FusionConfig, PairFunnel } from "./associate";
+import { buildFusionFrame } from "./frame";
 import type { SimFusionScenario, SimTick } from "./sim";
 import type { DrawTrack, RawReading } from "./frame";
 import type { IdentityMetrics } from "./identity-metrics";
@@ -350,6 +352,36 @@ export function replayFusionSession(
   const scenario = parseFusionSession(lines, truth, opts);
   const { metrics } = replayFusion(scenario, cfg, opts?.warmupMs);
   return { metrics, scenario };
+}
+
+/** O funil de vetos de UM tick do replay (ts REBASEADO, t0=0 — igual aos ticks do cenário). */
+export type FunnelTick = { ts: number; pairs: PairFunnel[] };
+
+/**
+ * FUNIL INSTRUMENTADO SOBRE GRAVAÇÃO DE CAMPO (ADITIVO, 2026-07-11): o MESMO replay fiel do
+ * replayFusionSession — parse + resample fiéis à produção, tick sem BLE PULADO, push a cada tick
+ * processado — mas em vez de medir identidade contra uma verdade, chama diagnoseFunnel(ts) a cada
+ * tick e devolve a série de funis (+ o cenário com diag/meta). NÃO precisa de verdade-terreno: o
+ * diagnóstico só responde "qual gate matou cada par (track, tag)", não "quem estava certo".
+ * Sessões de campo não têm âncoras exportadas (parseFusionSession não as produz) → o caminho de
+ * calibração de path-loss do replayFusion é inerte aqui por construção; a alimentação (stationPx
+ * só com H, buildFusionFrame idêntico) espelha o replayFusion de produção.
+ */
+export function diagnoseFusionSession(
+  lines: string[],
+  opts?: SessionLoadOpts & { cfg?: FusionConfig },
+): { funnels: FunnelTick[]; scenario: LoadedFusionSession } {
+  const scenario = parseFusionSession(lines, {}, opts);
+  const assoc = new TagTrackAssociator(opts?.cfg);
+  const funnels: FunnelTick[] = [];
+  // Mesma regra do replayFusion: stationPx calibrado só acompanha H presente (H null → proxy).
+  const stationPx = scenario.H ? scenario.stationPx : undefined;
+  for (const tick of scenario.ticks) {
+    if (tick.readings.length === 0) continue; // produção pula o tick sem BLE (useTagFusion)
+    assoc.push(buildFusionFrame(tick.tracks, tick.readings, scenario.H, tick.ts, stationPx));
+    funnels.push({ ts: tick.ts, pairs: assoc.diagnoseFunnel(tick.ts) });
+  }
+  return { funnels, scenario };
 }
 
 // ——— Definição conceitual: episódio-candidato a PSEUDO-LABEL (pedido do especialista científico,

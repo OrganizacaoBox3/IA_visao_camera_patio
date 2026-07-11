@@ -29,6 +29,14 @@ futuro, não só o que já rodou:
    precisaria quebrar a correspondência FÍSICA RSSI↔trajetória (ex.: deslocamento temporal circular),
    não só o rótulo de identidade. Ver `src/fusion/shuffle-baseline.ts` (achado negativo provado,
    não só medido) e `docs/analises/tags-bluetooth/PENDENCIAS.md` (previsão a).
+5. **Toda fórmula em spec vem com um exemplo de sanidade direcional de uma linha** — "caminhar de
+   costas para a estação deve DERRUBAR o RSSI; se subir, o sinal está invertido". Teste dimensional
+   e direcional para prosa, com o mesmo status dos testes para código. Nasceu do post-mortem do
+   sinal invertido do viés corporal (revisão adversarial da Fase 4 da bancada, 2026-07-11): o §4 de
+   `simulador.md` somava `bodyBias` quando atenuação subtrai — o desenvolvedor implementou fielmente
+   uma fórmula errada; o erro era da ESPECIFICAÇÃO. O modo de falha mais perigoso de uma spec é o
+   entendimento certo com o documento errado, porque ninguém desconfia dela. Um exemplo direcional
+   de dez segundos no §4 teria pego o bug antes de virar curva retratada.
 
 ### Recalibrações do material original (assumidas pelo próprio especialista)
 

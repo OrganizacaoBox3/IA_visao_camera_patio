@@ -487,6 +487,106 @@ describe("TagTrackAssociator — instrumentação margin/hadConflict (reliabilit
   });
 });
 
+describe("TagTrackAssociator — diagnoseFunnel (funil de vetos instrumentado)", () => {
+  it("par que fala → SPOKE (mesma decisão do assign), par oposto → belowMinConfidence", () => {
+    const N = 10;
+    const frames = makeFrames(N, 1000, 500, (i) => ({
+      tracks: [
+        { trackId: 1, dist: ramp(1, 6, i, N) },
+        { trackId: 2, dist: ramp(6, 1, i, N) },
+      ],
+      readings: [
+        { tag: "AA", rssi: ramp(-50, -75, i, N) },
+        { tag: "BB", rssi: ramp(-75, -50, i, N) },
+      ],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const funnel = a.diagnoseFunnel();
+    expect(funnel).toHaveLength(4); // 2 pistas × 2 tags
+
+    const f1AA = funnel.find((p) => p.trackId === 1 && p.tag === "AA")!;
+    expect(f1AA.verdict).toBe("SPOKE");
+    expect(f1AA.distSamples).toBe(N);
+    expect(f1AA.rssiSamples).toBe(N);
+    expect(f1AA.alignedSamples).toBe(N);
+    expect(f1AA.spanMs).toBe((N - 1) * 500);
+    expect(f1AA.corr).toBeLessThan(-0.99); // anti-correlação quase perfeita
+    expect(f1AA.score).toBeGreaterThan(0.99);
+    expect(f1AA.margin).toBeGreaterThan(0.9);
+    expect(f1AA.thresholds.minSamples).toBe(5); // limiares vigentes expostos
+
+    // Par cruzado (correlação POSITIVA → score 0): morre em belowMinConfidence.
+    const f1BB = funnel.find((p) => p.trackId === 1 && p.tag === "BB")!;
+    expect(f1BB.verdict).toBe("belowMinConfidence");
+    expect(f1BB.score).toBe(0);
+    expect(f1BB.margin).toBeNull();
+
+    // Diagnóstico é SÓ LEITURA e coerente com a decisão real: SPOKE ⇔ assign fala o rótulo.
+    const res = a.assign();
+    expect(res.find((r) => r.trackId === 1)!.tag).toBe("AA");
+    expect(res.find((r) => r.trackId === 2)!.tag).toBe("BB");
+  });
+
+  it("pessoa quase parada → lowMovement, com movVar reportado abaixo do limiar", () => {
+    const N = 10;
+    const frames = makeFrames(N, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: 3 + (i % 2) * 0.03 }],
+      readings: [{ tag: "AA", rssi: -60 + (i % 3) }],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const [p] = a.diagnoseFunnel();
+    expect(p.verdict).toBe("lowMovement");
+    expect(p.movVar).not.toBeNull();
+    expect(p.movVar!).toBeLessThan(p.thresholds.minMovement);
+    expect(p.score).toBe(0); // o pairScore real também vetou (fonte única)
+    expect(a.assign()[0].tag).toBeNull();
+  });
+
+  it("amostras de menos na janela → distSamples<minSamples", () => {
+    const N = 3; // < minSamples (default 5)
+    const frames = makeFrames(N, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: ramp(1, 6, i, N) }],
+      readings: [{ tag: "AA", rssi: ramp(-50, -75, i, N) }],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const [p] = a.diagnoseFunnel();
+    expect(p.verdict).toBe("distSamples<minSamples");
+    expect(p.distSamples).toBe(3);
+    expect(p.corr).not.toBeNull(); // a correlação até existe — o veto é o n, não a matemática
+    expect(a.assign()[0].tag).toBeNull();
+  });
+
+  it("bloco (empate físico): escolhidos morrem em belowMinMargin, perdedores da 1-1 em lostTieBreak", () => {
+    const n = 10;
+    const frames = makeFrames(n, 0, 500, (i) => ({
+      tracks: [
+        { trackId: 1, dist: ramp(1, 6, i, n) },
+        { trackId: 2, dist: ramp(1.3, 6.3, i, n) }, // paralela (bloco)
+      ],
+      readings: [
+        { tag: "AA", rssi: ramp(-50, -75, i, n) },
+        { tag: "BB", rssi: ramp(-52, -77, i, n) },
+      ],
+    }));
+    const a = new TagTrackAssociator();
+    for (const f of frames) a.push(f);
+    const funnel = a.diagnoseFunnel();
+    const byVerdict = (v: string) => funnel.filter((p) => p.verdict === v);
+    expect(byVerdict("belowMinMargin")).toHaveLength(2); // os 2 pares que a 1-1 escolheu
+    expect(byVerdict("lostTieBreak")).toHaveLength(2); // os 2 elegíveis que perderam linha/coluna
+    expect(byVerdict("SPOKE")).toHaveLength(0);
+    for (const p of byVerdict("belowMinMargin")) {
+      expect(p.margin).not.toBeNull();
+      expect(p.margin!).toBeLessThan(p.thresholds.minMargin); // a razão exata do veto, em número
+      expect(p.score).toBeGreaterThan(0.9); // chegou PERTO de falar — a assinatura do empate
+    }
+    expect(a.assign().map((r) => r.tag)).toEqual([null, null]); // coerente com a decisão real
+  });
+});
+
 describe("TagTrackAssociator — janela, determinismo e limpeza", () => {
   it("frames fora da janela são podados (não contam p/ a correlação)", () => {
     const a = new TagTrackAssociator({ windowMs: 2000 });
