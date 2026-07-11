@@ -176,8 +176,14 @@
        `onScanResult` guardando só a ÚLTIMA leitura por MAC descartava todo o resto (o
        inter-arrival de ~2,06s cravado em TODAS as tags é o POST, não o advertising). **CORRIGIDO:
        500ms** (≈4× leituras distintas/janela; custo +1,5 req/s na LAN, zero bateria de tag).
-       ⚠️ **PENDENTE DO DONO: rebuildar e reinstalar o APK do TC22** (tc22-scanner/build.sh).
        Nunca interpolar RSSI (inventa pontos, infla n, enviesa r) — regra registrada.
+       ✅ **APK rebuildado e instalado no coletor (2026-07-11, mesma noite) — VALIDADO EM
+       PRODUÇÃO**: inter-arrival do batch caiu de ~2.060ms para **543ms (mediana; p90 556ms)** —
+       110 batches/min vs ~29 antes (3,8×). O teto físico da janela de 8s subiu de ~3,9 para ~15
+       batches. Ressalva de medição: âncora PARADA repete RSSI inteiro legitimamente (leitura nova
+       com mesmo valor — o dedup do significanceGate subconta nesse caso, limitação conhecida e
+       inócua: parada não fala mesmo); o nº real de amostras independentes de tag MÓVEL é o que a
+       próxima caminhada mede (a 5ª conta da caminhada).
      - ✅🔬 **Grade (P*,K) da persistência — RODADA em sintético (2026-07-11), e a regra do
        especialista disparou: "se nenhuma célula fecha nem no sintético, o desenho muda antes de
        qualquer campo". Resultado em três achados**:
