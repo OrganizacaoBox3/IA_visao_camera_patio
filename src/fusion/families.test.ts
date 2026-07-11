@@ -1,15 +1,28 @@
 // Testes da infraestrutura de famílias paramétricas (families.ts — Fase 3 da bancada,
-// docs/cientifica/simulador.md §7.1/§8). Três garantias:
+// docs/cientifica/simulador.md §7.1/§8). Garantias:
 // (a) determinismo bit-a-bit: mesma família + mesmos seeds ⇒ resultado idêntico;
 // (b) o bootstrap devolve IC coerente (lo ≤ média ≤ hi) — nunca NaN;
-// (c) a família concreta FAMILY_PRECISION_VS_PEOPLE roda ponta-a-ponta.
-// No CI, (c) roda com eixo REDUZIDO (people 2..4) e 5 seeds pra não estourar o tempo; a curva
-// COMPLETA (§7.1: 6 pontos × 20 seeds) fica atrás da env var FAMILY_FULL=1:
+// (c) cada família concreta roda ponta-a-ponta (pessoas, ruído, viés corporal, erro de âncora);
+// (d) a PREVISÃO FALSEÁVEL (c) do §8 do escopo é COBRADA em CI: erro de posição de âncora não
+//     pode mover a precisão de identidade — se mover, o teste FALHA e isso é um ACHADO
+//     (acoplamento escondido), não um bug do teste. NÃO enfraquecer.
+// No CI, cada família roda com eixo REDUZIDO e poucos seeds pra não estourar o tempo; a curva
+// COMPLETA (§7.1: ≥20 seeds/ponto) fica atrás da env var FAMILY_FULL=1:
 //   FAMILY_FULL=1 npx vitest run src/fusion/families.test.ts
+// (ou por família, via o comando do aceite §9.3: `npm run family -- <nome>` → scripts/family.mjs).
 // Curvas novas NÃO nascem pinadas ("ganham pinos próprios quando estabilizarem", §7.1) — aqui só
 // sanidade estrutural + log da curva pra diagnóstico humano (console.log em teste é praxe da casa).
+// CONTRATO com scripts/family.mjs: todo teste de curva completa chama-se
+// "curva completa <nome-da-família> (FAMILY_FULL=1): ..." — é esse prefixo que o CLI filtra via -t.
 import { describe, expect, it } from "vitest";
-import { bootstrapCi, runFamily, FAMILY_PRECISION_VS_PEOPLE } from "./families";
+import {
+  bootstrapCi,
+  runFamily,
+  FAMILY_PRECISION_VS_PEOPLE,
+  FAMILY_PRECISION_VS_NOISE,
+  FAMILY_PRECISION_VS_BODY_BIAS,
+  FAMILY_PRECISION_VS_ANCHOR_ERROR,
+} from "./families";
 import type { BootstrapCi, ParametricFamily } from "./families";
 
 /** Família mínima pros testes de infraestrutura — barata (80 passos, 2 pontos). */
@@ -113,7 +126,7 @@ describe("FAMILY_PRECISION_VS_PEOPLE — ponta a ponta", () => {
   // roda sob demanda com FAMILY_FULL=1 (documentado no cabeçalho). É ela que responde a previsão
   // falseável (b) do escopo §8 (joelho vs declive linear) — a leitura é humana, sobre o log.
   it.runIf(process.env.FAMILY_FULL === "1")(
-    "curva completa (FAMILY_FULL=1): people 2..7, 20 seeds/ponto",
+    "curva completa precisao-vs-pessoas (FAMILY_FULL=1): people 2..7, 20 seeds/ponto",
     () => {
       const r = runFamily(FAMILY_PRECISION_VS_PEOPLE);
       console.log(`\n${fmtCurve(r)}\n`);
@@ -124,5 +137,109 @@ describe("FAMILY_PRECISION_VS_PEOPLE — ponta a ponta", () => {
       }
     },
     120_000,
+  );
+});
+
+describe("FAMILY_PRECISION_VS_NOISE — ponta a ponta", () => {
+  it("(c) eixo reduzido (rssiNoiseDb 2/6/12, 5 seeds) roda e produz curva coerente", () => {
+    const r = runFamily(FAMILY_PRECISION_VS_NOISE, { axis: [2, 6, 12], seedsPerPoint: 5 });
+    console.log(`\n${fmtCurve(r)}\n`);
+    expect(r.name).toBe("precisao-vs-ruido");
+    expect(r.points.map((p) => p.axisValue)).toEqual([2, 6, 12]);
+    for (const p of r.points) {
+      expect(p.seeds).toEqual([1, 2, 3, 4, 5]);
+      ciIsCoherent(p.precision);
+      ciIsCoherent(p.coverage);
+      expect(p.coverage.mean).toBeGreaterThan(0); // ver nota no teste de pessoas
+    }
+  }, 30_000);
+
+  it.runIf(process.env.FAMILY_FULL === "1")(
+    "curva completa precisao-vs-ruido (FAMILY_FULL=1): rssiNoiseDb 2..12, 20 seeds/ponto",
+    () => {
+      const r = runFamily(FAMILY_PRECISION_VS_NOISE);
+      console.log(`\n${fmtCurve(r)}\n`);
+      expect(r.points).toHaveLength(6);
+      for (const p of r.points) {
+        expect(p.seeds).toHaveLength(20);
+        ciIsCoherent(p.precision);
+      }
+    },
+    120_000,
+  );
+});
+
+describe("FAMILY_PRECISION_VS_BODY_BIAS — ponta a ponta", () => {
+  it("(c) eixo reduzido (peakDb 0/12/24, 5 seeds) roda e produz curva coerente", () => {
+    const r = runFamily(FAMILY_PRECISION_VS_BODY_BIAS, { axis: [0, 12, 24], seedsPerPoint: 5 });
+    console.log(`\n${fmtCurve(r)}\n`);
+    expect(r.name).toBe("precisao-vs-vies-corporal");
+    expect(r.points.map((p) => p.axisValue)).toEqual([0, 12, 24]);
+    for (const p of r.points) {
+      expect(p.seeds).toEqual([1, 2, 3, 4, 5]);
+      ciIsCoherent(p.precision);
+      ciIsCoherent(p.coverage);
+      expect(p.coverage.mean).toBeGreaterThan(0);
+    }
+  }, 30_000);
+
+  it.runIf(process.env.FAMILY_FULL === "1")(
+    "curva completa precisao-vs-vies-corporal (FAMILY_FULL=1): peakDb 0..24, 20 seeds/ponto",
+    () => {
+      const r = runFamily(FAMILY_PRECISION_VS_BODY_BIAS);
+      console.log(`\n${fmtCurve(r)}\n`);
+      expect(r.points).toHaveLength(7);
+      for (const p of r.points) {
+        expect(p.seeds).toHaveLength(20);
+        ciIsCoherent(p.precision);
+      }
+    },
+    180_000,
+  );
+});
+
+describe("FAMILY_PRECISION_VS_ANCHOR_ERROR — previsão falseável (c) do escopo (§8)", () => {
+  // A previsão registrada ANTES do experimento (docs/cientifica/simulador.md §8): "erro de posição
+  // de âncora move auditoria e anéis, NÃO a precisão de identidade — a associação por correlação
+  // não consome posição de âncora. Se mover, há acoplamento escondido (bug ou suposição não
+  // documentada) e a bancada terá pago por si só." Este teste RODA em CI (eixo reduzido: só os
+  // extremos 0 m e 2 m) e cobra a previsão comparando os ICs de precisão dos dois extremos.
+  it("(c) precisão de identidade NÃO se move com o erro de âncora (ICs de 0 m e 2 m se sobrepõem)", () => {
+    const r = runFamily(FAMILY_PRECISION_VS_ANCHOR_ERROR, { axis: [0, 2], seedsPerPoint: 8 });
+    console.log(`\n${fmtCurve(r)}\n`);
+    expect(r.name).toBe("precisao-vs-erro-ancora");
+    const [p0, pMax] = r.points;
+    for (const p of r.points) {
+      ciIsCoherent(p.precision);
+      ciIsCoherent(p.coverage);
+      expect(p.coverage.mean).toBeGreaterThan(0);
+    }
+    // ICs 95% se sobrepõem ⇔ nenhuma evidência de que o erro de cadastro move a identidade.
+    const overlap = p0.precision.lo <= pMax.precision.hi && pMax.precision.lo <= p0.precision.hi;
+    expect(
+      overlap,
+      `PREVISÃO (c) DO ESCOPO VIOLADA (docs/cientifica/simulador.md §8): a precisão de identidade ` +
+        `MUDOU com o erro de posição de âncora — há acoplamento escondido entre posição cadastrada ` +
+        `e associação (bug ou suposição não documentada). Isto é um ACHADO da bancada, não um bug ` +
+        `do teste — NÃO enfraquecer; investigar o caminho distM→associador. ` +
+        `anchorPosErrorM=0: precisão ${(p0.precision.mean * 100).toFixed(1)}% ` +
+        `[${(p0.precision.lo * 100).toFixed(1)}, ${(p0.precision.hi * 100).toFixed(1)}]; ` +
+        `anchorPosErrorM=2: precisão ${(pMax.precision.mean * 100).toFixed(1)}% ` +
+        `[${(pMax.precision.lo * 100).toFixed(1)}, ${(pMax.precision.hi * 100).toFixed(1)}].`,
+    ).toBe(true);
+  }, 60_000);
+
+  it.runIf(process.env.FAMILY_FULL === "1")(
+    "curva completa precisao-vs-erro-ancora (FAMILY_FULL=1): anchorPosErrorM 0..2, 20 seeds/ponto",
+    () => {
+      const r = runFamily(FAMILY_PRECISION_VS_ANCHOR_ERROR);
+      console.log(`\n${fmtCurve(r)}\n`);
+      expect(r.points).toHaveLength(5);
+      for (const p of r.points) {
+        expect(p.seeds).toHaveLength(20);
+        ciIsCoherent(p.precision);
+      }
+    },
+    180_000,
   );
 });

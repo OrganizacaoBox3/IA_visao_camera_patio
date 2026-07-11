@@ -193,6 +193,42 @@ describe("simulateFusionScenario", () => {
     expect(plain.ticks[0].readings.some((r) => r.mac.startsWith("FX:"))).toBe(false);
   });
 
+  it("anchorPosErrorM desloca SÓ o cadastro exportado (sc.anchors); física de RSSI intacta", () => {
+    // Modela erro de INSTALAÇÃO/cadastro (posAssumed ≠ posReal, §3 de docs/cientifica/simulador.md):
+    // o RSSI é gerado da posição REAL; o que muda é só o que o operador "cadastrou".
+    const opts = { walk: "parado" as const, anchors: true, steps: 8 };
+    const baseline = simulateFusionScenario(opts, 5);
+    const comErro = simulateFusionScenario({ ...opts, anchorPosErrorM: 1.5 }, 5);
+
+    // Física intacta: TODOS os ticks (tracks, readings — inclusive RSSI das âncoras — e verdade)
+    // são byte-idênticos; o erro não toca a geração, só o cadastro.
+    expect(comErro.ticks).toEqual(baseline.ticks);
+
+    // Cadastro deslocado: cada âncora k é empurrada por EXATAMENTE 1,5 m, em direções fixas
+    // alternadas por índice (+x, +y, −x, −y — determinístico, sem RNG).
+    const dirs = [
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 0, y: -1 },
+    ];
+    expect(comErro.anchors).toHaveLength(4);
+    for (let k = 0; k < 4; k++) {
+      const real = baseline.anchors![k];
+      const cad = comErro.anchors![k];
+      expect(cad.mac).toBe(real.mac);
+      const dx = cad.world.x - real.world.x;
+      const dy = cad.world.y - real.world.y;
+      expect(Math.hypot(dx, dy)).toBeCloseTo(1.5, 9);
+      expect(dx).toBeCloseTo(1.5 * dirs[k].x, 9);
+      expect(dy).toBeCloseTo(1.5 * dirs[k].y, 9);
+    }
+
+    // Byte-compat: ausente (e explicitamente 0) → cenário INTEIRO idêntico, cadastro = real.
+    expect(simulateFusionScenario(opts, 5)).toEqual(baseline);
+    expect(simulateFusionScenario({ ...opts, anchorPosErrorM: 0 }, 5)).toEqual(baseline);
+  });
+
   it("dropout derruba detecções em alguns ticks; dropout 0 detecta todo mundo sempre", () => {
     const withDrop = simulateFusionScenario({ walk: "parado", dropoutP: 0.3, pxJitter: 0 }, 9);
     const counts = withDrop.ticks.map((t) => t.tracks.length);

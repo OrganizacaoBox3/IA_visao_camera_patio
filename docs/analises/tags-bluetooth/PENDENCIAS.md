@@ -318,9 +318,34 @@
         resumo pra UI futura. SEM UI de propósito: o player ainda não abre gravação real, e
         anotar sintético não faz sentido (a verdade já nasce pronta lá). É a ferramenta que
         faltava pro dia do teste de campo (item 2) — anotar o roteiro de 6min em minutos.
-      - **Restante da Fase 3**: mais famílias (×ruído, ×viés corporal, ×erro de âncora — a
-        previsão (c) do simulador.md), player abrir gravação REAL (pré-requisito da UI de
-        anotação), e o comando único "família ponta-a-ponta" (aceite §9.3).
+      - ✅🔬 **Fase 3, segunda leva (2 frentes paralelas, 2026-07-11)**:
+        - **3 famílias novas** (`families.ts`): ×ruído (rssiNoiseDb 2..12 — degrada suave, 95,2%→
+          55,1%, sem joelho), ×viés corporal (peakDb 0..24 — **o eixo mais agressivo medido**:
+          84%→14,7%) e ×erro de cadastro de âncora. Knob novo `anchorPosErrorM` em `sim.ts`
+          (modela posAssumed≠posReal do §3 — desloca SÓ o cadastro exportado, física intacta,
+          byte-compat).
+        - **🔬 PREVISÃO (c) DO ESCOPO — CONFIRMADA COM NÚMEROS** ("erro de posição de âncora move
+          auditoria e anéis, NÃO a precisão de identidade; se mover, há acoplamento escondido"):
+          curva completa (20 seeds/ponto), precisão **86,5% em TODOS os 5 pontos** (0 a 2m de
+          erro), decomposição bit-idêntica. Coerente com gate/blend OFF por default: a correlação
+          não consome posição de âncora. O teste roda em CI comparando os ICs dos extremos — se um
+          dia gate/blend voltarem aos defaults e criarem o acoplamento, este teste FALHA com
+          mensagem "ACHADO: acoplamento escondido" (sensor permanente, mesma família das
+          sentinelas de viés do v4).
+        - **Comando ponta-a-ponta (aceite §9.3 ✅)**: `npm run family -- <nome>` (scripts/
+          family.mjs — spawna o vitest com FAMILY_FULL=1, sem dependência nova) imprime a curva
+          completa com IC + decomposição. Sem argumento lista as 4 famílias.
+        - **Player abre GRAVAÇÃO REAL (aceite §9.2 parcial ✅) + UI de anotação (§6 ✅)**
+          (`ReplayPlayerPage.tsx` + `player/session-view.ts` novo, 12 testes): .jsonl lido 100% no
+          cliente (LGPD — nada sobe), domínio da planta calculado do bounding box real (fallback
+          8×6), painel de anotação (track → MAC/sem-tag/limpar, os 3 estados de SessionTruth),
+          export/import por download local manual (padrão cine-loop). Anotar pinta o track no
+          replay na hora. Limitações declaradas: enquadramento pelos primeiros 2000 ticks; lista
+          de tracks sem virtualização (gravações de horas ficam pesadas de rolar, não travam).
+      - **Restante da Fase 3/4**: pino das curvas quando estabilizarem (§7.1), aceite §9 formal
+        (o §9.4 — SessionTruth anotado consumido por replayFusionSession sem adaptação — está
+        construído mas nunca exercitado com gravação real de verdade: falta o teste de campo),
+        e revisão adversarial da bancada (§12/Fase 4 do plano).
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 

@@ -28,13 +28,16 @@ export type SimTick = {
   readings: RawReading[];
   truthTagByTrack: Record<number, string | null>;
 };
-/** Tag-âncora FIXA (v4): MAC + posição-mundo VERDADEIRA (metros) — o "gabarito" de calibração. */
+/** Tag-âncora FIXA (v4): MAC + posição-mundo CADASTRADA (metros) — o que o operador informa e o
+ *  fit consome como "gabarito". Igual à posição REAL, exceto com SimOpts.anchorPosErrorM (erro de
+ *  instalação/cadastro: posAssumed ≠ posReal — a física do RSSI segue usando a real). */
 export type SimAnchor = { mac: string; world: Vec2 };
 export type SimFusionScenario = {
   ticks: SimTick[];
   H: Matrix3 | null;
   stationPx: Vec2;
-  /** ADITIVO (v4): posições-verdade das tags-âncora — presente só com SimOpts.anchors. */
+  /** ADITIVO (v4): posições CADASTRADAS das tags-âncora — presente só com SimOpts.anchors
+   *  (= posições reais, salvo erro de instalação via SimOpts.anchorPosErrorM). */
   anchors?: SimAnchor[];
 };
 export type SimWalk = "waypoint" | "parado" | "bloco" | "cruzamento";
@@ -55,6 +58,16 @@ export type SimOpts = {
    *  estação (espelha o campo real do dono — span ESTREITO de distâncias, regime anchors-offset
    *  do fitPathLoss), com o MESMO modelo log-distância + mesmo ruído das tags de pessoa. */
   anchors?: boolean;
+  /** ERRO DE INSTALAÇÃO/CADASTRO das âncoras (Fase 3 — eixo da curva "quão bem preciso instalar?"
+   *  do §8 de docs/cientifica/simulador.md; modela o posAssumed ≠ posReal do §3 do escopo: o
+   *  operador mediu/cadastrou a posição da âncora ERRADO). Desloca APENAS as posições EXPORTADAS
+   *  em `SimFusionScenario.anchors[].world` — as que o replay/fitPathLoss consomem como "posição
+   *  conhecida" — por um vetor determinístico de magnitude `anchorPosErrorM` (metros) por âncora,
+   *  em direções FIXAS alternadas por índice (+x, +y, −x, −y — SEM consumir RNG; ausente/0 =
+   *  byte-compat total). A física de GERAÇÃO do RSSI continua usando a posição REAL da ferragem —
+   *  o erro existe só no que o operador "cadastrou". É o knob da previsão falseável (c) do §8:
+   *  erro de cadastro deve mover auditoria/anéis, NUNCA a precisão de identidade. */
+  anchorPosErrorM?: number;
   /** SENTINELA DE VIÉS (revisão adversarial de 2026-07-10): offset constante em dB aplicado SÓ
    *  ao RSSI das tags de PESSOA — a atenuação corporal que o campo real tem e o modelo do fit
    *  não vê (foi este knob, a −6 dB, que provou a circularidade sim↔fit e derrubou gate/blend
@@ -198,6 +211,15 @@ const MACS = ["AA:AA", "BB:BB", "CC:CC", "DD:DD", "EE:EE", "FF:FF"];
 const ANCHOR_MACS = ["FX:01", "FX:02", "FX:03", "FX:04"];
 const ANCHOR_HALF_W = 1.25; // metade dos 2,5 m
 const ANCHOR_HALF_H = 0.6; // metade dos 1,2 m
+// Direções FIXAS do erro de cadastro (SimOpts.anchorPosErrorM), alternadas por índice de âncora —
+// determinísticas por construção (sem RNG): o erro de instalação não é sorteio, é um deslocamento
+// sistemático que o eixo da curva controla em magnitude.
+const ANCHOR_ERR_DIRS: Vec2[] = [
+  { x: 1, y: 0 },
+  { x: 0, y: 1 },
+  { x: -1, y: 0 },
+  { x: 0, y: -1 },
+];
 
 // ——— Caminhadas (posição-verdade de cada pessoa por tick) ———
 
@@ -512,6 +534,24 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
       }))
     : null;
   const lastAnchorRssi = new Array<number>(anchors ? anchors.length : 0).fill(0);
+  // Posições EXPORTADAS das âncoras (o "cadastro" do operador, SimOpts.anchorPosErrorM): reais +
+  // erro de instalação determinístico por índice. A física do RSSI abaixo usa SEMPRE `anchors`
+  // (posição REAL da ferragem) — o erro existe só no que o replay/fit consome como verdade.
+  // Sem o knob (ou 0), exporta os MESMOS objetos — byte-compat total.
+  const anchorPosErrorM = opts.anchorPosErrorM ?? 0;
+  const anchorsExported: SimAnchor[] | null =
+    anchors && anchorPosErrorM !== 0
+      ? anchors.map((a, k) => {
+          const dir = ANCHOR_ERR_DIRS[k % ANCHOR_ERR_DIRS.length];
+          return {
+            mac: a.mac,
+            world: {
+              x: a.world.x + anchorPosErrorM * dir.x,
+              y: a.world.y + anchorPosErrorM * dir.y,
+            },
+          };
+        })
+      : anchors;
 
   // Tracker: trackId = índice da pessoa, até um id-switch trocar (e a troca vale dali em diante).
   const trackIdOfPerson: number[] = [];
@@ -689,6 +729,8 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   }
 
   const out: SimFusionScenario = { ticks, H: opts.uncalibrated ? null : H, stationPx };
-  if (anchors) out.anchors = anchors; // campo ADITIVO — ausente quando o cenário não tem âncoras
+  // Campo ADITIVO — ausente quando o cenário não tem âncoras. Exporta o CADASTRO (com erro de
+  // instalação, se anchorPosErrorM), nunca necessariamente a posição real (ver docstring do knob).
+  if (anchorsExported) out.anchors = anchorsExported;
   return out;
 }

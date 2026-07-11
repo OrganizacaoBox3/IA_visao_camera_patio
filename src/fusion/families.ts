@@ -191,3 +191,68 @@ export const FAMILY_PRECISION_VS_PEOPLE: ParametricFamily = {
     walk: "waypoint",
   }),
 };
+
+/**
+ * Precisão × σ de ruído RSSI — a curva "quanto ruído aguenta?" do §8 do escopo.
+ * Eixo: rssiNoiseDb 2..12 dB — o default do sim é 4 e a mineração das 6h reais mediu σ≈5,6
+ * (relatorio-consolidado-2026-07-10.md), então o eixo cobre de "melhor que o campo" a "bem pior".
+ * People 3 / tagged 2 / waypoint / 240 passos — o regime canônico dos pinos: a ÚNICA coisa
+ * variando é o ruído (§7.1: um eixo por família, nunca dois).
+ */
+export const FAMILY_PRECISION_VS_NOISE: ParametricFamily = {
+  name: "precisao-vs-ruido",
+  axisName: "rssiNoiseDb",
+  axis: [2, 4, 6, 8, 10, 12],
+  scenario: (rssiNoiseDb) => ({
+    steps: FAMILY_STEPS,
+    people: 3,
+    tagged: 2,
+    walk: "waypoint",
+    rssiNoiseDb,
+  }),
+};
+
+/**
+ * Precisão × viés corporal — a curva "×viés corporal" do §8 do escopo. Eixo = `peakDb` do
+ * bodyBias (a atenuação de pior caso, corpo entre a tag e a estação); `meanDb` acompanha
+ * proporcional (peakDb/3 — preserva a razão piso/pico ~6/18 dos valores literatura+minerados de
+ * sim.ts) e `angWidthDeg` = 100 é o `[chute marcado]` do §3 do escopo (sem medição própria ainda).
+ * peakDb = 0 ⇒ meanDb = 0 ⇒ viés nulo em toda direção — o ponto-controle da curva (equivale a
+ * não ter o knob; bodyBias não consome RNG, então o cenário é o mesmo do canônico).
+ */
+export const FAMILY_PRECISION_VS_BODY_BIAS: ParametricFamily = {
+  name: "precisao-vs-vies-corporal",
+  axisName: "bodyBiasPeakDb",
+  axis: [0, 4, 8, 12, 16, 20, 24],
+  scenario: (peakDb) => ({
+    steps: FAMILY_STEPS,
+    people: 3,
+    tagged: 2,
+    walk: "waypoint",
+    bodyBias: { meanDb: peakDb / 3, peakDb, angWidthDeg: 100 },
+  }),
+};
+
+/**
+ * Precisão × erro de posição de âncora — a curva "quão bem preciso instalar?" do §8 do escopo e o
+ * TESTE da previsão falseável (c): "erro de posição de âncora move auditoria e anéis, NÃO a
+ * precisão de identidade — a associação por correlação não consome posição de âncora. Se mover,
+ * há acoplamento escondido (bug ou suposição não documentada)". Eixo: anchorPosErrorM 0..2 m
+ * (0 = cadastro perfeito). Cenário com anchors:true — o replay refita o path-loss pelas posições
+ * CADASTRADAS (erradas quando o eixo > 0), então o `distM` das leituras muda; a previsão é que a
+ * identidade fica parada porque gate/blend estão OFF por default (revisão adversarial de
+ * 2026-07-10) e a correlação ignora distM. O teste que cobra a previsão vive em families.test.ts.
+ */
+export const FAMILY_PRECISION_VS_ANCHOR_ERROR: ParametricFamily = {
+  name: "precisao-vs-erro-ancora",
+  axisName: "anchorPosErrorM",
+  axis: [0, 0.5, 1, 1.5, 2],
+  scenario: (anchorPosErrorM) => ({
+    steps: FAMILY_STEPS,
+    people: 3,
+    tagged: 2,
+    walk: "waypoint",
+    anchors: true,
+    anchorPosErrorM,
+  }),
+};
