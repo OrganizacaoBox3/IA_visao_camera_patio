@@ -227,6 +227,19 @@
     isolado, "passo zero"). **Trilha P (player, não toca `sim.ts`) pode rodar AGORA em paralelo** ao
     item 9 (persistência); **Trilha M (World Spec, mexe em `sim.ts`) espera o item 9 fechar** — dono
     único por arquivo por rodada, mesma lição do `session-loader.ts`.
+    - ✅ **Fase 0 (Trilha P)** — feita: núcleo puro do player (`src/fusion/player/`) + rota `/replay`
+      navegável (canConfigure), 18 testes. Ver commits de 2026-07-10.
+    - ✅🔬 **Fase 1, passo zero (Trilha M) — FEITA, aceite §9.1 confirmado** (`src/fusion/
+      world-spec.ts` + `world-spec.test.ts`, 13 testes): `WorldSpecV1` (JSON declarativo) → tradução
+      pura pra `SimOpts` → MESMA `simulateFusionScenario` de sempre (decisão de baixo risco:
+      NÃO reescreveu o miolo do gerador nem a ordem de consumo do RNG — só uma camada de tradução em
+      cima). Os 12 cenários pinados de `FUSION_SCENARIOS` reproduzem **bit-a-idênticos** (`toEqual`
+      profundo, não só métricas agregadas) pelo caminho novo. **Ainda NÃO tem física nova** — nenhum
+      parâmetro aqui é "medido"; são os MESMOS defaults de sempre, só em JSON. A Fase 2 (física
+      calibrada com os números já minerados nesta sessão — τ autocorrelação 0,49-0,94/2s, spread de
+      offset regional ~16dB, viés corporal ~12dB médio validado contra quedas transientes, timeout
+      de fragmentação ~12s) é o próximo passo — SÓ ali os dados reais/medidos entram de fato.
+      Sequenciada corretamente: só começou depois que a rodada de persistência (item 9) pausou.
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 
