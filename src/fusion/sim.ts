@@ -18,6 +18,8 @@
 import { computeHomography, worldToPixel } from "../vision/homography";
 import type { Matrix3, Vec2 } from "../vision/homography";
 import type { DrawTrack, RawReading } from "./frame";
+import { pointInPolygon } from "./floor-polygon";
+import type { Polygon } from "./floor-polygon";
 
 /** Um tick de 500 ms: o que a câmera+estação ENTREGAM + a verdade de quem está sob cada trackId. */
 export type SimTick = {
@@ -85,6 +87,36 @@ export type SimOpts = {
    *  (ou fora dela, documentando por quê) — não escondemos a incerteza atrás de uma média. Só
    *  aplica ao RSSI de PESSOA; âncoras seguem IID (limitação declarada, não medida ainda pra elas). */
   rssiNoiseTauS?: number;
+  /** FÍSICA MEDIDA (Fase 2) — offsets REGIONAIS de verdade (polígonos de mundo, metros), não um
+   *  offset achatado por emissor: dentro de um polígono, o `offsetDb` daquela região soma ao RSSI
+   *  (pessoas E âncoras — ferragem fixa também está num lugar físico do prédio). Regiões
+   *  sobrepostas SOMAM (múltiplos efeitos ambientais se acumulam; não escolhemos "o primeiro que
+   *  bater" pra não esconder a sobreposição). Reusa `pointInPolygon` de `floor-polygon.ts` — MESMO
+   *  primitivo do recorte do anel ∩navegável, sem duplicar geometria. Ausente/vazio = 0 offset em
+   *  toda parte, byte-compat total (nenhum consumo de RNG aqui — é geometria pura, determinística).
+   *  FONTE: `rssi0` implícito variou 16dB entre as 4 âncoras da calibração real (mineração das 6h,
+   *  `relatorio-consolidado-2026-07-10.md` §4) — evidência de que um modelo único de propagação pro
+   *  espaço inteiro é um ajuste pobre; cada região tem condição de rádio própria. Os POLÍGONOS e
+   *  DELTAS específicos ficam a cargo de quem monta o cenário (não cravamos uma família aqui —
+   *  isso é Fase 3, famílias/curvas) — o que entra agora é o MECANISMO, testado e correto. */
+  rssiRegions?: { poly: Polygon; offsetDb: number }[];
+  /** FÍSICA MEDIDA (Fase 2) — viés corporal DIRECIONAL: em vez do offset achatado
+   *  (`personRssiBiasDb`, a sentinela do v4), a atenuação depende do ÂNGULO entre a direção em que
+   *  a pessoa anda (proxy da orientação do corpo — "parado" não tem heading real, ver
+   *  implementação) e a linha tag→estação, mais de que LADO do corpo a tag está
+   *  (`tagPlacement`). Modelo: pior caso (`peakDb`) quando o corpo está diretamente ENTRE a tag e
+   *  a estação (a tag "de costas" pra estação, na direção da colocação); melhor caso (`meanDb`,
+   *  o piso — o corpo SEMPRE atenua alguma coisa, mesmo com linha de visão livre) quando a tag
+   *  encara a estação. `angWidthDeg` é a largura angular da zona de sombra (graus) ao redor do
+   *  pior ângulo — fora dela, cai rápido pro piso. FONTE: `meanDb`/`peakDb` cruzam literatura
+   *  (4-10dB médio corporal, pico ~20dB) com a profundidade medida nas quedas transientes das 6h
+   *  reais (~12dB médio) — ver `relatorio-consolidado-2026-07-10.md` §9.5; `angWidthDeg` não tem
+   *  medição própria ainda, é `[chute marcado]` até o teste de campo calibrar. Ausente = sem viés
+   *  direcional (só `personRssiBiasDb`, se presente); não consome RNG (byte-compat). */
+  bodyBias?: { meanDb: number; peakDb: number; angWidthDeg: number };
+  /** Lado do corpo onde a tag fica, por ÍNDICE de pessoa (0-based) — só relevante com `bodyBias`.
+   *  Ausente por pessoa = "peito" (default neutro: tag na frente do corpo, na direção do heading). */
+  tagPlacement?: Record<number, "peito" | "bolso-esq" | "bolso-dir">;
 };
 
 // ——— PRNG determinístico (mesmo padrão de src/localizacao/simulate.ts) ———
@@ -268,6 +300,73 @@ function createMovers(walk: SimWalk, people: number, rng: Rng): Movers {
   };
 }
 
+// ——— Física medida (Fase 2): offset regional + viés corporal direcional — funções PURAS,
+// determinísticas, sem RNG (ver docstrings de SimOpts.rssiRegions/bodyBias). ———
+
+/** Soma os offsets de TODAS as regiões que contêm `pos` (sobreposição soma, ver docstring).
+ *  Exportada (testável isolada) — mesmo padrão de fitPathLoss/distFromRssi em floor-plot.ts. */
+export function regionOffsetAt(
+  pos: Vec2,
+  regions: readonly { poly: Polygon; offsetDb: number }[],
+): number {
+  let total = 0;
+  for (const r of regions) if (pointInPolygon(pos, r.poly)) total += r.offsetDb;
+  return total;
+}
+
+/** Ângulo entre dois vetores 2D, em graus, sempre em [0,180] (não-orientado — shadowing é
+ *  simétrico: não importa se o desvio é horário ou anti-horário). Vetor de magnitude ~0 (pessoa
+ *  parada, ou tag exatamente na estação) → 0° (neutro: sem informação de ângulo, sem penalizar). */
+function angleBetweenDeg(a: Vec2, b: Vec2): number {
+  const magA = Math.hypot(a.x, a.y);
+  const magB = Math.hypot(b.x, b.y);
+  if (magA < 1e-9 || magB < 1e-9) return 0;
+  const cos = Math.min(1, Math.max(-1, (a.x * b.x + a.y * b.y) / (magA * magB)));
+  return (Math.acos(cos) * 180) / Math.PI;
+}
+
+/** Rotaciona um vetor 2D por `deg` graus (anti-horário, y pra cima). */
+function rotateDeg(v: Vec2, deg: number): Vec2 {
+  const r = (deg * Math.PI) / 180;
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  return { x: v.x * c - v.y * s, y: v.x * s + v.y * c };
+}
+
+/** Deslocamento angular da direção "de frente pra tag" em relação ao heading do corpo — peito
+ *  encara o heading (0°); bolsos ficam ~90° pro lado (convenção: esquerda/direita da PESSOA, não
+ *  da tela — mas como o mundo aqui não tem "esquerda absoluta" sem mais contexto, ambos os bolsos
+ *  usam a MESMA magnitude, só o sinal difere, o que é suficiente pro modelo de sombra simétrico). */
+const PLACEMENT_OFFSET_DEG: Record<"peito" | "bolso-esq" | "bolso-dir", number> = {
+  peito: 0,
+  "bolso-esq": 90,
+  "bolso-dir": -90,
+};
+
+/**
+ * Viés corporal direcional (dB) — ver docstring de SimOpts.bodyBias. `heading` é a direção de
+ * movimento (proxy da orientação do corpo); {x:0,y:0} (pessoa sem heading conhecido — "parado", ou
+ * 1º tick) faz `angleBetweenDeg` devolver 0°, e o modelo cai no PIOR caso (shadow=1 — conservador:
+ * sem saber a orientação, assume a pior, não a melhor) seria errado; por isso `heading` zero é
+ * tratado à parte aqui: devolve só `meanDb` (o piso), documentado como a simplificação honesta de
+ * v1 para o caso sem heading real (não inventamos uma orientação que não existe).
+ * Exportada (testável isolada) — mesmo padrão de fitPathLoss/distFromRssi em floor-plot.ts.
+ */
+export function bodyBiasDb(
+  heading: Vec2,
+  dirToStation: Vec2,
+  placement: "peito" | "bolso-esq" | "bolso-dir",
+  bias: { meanDb: number; peakDb: number; angWidthDeg: number },
+): number {
+  if (Math.hypot(heading.x, heading.y) < 1e-9) return bias.meanDb; // sem heading real — só o piso
+  const fTag = rotateDeg(heading, PLACEMENT_OFFSET_DEG[placement]);
+  const theta = angleBetweenDeg(fTag, dirToStation); // [0,180]; 180° = tag de costas pra estação
+  const diffFromWorst = 180 - theta; // 0 no pior caso
+  const sigma = Math.max(1e-6, bias.angWidthDeg / 2);
+  const shadow = Math.exp(-(diffFromWorst * diffFromWorst) / (2 * sigma * sigma));
+  return bias.meanDb + (bias.peakDb - bias.meanDb) * shadow;
+}
+
 // ——— O simulador ———
 
 /**
@@ -291,6 +390,9 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   // então cenários sem os knobs preservam o stream byte-a-byte (pinos antigos intactos).
   const personRssiBiasDb = opts.personRssiBiasDb ?? 0;
   const channelN = opts.channelN ?? PATH_LOSS_N;
+  const rssiRegions = opts.rssiRegions ?? [];
+  const bodyBias = opts.bodyBias;
+  const tagPlacement = opts.tagPlacement ?? {};
 
   // Calibração pela matemática REAL (solver DLT da produção). Falha aqui = geometria fixa quebrada
   // → erro explícito, nunca NaN mudo.
@@ -338,10 +440,27 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const rssiUpdateDtS = (rssiPeriodTicks * TICK_MS) / 1000;
   const rssiAr1Rho =
     opts.rssiNoiseTauS !== undefined ? Math.exp(-rssiUpdateDtS / opts.rssiNoiseTauS) : null;
+  // Heading (proxy de orientação do corpo, ver SimOpts.bodyBias): {0,0} até a 1ª movimentação real
+  // — pessoa parada ou 1º tick não tem heading conhecido (bodyBiasDb trata isso à parte).
+  const lastPos: (Vec2 | null)[] = new Array(people).fill(null);
+  const lastHeading: Vec2[] = Array.from({ length: people }, () => ({ x: 0, y: 0 }));
   const ticks: SimTick[] = [];
 
   for (let i = 0; i < steps; i++) {
     const positions = movers.current();
+
+    // Heading = deslocamento desde o tick anterior; só atualiza com movimento REAL (>1e-6 m) —
+    // pessoa parada mantém o último heading conhecido (não gira em torno de si mesma por ruído
+    // numérico). Não consome RNG — determinístico, puro cálculo sobre posições já sorteadas.
+    for (let p = 0; p < people; p++) {
+      const prev = lastPos[p];
+      if (prev) {
+        const dx = positions[p].x - prev.x;
+        const dy = positions[p].y - prev.y;
+        if (Math.hypot(dx, dy) > 1e-6) lastHeading[p] = { x: dx, y: dy };
+      }
+      lastPos[p] = { x: positions[p].x, y: positions[p].y };
+    }
 
     // Sentinela de persistência (Mordida 2): troca FORÇADA e determinística, sem RNG — aplicada
     // ANTES da leitura de trackIdOfPerson[p] desta tick, mesmo ponto onde idSwitchOnCross aplicaria
@@ -414,10 +533,25 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
           rssiAr1Rho === null
             ? eps
             : rssiAr1Rho * rssiNoiseAr1[p] + Math.sqrt(1 - rssiAr1Rho * rssiAr1Rho) * eps;
+        // Offset regional (Fase 2, ver SimOpts.rssiRegions) — 0 sem regiões cadastradas, sem custo.
+        const regionDb = rssiRegions.length ? regionOffsetAt(positions[p], rssiRegions) : 0;
+        // Viés corporal direcional (Fase 2, ver SimOpts.bodyBias) — 0 sem o knob. Coexiste com
+        // personRssiBiasDb (a sentinela achatada do v4) só se o chamador ligar os dois de
+        // propósito; nenhum dos dois desliga o outro automaticamente (decisão do chamador).
+        const bodyDb = bodyBias
+          ? bodyBiasDb(
+              lastHeading[p],
+              { x: rssiOrigin.x - positions[p].x, y: rssiOrigin.y - positions[p].y },
+              tagPlacement[p] ?? "peito",
+              bodyBias,
+            )
+          : 0;
         const rssi =
           RSSI_1M_DBM -
           10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
           personRssiBiasDb +
+          regionDb +
+          bodyDb +
           rssiNoiseAr1[p] * rssiNoiseDb;
         lastRssi[p] = Math.round(rssi);
       }
@@ -426,14 +560,17 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     // Âncoras (v4): MESMO canal (channelN), mesmo ruído, mesma cadência das tags de pessoa —
     // distância FIXA à origem (elas não se movem) e SEM o viés corporal (ferragem fixa não tem
     // corpo na frente — é exatamente essa assimetria que o fit não enxerga). Entram como
-    // leituras normais: a produção também as vê nas leituras BLE.
+    // leituras normais: a produção também as vê nas leituras BLE. Offset REGIONAL se aplica (a
+    // âncora também está fisicamente num lugar do prédio, sujeito à mesma condição de rádio local).
     if (anchors) {
       for (let k = 0; k < anchors.length; k++) {
         if (i % rssiPeriodTicks === 0) {
           const d = Math.hypot(anchors[k].world.x - rssiOrigin.x, anchors[k].world.y - rssiOrigin.y);
+          const regionDb = rssiRegions.length ? regionOffsetAt(anchors[k].world, rssiRegions) : 0;
           const rssi =
             RSSI_1M_DBM -
             10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
+            regionDb +
             randn(rng) * rssiNoiseDb;
           lastAnchorRssi[k] = Math.round(rssi);
         }

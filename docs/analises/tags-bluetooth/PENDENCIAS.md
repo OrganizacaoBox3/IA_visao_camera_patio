@@ -253,6 +253,31 @@
       não medida ainda pra elas). Restante da Fase 2 (offsets regionais, viés corporal direcional,
       oclusão estruturada) segue pendente — próximos incrementos, mesmo padrão (opt-in, fonte
       marcada, byte-compat).
+    - ✅🔬 **Fase 2, segundo incremento — offsets REGIONAIS por polígono (não achatado por
+      emissor, por pedido explícito do dono)** (`sim.ts`, knob `rssiRegions`, opt-in): reusa
+      `pointInPolygon` de `floor-polygon.ts` (mesmo primitivo do ∩navegável, sem duplicar
+      geometria) — dentro de um polígono soma o `offsetDb` daquela região (pessoas E âncoras;
+      regiões sobrepostas SOMAM, não "a primeira que bater"). FONTE: `rssi0` implícito variou
+      16dB entre as 4 âncoras da calibração real (`relatorio-consolidado-2026-07-10.md` §4) —
+      evidência de que um modelo único de propagação pro espaço inteiro é pobre. O MECANISMO está
+      pronto e testado; os polígonos/deltas de uma família calibrada ficam pra Fase 3.
+    - ✅🔬 **Fase 2, terceiro incremento — viés corporal DIRECIONAL** (`sim.ts`, knobs `bodyBias`+
+      `tagPlacement`, opt-in, por pedido explícito do dono de fazer o modelo completo, não só a
+      profundidade média): ângulo entre o heading (direção de caminhada, proxy da orientação do
+      corpo) e a linha tag→estação, mais o lado do corpo (`peito`/`bolso-esq`/`bolso-dir`) —
+      pior caso (`peakDb`) quando o corpo bloqueia a linha de visão, piso (`meanDb`) quando a tag
+      encara a estação, `angWidthDeg` controla a largura da zona de sombra. Pessoa PARADA (sem
+      heading real) usa só o piso — decisão explícita de não inventar orientação sem movimento.
+      FONTE: `meanDb`/`peakDb` cruzam literatura (4-10dB médio, pico ~20dB) com a profundidade
+      medida nas quedas transientes das 6h reais (~12dB médio); `angWidthDeg` é `[chute marcado]`
+      até o teste de campo calibrar — marcado como tal, não escondido. 12 testes novos (unitários
+      da função pura `bodyBiasDb` + integração ponta-a-ponta) provam: pior/melhor caso batem
+      `peakDb`/`meanDb`; a colocação da tag rotaciona a direção efetiva; o valor nunca extrapola
+      o intervalo [meanDb, peakDb]; pessoa parada usa só o piso; byte-compat quando ausente.
+      **Restante da Fase 2**: oclusão estruturada (a única peça que falta) — precisa de obstáculos
+      geométricos que o simulador ainda não tem (bloquear visão E atenuar RF por segmento
+      cruzado) — é o incremento mais dependente de generalizar geometria (paredes/obstáculos),
+      naturalmente o último dos quatro.
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 

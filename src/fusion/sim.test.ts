@@ -4,7 +4,7 @@
 // RSSI (estação no canto × junto da câmera), dropout e id-switch. O simulador é o sensor do
 // harness — se ele mentir, o harness inteiro mente.
 import { describe, expect, it } from "vitest";
-import { simulateFusionScenario } from "./sim";
+import { bodyBiasDb, regionOffsetAt, simulateFusionScenario } from "./sim";
 import type { SimTick } from "./sim";
 import { pixelToWorld } from "../vision/homography";
 import type { Matrix3, Vec2 } from "../vision/homography";
@@ -275,5 +275,121 @@ describe("simulateFusionScenario — ruído AR(1) do RSSI (Fase 2 da bancada, τ
     const a = simulateFusionScenario(opts, 7);
     const b = simulateFusionScenario(opts, 7);
     expect(a).toEqual(b); // determinismo — não quebrado pelo novo estado interno (rssiNoiseAr1)
+  });
+});
+
+describe("regionOffsetAt — offset regional por polígono (Fase 2, física medida)", () => {
+  const quadrado: Vec2[] = [
+    { x: 0, y: 0 },
+    { x: 2, y: 0 },
+    { x: 2, y: 2 },
+    { x: 0, y: 2 },
+  ];
+
+  it("dentro do polígono soma o offset; fora, fica 0", () => {
+    expect(regionOffsetAt({ x: 1, y: 1 }, [{ poly: quadrado, offsetDb: -9 }])).toBe(-9);
+    expect(regionOffsetAt({ x: 5, y: 5 }, [{ poly: quadrado, offsetDb: -9 }])).toBe(0);
+  });
+
+  it("regiões sobrepostas SOMAM (não é 'a primeira que bater')", () => {
+    const outra: Vec2[] = [
+      { x: 0.5, y: 0.5 },
+      { x: 1.5, y: 0.5 },
+      { x: 1.5, y: 1.5 },
+      { x: 0.5, y: 1.5 },
+    ];
+    const regions = [
+      { poly: quadrado, offsetDb: -9 },
+      { poly: outra, offsetDb: 3 },
+    ];
+    expect(regionOffsetAt({ x: 1, y: 1 }, regions)).toBe(-6); // -9 + 3, ponto dentro das duas
+  });
+
+  it("sem regiões (array vazio) → sempre 0", () => {
+    expect(regionOffsetAt({ x: 1, y: 1 }, [])).toBe(0);
+  });
+});
+
+describe("bodyBiasDb — viés corporal direcional (Fase 2, física medida)", () => {
+  const bias = { meanDb: 6, peakDb: 18, angWidthDeg: 60 };
+
+  it("sem heading conhecido (pessoa parada) → só o piso (meanDb), nunca inventa orientação", () => {
+    const zero: Vec2 = { x: 0, y: 0 };
+    expect(bodyBiasDb(zero, { x: 5, y: 0 }, "peito", bias)).toBe(bias.meanDb);
+  });
+
+  it("pior caso (tag de costas pra estação) → perto do peakDb", () => {
+    // heading (1,0): tag no peito encara (1,0). Estação atrás (dirToStation aponta pra -x) →
+    // ângulo 180° entre a frente da tag e a direção da estação = pior caso, por construção.
+    const heading: Vec2 = { x: 1, y: 0 };
+    const dirToStation: Vec2 = { x: -1, y: 0 };
+    const db = bodyBiasDb(heading, dirToStation, "peito", bias);
+    expect(db).toBeCloseTo(bias.peakDb, 1);
+  });
+
+  it("melhor caso (tag encarando a estação) → perto do meanDb (piso)", () => {
+    const heading: Vec2 = { x: 1, y: 0 };
+    const dirToStation: Vec2 = { x: 1, y: 0 }; // mesma direção do heading — tag encara a estação
+    const db = bodyBiasDb(heading, dirToStation, "peito", bias);
+    expect(db).toBeCloseTo(bias.meanDb, 1);
+  });
+
+  it("tagPlacement rotaciona a direção efetiva — bolso-esq/dir diferem do peito p/ o mesmo heading", () => {
+    const heading: Vec2 = { x: 1, y: 0 };
+    const dirToStation: Vec2 = { x: 0, y: 1 }; // estação a 90° do heading
+    const peito = bodyBiasDb(heading, dirToStation, "peito", bias);
+    const bolsoEsq = bodyBiasDb(heading, dirToStation, "bolso-esq", bias);
+    const bolsoDir = bodyBiasDb(heading, dirToStation, "bolso-dir", bias);
+    expect(bolsoEsq).not.toBeCloseTo(peito, 1);
+    expect(bolsoDir).not.toBeCloseTo(peito, 1);
+    // bolso-esq (+90°) e bolso-dir (-90°) são espelhados em torno do heading — c/ a estação
+    // exatamente a 90°, um dos dois cai no pior caso e o outro no melhor (simetria do modelo).
+    expect(Math.abs(bolsoEsq - bolsoDir)).toBeGreaterThan(5);
+  });
+
+  it("está sempre em [meanDb, peakDb] (assumindo peakDb > meanDb) — nunca extrapola", () => {
+    for (const deg of [0, 30, 60, 90, 120, 150, 180, 210, 270, 359]) {
+      const rad = (deg * Math.PI) / 180;
+      const dirToStation: Vec2 = { x: Math.cos(rad), y: Math.sin(rad) };
+      const db = bodyBiasDb({ x: 1, y: 0 }, dirToStation, "peito", bias);
+      expect(db).toBeGreaterThanOrEqual(bias.meanDb - 1e-9);
+      expect(db).toBeLessThanOrEqual(bias.peakDb + 1e-9);
+    }
+  });
+});
+
+describe("simulateFusionScenario — física medida da Fase 2, ligada de ponta a ponta", () => {
+  it("rssiRegions desloca o RSSI de quem está dentro, byte-compat quando ausente", () => {
+    const opts = { walk: "parado" as const, people: 1, tagged: 1, steps: 4 };
+    const baseline = simulateFusionScenario(opts, 1);
+    // pessoa 0 em "parado" fica em (1, 1.5) — grade fixa de createMovers (ver sim.ts).
+    const regiao: Vec2[] = [
+      { x: 0, y: 0 },
+      { x: 3, y: 0 },
+      { x: 3, y: 3 },
+      { x: 0, y: 3 },
+    ];
+    const comRegiao = simulateFusionScenario(
+      { ...opts, rssiRegions: [{ poly: regiao, offsetDb: -9 }] },
+      1,
+    );
+    const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    const rssiComRegiao = comRegiao.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    expect(rssiComRegiao).toBe(rssiBase - 9);
+
+    // ausente (array vazio expresso via opts sem o campo) → idêntico ao baseline.
+    expect(simulateFusionScenario(opts, 1)).toEqual(baseline);
+  });
+
+  it("bodyBias desloca o RSSI de uma pessoa parada pelo piso (meanDb) — sem heading, sem invenção", () => {
+    const opts = { walk: "parado" as const, people: 1, tagged: 1, steps: 4 };
+    const baseline = simulateFusionScenario(opts, 1);
+    const comViés = simulateFusionScenario(
+      { ...opts, bodyBias: { meanDb: 6, peakDb: 18, angWidthDeg: 60 } },
+      1,
+    );
+    const rssiBase = baseline.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    const rssiComViés = comViés.ticks[0].readings.find((r) => r.mac === "AA:AA")!.rssi;
+    expect(rssiComViés).toBe(rssiBase + 6); // pessoa parada → heading zero → só o piso (meanDb)
   });
 });
