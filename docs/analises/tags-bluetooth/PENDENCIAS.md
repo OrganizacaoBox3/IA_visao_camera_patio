@@ -295,6 +295,32 @@
       cenários pinados (nenhum default mudou). Nenhuma família/curva calibrada foi criada ainda
       com eles — isso é Fase 3 (famílias paramétricas, ≥20 seeds/ponto, IC — próximo passo natural
       quando houver prioridade pra isso) ou o teste de campo real decidindo os valores finais.
+    - ✅🔬 **Fase 3, primeira leva (2 frentes paralelas, propriedade exclusiva de arquivo)**:
+      - **(A) Famílias paramétricas** (`src/fusion/families.ts`, 6 testes): `runFamily()` — um
+        eixo varia, seeds determinísticos 1..N (default 20, §7.1), IC 95% por bootstrap percentil
+        (LCG próprio seedado, zero Math.random), decomposição por tipo de erro OBRIGATÓRIA
+        (wrong/falseLabels/idSwitches junto de precisão/cobertura). Cada célula é literalmente
+        `replayFusion(simulateFusionScenario(...))` — motor único, nada reimplementado. Primeira
+        família concreta: `FAMILY_PRECISION_VS_PEOPLE` (people 2..7). CI roda eixo reduzido; a
+        curva completa fica atrás de `FAMILY_FULL=1`.
+      - **🔬 ACHADO da curva completa (20 seeds/ponto) contra a previsão (b) do escopo do
+        simulador ("a curva precisão×pessoas tem JOELHO, não declive linear")**: na PRECISÃO
+        MÉDIA o declive é suave (89,6%→72,2% de 2 a 7 pessoas, ~3-5pp/pessoa, sem joelho óbvio) —
+        mas a DECOMPOSIÇÃO conta outra história: `wrong` acelera não-linearmente (10→26→45→59→70→87)
+        e a cobertura cai quase pela metade (41%→17,7%). Leitura honesta: se há joelho, ele
+        aparece na decomposição/cobertura, não na média de precisão — mais uma confirmação de que
+        "todo ganho (ou perda) agregado deve ser decomposto" (regra institucionalizada nº2); a
+        média sozinha teria escondido a não-linearidade. Previsão (b) do simulador.md:
+        PARCIALMENTE confirmada, com a nuance acima registrada.
+      - **(B) Modo anotação — núcleo puro** (`src/fusion/player/annotation.ts`, 10 testes):
+        estado imutável de anotação (trackId → mac|null|ausente — os TRÊS estados de
+        `SessionTruth` preservados), export com MAC normalizado, import pra retomar sessão,
+        resumo pra UI futura. SEM UI de propósito: o player ainda não abre gravação real, e
+        anotar sintético não faz sentido (a verdade já nasce pronta lá). É a ferramenta que
+        faltava pro dia do teste de campo (item 2) — anotar o roteiro de 6min em minutos.
+      - **Restante da Fase 3**: mais famílias (×ruído, ×viés corporal, ×erro de âncora — a
+        previsão (c) do simulador.md), player abrir gravação REAL (pré-requisito da UI de
+        anotação), e o comando único "família ponta-a-ponta" (aceite §9.3).
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 
