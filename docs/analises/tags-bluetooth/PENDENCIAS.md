@@ -240,6 +240,19 @@
       offset regional ~16dB, viés corporal ~12dB médio validado contra quedas transientes, timeout
       de fragmentação ~12s) é o próximo passo — SÓ ali os dados reais/medidos entram de fato.
       Sequenciada corretamente: só começou depois que a rodada de persistência (item 9) pausou.
+    - ✅🔬 **Fase 2, primeiro incremento — ruído RSSI autocorrelacionado (AR(1)), calibrado pelo τ
+      medido** (`sim.ts`, knob `rssiNoiseTauS`, opt-in — ausente = IID, byte-compat total, os 12
+      cenários pinados seguem intactos). Honestidade sobre a calibração: a mineração das 6h reais
+      deu autocorrelação de 0,49-0,94 NUM LAG de 2s — invertendo ρ(Δt)=exp(-Δt/τ) pros dois extremos
+      dá τ≈2,8s a τ≈32s, uma faixa LARGA (a mineração cobriu regimes de obstrução bem diferentes por
+      âncora); por isso **não** cravamos um default único escondendo essa incerteza — quem liga o
+      knob escolhe o τ explicitamente. 3 testes novos: controle positivo (regra institucionalizada
+      nº4 — sem o knob, autocorrelação empírica ≈0, prova que SEM ele é IID de verdade) + a
+      autocorrelação COM o knob bate a fórmula teórica (ρ=exp(-Δt/τ)) dentro de margem + byte-compat
+      confirmado. Só se aplica ao RSSI de PESSOA por ora (âncoras seguem IID — limitação declarada,
+      não medida ainda pra elas). Restante da Fase 2 (offsets regionais, viés corporal direcional,
+      oclusão estruturada) segue pendente — próximos incrementos, mesmo padrão (opt-in, fonte
+      marcada, byte-compat).
 
 ### Previsões falseáveis registradas (especialista, 2026-07-10 — cobrar depois de medir)
 

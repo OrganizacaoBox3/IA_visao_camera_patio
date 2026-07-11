@@ -207,4 +207,73 @@ describe("simulateFusionScenario", () => {
     const s2 = simulateFusionScenario(opts, 2);
     expect(s2.ticks.every((t) => t.truthTagByTrack[0] === "AA:AA")).toBe(true);
   });
+
+  it("forceSwitchAt troca trackIdOfPerson NO tick exato, sem sorteio, e é byte-compat quando ausente", () => {
+    const opts = { walk: "waypoint" as const, people: 2, tagged: 2, steps: 20 };
+    const withSwitch = simulateFusionScenario(
+      { ...opts, forceSwitchAt: { tickIndex: 5, personA: 0, personB: 1 } },
+      1,
+    );
+    expect(withSwitch.ticks[4].truthTagByTrack).toEqual({ 0: "AA:AA", 1: "BB:BB" });
+    expect(withSwitch.ticks[5].truthTagByTrack).toEqual({ 0: "BB:BB", 1: "AA:AA" });
+    expect(
+      withSwitch.ticks.slice(5).every((t) => t.truthTagByTrack[0] === "BB:BB"),
+    ).toBe(true); // a troca VALE dali em diante, não é um blip de 1 tick
+
+    // ausente → idêntico ao comportamento de sempre (mesmo seed/opts, sem o campo).
+    const without = simulateFusionScenario(opts, 1);
+    expect(without).toEqual(simulateFusionScenario(opts, 1));
+  });
+});
+
+describe("simulateFusionScenario — ruído AR(1) do RSSI (Fase 2 da bancada, τ medido nas 6h reais)", () => {
+  /** Série de RSSI de UMA tag, amostrada só nos ticks de atualização real (rssiPeriodTicks=2,
+   *  default) — evita reler o valor repetido dos ticks intermediários (sim.ts inteiro é 500ms/tick,
+   *  RSSI atualiza a 1Hz por padrão). */
+  function updateSeries(sc: ReturnType<typeof simulateFusionScenario>, mac: string): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < sc.ticks.length; i += 2) {
+      const r = sc.ticks[i].readings.find((x) => x.mac === mac);
+      if (r) out.push(r.rssi);
+    }
+    return out;
+  }
+
+  function lag1Autocorr(xs: number[]): number {
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    let num = 0;
+    let den = 0;
+    for (const x of xs) den += (x - mean) ** 2;
+    for (let i = 0; i < xs.length - 1; i++) num += (xs[i] - mean) * (xs[i + 1] - mean);
+    return num / den;
+  }
+
+  // "parado": distância à estação CONSTANTE → toda variação do RSSI é o ruído puro (isola o
+  // mecanismo do resto da física, mesma tática de isolamento do resto do domínio).
+  const PARADO_OPTS = { steps: 2000, people: 1, tagged: 1, walk: "parado" as const };
+
+  it("CONTROLE POSITIVO (regra institucionalizada nº4): sem rssiNoiseTauS, autocorrelação ≈ 0 (IID)", () => {
+    const sc = simulateFusionScenario(PARADO_OPTS, 1);
+    const series = updateSeries(sc, "AA:AA");
+    expect(Math.abs(lag1Autocorr(series))).toBeLessThan(0.1);
+  });
+
+  it("com rssiNoiseTauS, a autocorrelação empírica bate a teórica (ρ=exp(-Δt/τ)) — dentro de margem", () => {
+    const tauS = 5;
+    const sc = simulateFusionScenario({ ...PARADO_OPTS, rssiNoiseTauS: tauS }, 1);
+    const series = updateSeries(sc, "AA:AA");
+    const empirical = lag1Autocorr(series);
+    const theoretical = Math.exp(-1 / tauS); // Δt = rssiPeriodTicks(2)×500ms = 1s
+    expect(empirical).toBeGreaterThan(theoretical - 0.15);
+    expect(empirical).toBeLessThan(theoretical + 0.15);
+    // MUITO maior que o controle IID — a correlação é do mecanismo, não ruído de amostragem.
+    expect(empirical).toBeGreaterThan(0.5);
+  });
+
+  it("ausente → byte-compat total (mesmo consumo de RNG, mesmo cenário) com o comportamento anterior", () => {
+    const opts = { walk: "cruzamento" as const, idSwitchOnCross: true, people: 2, tagged: 2 };
+    const a = simulateFusionScenario(opts, 7);
+    const b = simulateFusionScenario(opts, 7);
+    expect(a).toEqual(b); // determinismo — não quebrado pelo novo estado interno (rssiNoiseAr1)
+  });
 });

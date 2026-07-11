@@ -72,6 +72,19 @@ export type SimOpts = {
    *  onde as duas pessoas estejam próximas (senão a troca gera um salto físico detectável, que é
    *  um cenário de sentinela DIFERENTE, não o "sem salto" da Mordida 2). */
   forceSwitchAt?: { tickIndex: number; personA: number; personB: number };
+  /** FÍSICA MEDIDA (Fase 2 da bancada, docs/cientifica/simulador.md) — constante de tempo (s) da
+   *  autocorrelação do ruído de RSSI, via AR(1): ausente (default) = ruído IID a cada atualização,
+   *  o comportamento de sempre (byte-compat — pinos antigos intactos, mesmo consumo de RNG).
+   *  Presente = `noise[t] = ρ·noise[t-1] + √(1-ρ²)·ε[t]` (ε~N(0,1) iid, ρ=exp(-Δt/τ) — Δt é o
+   *  período real entre atualizações de RSSI, `rssiPeriodTicks`×500ms), preservando a MESMA
+   *  variância (rssiNoiseDb) só adicionando correlação temporal. FONTE: mineração das 6h reais
+   *  (`docs/cientifica/relatorio-consolidado-2026-07-10.md` §9.5) mediu autocorrelação de 0,49-0,94
+   *  em lag de 2s — invertendo ρ(Δt)=exp(-Δt/τ) pros dois extremos dá τ≈2,8s a τ≈32s (faixa LARGA,
+   *  não um número limpo — a mineração cobriu regimes de obstrução bem diferentes por âncora).
+   *  Nenhum default aqui: quem usa este knob escolhe o τ explicitamente dentro da faixa medida
+   *  (ou fora dela, documentando por quê) — não escondemos a incerteza atrás de uma média. Só
+   *  aplica ao RSSI de PESSOA; âncoras seguem IID (limitação declarada, não medida ainda pra elas). */
+  rssiNoiseTauS?: number;
 };
 
 // ——— PRNG determinístico (mesmo padrão de src/localizacao/simulate.ts) ———
@@ -318,6 +331,13 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const armed = new Map<string, boolean>();
 
   const lastRssi: number[] = new Array<number>(tagged).fill(0);
+  // Estado do ruído AR(1) por tag de pessoa (ver SimOpts.rssiNoiseTauS) — 0 até a 1ª atualização,
+  // igual a um ε~N(0,1) já teria média 0. Só usado quando o knob está presente; ausente = cada
+  // "atualização" reatribui `eps` puro (IID), byte-idêntico ao `randn(rng)` inline de sempre.
+  const rssiNoiseAr1 = new Array<number>(tagged).fill(0);
+  const rssiUpdateDtS = (rssiPeriodTicks * TICK_MS) / 1000;
+  const rssiAr1Rho =
+    opts.rssiNoiseTauS !== undefined ? Math.exp(-rssiUpdateDtS / opts.rssiNoiseTauS) : null;
   const ticks: SimTick[] = [];
 
   for (let i = 0; i < steps; i++) {
@@ -385,11 +405,20 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     for (let p = 0; p < tagged; p++) {
       if (i % rssiPeriodTicks === 0) {
         const d = Math.hypot(positions[p].x - rssiOrigin.x, positions[p].y - rssiOrigin.y);
+        // AR(1) (ver SimOpts.rssiNoiseTauS): rho=null → eps puro, IID, byte-idêntico ao
+        // `randn(rng) * rssiNoiseDb` de sempre. rho!=null → correlaciona com o valor anterior,
+        // preservando a MESMA variância (rssiNoiseDb) — só a mineração das 6h reais mostrou que o
+        // ruído de campo não é IID amostra-a-amostra, e este é o desvio calibrado por isso.
+        const eps = randn(rng);
+        rssiNoiseAr1[p] =
+          rssiAr1Rho === null
+            ? eps
+            : rssiAr1Rho * rssiNoiseAr1[p] + Math.sqrt(1 - rssiAr1Rho * rssiAr1Rho) * eps;
         const rssi =
           RSSI_1M_DBM -
           10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
           personRssiBiasDb +
-          randn(rng) * rssiNoiseDb;
+          rssiNoiseAr1[p] * rssiNoiseDb;
         lastRssi[p] = Math.round(rssi);
       }
       readings.push({ mac: MACS[p], rotulo: null, rssi: lastRssi[p] });
