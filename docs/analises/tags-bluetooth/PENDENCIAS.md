@@ -151,9 +151,26 @@
        reformulado: Fisher z=atanh(r), falar exige |z| ≥ z_crit·√(1/(n_eff−3)), n_eff mínimo ~5-6.
        E o gate de movimento vira **std(log₁₀ d) em DÉCADAS** (adimensional — escala-aware por
        construção; limiar do ruído medido: ~0,25 década p/ SNR=1, prática 0,12-0,18; correlacionar
-       RSSI×log(d) é o modelo físico e o r do par verdadeiro sobe de graça). **EM EXECUÇÃO**:
-       knobs de pesquisa OFF + torneio no harness (rodada de recalibração dos gates; pinos só se
-       re-derivam conscientemente).
+       RSSI×log(d) é o modelo físico e o r do par verdadeiro sobe de graça).
+     - ✅🔬 **RODADA DE RECALIBRAÇÃO DOS GATES — TORNEADA (2026-07-11), 3 knobs entregues OFF por
+       default (pins intactos, 340 testes verdes), com TRÊS leituras honestas**:
+       (a) **O gate de significância COMO PRESCRITO é MUDO TOTAL** (0 falas em toda a suíte, e a
+       matemática explica): no harness ~8-9 leituras distintas/janela → n_eff = 8·0,3/1,7 ≈ **1,4
+       < 3**; com ρ=0,7 e minNeff=5, falar exige n≥28 leituras frescas ≈ janela de 30-60s, não 8s.
+       **Inconsistência a devolver ao especialista: pelos números DELE (3,9 distintas → n_eff
+       0,7), o gate como prescrito nunca falaria nem no campo** — a re-derivação precisa acoplar
+       janela↔n_eff (windowMs maior quando o gate liga? ρ medido POR janela? — e o POST de 500ms
+       muda o n mas também o ρ do lag menor). O knob está correto e testado; os PINOS zCrit/ρ/
+       minNeff são incompatíveis com windowMs=8000.
+       (b) **C (log+decades 0,12) é a candidata mais interessante**: precisão média +7,3pp, wrong
+       −62% (556→209), cruzamento 78→97% — pagando metade da cobertura. DOIS FUROS: bloco DEGRADA
+       (80→59,5% — o que sobra escapa da guarda de margem) e **décadas de metro ≠ décadas de
+       proxy** (sem-calibracao fica 100% mudo; o limiar adimensional não transfere ao 1/bh — se
+       promovida, o modo proxy precisa de limiar próprio ou veto explícito).
+       (c) **B (log só) é ~neutro no sim POR CONSTRUÇÃO** (o sim gera RSSI por log-distância — a
+       vantagem do span radial só aparece com dado real). É a mudança mais barata e fisicamente
+       correta; a evidência decisiva é o replay de CAMPO pós-APK novo, não este sim.
+       NADA promovido — como mandado.
      - **CADÊNCIA — ASSASSINO Nº 2 LOCALIZADO COM ENDEREÇO (diagnóstico nosso, mesma noite)**: o
        TC22 já roda `SCAN_MODE_LOW_LATENCY` (quase contínuo) — mas `POST_EVERY_MS=2000` no app +
        `onScanResult` guardando só a ÚLTIMA leitura por MAC descartava todo o resto (o
@@ -161,10 +178,31 @@
        500ms** (≈4× leituras distintas/janela; custo +1,5 req/s na LAN, zero bateria de tag).
        ⚠️ **PENDENTE DO DONO: rebuildar e reinstalar o APK do TC22** (tc22-scanner/build.sh).
        Nunca interpolar RSSI (inventa pontos, infla n, enviesa r) — regra registrada.
-     - **Grade (P*,K) da persistência**: roda AGORA em sintético como exploração de forma;
-       NENHUM default promovido até a curva de calibração ter âncora real (hello world = ponta
-       esparsa; regime denso fica sintético com ressalva declarada). **EM EXECUÇÃO** (reliability
-       estratificada por regime + barra por precisão-implicada + janela limpa via hadConflict).
+     - ✅🔬 **Grade (P*,K) da persistência — RODADA em sintético (2026-07-11), e a regra do
+       especialista disparou: "se nenhuma célula fecha nem no sintético, o desenho muda antes de
+       qualquer campo". Resultado em três achados**:
+       (a) **A grade prescrita REPROVA em TODAS as 9 células** — a premissa quantitativa ("margem
+       0,22 em multidão historicamente entrega ~93%") não se sustenta neste simulador: a curva
+       estratificada MEDIDA dá **63%** para margem 0,2-0,3 em regime denso (o único bin ≥0,90 da
+       curva inteira é denso [0,4-1]; o esparso teta em 77%). Com P* ∈ {0,90;0,95;0,98} quase nada
+       qualifica — cobertura colapsa (0,00×-0,21× o baseline, PIOR que a v1 de 0,68×).
+       (b) **A emenda cleanWindow contradiz o retuning POR CONSTRUÇÃO do proxy**: `hadConflict` é
+       definido como "concorrente real E margem<0,3" (CONFLICT_MARGIN_THRESHOLD) — logo falas
+       "limpas" NUNCA têm margem <0,3, e o canal que o retuning queria abrir (confirmar com margem
+       comprimida em denso) é morto pela própria tradução proximidade-física→hadConflict. A
+       tradução não era inócua.
+       (c) **O DESENHO (condicionalização por regime) tem forma — fora da grade prescrita**: sweep
+       diagnóstico com cleanWindow OFF: **(P*=0,60, K=4) → 0,42× erro-segundos / 1,03× cobertura —
+       FECHA OS DOIS EIXOS** no sintético (também 0,55/K4 e 0,65/K2 fecham). O alvo de P* tem de
+       vir da curva medida (~0,55-0,65 na sintética), não do chute 0,90+.
+       **Estado**: mecanismo entregue ADITIVO (regime-reliability.ts + confirmPolicy em
+       label-memory.ts, 20 testes novos, pins v1 intactos, grade roda no CI em <1s); NENHUM default
+       promovido (regra mantida: curva precisa de âncora real; célula densa segue sintética com
+       ressalva declarada nos headers). **Pergunta de volta ao especialista**: o P*~0,60 sintético
+       é artefato do simulador (margens comprimidas demais por construção?) ou o alvo realista de
+       precisão-implicada em regime denso é mesmo dessa ordem — e nesse caso a régua de produto
+       ("rótulo errado é pior que nenhum") aceita confirmar a 60%? E qual proxy substituir na
+       janela limpa, já que hadConflict é redundante com a margem?
      - **Viés direcional como feature**: desenho anti-v4 ARQUIVADO (4 passos: confirmação física →
        score auxiliar isolado medido por AUC sobre dado real anotado, nunca sim → torneio com
        sentinelas de placement/multipath → decomposição exigindo ganho vindo dos empates). A

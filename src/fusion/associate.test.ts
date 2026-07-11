@@ -587,6 +587,216 @@ describe("TagTrackAssociator — diagnoseFunnel (funil de vetos instrumentado)",
   });
 });
 
+describe("TagTrackAssociator — recalibração dos gates (knobs de PESQUISA: useLogDistance / minMovementDecades / significanceGate)", () => {
+  // OFF por default (byte-compat dura com os pinos de replay-fusion.test.ts); estes testes
+  // exercitam o MECANISMO ligando cada knob explicitamente — o torneio que decide promoção mora
+  // em gates-recalibration.test.ts. Prescrição completa no cabeçalho de associate.ts.
+
+  /** RSSI pelo modelo físico log-distância (o que o canal real faz): −45 − 10·2,2·log10(d). */
+  const logLaw = (d: number) => -45 - 22 * Math.log10(d);
+
+  it("OFF explícito = byte-compat: knobs em OFF reproduzem a saída default (aditividade)", () => {
+    const build = (cfg?: FusionConfig) => {
+      const a = new TagTrackAssociator(cfg);
+      for (const f of makeFrames(10, 0, 500, (i) => ({
+        tracks: [
+          { trackId: 1, dist: ramp(1, 6, i, 10) },
+          { trackId: 2, dist: ramp(6, 1, i, 10) },
+        ],
+        readings: [
+          { tag: "AA", rssi: ramp(-50, -75, i, 10) },
+          { tag: "BB", rssi: ramp(-75, -50, i, 10) },
+        ],
+      }))) {
+        a.push(f);
+      }
+      return a.assign();
+    };
+    expect(build({ useLogDistance: false, minMovementDecades: 0 })).toEqual(build());
+  });
+
+  it("useLogDistance: RSSI que segue o modelo log-distância → r sobe na variável certa (e vale p/ proxy)", () => {
+    // Sem `metric` nas pistas — é exatamente o caso proxy/sem-H: o knob aplica o log igual
+    // (proxy monotônico → log igualmente monotônico, ver FusionConfig.useLogDistance).
+    const N = 10;
+    const conf = (cfg?: FusionConfig) => {
+      const a = new TagTrackAssociator(cfg);
+      for (const f of makeFrames(N, 0, 500, (i) => ({
+        tracks: [{ trackId: 1, dist: ramp(1, 6, i, N) }],
+        readings: [{ tag: "AA", rssi: logLaw(ramp(1, 6, i, N)) }],
+      }))) {
+        a.push(f);
+      }
+      return a.assign()[0];
+    };
+    const linear = conf();
+    const log = conf({ useLogDistance: true });
+    expect(linear.tag).toBe("AA"); // a correlação linear também fala (monotônica)…
+    expect(log.tag).toBe("AA");
+    // …mas na variável do MODELO FÍSICO a anti-correlação é exata: r = −1 (a menos de fp).
+    expect(log.confidence).toBeGreaterThan(0.9999);
+    expect(log.confidence).toBeGreaterThan(linear.confidence);
+  });
+
+  it("minMovementDecades SEM useLogDistance é ignorado (décadas só existem na variável log)", () => {
+    const build = (cfg?: FusionConfig) => {
+      const a = new TagTrackAssociator(cfg);
+      for (const f of makeFrames(10, 0, 500, (i) => ({
+        tracks: [{ trackId: 1, dist: ramp(1, 6, i, 10) }],
+        readings: [{ tag: "AA", rssi: ramp(-50, -75, i, 10) }],
+      }))) {
+        a.push(f);
+      }
+      return a.assign();
+    };
+    // Um limiar absurdo (9 décadas) que calaria qualquer par SE fosse aplicado: saída idêntica.
+    expect(build({ minMovementDecades: 9 })).toEqual(build());
+    expect(build({ minMovementDecades: 9 })[0].tag).toBe("AA");
+  });
+
+  it("gate em DÉCADAS substitui minMovement: caminhada curta em m² (0,10 < 0,15) mas rica em décadas fala", () => {
+    // dist 0,5→1,5 m (sala pequena/perto da estação): variância ≈ 0,102 m² — FISICAMENTE
+    // impassável pro minMovement 0,15 (o problema do campo real). Em décadas o span radial é
+    // rico: std(log10 d) ≈ 0,150 década → o gate ADIMENSIONAL (0,12) deixa a física falar.
+    const N = 10;
+    const run = (cfg?: FusionConfig) => {
+      const a = new TagTrackAssociator(cfg);
+      for (const f of makeFrames(N, 0, 500, (i) => ({
+        tracks: [{ trackId: 1, dist: ramp(0.5, 1.5, i, N) }],
+        readings: [{ tag: "AA", rssi: logLaw(ramp(0.5, 1.5, i, N)) }],
+      }))) {
+        a.push(f);
+      }
+      return a.assign()[0];
+    };
+    expect(run().tag).toBeNull(); // default: var 0,102 m² < 0,15 → lowMovement
+    expect(run({ useLogDistance: true }).tag).toBeNull(); // log SÓ na correlação: m² segue valendo
+    expect(run({ useLogDistance: true, minMovementDecades: 0.12 }).tag).toBe("AA"); // substituiu
+    expect(run({ useLogDistance: true, minMovementDecades: 0.18 }).tag).toBeNull(); // 0,150 < 0,18
+  });
+
+  /** Frames com correlação CONTROLADA por decomposição ortogonal: u = rampa centrada (ímpar em
+   *  torno do centro), v = |u| − média (par) ⇒ u ⊥ v exatos. rssi = −cu·(u/σu) + cv·(v/σv) dá
+   *  corr(rssi, dist) = −cu/√(cu²+cv²) EXATA (dist é afim em u). (cu,cv)=(3,4) → r = −0,6;
+   *  (24,7) → r = −0,96. dt=300 ms p/ n=20 caber na janela de 8 s (5,7 s de span). */
+  const corrFrames = (n: number, cu: number, cv: number) => {
+    const u = Array.from({ length: n }, (_, i) => i - (n - 1) / 2);
+    const absMean = u.reduce((s, x) => s + Math.abs(x), 0) / n;
+    const v = u.map((x) => Math.abs(x) - absMean);
+    const sd = (xs: number[]) => {
+      const m = xs.reduce((s, x) => s + x, 0) / xs.length;
+      return Math.sqrt(xs.reduce((s, x) => s + (x - m) * (x - m), 0) / xs.length);
+    };
+    const su = sd(u);
+    const sv = sd(v);
+    return makeFrames(n, 0, 300, (i) => ({
+      tracks: [{ trackId: 1, dist: 6 + 0.5 * u[i] }],
+      readings: [{ tag: "AA", rssi: -60 - cu * (u[i] / su) + cv * (v[i] / sv) }],
+    }));
+  };
+
+  it("significanceGate SUBSTITUI minConfidence: r modesto mas significativo fala (janela rica)", () => {
+    // n=20 distintas, ρ=0 → n_eff=20; limiar |z| ≥ 1,96·√(1/17) ≈ 0,475 → r crítico ≈ 0,44.
+    // r = 0,6 (z = 0,693) É significativo → fala, mesmo com minConfidence 0,9 (substituído).
+    const gate = { zCrit: 1.96, rho: 0, minNeff: 5 };
+    const withGate = new TagTrackAssociator({ minConfidence: 0.9, significanceGate: gate });
+    for (const f of corrFrames(20, 3, 4)) withGate.push(f);
+    const [spoke] = withGate.assign();
+    expect(spoke.tag).toBe("AA");
+    expect(spoke.confidence).toBeCloseTo(0.6, 3); // semântica intacta: confidence segue −corr
+
+    // Contraprova: SEM o gate, o MESMO minConfidence 0,9 barra o mesmo par (r 0,6 < 0,9).
+    const without = new TagTrackAssociator({ minConfidence: 0.9 });
+    for (const f of corrFrames(20, 3, 4)) without.push(f);
+    expect(without.assign()[0].tag).toBeNull();
+  });
+
+  it("janela POBRE exige r alto: r=0,6 insignificante com n=8 abstém; r=0,96 fala na mesma janela", () => {
+    // n=8, ρ=0 → n_eff=8; limiar |z| ≥ 1,96·√(1/5) ≈ 0,877 → r crítico ≈ 0,705.
+    const gate = { zCrit: 1.96, rho: 0, minNeff: 5 };
+    const poor = new TagTrackAssociator({ significanceGate: gate });
+    for (const f of corrFrames(8, 3, 4)) poor.push(f);
+    expect(poor.assign()[0].tag).toBeNull(); // z(0,6)=0,693 < 0,877 → abstém
+
+    // Sem o gate, o comportamento ATUAL fala (0,6 ≥ minConfidence 0,5) — é isso que ele troca.
+    const current = new TagTrackAssociator();
+    for (const f of corrFrames(8, 3, 4)) current.push(f);
+    expect(current.assign()[0].tag).toBe("AA");
+
+    // E a MESMA janela pobre fala com r alto: z(0,96)=1,946 ≥ 0,877 → o "−0,9 do campo".
+    const strong = new TagTrackAssociator({ significanceGate: gate });
+    for (const f of corrFrames(8, 24, 7)) strong.push(f);
+    const [r] = strong.assign();
+    expect(r.tag).toBe("AA");
+    expect(r.confidence).toBeCloseTo(0.96, 3);
+  });
+
+  it("dedup por valor consecutivo: snapshot que repete o último batch não infla o n", () => {
+    // 24 frames, RSSI atualizado a cada 3 (8 valores distintos consecutivos, como o snapshot
+    // real que repete o último batch entre atualizações). minNeff 10: a contagem INGÊNUA (24
+    // amostras alinhadas) passaria; o dedup honesto conta 8 < 10 → abstém, apesar de |z| enorme.
+    const gate = { zCrit: 1.96, rho: 0, minNeff: 10 };
+    const N = 24;
+    const dist = (i: number) => 1 + (5 * i) / (N - 1);
+    const held = new TagTrackAssociator({ significanceGate: gate });
+    for (const f of makeFrames(N, 0, 300, (i) => ({
+      tracks: [{ trackId: 1, dist: dist(i) }],
+      readings: [{ tag: "AA", rssi: logLaw(dist(3 * Math.floor(i / 3))) }], // “batch” repetido 3×
+    }))) {
+      held.push(f);
+    }
+    expect(held.assign()[0].tag).toBeNull(); // 8 distintas < minNeff 10 — o dedup foi contado
+
+    // Mesma física com leitura FRESCA a cada frame: 24 distintas ≥ 10 e |z| enorme → fala.
+    const fresh = new TagTrackAssociator({ significanceGate: gate });
+    for (const f of makeFrames(N, 0, 300, (i) => ({
+      tracks: [{ trackId: 1, dist: dist(i) }],
+      readings: [{ tag: "AA", rssi: logLaw(dist(i)) }],
+    }))) {
+      fresh.push(f);
+    }
+    expect(fresh.assign()[0].tag).toBe("AA");
+  });
+
+  it("n_eff ≤ 3 → nunca fala, mesmo com anti-correlação PERFEITA (variância de Fisher indefinida)", () => {
+    // ρ=0,7 → n_eff = 10·(0,3/1,7) ≈ 1,76 ≤ 3: abstém apesar de r = −1 exato na variável log
+    // (atanh(−1) = −∞ passaria QUALQUER limiar — a proteção do n_eff tem de vir antes).
+    const gate = { zCrit: 1.645, rho: 0.7, minNeff: 1 };
+    const a = new TagTrackAssociator({ useLogDistance: true, significanceGate: gate });
+    for (const f of makeFrames(10, 0, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: ramp(1, 6, i, 10) }],
+      readings: [{ tag: "AA", rssi: logLaw(ramp(1, 6, i, 10)) }],
+    }))) {
+      a.push(f);
+    }
+    expect(a.assign()[0].tag).toBeNull();
+  });
+
+  it("invariante do parado preservada com TODOS os knobs ligados: sem movimento → nunca fala", () => {
+    const cfg: FusionConfig = {
+      useLogDistance: true,
+      minMovementDecades: 0.12,
+      significanceGate: { zCrit: 1.645, rho: 0, minNeff: 5 },
+    };
+    const a = new TagTrackAssociator(cfg);
+    for (const f of makeFrames(10, 0, 500, (i) => ({
+      tracks: [
+        { trackId: 1, dist: 3 + (i % 2) * 0.03 },
+        { trackId: 2, dist: 4 - (i % 2) * 0.03 },
+      ],
+      readings: [
+        { tag: "AA", rssi: -60 + (i % 3) },
+        { tag: "BB", rssi: -65 - (i % 3) },
+      ],
+    }))) {
+      a.push(f);
+    }
+    const res = a.assign();
+    expect(res.map((r) => r.tag)).toEqual([null, null]); // std(log10 d) ≈ 0,002 << 0,12 → veto
+    expect(res.every((r) => r.confidence === 0)).toBe(true);
+  });
+});
+
 describe("TagTrackAssociator — janela, determinismo e limpeza", () => {
   it("frames fora da janela são podados (não contam p/ a correlação)", () => {
     const a = new TagTrackAssociator({ windowMs: 2000 });

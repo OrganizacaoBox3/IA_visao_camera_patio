@@ -53,11 +53,36 @@
 // que pode alimentar uma quebra externa chamando `reset()`/removendo o track da política se detectar
 // o salto — não implementado aqui de propósito (responsabilidade única: só a política de memória).
 //
+// RETUNING v2 (ADITIVO, prescrição do especialista pós-torneio v1 — ver persistence-tournament
+// .test.ts, "ACHADO HONESTO", e regime-reliability.ts): a barra "margem ≥ confirmMargin por
+// confirmTicks" NUNCA fecha em multidão (margens comprimidas no regime denso). Com `confirmPolicy`
+// presente, a barra de confirmação vira "PRECISÃO-IMPLICADA ≥ pStar por K ticks de fala
+// qualificada" — a precisão que aquela margem historicamente ENTREGOU naquele REGIME
+// (denso/esparso, curva estratificada de regime-reliability.ts). A adaptatividade EMERGE da
+// condicionalização (nenhum knob "modo multidão").
+//  - EMENDA v2 (janela LIMPA, `cleanWindow`): nenhum tick com hadConflict local true entre os K
+//    ticks que fecham a confirmação. TRADUÇÃO DOCUMENTADA: a formulação original do especialista
+//    pedia "sem proximidade física <0,4m na janela", mas esta política só vê Assignments — não tem
+//    posição. `hadConflict` local (≥2 candidatos competitivos pro mesmo track — associate.ts) é o
+//    proxy OBSERVÁVEL da mesma situação (disputa real por identidade); é a tradução usada aqui.
+//  - O REGIME do tick chega pela `context` de step() (ADITIVO): `{ candidates }` = nº de
+//    assignments avaliáveis do tick (observável em produção — é o tamanho do array). `context`
+//    AUSENTE = regime esparso (documentado: chamador antigo sem instrumentação cai no regime cuja
+//    curva se parece com a barra v1 — margens altas exigidas — e nunca ganha confirmação "de
+//    graça" pelo caminho denso).
+//  - Reentrada memória→confirmada usa a MESMA qualificação (sem assimetria — mesma regra do v1).
+//  - Default (sem `confirmPolicy`) = comportamento v1 BYTE-IDÊNTICO (mesma matemática, mesmos
+//    números) — os PINS de persistence-tournament.test.ts não mudam.
+//  - CALIBRAÇÃO: a curva usada aqui é SINTÉTICA por enquanto (replay da suíte fixa) — exploração
+//    de forma; nenhum default é promovido até a curva ter âncora real (ver regime-reliability.ts).
+//
 // Responsabilidade única: só a máquina de estados. Não mede (cobertura de experiência/erro-segundos/
 // latência de correção vivem numa métrica separada, consumindo a saída daqui + verdade). Não sabe de
 // UI, socket, nem React — mesmo padrão de associate.ts.
 
 import type { Assignment } from "./associate";
+import { impliedPrecision, tickRegime } from "./regime-reliability";
+import type { RegimeReliabilityCurve } from "./regime-reliability";
 
 export type MemoryState = "candidata" | "confirmada" | "memoria";
 
@@ -72,6 +97,20 @@ export type MemoryBelief = {
   isFresh: boolean;
 };
 
+/** Barra de confirmação v2 (retuning — ver header, "RETUNING v2"): substitui a dupla
+ *  (confirmMargin, confirmTicks) por "impliedPrecision(regime do tick, margem) ≥ pStar por K
+ *  ticks consecutivos de fala qualificada". A curva viaja aqui dentro (calibrada FORA — a política
+ *  não constrói curva, só consulta). */
+export type ConfirmPolicy = {
+  curve: RegimeReliabilityCurve;
+  /** Precisão-implicada mínima pra um tick de fala contar como qualificado. */
+  pStar: number;
+  /** Nº de ticks CONSECUTIVOS qualificados (mesma tag) pra confirmar — o K da grade. */
+  k: number;
+  /** Emenda v2 (janela LIMPA): exige hadConflict local false em TODOS os K ticks — ver header. */
+  cleanWindow: boolean;
+};
+
 export type MemoryConfig = {
   /** Margem mínima (Assignment.margin) pra uma fala contar como "qualificada" pra confirmar/reentrar
    *  /contradizer. Mais estrito que o minMargin de FALA do associador — ver header. */
@@ -83,9 +122,15 @@ export type MemoryConfig = {
   contradictTicks?: number;
   /** Tempo (ms) em `memoria` sem reentrada nem contradição sustentada até quebrar (candidata). */
   memoryTimeoutMs?: number;
+  /** ADITIVO (retuning v2): quando presente, SUBSTITUI a barra (confirmMargin, confirmTicks) pela
+   *  barra condicionada ao regime — ver header. Ausente = comportamento v1 byte-idêntico. */
+  confirmPolicy?: ConfirmPolicy;
 };
 
-const DEFAULTS: Required<MemoryConfig> = {
+type ResolvedConfig = Required<Omit<MemoryConfig, "confirmPolicy">> &
+  Pick<MemoryConfig, "confirmPolicy">;
+
+const DEFAULTS: Required<Omit<MemoryConfig, "confirmPolicy">> = {
   confirmMargin: 0.4, // início do bin "alta confiança" do reliability diagram — ver header
   confirmTicks: 3,
   contradictTicks: 3,
@@ -114,16 +159,26 @@ function freshRecord(): TrackRecord {
   };
 }
 
-/** Fala "qualificada": tag falada (não-abstenção), sem conflito LOCAL (Mordida 1) e com margem no
- *  bin de alta confiança. Assignment sem instrumentação (margin/hadConflict ausentes, ex.: saída
+/** Fala "qualificada" (v1): tag falada (não-abstenção), sem conflito LOCAL (Mordida 1) e com margem
+ *  no bin de alta confiança. Assignment sem instrumentação (margin/hadConflict ausentes, ex.: saída
  *  antiga) nunca qualifica — default conservador (documentado): não confirma/contradiz sem medir. */
 function qualified(a: Assignment, confirmMargin: number): boolean {
   return a.tag !== null && a.hadConflict !== true && (a.margin ?? 0) >= confirmMargin;
 }
 
+/** Régua EFETIVA de um tick: o predicado de qualificação + os limiares que a máquina de estados
+ *  usa neste tick. Com `confirmPolicy` o predicado é o v2 (precisão-implicada condicionada ao
+ *  regime do tick — por isso a régua é POR TICK, não por instância); sem, é o v1 byte-idêntico. */
+type TickPolicy = {
+  qualifies: (a: Assignment) => boolean;
+  confirmTicks: number;
+  contradictTicks: number;
+  memoryTimeoutMs: number;
+};
+
 /** Avança UM track por UM tick (função de módulo, não método — testável isolada da classe). */
-function advance(rec: TrackRecord, a: Assignment, ts: number, cfg: Required<MemoryConfig>): void {
-  const q = qualified(a, cfg.confirmMargin);
+function advance(rec: TrackRecord, a: Assignment, ts: number, cfg: TickPolicy): void {
+  const q = cfg.qualifies(a);
 
   if (rec.state === "candidata") {
     if (q) {
@@ -188,7 +243,7 @@ function advance(rec: TrackRecord, a: Assignment, ts: number, cfg: Required<Memo
 /** Contabiliza uma discordância qualificada; quebra pra candidata (e já credita o streak da nova
  *  tag) quando sustenta por `contradictTicks` — pode inclusive já bater `confirmTicks` no mesmo tick
  *  se os dois limiares coincidirem (default: ambos 3) — comportamento intencional, documentado. */
-function advanceContradiction(rec: TrackRecord, a: Assignment, cfg: Required<MemoryConfig>): void {
+function advanceContradiction(rec: TrackRecord, a: Assignment, cfg: TickPolicy): void {
   if (rec.contradictTag === a.tag) rec.contradictStreak++;
   else {
     rec.contradictTag = a.tag;
@@ -216,19 +271,53 @@ function advanceContradiction(rec: TrackRecord, a: Assignment, cfg: Required<Mem
  * TagTrackAssociator). `step()` é chamado a cada tick com a saída CORRENTE do associador.
  */
 export class LabelMemoryPolicy {
-  private cfg: Required<MemoryConfig>;
+  private cfg: ResolvedConfig;
   private records = new Map<number, TrackRecord>();
 
   constructor(cfg?: MemoryConfig) {
     this.cfg = { ...DEFAULTS, ...(cfg ?? {}) };
   }
 
+  /** Monta a régua efetiva DESTE tick — v2 (confirmPolicy) condiciona a qualificação ao regime do
+   *  tick; sem confirmPolicy é a régua v1 (byte-idêntica — mesmo predicado, mesmos limiares). */
+  private tickPolicy(context?: { candidates: number }): TickPolicy {
+    const cp = this.cfg.confirmPolicy;
+    if (!cp) {
+      return {
+        qualifies: (a) => qualified(a, this.cfg.confirmMargin),
+        confirmTicks: this.cfg.confirmTicks,
+        contradictTicks: this.cfg.contradictTicks,
+        memoryTimeoutMs: this.cfg.memoryTimeoutMs,
+      };
+    }
+    // context ausente = regime esparso (chamador sem instrumentação — ver header, RETUNING v2).
+    const regime = tickRegime(context?.candidates ?? 0, cp.curve.denseMinCandidates);
+    return {
+      qualifies: (a) =>
+        a.tag !== null &&
+        (!cp.cleanWindow || a.hadConflict !== true) &&
+        impliedPrecision(cp.curve, regime, a.margin ?? 0) >= cp.pStar,
+      confirmTicks: cp.k,
+      contradictTicks: this.cfg.contradictTicks,
+      memoryTimeoutMs: this.cfg.memoryTimeoutMs,
+    };
+  }
+
   /**
    * Processa um tick: `assignments` é a saída de `TagTrackAssociator.assign()` para os tracks
    * CORRENTES (associate.ts só devolve Assignment pra tracks vivos — ver docstring de assign()).
    * Tracks conhecidos AUSENTES deste array são tratados como mortos (ver header) e removidos.
+   * `context` (ADITIVO, retuning v2): `{ candidates }` = nº de candidatos avaliáveis do tick
+   * (tamanho do array de assignments em produção) — estratifica o regime denso/esparso quando
+   * `confirmPolicy` está configurada; ausente = esparso (documentado no header). Sem
+   * `confirmPolicy`, `context` é ignorado.
    */
-  step(ts: number, assignments: readonly Assignment[]): MemoryBelief[] {
+  step(
+    ts: number,
+    assignments: readonly Assignment[],
+    context?: { candidates: number },
+  ): MemoryBelief[] {
+    const pol = this.tickPolicy(context);
     const seen = new Set<number>();
     const out: MemoryBelief[] = [];
     for (const a of assignments) {
@@ -238,7 +327,7 @@ export class LabelMemoryPolicy {
         rec = freshRecord();
         this.records.set(a.trackId, rec);
       }
-      advance(rec, a, ts, this.cfg);
+      advance(rec, a, ts, pol);
       out.push({
         trackId: a.trackId,
         state: rec.state,

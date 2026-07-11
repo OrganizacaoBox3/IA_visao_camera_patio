@@ -52,6 +52,18 @@
 // (a) blend não resgata par abaixo de minConfidence; (b) par vetado pelo gate segue
 // concorrendo na guarda top-2; (c) gate em LOG-espaço. Detalhes/residuais em pairScore().
 //
+// RECALIBRAÇÃO DOS GATES (2026-07-11, prescrição do especialista científico — knobs de PESQUISA,
+// OFF por default; o TORNEIO no harness decide promoção, não esta entrega): minSamples +
+// minMovement + minConfidence são três aproximações discretas do que a estatística resolve com
+// UM teste — "a correlação observada é significativa dado o nº de pontos INDEPENDENTES da
+// janela?". Os knobs: `useLogDistance` (correlação contra log10 d — o modelo físico do canal;
+// para o par verdadeiro o r sobe de graça quando o span radial é grande), `minMovementDecades`
+// (gate de movimento ADIMENSIONAL em décadas — invariante ao tamanho da sala; substitui
+// minMovement no caminho log) e `significanceGate` (Fisher z com correção AR(1) de n_eff —
+// substitui minConfidence como critério de fala; janela rica fala com r menor, janela pobre
+// exige o −0,9). Torneio: src/fusion/gates-recalibration.test.ts. Com os três OFF (default) o
+// comportamento é BYTE-IDÊNTICO aos pinos de replay-fusion.test.ts.
+//
 // Responsabilidade única: só a associação. Sem deps, sem UI, sem socket, sem DOM.
 
 export type TagReading = {
@@ -95,9 +107,13 @@ export type Assignment = {
 /** ADITIVO (funil de vetos instrumentado, 2026-07-11 — diagnóstico do 1º teste de campo que
  *  falhou em silêncio): qual gate da CADEIA DE VETOS matou um par (track, tag) — na ORDEM exata
  *  em que pairScore() e assign() os aplicam. "SPOKE" = o par falou (nenhum veto).
- *  NOTA (knob de pesquisa): par vetado pelo gate de consistência (`maxDistRatio`, DESLIGADO por
+ *  NOTA (knobs de pesquisa): par vetado pelo gate de consistência (`maxDistRatio`, DESLIGADO por
  *  default) zera o score e aparece aqui como "belowMinConfidence" — declarado, não escondido
- *  (o gate não roda no campo hoje; se for religado, ganha verdict próprio ADITIVO). */
+ *  (o gate não roda no campo hoje; se for religado, ganha verdict próprio ADITIVO). Mesmo
+ *  tratamento p/ o `significanceGate` da recalibração (OFF por default): par insignificante
+ *  zera em pairScore e aparece como "belowMinConfidence"; e com `useLogDistance`+
+ *  `minMovementDecades` o "lowMovement" reflete o gate em DÉCADAS (movementVetoed é a fonte
+ *  única). Promoção de knob → verdicts próprios ADITIVOS. */
 export type FunnelVerdict =
   | "distSamples<minSamples" // a PISTA tem amostras de menos na janela
   | "rssiSamples<minSamples" // a TAG tem amostras de menos na janela
@@ -169,9 +185,41 @@ export type FusionConfig = {
    *  score = (1−w)·(−corr) + w·exp(−gap/escala), SÓ quando a correlação sozinha já passa de
    *  minConfidence (jamais resgata par que a correlação recusaria). Ver pairScore(). */
   distWeight?: number;
+  /** PESQUISA (recalibração dos gates 2026-07-11 — ver cabeçalho; DESLIGADO por default):
+   *  correlaciona RSSI contra log10(max(d, 0,1)) no lugar de d. É o modelo FÍSICO do canal
+   *  (RSSI ≈ A − 10·n·log10 d): para o par verdadeiro o r sobe de graça quando o span radial é
+   *  grande. Aplica-se IGUAL ao proxy 1/bh sem H (deliberado, documentado): o proxy é
+   *  monotônico na distância, logo log10(proxy) é igualmente monotônico — a correlação segue
+   *  medindo a mesma tendência, só em escala log. Piso de 0,1 m (GATE_MIN_DIST_M) antes do log
+   *  — abaixo disso nem câmera nem RSSI discriminam. */
+  useLogDistance?: boolean;
+  /** PESQUISA (só no caminho useLogDistance; 0 = desligado): gate de movimento ADIMENSIONAL —
+   *  std(log10 d) ≥ minMovementDecades (em DÉCADAS de distância) SUBSTITUI o minMovement
+   *  (variância em m²) para o par. Mudança dupla de régua, deliberada: variância→desvio-padrão
+   *  e m²→décadas. É invariante ao tamanho da sala e o limiar deriva do ruído medido
+   *  (k·σ_RSSI/(10·n): σ=5,6 dB, n=2,2 → ~0,25 década p/ SNR=1; na prática 0,12–0,18 com os
+   *  demais filtros). IGNORADO quando useLogDistance=false (décadas só fazem sentido na
+   *  variável log). */
+  minMovementDecades?: number;
+  /** PESQUISA (AUSENTE = desligado): teste de significância (Fisher z) SUBSTITUI minConfidence
+   *  como critério de fala. n_eff = n·(1−ρ)/(1+ρ) — correção AR(1): a mineração mediu
+   *  autocorrelação 0,49–0,94@2s (inter-arrival ~2,06 s), leituras consecutivas são altamente
+   *  dependentes; n = nº de amostras ALINHADAS DISTINTAS de RSSI na janela (dedup por valor
+   *  consecutivo repetido — o snapshot repete o último batch entre atualizações reais, então
+   *  transições de valor contam leituras FRESCAS, não cópias; ver distinctConsecutive()).
+   *  Falar exige n_eff ≥ minNeff E |atanh(r)| ≥ zCrit·√(1/(n_eff−3)); n_eff ≤ 3 → não fala
+   *  (a variância de Fisher é indefinida). Escala-aware por construção: janela rica fala com r
+   *  menor; janela pobre exige o −0,9. O score/confidence reportado segue −corr (semântica
+   *  intacta — o teste decide FALAR, não o valor). NOTA: o blend (`distWeight`, outro knob de
+   *  pesquisa) segue referenciando minConfidence internamente — a combinação dos dois não foi
+   *  medida e não é suportada. */
+  significanceGate?: { zCrit: number; rho: number; minNeff: number };
 };
 
-type ResolvedConfig = Required<FusionConfig>;
+// significanceGate fica OPCIONAL mesmo na config resolvida: "ausente" É o estado desligado
+// (não há valor neutro honesto p/ um objeto {zCrit, rho, minNeff}).
+type ResolvedConfig = Required<Omit<FusionConfig, "significanceGate">> &
+  Pick<FusionConfig, "significanceGate">;
 
 const DEFAULTS: ResolvedConfig = {
   windowMs: 8000,
@@ -190,6 +238,11 @@ const DEFAULTS: ResolvedConfig = {
   optimal: false, // Hungarian medido e não promovido (ver cabeçalho); knob disponível
   maxDistRatio: 0, // gate DESLIGADO — knob de pesquisa; a revisão adversarial provou circularidade (ver cabeçalho)
   distWeight: 0, // blend DESLIGADO — idem; ambos aguardam dados de campo p/ re-medição honesta
+  // Recalibração dos gates (2026-07-11) — knobs de PESQUISA, OFF por default (byte-compat com
+  // os pinos): o torneio em gates-recalibration.test.ts decide promoção, não esta entrega.
+  useLogDistance: false,
+  minMovementDecades: 0,
+  // significanceGate: AUSENTE por default (desligado) — ver ResolvedConfig.
 };
 
 // Escala do blend (m): exp(−gap/escala). 1,5 m ≈ erro mediano de distância que 4 dB de ruído de
@@ -237,6 +290,59 @@ function pearson(
   const denom = Math.sqrt(sxx * syy);
   if (denom < EPS) return null; // alguma série constante → correlação indefinida
   return { corr: sxy / denom, varY };
+}
+
+/** Variância POPULACIONAL (assume xs não-vazio) — a MESMA matemática do varY de pearson()
+ *  (syy/n, mesmo mean(), mesma ordem de acumulação: bitwise-igual no caminho default). Existe
+ *  separada porque a recalibração dos gates (useLogDistance) precisa da variância da série CRUA
+ *  mesmo quando a correlação roda sobre a série log. */
+function variance(xs: readonly number[]): number {
+  const m = mean(xs);
+  let s = 0;
+  for (const x of xs) {
+    const d = x - m;
+    s += d * d;
+  }
+  return s / xs.length;
+}
+
+/** log10 da série de distância com o MESMO piso do gate (GATE_MIN_DIST_M = 0,1 m — abaixo disso
+ *  nem câmera nem RSSI discriminam; sem o piso, d→0 explodiria o log). Serve METROS e PROXY
+ *  igualmente (ver FusionConfig.useLogDistance — o log de um proxy monotônico segue monotônico). */
+function log10Dist(dist: readonly number[]): number[] {
+  return dist.map((d) => Math.log10(Math.max(d, GATE_MIN_DIST_M)));
+}
+
+/** Nº de valores DISTINTOS CONSECUTIVOS de uma série (dedup de vizinhos repetidos): conta 1 +
+ *  transições de valor. ESCOLHA documentada (significanceGate): o snapshot de leituras repete o
+ *  último batch entre atualizações reais da estação — valores iguais CONSECUTIVOS são, com
+ *  altíssima probabilidade, a MESMA leitura física copiada, não evidência nova; uma transição é
+ *  uma leitura fresca. (Dedup global seria errado: a mesma leitura re-visitada mais tarde É
+ *  evidência nova; só a repetição adjacente é cópia.) */
+function distinctConsecutive(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  let n = 1;
+  for (let i = 1; i < xs.length; i++) if (xs[i] !== xs[i - 1]) n++;
+  return n;
+}
+
+/** Teste de significância da correlação (significanceGate — ver FusionConfig): Fisher
+ *  z = atanh(r) com n_eff = n·(1−ρ)/(1+ρ) (correção AR(1); n = amostras alinhadas DISTINTAS de
+ *  RSSI, ver distinctConsecutive). Fala exige n_eff ≥ minNeff E |z| ≥ zCrit·√(1/(n_eff−3)).
+ *  Proteções: n_eff ≤ 3 → false (variância de Fisher 1/(n_eff−3) indefinida/negativa);
+ *  r clampado a [−1,1] antes do atanh (erro de ponto flutuante do pearson pode passar de 1 por
+ *  ~1e-16; atanh(±1) = ±Infinity, que passa qualquer limiar — correto: correlação perfeita É
+ *  significativa quando o n_eff basta). */
+function passesSignificance(
+  corr: number,
+  alignedRssi: readonly number[],
+  gate: { zCrit: number; rho: number; minNeff: number },
+): boolean {
+  const n = distinctConsecutive(alignedRssi);
+  const nEff = (n * (1 - gate.rho)) / (1 + gate.rho);
+  if (nEff <= 3 || nEff < gate.minNeff) return false;
+  const z = Math.abs(Math.atanh(Math.max(-1, Math.min(1, corr))));
+  return z >= gate.zCrit * Math.sqrt(1 / (nEff - 3));
 }
 
 /** Amostra alinhada de uma pista: distância no instante ts (+ se está em metros REAIS). */
@@ -485,15 +591,26 @@ export class TagTrackAssociator {
    * não desambigua mesma-distância; só VETA inconsistência ou REPONDERA candidato já validado.
    */
   private pairScore(distSeries: DistSample[], rssiSeries: RssiSample[]): PairEvidence {
-    const { minSamples, minMovement, minConfidence, maxDistRatio, distWeight } = this.cfg;
+    const { minSamples, minConfidence, maxDistRatio, distWeight, useLogDistance, significanceGate } =
+      this.cfg;
     if (distSeries.length < minSamples || rssiSeries.length < minSamples) return NO_EVIDENCE;
     const { rssi, dist, gaps, logGaps } = align(distSeries, rssiSeries);
     if (rssi.length < minSamples) return NO_EVIDENCE;
-    const p = pearson(rssi, dist);
+    // PESQUISA useLogDistance (OFF por default): a variável de correlação vira log10(d) — o
+    // modelo físico do canal (ver FusionConfig). OFF → ys === dist, caminho byte-idêntico.
+    const ys = useLogDistance ? log10Dist(dist) : dist;
+    const p = pearson(rssi, ys);
     if (p === null) return NO_EVIDENCE; // série constante
-    if (p.varY < minMovement) return NO_EVIDENCE; // pessoa (quase) parada → ambíguo, "não sei"
+    if (this.movementVetoed(dist)) return NO_EVIDENCE; // pessoa (quase) parada → ambíguo, "não sei"
     // -corr: casamento físico (RSSI cai com distância) → corr<0 → score>0.
     const base = Math.max(0, Math.min(1, -p.corr));
+    // PESQUISA significanceGate (AUSENTE por default): a correlação só FALA se for
+    // estatisticamente significativa dado o nº de pontos independentes (Fisher z + n_eff AR(1),
+    // ver passesSignificance). Par insignificante devolve NO_EVIDENCE — mesma semântica dos
+    // demais vetos de honestidade (não concorre na guarda; abstenção por falta de evidência).
+    // Quando o gate está presente, minConfidence SAI do critério de fala (ver speakBar()).
+    if (significanceGate !== undefined && !passesSignificance(p.corr, rssi, significanceGate))
+      return NO_EVIDENCE;
     const gateOn = maxDistRatio > 1; // fator ≤ 1 não é limiar físico plausível → desligado
     // Evidência absoluta: exige série métrica suficiente (mesma régua minSamples da correlação).
     if ((gateOn || distWeight > 0) && gaps.length >= minSamples) {
@@ -515,6 +632,31 @@ export class TagTrackAssociator {
       return { score: blended, guard: blended };
     }
     return { score: base, guard: base };
+  }
+
+  /** Veto de MOVIMENTO sobre a série ALINHADA de distância CRUA (m ou proxy) — fonte única
+   *  (pairScore E diagnoseFunnel usam ESTA função; nunca recalcule por fora):
+   *  - default (useLogDistance OFF): variância < minMovement (m²) — variance() é bitwise-igual
+   *    ao p.varY histórico do pearson;
+   *  - useLogDistance + minMovementDecades>0: std(log10 d) < minMovementDecades — o gate
+   *    ADIMENSIONAL em DÉCADAS substitui minMovement para o par (ver FusionConfig);
+   *  - useLogDistance SEM decades: minMovement segue valendo sobre a série CRUA em m²
+   *    (deliberado: o log é só a variável de CORRELAÇÃO; comparar minMovement em m² contra
+   *    variância em décadas² seria régua desonesta). */
+  private movementVetoed(dist: readonly number[]): boolean {
+    const { useLogDistance, minMovementDecades, minMovement } = this.cfg;
+    if (useLogDistance && minMovementDecades > 0)
+      return Math.sqrt(variance(log10Dist(dist))) < minMovementDecades;
+    return variance(dist) < minMovement;
+  }
+
+  /** Barra de elegibilidade p/ FALAR (consumida por chooseGreedy/chooseOptimal e pelo funil):
+   *  minConfidence no caminho default; 0 quando significanceGate está presente — o teste de
+   *  significância (já aplicado DENTRO de pairScore: par insignificante tem score 0) SUBSTITUI
+   *  minConfidence como critério de fala (prescrição da recalibração — ver FusionConfig).
+   *  eligible(score, 0) ≡ score > 0, ou seja: sobrou evidência significativa → pode falar. */
+  private speakBar(): number {
+    return this.cfg.significanceGate !== undefined ? 0 : this.cfg.minConfidence;
   }
 
   /**
@@ -594,10 +736,9 @@ export class TagTrackAssociator {
     const score: number[][] = evidence.map((row) => row.map((e) => e.score));
     const guard: number[][] = evidence.map((row) => row.map((e) => e.guard));
 
-    const { minConfidence, minMargin, optimal } = this.cfg;
-    const chosen = optimal
-      ? chooseOptimal(score, minConfidence)
-      : chooseGreedy(score, minConfidence);
+    const { minMargin, optimal } = this.cfg;
+    const speakBar = this.speakBar(); // minConfidence — ou 0 com significanceGate (ver speakBar)
+    const chosen = optimal ? chooseOptimal(score, speakBar) : chooseGreedy(score, speakBar);
 
     // Melhor concorrente FANTASMA por tag: pistas com amostras na janela mas fora do último
     // frame (flicker/oclusão). Só alimentam o scan da guarda — nunca a escolha 1-1 nem a saída
@@ -738,9 +879,8 @@ export class TagTrackAssociator {
     const guard: number[][] = evidence.map((row) => row.map((e) => e.guard));
 
     const { windowMs, minSamples, minConfidence, minMovement, minMargin, optimal } = this.cfg;
-    const chosen = optimal
-      ? chooseOptimal(score, minConfidence)
-      : chooseGreedy(score, minConfidence);
+    const speakBar = this.speakBar(); // mesma barra do assign() — fonte única
+    const chosen = optimal ? chooseOptimal(score, speakBar) : chooseGreedy(score, speakBar);
 
     const currentSet = new Set(currentTracks);
     const ghostBestByTag = new Array<number>(tags.length).fill(0);
@@ -802,9 +942,11 @@ export class TagTrackAssociator {
         else if (rssiSeries.length < minSamples) verdict = "rssiSamples<minSamples";
         else if (alignedSamples < minSamples) verdict = "aligned<minSamples";
         else if (p === null) verdict = "constantSeries";
-        else if (p.varY < minMovement) verdict = "lowMovement";
+        // Veto de movimento: MESMA função do pairScore (movementVetoed — cobre também os knobs
+        // de pesquisa useLogDistance/minMovementDecades; default = p.varY < minMovement, igual).
+        else if (this.movementVetoed(aligned.dist)) verdict = "lowMovement";
         else if (ck !== undefined) verdict = ck.accepted ? "SPOKE" : "belowMinMargin";
-        else verdict = eligible(s, minConfidence) ? "lostTieBreak" : "belowMinConfidence";
+        else verdict = eligible(s, speakBar) ? "lostTieBreak" : "belowMinConfidence";
         out.push({
           trackId: currentTracks[i],
           tag: tags[j],
