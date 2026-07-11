@@ -231,6 +231,22 @@
        (0,846/pessoa com 1 estação) SOBE visivelmente com A+B — se mover, valida que o teto era
        DIMENSIONAL, e trilateração/fator BLE de posição/factor graph (T1) ganham alicerce medido
        de graça na mesma gravação.
+     - ✅🔬 **FUNDAÇÃO DO MOTOR UNIVERSAL CONSTRUÍDA (2026-07-11, ADR-013 — a "Fase 8" do dono com
+       lastro)**: (i) vocabulário de evidência tipado pelos DOIS EIXOS QUEM×ONDE
+       (`src/fusion/evidence.ts`: position2d/range/bearing/identity-series/identity-claim +
+       SourceKind extensível); (ii) `sourceKind:"ble-rssi"` na gravação + `sourceId` preservado
+       pelo loader em cada reading (gravações antigas byte-idênticas); (iii) **fusão de identidade
+       multi-fonte por soma de Fisher-z ponderada** (`multiSourceFisher`, knob OFF; redução
+       fonte-única BIT-EXATA provada; 2 fontes desempatam par espúrio de ~0,99→~0,3→abstém);
+       (iv) checklist de entrada de sensor (1 página, rito de homologação). **MÉTRICA DE
+       UNIVERSALIDADE MEDIDA: 61 linhas de motor + 1 de adapter** nesta entrega — a previsão do
+       especialista ("chegada do ESP32 = ~zero linhas novas no motor, só o adapter preenchendo
+       sourceId") fica pinada no docstring do knob para cobrança no dia. LIMITAÇÃO v1 declarada:
+       cada fonte correlaciona contra a MESMA série de distância (estação principal) — fonte B
+       vale como dimensão extra de assinatura; TrackDist por fonte (geometria própria, ganho
+       pleno de ortogonalidade) é a fase 2, quando a estação B tiver posição cadastrada. O
+       critério de entrada do factor graph agora é objetivo (ADR-013 item 6): 2ª fonte POSICIONAL
+       independente (UWB/AoA/mmWave).
 3. 🟡 **Contrato de gravação/pseudo-label** (session-recorder) — PARCIAL, 2026-07-10:
    - ✅ **Versão do algoritmo/knobs por sessão**: linha `"meta"` no JSONL (`gitRev` do hub via
      `git rev-parse --short HEAD` + espelho manual do `FusionConfig` DEFAULTS de `associate.ts`),

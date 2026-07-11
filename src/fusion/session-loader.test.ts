@@ -457,6 +457,64 @@ describe("findPseudoLabelCandidates (definição do episódio-candidato a pseudo
   });
 });
 
+describe("sourceId/sourceKind na linha 'ble' (ADR-013 item 3 — ADITIVO)", () => {
+  // Formato NOVO do recorder (session-recorder.js grava sourceKind:"ble-rssi" desde o ADR-013);
+  // helper local para não tocar no bleLine legado, que continua exercendo o formato ANTIGO.
+  function bleLineV2(
+    ts: number,
+    readings: { mac: string; rssi: number }[],
+    stationId = "est-1",
+  ): string {
+    return JSON.stringify({ t: "ble", ts, stationId, sourceKind: "ble-rssi", readings });
+  }
+
+  it("linha com sourceKind + stationId → cada reading sai com sourceId preenchido", () => {
+    const lines = [
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+      bleLineV2(0, [{ mac: "aa:bb", rssi: -50 }, { mac: "cc:dd", rssi: -70 }], "estacao-7"),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.ticks[0].readings).toEqual([
+      { mac: "AA:BB", rotulo: null, rssi: -50, sourceId: "estacao-7" },
+      { mac: "CC:DD", rotulo: null, rssi: -70, sourceId: "estacao-7" },
+    ]);
+  });
+
+  it("linha ANTIGA (sem sourceKind) parseia idêntica ao de sempre — nem a chave sourceId existe", () => {
+    const lines = [
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+      bleLine(0, [{ mac: "aa:bb", rotulo: null, rssi: -50 }], "est-1"), // formato antigo: stationId sem sourceKind
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.ticks[0].readings).toEqual([{ mac: "AA:BB", rotulo: null, rssi: -50 }]);
+    expect("sourceId" in sc.ticks[0].readings[0]).toBe(false); // retrocompat DURA: chave ausente, não undefined
+  });
+
+  it("sourceKind sem stationId útil (vazio/ausente) → sem sourceId (gate documentado no loader)", () => {
+    const lines = [
+      trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
+      JSON.stringify({ t: "ble", ts: 0, stationId: "", sourceKind: "ble-rssi", readings: [{ mac: "AA", rssi: -50 }] }),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.ticks[0].readings).toEqual([{ mac: "AA", rotulo: null, rssi: -50 }]);
+    expect("sourceId" in sc.ticks[0].readings[0]).toBe(false);
+  });
+
+  it("readings com sourceId fluem ao replay de produção sem mudar nada no motor (universalidade)", () => {
+    const lines: string[] = [calLine(0, "cam1", null, null)];
+    for (let k = 0; k <= 30; k++) {
+      const ts = k * 500;
+      const bh = 0.12 + k * 0.006;
+      lines.push(trkLine(ts, "cam1", [{ id: 1, bbox: [0.45, 0.8 - bh, 0.4 * bh, bh] }]));
+      lines.push(bleLineV2(ts, [{ mac: "aa:aa", rssi: Math.round(-75 + k) }]));
+    }
+    const { metrics, scenario } = replayFusionSession(lines, { 1: "AA:AA" }, undefined, { warmupMs: 0 });
+    expect(scenario.ticks[0].readings[0].sourceId).toBe("est-1"); // preservado até o tick…
+    expectMetricsHonest(metrics); // …e o associador roda idêntico (campo é carona, não gatilho)
+    expect(metrics.ticksEvaluated).toBeGreaterThan(0);
+  });
+});
+
 describe("replayFusionSession (ponta a ponta no associador de produção)", () => {
   it("mini-sessão sintética em JSONL roda no replayFusion real e devolve métricas sem NaN", () => {
     // 30 s de gravação, câmera SEM calibração (H null → proxy de caixa, como produção sem H):

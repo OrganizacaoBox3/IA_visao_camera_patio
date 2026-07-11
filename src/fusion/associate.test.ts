@@ -12,6 +12,9 @@
 // DESLIGADOS por default desde a revisão adversarial de 2026-07-10 (circularidade sim↔fit
 // provada; ver cabeçalho de associate.ts). Testados aqui LIGANDO a config explicitamente:
 // consistente passa, inconsistente zera, distM ausente/proxy = inerte mesmo com o knob ligado.
+// E a fusão MULTI-FONTE por soma de Fisher-z (knob `multiSourceFisher`, ADR-013 item 4 — knob de
+// PESQUISA, OFF por default): redução p/ fonte única bit-idêntica, diluição por ruído sem matar o
+// par certo, desempate de correlação espúria pela 2ª fonte, retrocompat da fonte "default".
 import { describe, it, expect } from "vitest";
 import {
   TagTrackAssociator,
@@ -20,6 +23,7 @@ import {
   type TagReading,
   type TrackDist,
 } from "./associate";
+import { buildFusionFrame } from "./frame";
 
 /** Gera N frames a partir de startTs, passo dt; `gen(i)` devolve readings+tracks daquele instante. */
 function makeFrames(
@@ -862,3 +866,158 @@ describe("TagTrackAssociator — janela, determinismo e limpeza", () => {
     expect(res.find((r) => r.trackId === 2)!.tag).toBeNull();
   });
 });
+
+describe("TagTrackAssociator — fusão multi-fonte por soma de Fisher-z (knob multiSourceFisher, ADR-013 item 4)", () => {
+  // Knob de PESQUISA, OFF por default (byte-compat dura). LIMITAÇÃO DE ESCOPO v1 documentada em
+  // FusionConfig.multiSourceFisher: toda fonte correlaciona contra a MESMA série de distância da
+  // pista (a da estação principal); geometria por-fonte (TrackDist por fonte) é a fase 2.
+  const N = 16;
+  const d = (i: number) => ramp(1, 8, i, N);
+  const wiggle = (i: number) => (i % 2 === 0 ? 1 : -1);
+  /** Fonte que SEGUE a física: anti-correlação forte (~−0,99) mas não perfeita (o wiggle evita
+   *  correlação exata ±1 — queremos exercitar a soma de z, não o clamp). */
+  const rssiFisica = (i: number) => -40 - 3 * d(i) + wiggle(i);
+  /** Fonte de RUÍDO puro: alternância sem tendência — corr ~−0,11 com a rampa (perto de zero). */
+  const rssiRuido = (i: number) => -60 + 2 * wiggle(i);
+  /** Fonte que CONTRADIZ: RSSI SOBE com a distância (fisicamente impossível p/ o dono da tag) —
+   *  corr ~+0,97: o z positivo quase cancela o z negativo da fonte espúria. */
+  const rssiContra = (i: number) => -80 + 2 * d(i) + wiggle(i);
+
+  const run = (
+    gen: (i: number) => TagReading[],
+    cfg?: FusionConfig,
+    tracks: (i: number) => TrackDist[] = (i) => [{ trackId: 1, dist: d(i) }],
+  ) => {
+    const a = new TagTrackAssociator(cfg);
+    for (const f of makeFrames(N, 0, 500, (i) => ({ tracks: tracks(i), readings: gen(i) })))
+      a.push(f);
+    return a.assign();
+  };
+
+  it("knob OFF (default): sourceId presente é IGNORADO — byte-idêntico à mesma cena sem o campo", () => {
+    const comSrc = run((i) => [
+      { tag: "AA", rssi: rssiFisica(i), sourceId: "A" },
+      { tag: "AA", rssi: rssiRuido(i), sourceId: "B" },
+    ]);
+    const semSrc = run((i) => [
+      { tag: "AA", rssi: rssiFisica(i) },
+      { tag: "AA", rssi: rssiRuido(i) },
+    ]);
+    expect(JSON.stringify(comSrc)).toBe(JSON.stringify(semSrc)); // pool único, como sempre
+  });
+
+  it("ON com fonte ÚNICA = OFF bit-a-bit (a redução z_comb = z_1): sem sourceId e com sourceId único", () => {
+    const gen = (i: number): TagReading[] => [{ tag: "AA", rssi: rssiFisica(i) }];
+    const off = run(gen);
+    const on = run(gen, { multiSourceFisher: true });
+    expect(on).toEqual(off);
+    expect(on[0].tag).toBe("AA");
+    expect(on[0].confidence).toBe(off[0].confidence); // bit-a-bit, não aproximado
+    // Mesma redução com a fonte EXPLÍCITA (todas as leituras da fonte "A"):
+    const onSrc = run((i) => [{ tag: "AA", rssi: rssiFisica(i), sourceId: "A" }], {
+      multiSourceFisher: true,
+    });
+    expect(JSON.stringify(onSrc)).toBe(JSON.stringify(off));
+  });
+
+  it("fonte com amostras de MENOS não vota (gate por fonte): bit-idêntico à fonte forte sozinha", () => {
+    const onAB = run(
+      (i) => {
+        const r: TagReading[] = [{ tag: "AA", rssi: rssiFisica(i), sourceId: "A" }];
+        if (i < 3) r.push({ tag: "AA", rssi: rssiRuido(i), sourceId: "B" }); // 3 < minSamples (5)
+        return r;
+      },
+      { multiSourceFisher: true },
+    );
+    const offA = run((i) => [{ tag: "AA", rssi: rssiFisica(i) }]);
+    expect(onAB[0].tag).toBe("AA");
+    expect(onAB[0].confidence).toBe(offA[0].confidence); // a redução exata, sem round-trip de fp
+  });
+
+  it("2 fontes, uma FORTE + uma de RUÍDO puro: o par certo ainda fala — diluído, não morto", () => {
+    const soloA = run((i) => [{ tag: "AA", rssi: rssiFisica(i), sourceId: "A" }], {
+      multiSourceFisher: true,
+    });
+    const comRuido = run(
+      (i) => [
+        { tag: "AA", rssi: rssiFisica(i), sourceId: "A" },
+        { tag: "AA", rssi: rssiRuido(i), sourceId: "B" },
+      ],
+      { multiSourceFisher: true },
+    );
+    expect(comRuido[0].tag).toBe("AA"); // ainda fala (z_comb ≈ z_A/√2 → score ~0,94)
+    expect(comRuido[0].confidence).toBeGreaterThan(0.5);
+    expect(comRuido[0].confidence).toBeLessThan(soloA[0].confidence); // o ruído DILUI, mede-se
+  });
+
+  it("correlação ESPÚRIA numa fonte só é ENFRAQUECIDA pela segunda (o desempate real de 2 antenas)", () => {
+    // Sozinha, a fonte A “prova” o par (r ≈ −0,99, espúrio por hipótese). A fonte B mede o
+    // CONTRÁRIO (RSSI subindo com a distância): z_B (+) quase cancela z_A (−) → score ~0,3 → abstém.
+    const soloA = run((i) => [{ tag: "AA", rssi: rssiFisica(i), sourceId: "A" }], {
+      multiSourceFisher: true,
+    });
+    expect(soloA[0].tag).toBe("AA"); // sem a 2ª fonte, a espúria falaria
+    const both = run(
+      (i) => [
+        { tag: "AA", rssi: rssiFisica(i), sourceId: "A" },
+        { tag: "AA", rssi: rssiContra(i), sourceId: "B" },
+      ],
+      { multiSourceFisher: true },
+    );
+    expect(both[0].tag).toBeNull(); // a 2ª fonte desempata: cai abaixo de minConfidence
+    expect(both[0].confidence).toBeLessThan(0.5);
+    expect(both[0].confidence).toBeLessThan(soloA[0].confidence);
+  });
+
+  it("leituras SEM sourceId caem na fonte 'default' (retrocompat): igual a rotulá-las explicitamente", () => {
+    const implicita = run(
+      (i) => [
+        { tag: "AA", rssi: rssiFisica(i) }, // sem sourceId → fonte "default"
+        { tag: "AA", rssi: rssiRuido(i), sourceId: "B" },
+      ],
+      { multiSourceFisher: true },
+    );
+    const explicita = run(
+      (i) => [
+        { tag: "AA", rssi: rssiFisica(i), sourceId: "A" },
+        { tag: "AA", rssi: rssiRuido(i), sourceId: "B" },
+      ],
+      { multiSourceFisher: true },
+    );
+    expect(JSON.stringify(implicita)).toBe(JSON.stringify(explicita)); // 2 fontes nos dois casos
+  });
+
+  it("guarda de ambiguidade opera IGUAL sobre o score combinado: bloco com 2 fontes → abstém", () => {
+    const tracks = (i: number): TrackDist[] => [
+      { trackId: 1, dist: ramp(1, 6, i, N) },
+      { trackId: 2, dist: ramp(1.3, 6.3, i, N) }, // paralela (bloco — o empate físico)
+    ];
+    const res = run(
+      (i) => [
+        { tag: "AA", rssi: ramp(-50, -75, i, N), sourceId: "A" },
+        { tag: "AA", rssi: ramp(-51, -76, i, N), sourceId: "B" },
+        { tag: "BB", rssi: ramp(-52, -77, i, N), sourceId: "A" },
+        { tag: "BB", rssi: ramp(-53, -78, i, N), sourceId: "B" },
+      ],
+      { multiSourceFisher: true },
+      tracks,
+    );
+    expect(res.map((r) => r.tag)).toEqual([null, null]); // 2 fontes CONCORDANTES não desfazem o empate
+    expect(res.every((r) => r.confidence > 0.9)).toBe(true); // a assinatura da ambiguidade, intacta
+  });
+
+  it("buildFusionFrame repassa sourceId intacto (e não inventa a chave quando ausente)", () => {
+    const ff = buildFusionFrame(
+      [],
+      [
+        { mac: "M1", rotulo: "AA", rssi: -50, sourceId: "esp32-b" },
+        { mac: "M2", rotulo: null, rssi: -60 },
+      ],
+      null,
+      123,
+    );
+    expect(ff.readings[0].sourceId).toBe("esp32-b");
+    expect("sourceId" in ff.readings[1]).toBe(false); // retrocompat dura: nem a chave existe
+  });
+});
+

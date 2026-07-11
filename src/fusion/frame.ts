@@ -9,8 +9,20 @@ import type { FusionFrame, TagReading } from "./associate";
 export type DrawTrack = { id: number; bbox: readonly [number, number, number, number] };
 /** Leitura BLE crua (shape do bt-readings): rótulo quando cadastrada, senão o MAC.
  *  `distM` (OPCIONAL, v4): distância ABSOLUTA tag→estação (m) estimada pelo modelo RSSI→distância
- *  calibrado pelas âncoras (floor-plot.ts) — repassada intacta ao associador como 2ª evidência. */
-export type RawReading = { mac: string; rotulo: string | null; rssi: number; distM?: number };
+ *  calibrado pelas âncoras (floor-plot.ts) — repassada intacta ao associador como 2ª evidência.
+ *  `sourceId` (OPCIONAL, ADR-013 item 3): id da FONTE que mediu (a estação BLE — o `stationId` do
+ *  ingest/gravação). AUSENTE = fonte única implícita — a semântica de todo o código de hoje
+ *  (simulador `sim.ts`, produção com 1 estação): leituras sem sourceId são tratadas como vindas da
+ *  mesma e única fonte, exatamente como antes do campo existir. Só o loader de gravação o preenche
+ *  por ora (session-loader.ts); nenhum consumidor o exige — vocabulário aditivo p/ multi-fonte
+ *  (2ª antena/AoA/UWB), ver src/fusion/evidence.ts. */
+export type RawReading = {
+  mac: string;
+  rotulo: string | null;
+  rssi: number;
+  distM?: number;
+  sourceId?: string;
+};
 
 // Padrão da estação: base-centro da imagem (0.5, 1.0) = ponto do chão MAIS PERTO da câmera. Assume a
 // estação junto da câmera (caminho C). Trocável se a estação ficar em outro ponto conhecido do chão.
@@ -68,6 +80,7 @@ export function buildFusionFrame(
     if (excludeTags && excludeTags.has(r.mac.toUpperCase())) continue;
     const out: TagReading = { tag: r.rotulo || r.mac, rssi: r.rssi };
     if (r.distM !== undefined) out.distM = r.distM;
+    if (r.sourceId !== undefined) out.sourceId = r.sourceId; // fonte → fusão multi-fonte (ADR-013)
     outReadings.push(out);
   }
   return { ts: now, readings: outReadings, tracks: outTracks };

@@ -6,7 +6,13 @@
 // FORMATO (JSONL append-only, 1 evento/linha — contrato fixo com o loader de replay):
 //   {"t":"cal","ts":<ms>,"cameraId":"<id>","H":[9 números]|null,"station":{"x":0..1,"y":0..1}|null}
 //   {"t":"trk","ts":<ms>,"cameraId":"<id>","tracks":[{"id":<num>,"bbox":[x,y,w,h]}]}  // bbox 0..1
-//   {"t":"ble","ts":<ms>,"stationId":"<id>","readings":[{"mac":"<MAC>","rssi":<int>}]}
+//   {"t":"ble","ts":<ms>,"stationId":"<id>","sourceKind":"ble-rssi","readings":[{"mac":"<MAC>","rssi":<int>}]}
+//     — `sourceKind` (ADITIVO, ADR-013 item 3): tipo da FONTE da medição, no vocabulário universal
+//     de evidência (`src/fusion/evidence.ts`) — sensores futuros (AoA/UWB/mmWave) gravam o seu pela
+//     MESMA porta. O `stationId` É o `sourceId` do domínio BLE: o nome fica por retrocompat de
+//     contrato (loader/ingest antigos o conhecem assim), a generalização fica registrada aqui — o
+//     loader (`src/fusion/session-loader.ts`) o preserva como `sourceId` de cada reading quando a
+//     linha traz `sourceKind`. Gravações antigas (sem o campo) seguem lidas idênticas.
 //   {"t":"meta","ts":<ms>,"gitRev":"<hash curto>"|null,"fusionConfig":{...knobs de associate.ts}}
 //     — versão do algoritmo/knobs (pedido do especialista científico, 2026-07-10): escrita UMA vez,
 //     na primeira linha gravada do PROCESSO (não por câmera/sessão — ver `ensureMeta()`). "Replay de
@@ -247,7 +253,14 @@ function recordReadings(stationId, ts, readings) {
       mac: String((r && r.mac) || ""),
       rssi: Number(r && r.rssi),
     }));
-    append({ t: "ble", ts: Number(ts) || Date.now(), stationId: String(stationId || ""), readings: clean });
+    // sourceKind: vocabulário universal de evidência (ADR-013 / src/fusion/evidence.ts) — ver header.
+    append({
+      t: "ble",
+      ts: Number(ts) || Date.now(),
+      stationId: String(stationId || ""),
+      sourceKind: "ble-rssi",
+      readings: clean,
+    });
   } catch (e) {
     fail(e);
   }

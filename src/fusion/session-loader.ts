@@ -49,6 +49,14 @@
 //   grade de ticks (não tem cameraId, não é cal/trk/ble) — é lida à parte e exposta em `meta` no
 //   retorno (aditivo a `SimFusionScenario`); "último vence" se houver mais de uma (mesmo padrão do
 //   "cal"). Gravações ANTIGAS sem essa linha continuam funcionando idênticas — `meta` sai `null`.
+// - `sourceId` nas readings (ADITIVO, ADR-013 item 3): a linha "ble" NOVA traz `sourceKind`
+//   ("ble-rssi" — ver session-recorder.js) e o loader então PRESERVA o `stationId` do evento como
+//   `sourceId` de cada RawReading (antes era descartado). Gate deliberado pela PRESENÇA de
+//   `sourceKind`: gravação ANTIGA (sem sourceKind) parseia BYTE-IDÊNTICA ao que sempre parseou
+//   (retrocompat dura, provada por teste — nem a chave `sourceId` existe), e é a linha que DECLARA
+//   seu sourceKind que opta pelo vocabulário multi-fonte. Nenhum consumidor exige o campo hoje
+//   (fonte única implícita — ver frame.ts); ele existe p/ a 2ª antena/AoA/UWB entrarem pela mesma
+//   porta (src/fusion/evidence.ts).
 import { replayFusion } from "./replay-fusion";
 import { TagTrackAssociator } from "./associate";
 import type { FusionConfig, PairFunnel } from "./associate";
@@ -142,11 +150,15 @@ function parseTrack(v: unknown): DrawTrack | null {
   return { id: o.id, bbox: [b[0], b[1], b[2], b[3]] };
 }
 
-/** Um item de readings: {mac, rssi} — rotulo é sempre null (identidade = MAC maiúsculo; ver cabeçalho). */
-function parseReading(v: unknown): RawReading | null {
+/** Um item de readings: {mac, rssi} — rotulo é sempre null (identidade = MAC maiúsculo; ver cabeçalho).
+ *  `sourceId` (quando o chamador o passa — linha "ble" nova com sourceKind, ver cabeçalho) é
+ *  estampado em cada reading; ausente → nem a chave existe (retrocompat dura, fonte única implícita). */
+function parseReading(v: unknown, sourceId?: string): RawReading | null {
   const o = asRecord(v);
   if (!o || typeof o.mac !== "string" || o.mac.length === 0 || !isFiniteNumber(o.rssi)) return null;
-  return { mac: o.mac.toUpperCase(), rotulo: null, rssi: o.rssi };
+  const out: RawReading = { mac: o.mac.toUpperCase(), rotulo: null, rssi: o.rssi };
+  if (sourceId !== undefined) out.sourceId = sourceId;
+  return out;
 }
 
 /** Parse de UMA linha JSONL → evento tipado, ou null se a linha é suja (pulada + contada no diag). */
@@ -181,9 +193,15 @@ function parseLine(line: string): SessionEvent | null {
   }
   if (o.t === "ble") {
     if (!Array.isArray(o.readings)) return null;
+    // sourceId = stationId, SÓ quando a linha declara sourceKind (formato novo — ver cabeçalho);
+    // linha antiga sem sourceKind parseia idêntica ao de sempre (sem a chave sourceId).
+    const sourceId =
+      typeof o.sourceKind === "string" && typeof o.stationId === "string" && o.stationId.length > 0
+        ? o.stationId
+        : undefined;
     const readings: RawReading[] = [];
     for (const item of o.readings) {
-      const r = parseReading(item);
+      const r = parseReading(item, sourceId);
       if (r) readings.push(r);
     }
     return { t: "ble", ts: o.ts, readings };

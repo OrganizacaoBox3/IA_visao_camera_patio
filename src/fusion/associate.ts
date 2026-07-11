@@ -72,6 +72,12 @@ export type TagReading = {
   /** Estimativa ABSOLUTA da distância tag→estação (m), via modelo calibrado pelas âncoras
    *  (floor-plot.ts). OPCIONAL — ausente = comportamento pré-v4 intacto (retrocompat dura). */
   distM?: number;
+  /** FONTE da leitura (ADR-013 item 3 — o `sourceId`/`stationId` da estação/antena que mediu),
+   *  repassado por buildFusionFrame (frame.ts). OPCIONAL — ausente = fonte única implícita
+   *  ("default"), a semântica de todo o código de hoje. SÓ é consumido pelo knob de pesquisa
+   *  `multiSourceFisher` (fusão multi-fonte por soma de Fisher-z); com o knob OFF (default) o
+   *  campo é IGNORADO e as leituras seguem num pool único, byte-idêntico ao atual. */
+  sourceId?: string;
 };
 export type TrackDist = {
   trackId: number; // pessoa rastreada
@@ -113,7 +119,9 @@ export type Assignment = {
  *  tratamento p/ o `significanceGate` da recalibração (OFF por default): par insignificante
  *  zera em pairScore e aparece como "belowMinConfidence"; e com `useLogDistance`+
  *  `minMovementDecades` o "lowMovement" reflete o gate em DÉCADAS (movementVetoed é a fonte
- *  única). Promoção de knob → verdicts próprios ADITIVOS. */
+ *  única). Idem `multiSourceFisher` (OFF por default): par sem fonte votante zera em pairScore e
+ *  aparece como "belowMinConfidence" (e o `corr` do funil segue o Pearson do POOL, diagnóstico).
+ *  Promoção de knob → verdicts próprios ADITIVOS. */
 export type FunnelVerdict =
   | "distSamples<minSamples" // a PISTA tem amostras de menos na janela
   | "rssiSamples<minSamples" // a TAG tem amostras de menos na janela
@@ -214,6 +222,47 @@ export type FusionConfig = {
    *  pesquisa) segue referenciando minConfidence internamente — a combinação dos dois não foi
    *  medida e não é suportada. */
   significanceGate?: { zCrit: number; rho: number; minNeff: number };
+  /** PESQUISA (ADR-013 item 4 — fusão de IDENTIDADE multi-fonte por soma de Fisher-z; OFF/ausente
+   *  por default = byte-idêntico ao atual: leituras num pool único SEM olhar sourceId, os 12 pins
+   *  de replay-fusion.test.ts intactos). Quando true: as leituras de RSSI de cada tag são
+   *  PARTICIONADAS por `sourceId` (ausente = fonte "default"); para cada fonte com amostras
+   *  suficientes (os MESMOS gates de sempre, aplicados POR fonte) computa-se r_i (Pearson contra
+   *  a série de distância da pista); a evidência combinada é a soma ponderada de Fisher-z:
+   *
+   *      z_comb = Σ z_i·√(n_i−3) / √(Σ(n_i−3)),  com z_i = atanh(r_i), n_i = amostras alinhadas
+   *
+   *  — o teste combinado padrão de correlações independentes (Stouffer ponderado: cada
+   *  z_i·√(n_i−3) tem variância ~1 sob H0; a soma normalizada por √(Σ(n_i−3)) preserva
+   *  variância 1, então mais fontes concordando ⇒ |z_comb| cresce, fonte ruidosa (z≈0) DILUI
+   *  sem matar, e fonte que CONTRADIZ subtrai). Score do par = max(0, min(1, −tanh(z_comb))).
+   *  Com UMA fonte só, z_comb = z_1 ⇒ score IDÊNTICO ao atual (redução provada bit-a-bit em
+   *  associate.test.ts). A guarda de margem top-2 e a atribuição 1-1 operam IGUAL sobre o score
+   *  combinado — nada muda depois do pairScore.
+   *
+   *  ⚠ LIMITAÇÃO DE ESCOPO v1 (decisão documentada desta entrega — a FASE 2 está pendente):
+   *  cada fonte correlaciona o SEU RSSI contra a MESMA série de distância disponível da pista —
+   *  a distância à ESTAÇÃO PRINCIPAL (o contrato TrackDist tem UMA `dist` por pista). Isso é
+   *  fisicamente correto quando as fontes são CO-LOCALIZADAS, OU quando a fonte B serve só como
+   *  dimensão EXTRA DE ASSINATURA de identidade (a soma de Fisher-z segue válida como evidência
+   *  adicional) SEM geometria própria ainda. Com estações em POSIÇÕES DISTINTAS, a série de
+   *  distância correta da fonte B seria a distância da pista AO PONTO DA ESTAÇÃO B (distância a
+   *  A ≠ distância a B) — a geometria por-fonte (TrackDist por fonte) é a fase 2, quando o frame
+   *  de produção souber a posição da estação B; é lá que o ganho pleno de ORTOGONALIDADE (duas
+   *  geometrias desempatando o "bloco") aparece.
+   *
+   *  Combinações NÃO medidas (mesmo precedente do blend×significanceGate acima): no caminho com
+   *  ≥2 fontes votantes, maxDistRatio/distWeight NÃO se aplicam (knobs v4 já aposentados dos
+   *  defaults); significanceGate, se presente, aplica POR FONTE (fonte individualmente
+   *  insignificante não vota; nenhuma votante → não fala).
+   *
+   *  MÉTRICA DE UNIVERSALIDADE (ADR-013 item 7 — previsão do especialista a testar quando o
+   *  ESP32 chegar): esta entrega mudou 61 linhas EXECUTÁVEIS do motor (este arquivo, medido no
+   *  diff sem comentários/vazias: campo sourceId nos tipos + partição por fonte +
+   *  multiSourceScore + repasse nos builders de série) + 1 linha em frame.ts (repasse do
+   *  sourceId). Previsão registrada p/ a CHEGADA da 2ª antena: ZERO linhas adicionais no motor —
+   *  só o adapter de ingest preenchendo `sourceId`. Se confirmar, a interface está no lugar
+   *  certo e UWB/AoA/mmWave entram pela mesma porta. */
+  multiSourceFisher?: boolean;
 };
 
 // significanceGate fica OPCIONAL mesmo na config resolvida: "ausente" É o estado desligado
@@ -243,6 +292,7 @@ const DEFAULTS: ResolvedConfig = {
   useLogDistance: false,
   minMovementDecades: 0,
   // significanceGate: AUSENTE por default (desligado) — ver ResolvedConfig.
+  multiSourceFisher: false, // fusão multi-fonte (Fisher-z) DESLIGADA — knob de pesquisa (ADR-013 item 4)
 };
 
 // Escala do blend (m): exp(−gap/escala). 1,5 m ≈ erro mediano de distância que 4 dB de ruído de
@@ -347,8 +397,32 @@ function passesSignificance(
 
 /** Amostra alinhada de uma pista: distância no instante ts (+ se está em metros REAIS). */
 type DistSample = { ts: number; value: number; metric: boolean };
-/** Amostra de uma tag: RSSI no instante ts (+ distM calibrado, quando existe). */
-type RssiSample = { ts: number; value: number; distM?: number };
+/** Amostra de uma tag: RSSI no instante ts (+ distM calibrado e sourceId da fonte, quando há). */
+type RssiSample = { ts: number; value: number; distM?: number; sourceId?: string };
+
+/** Fonte implícita das leituras sem `sourceId` (retrocompat: o mundo de 1 estação de hoje). */
+const DEFAULT_SOURCE_ID = "default";
+
+/** Clamp de |r| ANTES do atanh na soma multi-fonte: atanh(±1) = ±∞, e ∞ somado à fonte que
+ *  discorda vira NaN (∞−∞). 1−1e−12 ⇒ |z| ≤ ~14, que ainda satura o tanh de volta em ±1 na
+ *  prática. SÓ o caminho multi-fonte usa; o caminho de fonte única segue com o r cru (intacto). */
+const FISHER_R_CLAMP = 1 - 1e-12;
+
+/** Particiona a série de RSSI por fonte (`sourceId`; ausente → DEFAULT_SOURCE_ID). Preserva a
+ *  ordem temporal dentro de cada fonte (mesma ordem de inserção do buffer). */
+function partitionBySource(rssiSeries: readonly RssiSample[]): Map<string, RssiSample[]> {
+  const m = new Map<string, RssiSample[]>();
+  for (const s of rssiSeries) {
+    const k = s.sourceId ?? DEFAULT_SOURCE_ID;
+    let arr = m.get(k);
+    if (!arr) {
+      arr = [];
+      m.set(k, arr);
+    }
+    arr.push(s);
+  }
+  return m;
+}
 
 /** Mediana (assume xs não-vazio) — robusta a outliers de RSSI, ao contrário da média. */
 function median(xs: readonly number[]): number {
@@ -594,6 +668,13 @@ export class TagTrackAssociator {
     const { minSamples, minConfidence, maxDistRatio, distWeight, useLogDistance, significanceGate } =
       this.cfg;
     if (distSeries.length < minSamples || rssiSeries.length < minSamples) return NO_EVIDENCE;
+    // PESQUISA multiSourceFisher (OFF por default — ver FusionConfig): com ≥2 fontes na janela,
+    // a evidência é a combinação de Fisher-z POR FONTE. Com 1 fonte só (ou todas sem sourceId),
+    // z_comb = z_1 ⇒ cai no caminho único abaixo, byte-idêntico (a redução, provada em teste).
+    if (this.cfg.multiSourceFisher) {
+      const groups = partitionBySource(rssiSeries);
+      if (groups.size > 1) return this.multiSourceScore(distSeries, groups);
+    }
     const { rssi, dist, gaps, logGaps } = align(distSeries, rssiSeries);
     if (rssi.length < minSamples) return NO_EVIDENCE;
     // PESQUISA useLogDistance (OFF por default): a variável de correlação vira log10(d) — o
@@ -632,6 +713,61 @@ export class TagTrackAssociator {
       return { score: blended, guard: blended };
     }
     return { score: base, guard: base };
+  }
+
+  /**
+   * PESQUISA multiSourceFisher (ADR-013 item 4; chamado por pairScore SÓ com ≥2 fontes na
+   * janela): evidência do par com as leituras PARTICIONADAS por fonte. Fórmula, redução p/ fonte
+   * única e a LIMITAÇÃO DE ESCOPO v1 (mesma série de distância p/ toda fonte — geometria
+   * por-fonte é a fase 2) documentadas em FusionConfig.multiSourceFisher.
+   *
+   * Gates POR FONTE (os mesmos de sempre): série crua ≥ minSamples, alinhada ≥ minSamples,
+   * Pearson definida (série constante → a fonte não vota) e, se presente, significanceGate.
+   * O veto de MOVIMENTO é da PISTA, não da fonte — a série alinhada de distância é a MESMA para
+   * toda fonte não-vazia (align() emite 1 par por amostra de distância) — checado 1× com a
+   * MESMA função do caminho único (movementVetoed).
+   *
+   * Fonte ÚNICA VOTANTE (as demais caíram nos gates): usa o r cru direto (sem o round-trip
+   * tanh∘atanh, que introduziria erro de fp) — BIT-IDÊNTICO a rodar só com a fonte votante.
+   * guard === score sempre (sem gate v4 neste caminho — combinação não medida, ver FusionConfig).
+   */
+  private multiSourceScore(
+    distSeries: DistSample[],
+    groups: Map<string, RssiSample[]>,
+  ): PairEvidence {
+    const { minSamples, useLogDistance, significanceGate } = this.cfg;
+    let movementChecked = false;
+    let sumZW = 0; // Σ z_i·√(n_i−3)
+    let sumW = 0; // Σ (n_i−3)
+    let voters = 0;
+    let soloCorr = 0; // r da única fonte votante (p/ a redução exata quando voters === 1)
+    // Ordem de iteração DETERMINÍSTICA (chaves ordenadas) — a soma de floats não depende da
+    // ordem de chegada das leituras no buffer.
+    for (const src of [...groups.keys()].sort()) {
+      const series = groups.get(src)!;
+      if (series.length < minSamples) continue; // gate de amostras cruas, POR fonte
+      const { rssi, dist } = align(distSeries, series);
+      if (rssi.length < minSamples) continue; // gate de amostras alinhadas, POR fonte
+      if (!movementChecked) {
+        if (this.movementVetoed(dist)) return NO_EVIDENCE; // veto da PISTA — 1× (ver docstring)
+        movementChecked = true;
+      }
+      const p = pearson(rssi, useLogDistance ? log10Dist(dist) : dist);
+      if (p === null) continue; // série constante NESTA fonte → a fonte não vota
+      if (significanceGate !== undefined && !passesSignificance(p.corr, rssi, significanceGate))
+        continue; // fonte individualmente insignificante não vota (ver FusionConfig)
+      const w = rssi.length - 3; // n_i−3 (peso de Fisher; minSamples ≥ 5 ⇒ w ≥ 2)
+      if (w <= 0) continue; // defensivo p/ minSamples configurado < 4 (variância indefinida)
+      const r = Math.max(-FISHER_R_CLAMP, Math.min(FISHER_R_CLAMP, p.corr));
+      sumZW += Math.atanh(r) * Math.sqrt(w);
+      sumW += w;
+      voters++;
+      soloCorr = p.corr;
+    }
+    if (voters === 0) return NO_EVIDENCE; // nenhuma fonte votou — abstenção por falta de evidência
+    const rComb = voters === 1 ? soloCorr : Math.tanh(sumZW / Math.sqrt(sumW));
+    const s = Math.max(0, Math.min(1, -rComb)); // mesma semântica de sempre: score = −corr
+    return { score: s, guard: s };
   }
 
   /** Veto de MOVIMENTO sobre a série ALINHADA de distância CRUA (m ou proxy) — fonte única
@@ -721,6 +857,7 @@ export class TagTrackAssociator {
         }
         const s: RssiSample = { ts: f.ts, value: r.rssi };
         if (r.distM !== undefined) s.distM = r.distM;
+        if (r.sourceId !== undefined) s.sourceId = r.sourceId; // multi-fonte (multiSourceFisher)
         arr.push(s);
       }
     }
@@ -864,6 +1001,7 @@ export class TagTrackAssociator {
         }
         const s: RssiSample = { ts: f.ts, value: r.rssi };
         if (r.distM !== undefined) s.distM = r.distM;
+        if (r.sourceId !== undefined) s.sourceId = r.sourceId; // multi-fonte (multiSourceFisher)
         arr.push(s);
       }
     }
