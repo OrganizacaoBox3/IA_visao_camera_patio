@@ -37,12 +37,19 @@
 // COMPLETA DO n_eff" em visit-metrics.ts.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 import { REAL_TAG_PERIOD_S, REAL_TAG_PERIOD_TICKS, simulateFusionScenario } from "./sim";
 import type { SimFusionScenario, SimOpts } from "./sim";
 import { FUSION_SCENARIOS } from "./replay-fusion";
 import { buildFusionFrame } from "./frame";
-import { computeVisitEpisodes, computeVisitMetrics, maxDistinctReadings } from "./visit-metrics";
-import type { VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
+import { parseFusionSession } from "./session-loader";
+import {
+  computeVisitEpisodes,
+  computeVisitMetrics,
+  countingViolations,
+  maxDistinctReadings,
+} from "./visit-metrics";
+import type { VisitEpisode, VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
 import { pixelToWorld } from "../vision/homography";
 import { DEFAULT_ROOM_GRID, optimalReceiver, radialSpan, type Pt } from "./receiver-geometry";
 
@@ -1246,4 +1253,327 @@ describe("CADÊNCIA REAL DA TAG (2,5 s) — a cobertura HONESTA, e a aritmética
     expect(maxDistinctReadings(97000, REAL_TAG_PERIOD_S)).toBeGreaterThanOrEqual(39);
     expect(maxDistinctReadings(40000, REAL_TAG_PERIOD_S)).toBeLessThan(39); // 40 s NÃO basta
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// O "PORTAL DE IDENTIFICAÇÃO" — a cobertura CONDICIONADA À DURAÇÃO do episódio (2026-07-12).
+//
+// A RELEITURA que este bloco testa. Reportamos "cobertura 2,5%" (destino, tag real) — mas isso é uma
+// taxa INCONDICIONAL, diluída por dezenas de episódios CURTOS que JAMAIS PODERIAM disparar: com a tag
+// real (Δt=2,5 s), um episódio de 3-8 s produz 3-5 leituras DISTINTAS ⇒ n_eff ≤ 3 ⇒ o teste de Fisher
+// é INDEFINIDO (√(n_eff−3) imaginário — Regra 8/CLAUDE.md). Medir a cobertura sobre eles é medir a
+// nossa própria aritmética, não o rádio.
+//
+// O DOMÍNIO (respostas do dono, jul/12): os postos são mesas VIZINHAS e o operador circula LIVRE.
+// O movimento cotidiano é mesa→mesa (3-5 m, T≈2-4 s) — o rádio NÃO dispara nele, por CONTAGEM. O que
+// existe é a caminhada LONGA (entrada de turno, volta de intervalo: ~20 m, T≈18 s a 1,2 m/s), 2-4×
+// por turno. A pergunta CERTA para o desenho do produto ("portal": câmera cobrindo o corredor de
+// entrada + receptor no fim dele) é:
+//
+//        Qual a cobertura CONDICIONADA a T ≥ 18 s? E com que precisão?
+//
+// Não se precisa de MUITAS identificações — precisa de UMA ÂNCORA CONFIÁVEL por turno; as camadas 3-5
+// (conservação por zona + HSMM + conformance) carregam a identidade pelo resto.
+//
+// ‼ CIRCULARIDADE (declarada, doutrina §5): a cobertura/precisão saem do SIMULADOR (que gera
+//   RSSI = f(dist→estação) + ruído ⇒ |r| alto POR CONSTRUÇÃO). São INDICATIVAS. O que É campo, e
+//   entra sem simulador nenhum, é a DISTRIBUIÇÃO DE T do item 3 (gravação real) — e ela é quem diz se
+//   o portal teria THROUGHPUT.
+// ‼ τ: uso τ→0 (ρ=0) — a estimativa PONTUAL de campo (resíduo da tag móvel é BRANCO). É a ponta
+//   OTIMISTA do intervalo [0; 1,68 s] e a única defensável como estimativa central (ver retratações).
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("PORTAL — cobertura CONDICIONADA à duração T do episódio (a releitura do 2,5%)", () => {
+  /** Um episódio, reduzido ao que a estratificação por duração precisa. */
+  type EpStat = {
+    tS: number; // T = duração de PAREDE do episódio (endTs−startTs), em segundos
+    nDistinct: number; // leituras DISTINTAS do melhor candidato (o teto de contagem em ação)
+    nEff: number;
+    decided: boolean;
+    correct: boolean;
+  };
+
+  type Bin = { label: string; lo: number; hi: number };
+  /** Faixas de T pedidas pela decisão de produto. ≥18 s = a caminhada longa (20 m a 1,2 m/s). */
+  const BINS: Bin[] = [
+    { label: "T < 5 s", lo: 0, hi: 5 },
+    { label: "5 ≤ T < 10 s", lo: 5, hi: 10 },
+    { label: "10 ≤ T < 18 s", lo: 10, hi: 18 },
+    { label: "18 ≤ T < 30 s", lo: 18, hi: 30 },
+    { label: "T ≥ 30 s", lo: 30, hi: Infinity },
+  ];
+
+  /** Episódios-COM-TAG de toda a suíte, numa cadência de tag e numa posição de receptor. τ→0 (ρ=0). */
+  function collect(period: number, at: "base" | "dest"): { eps: EpStat[]; viol: number } {
+    const vo = { rho: 0 }; // τ→0 (BRANCO — a estimativa pontual de campo)
+    const out: EpStat[] = [];
+    const dtTagS = period * TICK_S;
+    let viol = 0;
+    for (const entry of FUSION_SCENARIOS.filter(inOverrideScope)) {
+      const opts = { ...entry.opts, rssiPeriodTicks: period };
+      const traj = person0Trajectory(opts, entry.seed);
+      if (traj.length < 2) continue;
+      const simOpts = at === "dest" ? { ...opts, stationWorldOverride: destinationOf(traj) } : opts;
+      const ticks = visitTicksFromScenario(simulateFusionScenario(simOpts, entry.seed));
+      const episodes: VisitEpisode[] = computeVisitEpisodes(ticks, vo);
+      // REGRA 8 (assert, não comentário): nDistinct ≤ ⌈T/Δt_tag⌉+1 e nEff ≤ nDistinct. Violou = BUG.
+      viol += countingViolations(episodes, dtTagS).length;
+      for (const e of episodes) {
+        if (e.truthTag === null) continue;
+        let nEff = 0;
+        let nDistinct = 0;
+        for (const c of e.candidates) {
+          if (c.nEff > nEff) nEff = c.nEff;
+          if (c.nDistinct > nDistinct) nDistinct = c.nDistinct;
+        }
+        out.push({
+          tS: (e.endTs - e.startTs) / 1000,
+          nDistinct,
+          nEff,
+          decided: e.decided,
+          correct: e.correct === true,
+        });
+      }
+    }
+    return { eps: out, viol };
+  }
+
+  type BinStat = { label: string; n: number; medND: number; medNeff: number; dec: number; cor: number };
+  const binize = (eps: EpStat[], bins: Bin[]): BinStat[] =>
+    bins.map((b) => {
+      const inBin = eps.filter((e) => e.tS >= b.lo && e.tS < b.hi);
+      return {
+        label: b.label,
+        n: inBin.length,
+        medND: medianOf(inBin.map((e) => e.nDistinct)),
+        medNeff: medianOf(inBin.map((e) => e.nEff)),
+        dec: inBin.filter((e) => e.decided).length,
+        cor: inBin.filter((e) => e.decided && e.correct).length,
+      };
+    });
+  /** Cobertura/precisão CONDICIONADAS a T ≥ tMin — o número que decide o portal. */
+  const condAt = (
+    eps: EpStat[],
+    tMin: number,
+  ): { n: number; dec: number; cor: number; cov: number; prec: number } => {
+    const s = eps.filter((e) => e.tS >= tMin);
+    const dec = s.filter((e) => e.decided).length;
+    const cor = s.filter((e) => e.decided && e.correct).length;
+    return { n: s.length, dec, cor, cov: s.length ? dec / s.length : 0, prec: dec ? cor / dec : 1 };
+  };
+
+  const BIN_HEAD = "faixa de T".padEnd(15) + "eps   ndist_med   n_eff_med   decid   cobertura   precisão";
+  const fmtBin = (b: BinStat): string =>
+    b.label.padEnd(15) +
+    `${String(b.n).padStart(3)}   ` +
+    `${b.medND.toFixed(1).padStart(9)}   ` +
+    `${b.medNeff.toFixed(2).padStart(9)}   ` +
+    `${String(b.dec).padStart(5)}   ` +
+    `${(b.n ? `${pct(b.dec / b.n)}%` : "—").padStart(9)}   ` +
+    `${(b.dec ? `${pct(b.cor / b.dec)}%` : "—").padStart(8)}`;
+
+  it(
+    "TAREFA 1+2 — cobertura/precisão ESTRATIFICADAS por T (tag REAL 2,5 s e tag RÁPIDA 0,5 s)",
+    () => {
+      // ── (1) TAG REAL (Δt = 2,5 s) — baseline (canto) e destino ──
+      const realBase = collect(REAL_TAG_PERIOD_TICKS, "base");
+      const realDest = collect(REAL_TAG_PERIOD_TICKS, "dest");
+      // ── (2) TAG RÁPIDA (Δt = 0,5 s, rssiPeriodTicks=1) — o corredor encolhe? ──
+      const fastBase = collect(1, "base");
+      const fastDest = collect(1, "dest");
+
+      // REGRA 8: nenhuma violação de contagem em NENHUMA das quatro configurações.
+      expect(realBase.viol).toBe(0);
+      expect(realDest.viol).toBe(0);
+      expect(fastBase.viol).toBe(0);
+      expect(fastDest.viol).toBe(0);
+
+      const show = (title: string, c: { eps: EpStat[] }): string =>
+        `\n${title}\n${BIN_HEAD}\n${"-".repeat(BIN_HEAD.length)}\n` +
+        binize(c.eps, BINS).map(fmtBin).join("\n");
+
+      console.log(
+        `\n═══ TAREFA 1 — TAG REAL (Δt=${REAL_TAG_PERIOD_S} s), τ→0, pooled sobre a suíte ═══` +
+          show(`BASELINE (estação no canto 0,0) — ${realBase.eps.length} episódios-com-tag`, realBase) +
+          show(
+            `DESTINO (receptor no fim da caminhada) — ${realDest.eps.length} episódios-com-tag`,
+            realDest,
+          ),
+      );
+
+      const r18b = condAt(realBase.eps, 18);
+      const r18d = condAt(realDest.eps, 18);
+      const rAllb = condAt(realBase.eps, 0);
+      const rAlld = condAt(realDest.eps, 0);
+      console.log(
+        `\n★★ O NÚMERO QUE DECIDE O PORTAL — cobertura CONDICIONADA a T ≥ 18 s (tag real 2,5 s) ★★\n` +
+          `  INCONDICIONAL (o que reportamos):  BASE ${pct(rAllb.cov)}% (prec ${pct(rAllb.prec)}%, n=${rAllb.n})   ` +
+          `DESTINO ${pct(rAlld.cov)}% (prec ${pct(rAlld.prec)}%, n=${rAlld.n})\n` +
+          `  CONDICIONADA a T≥18 s:             BASE ${pct(r18b.cov)}% (prec ${pct(r18b.prec)}%, n=${r18b.n})   ` +
+          `DESTINO ${pct(r18d.cov)}% (prec ${pct(r18d.prec)}%, n=${r18d.n})\n` +
+          `  ⇒ ganho de condicionar (destino): ${pct(rAlld.cov)}% → ${pct(r18d.cov)}% ` +
+          `(${rAlld.cov > 0 ? `${(r18d.cov / rAlld.cov).toFixed(1)}×` : "—"}). A taxa incondicional estava\n` +
+          `    DILUÍDA por episódios curtos que não podiam disparar por CONTAGEM (n_eff ≤ 3 ⇒ Fisher indefinido).`,
+      );
+
+      console.log(
+        `\n═══ TAREFA 2 — TAG RÁPIDA (Δt=0,5 s / 2 Hz), τ→0 — o corredor exigido encolhe ═══` +
+          show(`BASELINE (canto) — ${fastBase.eps.length} episódios-com-tag`, fastBase) +
+          show(`DESTINO — ${fastDest.eps.length} episódios-com-tag`, fastDest),
+      );
+      const f8b = condAt(fastBase.eps, 8);
+      const f8d = condAt(fastDest.eps, 8);
+      const f18d = condAt(fastDest.eps, 18);
+      const nd8fast = maxDistinctReadings(8000, 0.5);
+      console.log(
+        `\n★ TAG RÁPIDA — cobertura CONDICIONADA a T ≥ 8 s (o T que a tag de 0,5 s exige p/ |r| plausível):\n` +
+          `  BASE    ${pct(f8b.cov)}% (prec ${pct(f8b.prec)}%, n=${f8b.n})\n` +
+          `  DESTINO ${pct(f8d.cov)}% (prec ${pct(f8d.prec)}%, n=${f8d.n})   [T≥18 s: ${pct(f18d.cov)}%, n=${f18d.n}]\n` +
+          `  ⇒ com Δt=0,5 s, T=8 s já dá nDistinct=${nd8fast} ⇒ |r| exigido ` +
+          `${Math.tanh(1.96 * Math.sqrt(1 / (nd8fast - 3))).toFixed(2)} — o corredor cai de\n` +
+          `    ~${(18 * 1.2).toFixed(0)} m (tag real) para ~${(8 * 1.2).toFixed(0)} m. É a diferença entre "não dá pra instalar" e "dá".`,
+      );
+
+      // ── Assertivas ROBUSTAS (o VEREDITO, não números frágeis) ──
+      // 1) Determinismo.
+      expect(collect(REAL_TAG_PERIOD_TICKS, "dest").eps.length).toBe(realDest.eps.length);
+      // 2) A ARITMÉTICA (Regra 8) morde nas faixas curtas: com a tag real, T<5 s NUNCA decide — não
+      //    por fraqueza de sinal, por CONTAGEM (nDistinct ≤ 3 ⇒ n_eff ≤ 3 ⇒ Fisher indefinido).
+      const shortReal = binize(realDest.eps, BINS)[0];
+      expect(shortReal.dec).toBe(0);
+      expect(shortReal.medNeff).toBeLessThanOrEqual(3);
+      // 3) CONDICIONAR SOBE A COBERTURA: T≥18 s decide MUITO mais que a média incondicional. Se isto
+      //    flipar, a releitura do portal cai — é o gate do achado.
+      expect(r18d.cov).toBeGreaterThan(rAlld.cov);
+      // 4) E o que decide em T≥18 s decide HONESTO (não é cobertura comprada com rótulo errado).
+      if (r18d.dec > 0) expect(r18d.prec).toBeGreaterThan(0.75);
+      // 5) A TAG RÁPIDA antecipa o gate: a 0,5 s o episódio médio-curto ganha n_eff que a tag real
+      //    não pode dar (teto de contagem). É a alavanca LINEAR da lei (1º termo, T/Δt_tag).
+      const midFast = binize(fastDest.eps, BINS)[1]; // 5 ≤ T < 10 s
+      const midReal = binize(realDest.eps, BINS)[1];
+      expect(midFast.medNeff).toBeGreaterThan(midReal.medNeff);
+      expect(f8d.cov).toBeGreaterThan(condAt(realDest.eps, 8).cov);
+    },
+    300000,
+  );
+
+  // ── TAREFA 4 — a TABELA DE DECISÃO (insumo de instalação e de compra da tag) ──
+  it(
+    "TAREFA 4 — (T mínimo, Δt_tag) → corredor exigido a 1,2 m/s → cobertura condicionada → veredito",
+    () => {
+      const WALK_MS = 1.2; // m/s — passo de operador em corredor (o mesmo que dá 20 m ≈ 18 s)
+      const realDest = collect(REAL_TAG_PERIOD_TICKS, "dest").eps;
+      const fastDest = collect(1, "dest").eps;
+      const ndOf = (tS: number, dt: number): number => maxDistinctReadings(tS * 1000, dt);
+      const rBar = (ne: number): number =>
+        ne > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (ne - 3))) : Number.NaN;
+
+      const rows: { tMin: number; dt: number; eps: EpStat[] }[] = [
+        { tMin: 4, dt: REAL_TAG_PERIOD_S, eps: realDest }, // mesa→mesa vizinha (o cotidiano)
+        { tMin: 8, dt: REAL_TAG_PERIOD_S, eps: realDest },
+        { tMin: 18, dt: REAL_TAG_PERIOD_S, eps: realDest },
+        { tMin: 30, dt: REAL_TAG_PERIOD_S, eps: realDest },
+        { tMin: 4, dt: 0.5, eps: fastDest },
+        { tMin: 8, dt: 0.5, eps: fastDest },
+        { tMin: 18, dt: 0.5, eps: fastDest },
+      ];
+      const head =
+        "T mín (s)  Δt_tag (s)  corredor (m)  nDist  |r| exigido  cob. cond.  prec.    n    veredito";
+      const lines = [head, "-".repeat(head.length + 12)];
+      for (const { tMin, dt, eps } of rows) {
+        const nd = ndOf(tMin, dt);
+        const rb = rBar(nd);
+        const c = condAt(eps, tMin);
+        const verdict = !Number.isFinite(rb)
+          ? "INDEFINIDO — Fisher não existe (faltam PONTOS)"
+          : rb > 0.9
+            ? "INÚTIL — exige |r| quase perfeito"
+            : rb > 0.7
+              ? "MARGINAL"
+              : c.cov >= 0.5
+                ? "PORTAL VIÁVEL (barra ok + cobertura alta)"
+                : "VIÁVEL — barra ok, cobertura parcial";
+        lines.push(
+          `${tMin.toFixed(0).padStart(9)}  ${dt.toFixed(1).padStart(10)}  ` +
+            `${(tMin * WALK_MS).toFixed(1).padStart(12)}  ${String(nd).padStart(5)}  ` +
+            `${(Number.isFinite(rb) ? rb.toFixed(2) : "—").padStart(11)}  ` +
+            `${`${pct(c.cov)}%`.padStart(10)}  ${(c.dec ? `${pct(c.prec)}%` : "—").padStart(6)}  ` +
+            `${String(c.n).padStart(3)}    ${verdict}`,
+        );
+      }
+      console.log(
+        `\n═══ TAREFA 4 — TABELA DE DECISÃO DO PORTAL (τ→0; cobertura/precisão = SIMULADOR, indicativas) ═══\n` +
+          `${lines.join("\n")}\n` +
+          `  (corredor = T × 1,2 m/s = o comprimento que a CÂMERA precisa OBSERVAR; o receptor fica no FIM dele.)`,
+      );
+
+      // ── Assertivas: a ARITMÉTICA da tabela (não os números do sim) ──
+      expect(ndOf(18, REAL_TAG_PERIOD_S)).toBeGreaterThanOrEqual(8); // 18 s c/ tag real: teste VIÁVEL
+      expect(rBar(ndOf(18, REAL_TAG_PERIOD_S))).toBeLessThanOrEqual(0.7);
+      expect(rBar(ndOf(8, 0.5))).toBeLessThanOrEqual(0.5); // 8 s c/ tag rápida: CONFORTÁVEL
+      expect(rBar(ndOf(4, REAL_TAG_PERIOD_S))).toBeNaN(); // mesa→mesa vizinha: o teste NEM EXISTE
+    },
+    300000,
+  );
+
+  // ── TAREFA 3 — a DISTRIBUIÇÃO REAL de T (CAMPO, não simulador): o portal teria THROUGHPUT? ──
+  // Gravação READ-ONLY (CLAUDE.md §3), gitignored → ausente no CI → it.skipIf pula.
+  // SEM verdade anotada ⇒ SÓ duração/contagem. NUNCA precisão. (Mesmo gate de visit-metrics.test.ts.)
+  const WALK_FILES = [
+    "server/bt/fusion-session-2026-07-11_20.jsonl",
+    "server/bt/fusion-session-2026-07-11_19.jsonl",
+  ];
+  const WALK_FILE = WALK_FILES.find((f) => existsSync(f));
+
+  it.skipIf(!WALK_FILE)(
+    "TAREFA 3 — distribuição REAL da duração dos episódios (campo): quantos alcançam T ≥ 18 s?",
+    () => {
+      const lines = readFileSync(WALK_FILE!, "utf8").split(/\r?\n/);
+      const scenario = parseFusionSession(lines, {});
+      const stationPx = scenario.H ? scenario.stationPx : undefined;
+      const ticks: VisitTick[] = [];
+      for (const tick of scenario.ticks) {
+        if (tick.readings.length === 0) continue;
+        const frame = buildFusionFrame(tick.tracks, tick.readings, scenario.H, tick.ts, stationPx);
+        const rssiByTag: Record<string, number> = {};
+        for (const r of frame.readings) rssiByTag[r.tag] = r.rssi;
+        ticks.push({
+          ts: tick.ts,
+          tracks: frame.tracks.map((t) => ({ trackId: t.trackId, truthTag: null, dist: t.dist })),
+          rssiByTag,
+        });
+      }
+      const episodes = computeVisitEpisodes(ticks, { rho: 0 });
+      const durs = episodes.map((e) => (e.endTs - e.startTs) / 1000).sort((a, b) => a - b);
+      const q = (p: number): number =>
+        durs.length ? durs[Math.min(durs.length - 1, Math.floor(p * durs.length))] : 0;
+      const over = (t: number): number => durs.filter((d) => d >= t).length;
+
+      const histBins = [0, 2, 5, 8, 10, 18, 30, 60];
+      const hist = histBins.map((lo, i) => {
+        const hi = histBins[i + 1] ?? Infinity;
+        return { lo, hi, n: durs.filter((d) => d >= lo && d < hi).length };
+      });
+      console.log(
+        `\n═══ TAREFA 3 — DISTRIBUIÇÃO REAL DE T (CAMPO: ${WALK_FILE}; sem verdade ⇒ só duração) ═══\n` +
+          `episódios: ${durs.length} | mediana ${q(0.5).toFixed(1)} s | p75 ${q(0.75).toFixed(1)} s | ` +
+          `p90 ${q(0.9).toFixed(1)} s | p99 ${q(0.99).toFixed(1)} s | MÁX ${(durs[durs.length - 1] ?? 0).toFixed(1)} s\n` +
+          hist
+            .map(
+              (b) =>
+                `  ${`${b.lo}–${b.hi === Infinity ? "∞" : b.hi} s`.padEnd(10)} ${String(b.n).padStart(4)}  ` +
+                `${"#".repeat(Math.round((40 * b.n) / Math.max(1, durs.length)))}`,
+            )
+            .join("\n") +
+          `\n  T ≥ 5 s: ${over(5)} | T ≥ 8 s: ${over(8)} (o gate da TAG RÁPIDA) | ` +
+          `T ≥ 18 s: ${over(18)} (o gate da TAG REAL) | T ≥ 30 s: ${over(30)}\n` +
+          `  ⇒ THROUGHPUT bruto do setup ATUAL: ${over(18)} episódios ≥18 s e ${over(8)} ≥8 s nesta gravação.\n` +
+          `    RESSALVA HONESTA: esta gravação NÃO é um corredor de portal — é a câmera de hoje, FOV curto,\n` +
+          `    sem caminhada longa encenada. A distribuição diz o que o SETUP DE HOJE produz, não o teto do\n` +
+          `    portal: T é ARTEFATO DE FOV (a alavanca nº1 do laudo) — e é exatamente o que o portal muda.`,
+      );
+
+      expect(durs.length).toBeGreaterThan(0);
+    },
+    120000,
+  );
 });
