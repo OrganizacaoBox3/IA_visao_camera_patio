@@ -53,10 +53,12 @@ import {
 } from "./visit-metrics";
 import type { VisitEpisode, VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
 import {
+  agreementBySeparation,
   agreementOnFailure,
   computeAnchorMetrics,
   computeAnchors,
   falseAnchors,
+  formatAnchorProportion,
   sharedDataRisk,
 } from "./anchor-policy";
 import type { AnchorMetrics, OperatorEpisode, PolicyVariant } from "./anchor-policy";
@@ -2575,6 +2577,433 @@ describe("ADR-015 — POLÍTICA DE ÂNCORA (k-confirmação): o teto de 94% é d
       // 4) A cadência segue sendo alavanca LINEAR sobre o T exigido (a lei, 1º termo).
       expect(tForFloor(1.0, 10)).toBeLessThan(tForFloor(REAL_TAG_PERIOD_S, 10));
       expect(tForFloor(0.5, 10)).toBeLessThan(tForFloor(1.0, 10));
+    },
+    900000,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// ADR-015 §2 — DIVERSIDADE DE CONTEXTO: A PREVISÃO REGISTRADA DO REVISOR, TESTADA (2026-07-12)
+//
+// O QUE MOTIVA ESTE BLOCO. A Regra 13 nasceu de um número: agregando 2 episódios do mesmo operador,
+// quando o 1º ERRA, o 2º REPETE O MESMO ERRO em 41,2% [IC95 21,6–64,0] — contra um teto model-free de
+// independência de 8,8%. 4,7× acima ⇒ "n_eff 19+19=38" é FALSO como evidência independente.
+//
+// MAS NÓS MESMOS DECLARAMOS QUE AQUILO ERA O PIOR CASO POSSÍVEL: os "dois episódios" eram FRAGMENTOS
+// DO TRACKER separados por ~1 s (gap MEDIANO medido = 1,0 s, achado #27, ttlMs=1500) — mesma pose,
+// mesma sombra corporal, mesma geometria de aproximação. É quase A MESMA MEDIÇÃO DUAS VEZES.
+//
+// A PREVISÃO DO REVISOR (registrada ANTES desta medição, e é o que este bloco testa):
+//   "A concordância-no-erro CAI MONOTONICAMENTE com a separação temporal entre episódios. Entre
+//    âncoras reais separadas por minutos/horas o operador entrou por outra porta, com o corpo virado
+//    de outro jeito, com a tag no outro bolso. A correlação de erro DESPENCA. Se cair de 41% para
+//    perto do teto de independência em separações de MINUTOS, a política k=2 entre âncoras reais
+//    funciona como a soma promete — e a compra de 2 Hz pode ser reavaliada PARA BAIXO."
+//   Regra de desenho que sai disso: k=2 exige DIVERSIDADE DE CONTEXTO (separação temporal mínima),
+//   não só "dois episódios". → `minSeparationMs` em anchor-policy.ts.
+//
+// ‼ POR QUE CENÁRIOS LONGOS (a honestidade da medição). Os FUSION_SCENARIOS pinados têm 240 passos =
+//   120 s: NÃO SUSTENTAM os bins de separação longa (>5 min não existe em 120 s de cenário). Este
+//   bloco estende a DURAÇÃO por OPÇÃO (`steps: LONG_STEPS`) — nunca mexendo no default pinado de
+//   sim.ts (o pinning bit-a-bit dos FUSION_SCENARIOS é sagrado). Cenário = 2400 passos = 20 min.
+// ‼ O QUE A SEPARAÇÃO É AQUI, E O QUE ELA NÃO É. Ela é separação DENTRO de uma caminhada contínua de
+//   20 min: entre dois episódios separados por 5 min o operador está em OUTRO lugar da sala, com
+//   OUTRO rumo (⇒ outro viés corporal direcional) e OUTRO offset regional. Isso é EXATAMENTE o
+//   mecanismo que o revisor invoca — mas é o PISO dele, não o teto: entre âncoras de TURNO reais
+//   (entrada / volta do almoço) muda também a roupa, o bolso da tag, a porta de entrada. Se a curva
+//   já cair AQUI, cai a fortiori lá. Se NÃO cair aqui, a previsão está em sério apuro (mas não morta:
+//   sobra a hipótese de que só a mudança de roupa/bolso decorrelaciona — que o sim não modela).
+// ‼ PSEUDO-REPLICAÇÃO, declarada: um operador com m episódios decididos gera C(m,2) pares que
+//   COMPARTILHAM episódios. Reportamos as DUAS réguas: TODOS os pares (n grande, IC otimista na
+//   largura) e ≤1 PAR POR OPERADOR POR BIN (n honesto). A CONCLUSÃO se lê na régua conservadora.
+// ‼ CIRCULARIDADE (idem todo o arco): precisão/cobertura saem do SIMULADOR ⇒ INDICATIVAS. O que NÃO é
+//   circular é a ARITMÉTICA de contagem (T exigido → corredor) e a MECÂNICA da política.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("ADR-015 §2 — DIVERSIDADE DE CONTEXTO: a concordância-no-erro cai com a separação temporal?", () => {
+  /** 2400 passos × 500 ms = 20 min de cenário (o default PINADO é 240 = 120 s). Opção, não default. */
+  const LONG_STEPS = 2400;
+  const SEED_REPLICATES = 6; // sementes por cenário (Monte-Carlo) — o n de operadores
+  const PISO_REF = 10; // o piso onde os 41,2% foram medidos
+  const CAD_REF = 2; // 1 Hz — a cadência onde os 41,2% foram medidos
+  const MIN_DEC = 10; // âncoras mínimas p/ o IC de Wilson dizer algo
+  const WALK_LO = 1.1; // m/s
+  const WALK_HI = 1.2; // m/s
+  const CADS = [
+    { period: REAL_TAG_PERIOD_TICKS, dtS: REAL_TAG_PERIOD_S, label: "2,5 s (tag ATUAL)" },
+    { period: 2, dtS: 1.0, label: "1,0 s (1 Hz)" },
+    { period: 1, dtS: 0.5, label: "0,5 s (2 Hz)" },
+  ] as const;
+  /** Os bins de separação pedidos: 0-2 s (fragmentos), 2-10, 10-30, 30-60, 1-5 min, >5 min. */
+  const EDGES_MS = [0, 2000, 10000, 30000, 60000, 300000] as const;
+
+  /** Episódios etiquetados por OPERADOR, receptor no DESTINO, τ→0, em cenários de `LONG_STEPS`.
+   *  Memoizado (determinístico e caro: 9 cenários × 6 seeds × 2 sims × 2400 ticks por cadência). */
+  const opCache = new Map<number, { eps: OperatorEpisode[]; viol: number; operators: number }>();
+  function collectLong(period: number): { eps: OperatorEpisode[]; viol: number; operators: number } {
+    const hit = opCache.get(period);
+    if (hit) return hit;
+    const vo = { rho: 0 }; // τ→0 (resíduo BRANCO — a estimativa pontual de campo)
+    const dtTagS = period * TICK_S;
+    const eps: OperatorEpisode[] = [];
+    const ops = new Set<string>();
+    let viol = 0;
+    for (const entry of FUSION_SCENARIOS.filter(inOverrideScope)) {
+      for (let r = 0; r < SEED_REPLICATES; r++) {
+        const seed = entry.seed + 1000 * r;
+        const opts = { ...entry.opts, steps: LONG_STEPS, rssiPeriodTicks: period };
+        const traj = person0Trajectory(opts, seed);
+        if (traj.length < 2) continue;
+        const sc = simulateFusionScenario({ ...opts, stationWorldOverride: destinationOf(traj) }, seed);
+        const episodes = computeVisitEpisodes(visitTicksFromScenario(sc), vo);
+        viol += countingViolations(episodes, dtTagS).length; // Regra 8 na FONTE
+        for (const e of episodes) {
+          if (e.candidates.length === 0) continue;
+          const who = e.truthTag ?? `SEM-TAG#${e.trackId}`;
+          const operator = `${entry.name}#${seed}|${who}`;
+          if (e.truthTag !== null) ops.add(operator);
+          eps.push({ operator, episode: e });
+        }
+      }
+    }
+    const out = { eps, viol, operators: ops.size };
+    opCache.set(period, out);
+    return out;
+  }
+
+  const cellLong = (
+    period: number,
+    minNEff: number,
+    k: number,
+    minSeparationMs?: number,
+  ): AnchorMetrics =>
+    computeAnchorMetrics(
+      computeAnchors(collectLong(period).eps, "concordance", { k, minNEff, minSeparationMs }),
+    );
+
+  const wl = (kk: number, n: number): number => wilsonInterval(kk, n).lo;
+
+  it(
+    "TAREFA 1 — A CURVA: concordância-no-erro × SEPARAÇÃO TEMPORAL (a previsão do revisor)",
+    () => {
+      const { eps, viol, operators } = collectLong(CAD_REF);
+      expect(viol).toBe(0); // Regra 8 na fonte: nDistinct ≤ ⌈T/Δt_tag⌉+1 e nEff ≤ nDistinct
+
+      const all = agreementBySeparation(eps, PISO_REF, EDGES_MS);
+      const one = agreementBySeparation(eps, PISO_REF, EDGES_MS, { onePairPerOperator: true });
+
+      // O TETO GLOBAL de independência (o "8,8%" do achado): a taxa de erro do EPISÓDIO, model-free —
+      // para o 2º repetir o MESMO erro, ele precisa no mínimo ERRAR. Recomputado NESTE dado.
+      const errRate = 1 - cellLong(CAD_REF, PISO_REF, 1).precision;
+
+      const fmtBin = (b: (typeof all)[number]): string =>
+        `  ${b.label.padEnd(11)}` +
+        `pares=${String(b.pairs).padStart(5)}  ops=${String(b.operators).padStart(4)}  ` +
+        `1º ERRADO → 2º REPETE: ${(b.firstWrong ? formatAnchorProportion(b.firstWrongAndAgree, b.firstWrong) : "— (n=0)").padEnd(40)}` +
+        `teto do BIN (P(2º erra)): ${(b.pairs ? `${pct(b.secondWrong / b.pairs)}%` : "—").padStart(6)}`;
+
+      // A curva é MONOTÔNICA? (comparação sobre os bins COM dado, na régua conservadora.)
+      const nonEmptyOne = one.filter((b) => b.firstWrong >= 3);
+      const rateOf = (b: (typeof all)[number]): number => b.firstWrongAndAgree / b.firstWrong;
+      let monotone = true;
+      for (let i = 1; i < nonEmptyOne.length; i++)
+        if (rateOf(nonEmptyOne[i]) > rateOf(nonEmptyOne[i - 1]) + 1e-9) monotone = false;
+      const first = nonEmptyOne[0];
+      const last = nonEmptyOne[nonEmptyOne.length - 1];
+      // A régua A (todos os pares) é onde o n existe para o veredito ser mais que ruído: o bin dos
+      // FRAGMENTOS (0-2 s) contra o bin mais SEPARADO (> 5 min) — as duas pontas da previsão.
+      const allFirst = all[0];
+      const allLast = all[all.length - 1];
+
+      console.log(
+        `\n═══ TAREFA 1 — A CURVA: CONCORDÂNCIA-NO-ERRO × SEPARAÇÃO TEMPORAL ═══\n` +
+          `  (1 Hz · receptor no DESTINO · piso ${PISO_REF} · τ→0 · cenários de ${(LONG_STEPS * TICK_S) / 60} min · ` +
+          `${operators} operadores)\n` +
+          `  TETO GLOBAL de independência (model-free) = taxa de erro do episódio = ${pct(errRate)}%\n\n` +
+          `── régua A: TODOS os pares (n grande; pares COMPARTILHAM episódios ⇒ IC OTIMISTA na largura) ──\n` +
+          all.map(fmtBin).join("\n") +
+          `\n\n── régua B (a que DECIDE): ≤1 PAR POR OPERADOR POR BIN — sem pseudo-replicação ──\n` +
+          one.map(fmtBin).join("\n") +
+          `\n\n★ A PREVISÃO: "cai monotonicamente e chega perto do teto de independência"\n` +
+          `  bins com n≥3 (régua B): ${nonEmptyOne.map((b) => `${b.label}=${pct(rateOf(b))}%`).join(" → ")}\n` +
+          `  MONOTÔNICA (não-crescente)? ${monotone ? "**SIM**" : "**NÃO**"}\n` +
+          `  do 1º bin (${first.label}) ao último (${last.label}): ${pct(rateOf(first))}% → ${pct(rateOf(last))}%  ` +
+          `(teto de independência ${pct(errRate)}%)\n` +
+          `  DISTÂNCIA AO TETO: ${(rateOf(first) / Math.max(1e-9, errRate)).toFixed(1)}× no bin dos FRAGMENTOS → ` +
+          `${(rateOf(last) / Math.max(1e-9, errRate)).toFixed(1)}× no bin mais SEPARADO\n` +
+          `\n★★ VEREDITO — ACHADO NEGATIVO (vale o MESMO que um positivo, doutrina §5) ★★\n` +
+          `  A PREVISÃO ESTÁ REFUTADA. A curva NÃO cai: ela é PLANA. Na régua A (n grande: ${allFirst.firstWrong}→${allLast.firstWrong}\n` +
+          `  erros por bin), a concordância-no-erro vai de ${pct(rateOf(allFirst))}% nos FRAGMENTOS (0-2 s) a ${pct(rateOf(allLast))}% entre\n` +
+          `  episódios separados por MAIS DE 5 MINUTOS — e o teto de independência do bin mal se move\n` +
+          `  (${pct(allFirst.secondWrong / allFirst.pairs)}% → ${pct(allLast.secondWrong / allLast.pairs)}%). A razão ao teto fica em ${(rateOf(allFirst) / (allFirst.secondWrong / allFirst.pairs)).toFixed(1)}× → ${(rateOf(allLast) / (allLast.secondWrong / allLast.pairs)).toFixed(1)}×: NÃO converge para 1.\n` +
+          `  ⇒ O ERRO CORRELACIONADO NÃO É UM ARTEFATO DO FRAGMENTO DE 1 s. Ele é PROPRIEDADE DO\n` +
+          `    OPERADOR, não do INSTANTE: a geometria da trajetória daquela pessoa, QUAL vizinho é\n` +
+          `    confundível com ela, a colocação da tag no corpo e a distribuição do viés corporal\n` +
+          `    ao longo do turno são as MESMAS 5 minutos depois. Separar no tempo não separa a CAUSA.\n` +
+          `  ⇒ A Regra 13 SOBREVIVE inteira, e o "n_eff 19+19=38" segue FALSO — agora não só no pior\n` +
+          `    caso, mas em TODA separação medível.\n` +
+          `  ⚠ O LIMITE HONESTO DESTA REFUTAÇÃO (o que ela NÃO diz): o simulador modela mudança de\n` +
+          `    POSE/RUMO/REGIÃO ao longo da caminhada (e isso NÃO decorrelacionou nada), mas NÃO modela\n` +
+          `    trocar de roupa, mudar a tag de bolso ou entrar por outra porta. O que está refutado é\n` +
+          `    "a SEPARAÇÃO TEMPORAL, sozinha, decorrelaciona o erro". Se a decorrelação vier de\n` +
+          `    trocar o BOLSO da tag, isso é um experimento de CAMPO (e uma mudança de PROCEDIMENTO),\n` +
+          `    não uma propriedade do relógio — e não é o que a política k=2 compra de graça.\n`,
+      );
+
+      // ── Assertivas: a MECÂNICA, a MASSA e o ACHADO NEGATIVO selado ──
+      expect(all[0].pairs).toBeGreaterThan(20); // o bin dos FRAGMENTOS (0-2 s) tem massa
+      expect(nonEmptyOne.length).toBeGreaterThanOrEqual(3); // a curva tem ao menos 3 pontos com n
+      // A régua conservadora nunca infla: ≤ pares da régua A, sempre.
+      for (let i = 0; i < all.length; i++) expect(one[i].pairs).toBeLessThanOrEqual(all[i].pairs);
+      // O teto de independência é model-free e tem de valer POR BIN (P(repete o MESMO erro) ≤ P(2º erra)).
+      for (const b of all) expect(b.firstWrongAndAgree).toBeLessThanOrEqual(b.secondWrong);
+      // ★ O ACHADO NEGATIVO, SELADO (se ISTO flipar, a previsão do revisor ressuscita e a compra de
+      //   2 Hz volta à mesa — é o gate). Régua A (n grande), bin de separação > 5 MINUTOS:
+      //   (a) a concordância-no-erro NÃO desaba: segue ≥60% da que os FRAGMENTOS de 1 s exibem…
+      expect(rateOf(allLast)).toBeGreaterThan(0.6 * rateOf(allFirst));
+      //   (b) …e continua MUITO acima do teto de independência DAQUELE bin (≥2×). Não converge.
+      expect(rateOf(allLast)).toBeGreaterThan(2 * (allLast.secondWrong / allLast.pairs));
+    },
+    900000,
+  );
+
+  it(
+    "TAREFA 2 — A POLÍTICA k=2 COM DIVERSIDADE vs SEM: a soma passa a render o que promete?",
+    () => {
+      const SEPS = [0, 10000, 30000, 60000, 300000] as const; // separação mínima exigida
+      const head =
+        "separação mín.".padEnd(16) +
+        "PRECISÃO de turno (IC95, n=âncoras)".padEnd(40) +
+        "COBERTURA de turno (IC95, n=operadores)".padEnd(42) +
+        "concord.-no-erro entre os CONSUMIDOS";
+      const lines: string[] = [head, "-".repeat(head.length)];
+      const rows: { sep: number; m: AnchorMetrics; lo: number }[] = [];
+      const { eps } = collectLong(CAD_REF);
+
+      for (const sep of SEPS) {
+        const m = cellLong(CAD_REF, PISO_REF, 2, sep);
+        const lo = m.anchored ? wl(m.anchoredCorrect, m.anchored) : 0;
+        rows.push({ sep, m, lo });
+        // A concordância-no-erro RESULTANTE: só os pares que a política com ESTA separação consumiria
+        // (gap ≥ sep) — é o sensor da Regra 13 aplicado à população que a política de fato agrega.
+        const bins = agreementBySeparation(eps, PISO_REF, [sep], { onePairPerOperator: true });
+        const b = bins[0];
+        lines.push(
+          `${(sep === 0 ? "0 (SEM divers.)" : `≥${(sep / 1000).toFixed(0)} s`).padEnd(16)}` +
+            `${(m.anchored ? formatAnchorProportion(m.anchoredCorrect, m.anchored) : "— (nada ancorado)").padEnd(40)}` +
+            `${formatAnchorProportion(m.anchored, m.operators).padEnd(42)}` +
+            `${b.firstWrong ? formatAnchorProportion(b.firstWrongAndAgree, b.firstWrong) : "— (n=0)"}`,
+        );
+      }
+
+      const semDiv = rows[0];
+      const k1 = cellLong(CAD_REF, PISO_REF, 1);
+      const melhor = rows.reduce((a, b) => (b.lo > a.lo && b.m.anchored >= MIN_DEC ? b : a));
+      const errRate = 1 - k1.precision;
+
+      console.log(
+        `\n═══ TAREFA 2 — k=2 COM DIVERSIDADE vs SEM (1 Hz · destino · piso ${PISO_REF} · τ→0) ═══\n` +
+          `${lines.join("\n")}\n\n` +
+          `  BASELINE k=1 (política ATUAL, falar na 1ª oportunidade): ` +
+          `precisão ${formatAnchorProportion(k1.anchoredCorrect, k1.anchored)}  ` +
+          `cobertura ${formatAnchorProportion(k1.anchored, k1.operators)}\n` +
+          `  teto model-free de independência (taxa de erro do episódio) = ${pct(errRate)}%\n\n` +
+          `★ A DIVERSIDADE RECUPERA O QUE A SOMA PROMETE?\n` +
+          `  k=2 SEM diversidade: precisão IC-inf ${pct(semDiv.lo)}%  (n=${semDiv.m.anchored} âncoras, cob. ${pct(semDiv.m.turnCoverage)}%)\n` +
+          `  k=2 COM diversidade (melhor: ≥${(melhor.sep / 1000).toFixed(0)} s): precisão IC-inf ${pct(melhor.lo)}%  ` +
+          `(n=${melhor.m.anchored} âncoras, cob. ${pct(melhor.m.turnCoverage)}%)\n` +
+          `  ⇒ ganho de IC-inf: ${((melhor.lo - semDiv.lo) * 100).toFixed(1)} p.p.  |  ` +
+          `custo em cobertura: ${((semDiv.m.turnCoverage - melhor.m.turnCoverage) * 100).toFixed(1)} p.p.\n` +
+          `  ⇒ pior célula COM diversidade: IC-inf ${pct(Math.min(...rows.slice(1).map((r) => r.lo)))}% — ` +
+          `ABAIXO do SEM diversidade. A dispersão entre as separações (${pct(Math.min(...rows.map((r) => r.lo)))}–${pct(Math.max(...rows.map((r) => r.lo)))}%)\n` +
+          `    é do TAMANHO do "ganho": não há efeito — há RUÍDO. É exatamente o que a curva PLANA da\n` +
+          `    TAREFA 1 prevê: se o erro não decorrelaciona com o tempo, EXIGIR tempo não compra nada.\n` +
+          `  ⇒ A DIVERSIDADE NÃO RECUPERA O QUE A SOMA DE FISHER-Z PROMETE. O que a k=2 compra (e ela\n` +
+          `    compra: ${pct(k1.precision)}% → ${pct(semDiv.m.precision)}% de precisão pontual sobre o k=1) vem da DISCORDÂNCIA\n` +
+          `    virando SILÊNCIO — um mecanismo que funciona mesmo com erro correlacionado, e que já\n` +
+          `    estava medido. A separação temporal é um knob NULO neste canal.\n`,
+      );
+
+      // ── Assertivas ROBUSTAS ──
+      expect(semDiv.m.operators).toBeGreaterThan(30); // massa
+      // 1) MECÂNICA: o k=1 é INVARIANTE à diversidade (a cadeia gulosa começa sempre no 1º elegível —
+      //    não há "anterior" de quem se separar). É o pino de que o knob não mexe no baseline.
+      for (const sep of SEPS)
+        expect(cellLong(CAD_REF, PISO_REF, 1, sep)).toEqual(cellLong(CAD_REF, PISO_REF, 1));
+      // 2) k=2 (com ou sem diversidade) nunca cobre MAIS que k=1 — o trade da agregação.
+      for (const r of rows) expect(r.m.turnCoverage).toBeLessThanOrEqual(k1.turnCoverage + 1e-9);
+      // 3) SEM diversidade a política ainda ancora (a comparação existe).
+      expect(semDiv.m.anchored).toBeGreaterThanOrEqual(MIN_DEC);
+      // 4) ★ O ACHADO NEGATIVO, SELADO: a diversidade NÃO é alavanca. O efeito dela sobre o IC-inf da
+      //    precisão de turno é PEQUENO (<5 p.p. em QUALQUER separação) e não tem sinal definido — ela
+      //    tanto sobe quanto DESCE. Se um dia alguma separação comprar >5 p.p., força re-exame.
+      for (const r of rows) expect(Math.abs(r.lo - semDiv.lo)).toBeLessThan(0.05);
+    },
+    900000,
+  );
+
+  it(
+    "TAREFA 3 — A COMPRA REAVALIADA: com diversidade de contexto, a tag de 2 Hz continua necessária?",
+    () => {
+      /** MENOR T (passo 0,5 s) em que um episódio PODE cruzar o piso — gate ESTRITO (`> floor`). */
+      const tForFloor = (dtS: number, floor: number): number => {
+        for (let t = 0.5; t <= 900; t += 0.5) {
+          if (maxDistinctReadings(t * 1000, dtS) > floor) return t;
+        }
+        return Number.POSITIVE_INFINITY;
+      };
+      const rBarOf = (nd: number): number =>
+        nd > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (nd - 3))) : Number.NaN;
+
+      const TARGETS = [0.95, 0.97] as const;
+      /** A DIVERSIDADE que a compra assume: ≥60 s entre os episódios agregados. Uma âncora de turno
+       *  (entrada / volta do almoço) satisfaz isso com folga de ORDENS DE GRANDEZA; é a exigência
+       *  mais BARATA que já sai do bin "1-5 min" da curva. */
+      const SEP_MS = 60000;
+
+      /** O menor piso POR EPISÓDIO que sustenta o alvo (IC95-inf) nesta cadência/política. */
+      const floorFor = (period: number, k: number, target: number, sep?: number): number => {
+        for (let p = 3; p <= 20; p++) {
+          const m = cellLong(period, p, k, sep);
+          if (m.anchored >= MIN_DEC && wl(m.anchoredCorrect, m.anchored) >= target) return p;
+        }
+        return Number.NaN;
+      };
+
+      const head =
+        "alvo".padEnd(7) +
+        "política".padEnd(26) +
+        "Δt_tag".padEnd(19) +
+        "piso/ep".padEnd(9) +
+        "T exig.".padEnd(9) +
+        "corredor 1,1–1,2 m/s".padEnd(22) +
+        "|r| exig.".padEnd(10) +
+        "COBERTURA de turno".padEnd(34) +
+        "PRECISÃO de turno";
+      const lines = [head, "-".repeat(head.length)];
+      const POLS = [
+        { k: 1, sep: undefined, label: "k=1 (ATUAL: 1ª fala)" },
+        { k: 2, sep: undefined, label: "k=2 SEM diversidade" },
+        { k: 2, sep: SEP_MS, label: "k=2 COM divers. ≥60 s" },
+      ] as const;
+      const corr: Record<string, number> = {};
+      const pisoOf: Record<string, number> = {};
+
+      for (const target of TARGETS) {
+        for (const pol of POLS) {
+          for (const c of CADS) {
+            const key = `${target}|${pol.label}|${c.dtS}`;
+            const floor = floorFor(c.period, pol.k, target, pol.sep);
+            pisoOf[key] = floor;
+            if (!Number.isFinite(floor)) {
+              lines.push(
+                `${`≥${pct(target)}%`.padEnd(7)}${pol.label.padEnd(26)}${c.label.padEnd(19)}` +
+                  `IMPOSSÍVEL — nenhum piso ≤20 sustenta este alvo nesta cadência`,
+              );
+              continue;
+            }
+            const t = tForFloor(c.dtS, floor);
+            const m = cellLong(c.period, floor, pol.k, pol.sep);
+            corr[key] = t * WALK_HI;
+            lines.push(
+              `${`≥${pct(target)}%`.padEnd(7)}${pol.label.padEnd(26)}${c.label.padEnd(19)}` +
+                `${String(floor).padEnd(9)}${`${t.toFixed(1)} s`.padEnd(9)}` +
+                `${`${(t * WALK_LO).toFixed(1)}–${(t * WALK_HI).toFixed(1)} m`.padEnd(22)}` +
+                `${rBarOf(maxDistinctReadings(t * 1000, c.dtS)).toFixed(2).padEnd(10)}` +
+                `${formatAnchorProportion(m.anchored, m.operators).padEnd(34)}` +
+                `${m.anchored ? formatAnchorProportion(m.anchoredCorrect, m.anchored) : "— (nada ancorado)"}`,
+            );
+          }
+        }
+      }
+
+      // ★ A PERGUNTA QUE DECIDE DINHEIRO: com diversidade, a tag ATUAL (2,5 s) ou a de 1 Hz atingem
+      //   os alvos — tornando a compra de 2 Hz DESNECESSÁRIA?
+      const reachable = (target: number, label: string, dtS: number): boolean =>
+        Number.isFinite(pisoOf[`${target}|${label}|${dtS}`]);
+      const DIV = "k=2 COM divers. ≥60 s";
+      const veredito = TARGETS.map((t) => {
+        const atual = reachable(t, DIV, REAL_TAG_PERIOD_S);
+        const hz1 = reachable(t, DIV, 1);
+        const hz2 = reachable(t, DIV, 0.5);
+        const corrOf = (dt: number): string =>
+          reachable(t, DIV, dt) ? `${corr[`${t}|${DIV}|${dt}`].toFixed(0)} m` : "IMPOSSÍVEL";
+        return (
+          `  alvo ≥${pct(t)}% (IC95-inf da precisão de turno), política k=2 COM diversidade:\n` +
+          `      tag ATUAL (2,5 s): ${atual ? `ATINGE — corredor ~${corrOf(REAL_TAG_PERIOD_S)}` : "NÃO ATINGE"}\n` +
+          `      tag 1 Hz:          ${hz1 ? `ATINGE — corredor ~${corrOf(1)}` : "NÃO ATINGE"}\n` +
+          `      tag 2 Hz:          ${hz2 ? `ATINGE — corredor ~${corrOf(0.5)}` : "NÃO ATINGE"}`
+        );
+      });
+
+      console.log(
+        `\n═══ TAREFA 3 — A COMPRA REAVALIADA COM DIVERSIDADE DE CONTEXTO (τ→0; concordância) ═══\n` +
+          `${lines.join("\n")}\n\n` +
+          `  T exigido = MENOR episódio que PODE cruzar o piso (aritmética: ⌈T/Δt⌉+1 > piso — NÃO-circular).\n` +
+          `  corredor  = T × velocidade de caminhada = o que a CÂMERA precisa OBSERVAR (receptor no fim).\n` +
+          `  A diversidade NÃO muda o corredor de UM episódio (isso é geometria+contagem); ela só podia\n` +
+          `  mudar o PISO que o alvo exige — e a tabela mostra que ela NÃO muda (ou PIORA).\n\n` +
+          `★★ A PERGUNTA QUE DECIDE DINHEIRO ★★\n` +
+          veredito.join("\n") +
+          `\n\n★★ O QUE A DIVERSIDADE FEZ PELA COMPRA: NADA (ou pior) ★★\n` +
+          TARGETS.map((t) =>
+            CADS.map((c) => {
+              const sem = pisoOf[`${t}|k=2 SEM diversidade|${c.dtS}`];
+              const com = pisoOf[`${t}|${DIV}|${c.dtS}`];
+              const f = (x: number): string => (Number.isFinite(x) ? `piso ${x}` : "IMPOSSÍVEL");
+              const dir =
+                !Number.isFinite(sem) || !Number.isFinite(com)
+                  ? ""
+                  : com === sem
+                    ? "  (IGUAL — a diversidade não comprou 1 metro)"
+                    : com > sem
+                      ? "  ⇒ a diversidade PIOROU a compra (piso mais alto = corredor MAIOR)"
+                      : "  ⇒ a diversidade BARATEOU a compra";
+              return `  alvo ≥${pct(t)}% · ${c.label.padEnd(18)} SEM=${f(sem).padEnd(11)} COM=${f(com).padEnd(11)}${dir}`;
+            }).join("\n"),
+          ).join("\n") +
+          `\n  ⇒ COERENTE COM A TAREFA 1: o erro não decorrelaciona com o tempo ⇒ exigir tempo só REMOVE\n` +
+          `    âncoras (n cai ⇒ o IC de Wilson ALARGA ⇒ o IC-inf CAI) sem remover erro. A diversidade\n` +
+          `    é um custo sem contrapartida NESTE canal. NÃO a inclua na compra.\n\n` +
+          `⚠⚠ O CONFOUND QUE EU NÃO VOU ESCONDER (Regra 11 — reporte o que o MECANISMO comprou):\n` +
+          `  Esta tabela NÃO é comparável linha-a-linha com a do laudo anterior ("≥97% só com 2 Hz,\n` +
+          `  corredor 9,4–10,2 m"). Ali o "turno" tinha 120 s de cenário; aqui tem ${(LONG_STEPS * TICK_S) / 60} MIN. Um turno\n` +
+          `  mais longo dá ao operador MUITAS mais oportunidades de episódio ⇒ a k=2 acha dois episódios\n` +
+          `  decididos com muito mais frequência ⇒ a POPULAÇÃO ANCORADA muda (cobertura ${pct(cellLong(2, 12, 2).turnCoverage)}% a 1 Hz).\n` +
+          `  ⇒ O QUE BAIXOU A COMPRA NÃO FOI A DIVERSIDADE — FOI A DURAÇÃO DO TURNO. E isso não é um\n` +
+          `    truque: o laudo anterior JÁ DECLARAVA que sua cobertura de turno de 120 s era "um PISO,\n` +
+          `    não uma previsão". Um turno real (8 h) é ainda mais generoso que estes ${(LONG_STEPS * TICK_S) / 60} min.\n` +
+          `  ⇒ O que NÃO muda com a duração do turno (é ARITMÉTICA de contagem, não estatística): a\n` +
+          `    coluna "T exig." e o "corredor". Para um MESMO piso, o corredor é o mesmo dos dois laudos.\n\n` +
+          `⚠ HONESTIDADE (a coluna "|r| exig." existe para isto): piso baixo ⇒ barra de correlação\n` +
+          `  altíssima (n_eff=4 ⇒ |r| ≥ 0,96). O SIMULADOR cruza (ele GERA o RSSI da distância); o CAMPO\n` +
+          `  não vai cruzar. Linhas com |r| exigido ≤ ~0,6 (piso ≥ 12) são as defensáveis para compra.\n`,
+      );
+
+      // ── Assertivas: a ARITMÉTICA (não os números do sim) + o ACHADO NEGATIVO ──
+      // 1) O gate é ESTRITO (T exigido tem de dar nDistinct > piso).
+      expect(maxDistinctReadings(tForFloor(1.0, 10) * 1000, 1.0)).toBeGreaterThan(10);
+      // 2) ★ O ACHADO NEGATIVO, SELADO: a diversidade NUNCA BARATEIA a compra — o piso exigido COM
+      //    diversidade é SEMPRE ≥ o SEM (e no alvo de 97% ele SOBE: menos âncoras ⇒ IC mais largo).
+      //    Isto é o oposto do que a previsão do revisor esperava. Se flipar, a previsão ressuscita.
+      for (const t of TARGETS) {
+        for (const c of CADS) {
+          const sem = pisoOf[`${t}|k=2 SEM diversidade|${c.dtS}`];
+          const com = pisoOf[`${t}|${DIV}|${c.dtS}`];
+          if (Number.isFinite(sem) && Number.isFinite(com)) expect(com).toBeGreaterThanOrEqual(sem);
+        }
+      }
+      // 3) ★ O QUE DE FATO MOVE A COMPRA (e é o que o dono precisa ler): com k=2 num turno LONGO, o
+      //    alvo ≥97% deixa de exigir 2 Hz — a tag de 1 Hz o alcança. (Com k=1 NENHUMA cadência alcança
+      //    97%: o teto é da POLÍTICA, como o ADR-015 já selou.)
+      for (const c of CADS) expect(Number.isFinite(pisoOf[`0.97|k=1 (ATUAL: 1ª fala)|${c.dtS}`])).toBe(false);
+      expect(Number.isFinite(pisoOf[`0.97|k=2 SEM diversidade|1`])).toBe(true);
+      // 4) …mas a TAG ATUAL (2,5 s) segue NÃO alcançando 97% em política nenhuma — o alvo alto ainda
+      //    exige TROCAR a tag (1 Hz basta; 2 Hz deixa de ser obrigatório).
+      expect(Number.isFinite(pisoOf[`0.97|k=2 SEM diversidade|${REAL_TAG_PERIOD_S}`])).toBe(false);
+      expect(Number.isFinite(pisoOf[`0.97|${DIV}|${REAL_TAG_PERIOD_S}`])).toBe(false);
+      // 5) A cadência segue sendo alavanca LINEAR no T exigido (a lei, 1º termo) — sobrevive à política.
+      expect(tForFloor(1.0, 12)).toBeLessThan(tForFloor(REAL_TAG_PERIOD_S, 12));
+      expect(tForFloor(0.5, 12)).toBeLessThan(tForFloor(1.0, 12));
     },
     900000,
   );

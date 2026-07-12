@@ -95,8 +95,43 @@ export type PolicyOpts = {
   k: number;
   /** PISO DE n_eff POR EPISÓDIO (Regra 10). Nunca abaixo de 3 (o piso da fórmula). */
   minNEff: number;
+  /**
+   * DIVERSIDADE DE CONTEXTO (Regra 13) — SEPARAÇÃO TEMPORAL MÍNIMA, em ms, entre os episódios que a
+   * política CONSOME. Ausente/0 = comportamento histórico (aditivo, bit-a-bit): a política consome os
+   * episódios ADJACENTES, que no nosso dado são FRAGMENTOS do tracker separados por ~1 s — mesma pose,
+   * mesma sombra corporal, mesma geometria. É quase a MESMA medição duas vezes, e foi ali que medimos
+   * 41,2% de concordância-no-erro (4,7× o teto de independência).
+   *
+   * A REGRA DE DESENHO: k≥2 não exige "dois episódios", exige DOIS CONTEXTOS. Um episódio só entra na
+   * âncora se começar ≥ minSeparationMs DEPOIS do fim do último consumido (cadeia gulosa cronológica).
+   * Duas âncoras de turno (entrada / volta do almoço) satisfazem isso por construção; dois fragmentos
+   * de 1 s, não. `agreementBySeparation()` é o sensor que mede quanto isso compra.
+   */
+  minSeparationMs?: number;
   zCrit?: number;
 };
+
+/**
+ * A CADEIA DIVERSA: dos episódios ELEGÍVEIS (já em ordem cronológica), a subsequência gulosa em que
+ * cada consumido começa ≥ `minSeparationMs` depois do FIM do consumido anterior. Guloso e não ótimo
+ * de propósito — é a política ONLINE que o produto pode rodar (decide no fim de cada episódio, sem
+ * ver o futuro). `minSeparationMs ≤ 0` ⇒ devolve TODOS (comportamento histórico intacto).
+ */
+function selectDiverse<T extends { startTs: number; endTs: number }>(
+  eligible: readonly T[],
+  minSeparationMs: number,
+): T[] {
+  if (!(minSeparationMs > 0)) return [...eligible];
+  const out: T[] = [];
+  let lastEnd = Number.NEGATIVE_INFINITY;
+  for (const e of eligible) {
+    if (out.length === 0 || e.startTs - lastEnd >= minSeparationMs) {
+      out.push(e);
+      lastEnd = e.endTs;
+    }
+  }
+  return out;
+}
 
 /** Vencedor de um episódio = maior score (−r) entre os candidatos — a MESMA regra de decideEpisode
  *  (visit-metrics.ts): correlação POSITIVA é evidência CONTRA a identidade, não a favor. Empate →
@@ -154,11 +189,15 @@ export function anchorByConcordance(
 ): Anchor {
   const zCrit = opts.zCrit ?? DEFAULT_Z_CRIT;
   const truthTag = episodes.find((e) => e.truthTag !== null)?.truthTag ?? null;
-  const decisions: { tag: string; nEff: number }[] = [];
+  const eligible: { tag: string; nEff: number; startTs: number; endTs: number }[] = [];
   for (const ep of episodes) {
     const d = episodeDecisionAt(ep, opts.minNEff, zCrit);
-    if (d.tag !== null && d.winner) decisions.push({ tag: d.tag, nEff: d.winner.nEff });
+    if (d.tag !== null && d.winner)
+      eligible.push({ tag: d.tag, nEff: d.winner.nEff, startTs: ep.startTs, endTs: ep.endTs });
   }
+  // DIVERSIDADE DE CONTEXTO (Regra 13): só entram na âncora episódios separados no tempo. Sem o knob
+  // (minSeparationMs ausente/0) a cadeia é a lista inteira — o comportamento histórico, bit-a-bit.
+  const decisions = selectDiverse(eligible, opts.minSeparationMs ?? 0);
   const base = {
     operator,
     truthTag,
@@ -206,9 +245,15 @@ export function anchorByFisherSum(
   const floor = Math.max(FISHER_FLOOR, opts.minNEff);
   const truthTag = episodes.find((e) => e.truthTag !== null)?.truthTag ?? null;
 
+  // DIVERSIDADE DE CONTEXTO (Regra 13): elegível = episódio com ao menos UM candidato acima do piso
+  // (só esses contribuem com peso); a cadeia gulosa impõe a separação temporal mínima. Sem o knob, a
+  // cadeia é a lista inteira dos elegíveis — e os NÃO-elegíveis nunca contribuíam mesmo ⇒ aditivo.
+  const eligible = episodes.filter((ep) => ep.candidates.some((c) => c.nEff > floor));
+  const used = selectDiverse(eligible, opts.minSeparationMs ?? 0);
+
   // Por tag: soma ponderada de z, peso total, e nº de episódios contribuintes.
   const agg = new Map<string, { sumWZ: number; sumW: number; m: number; sumNEff: number }>();
-  for (const ep of episodes) {
+  for (const ep of used) {
     for (const c of ep.candidates) {
       if (!(c.nEff > floor)) continue; // piso POR EPISÓDIO (e ≥ o da fórmula ⇒ w > 0)
       const w = c.nEff - FISHER_FLOOR;
@@ -401,6 +446,124 @@ export function agreementOnFailure(
     }
   }
   return out;
+}
+
+// ───────────── A CURVA: concordância-no-erro × SEPARAÇÃO TEMPORAL (a previsão do revisor) ─────────────
+//
+// O 41,2% da Regra 13 foi medido no PIOR CASO POSSÍVEL, e nós mesmos o declaramos: os dois episódios
+// eram FRAGMENTOS DO TRACKER separados por ~1 s (gap mediano medido) — mesma pose, mesma sombra
+// corporal, mesma geometria de aproximação. É quase a MESMA medição duas vezes.
+//
+// A PREVISÃO REGISTRADA (revisor externo, 2026-07-12): a concordância-no-erro CAI com a separação
+// temporal. Entre âncoras separadas por minutos/horas o operador entrou por outra porta, com o corpo
+// virado de outro jeito, com a tag no outro bolso — e a correlação de erro DESPENCA para o teto de
+// independência. Se cair, a política k=2 ENTRE CONTEXTOS DIVERSOS compra o que a soma promete.
+//
+// COMO SE MEDE (e o que NÃO se esconde):
+//   • PAR = dois episódios DECIDIDOS do mesmo operador (i < j, ordem cronológica), classificado pelo
+//     GAP = startTs(j) − endTs(i) — o silêncio ENTRE eles, que é exatamente o que `minSeparationMs`
+//     exige. Pares de TODAS as combinações (não só consecutivos): é o que constrói a curva.
+//   • PSEUDO-REPLICAÇÃO, declarada: um operador com m episódios decididos gera C(m,2) pares que
+//     COMPARTILHAM episódios ⇒ os pares NÃO são independentes entre si e o IC de Wilson sobre eles é
+//     OTIMISTA na LARGURA. Por isso `onePairPerOperator` existe: no modo conservador cada operador
+//     contribui com NO MÁXIMO UM par por bin (o primeiro) — n menor, IC honesto. Reporte os dois.
+//   • O TETO DE INDEPENDÊNCIA é BIN-LOCAL e model-free: para o 2º REPETIR o mesmo erro, ele precisa no
+//     mínimo ERRAR ⇒ P(repete o mesmo erro | 1º errado) ≤ P(2º errado) = `secondWrong/pairs` DAQUELE
+//     bin. Não importamos o "8,8%" global: cada bin traz o próprio teto, medido nos mesmos pares.
+export type SeparationBin = {
+  /** [loMs, hiMs) — hiMs = Infinity no último bin. */
+  loMs: number;
+  hiMs: number;
+  label: string;
+  pairs: number;
+  agree: number;
+  firstWrong: number;
+  /** …e o 2º REPETE o MESMO erro — o numerador da concordância-no-erro. */
+  firstWrongAndAgree: number;
+  firstRight: number;
+  firstRightAndAgree: number;
+  /** Pares em que o 2º episódio está ERRADO — o TETO de independência DESTE bin (model-free). */
+  secondWrong: number;
+  /** Operadores que contribuíram com ao menos um par neste bin. */
+  operators: number;
+};
+
+/**
+ * A CURVA. Bins definidos por `edgesMs` (crescente): [e0,e1), [e1,e2), …, [e_{n-1}, ∞). Devolve um
+ * bin por intervalo, sempre — bin vazio sai com n=0 (a ausência de dado é informação, não se omite).
+ */
+export function agreementBySeparation(
+  eps: readonly OperatorEpisode[],
+  minNEff: number,
+  edgesMs: readonly number[],
+  opts?: { zCrit?: number; onePairPerOperator?: boolean },
+): SeparationBin[] {
+  const zCrit = opts?.zCrit ?? DEFAULT_Z_CRIT;
+  const onePair = opts?.onePairPerOperator === true;
+  const bins: SeparationBin[] = [];
+  const fmt = (ms: number): string =>
+    ms === Number.POSITIVE_INFINITY ? "∞" : ms >= 60000 ? `${(ms / 60000).toFixed(0)}min` : `${(ms / 1000).toFixed(0)}s`;
+  for (let i = 0; i < edgesMs.length; i++) {
+    const lo = edgesMs[i];
+    const hi = i + 1 < edgesMs.length ? edgesMs[i + 1] : Number.POSITIVE_INFINITY;
+    bins.push({
+      loMs: lo,
+      hiMs: hi,
+      label: `${fmt(lo)}–${fmt(hi)}`,
+      pairs: 0,
+      agree: 0,
+      firstWrong: 0,
+      firstWrongAndAgree: 0,
+      firstRight: 0,
+      firstRightAndAgree: 0,
+      secondWrong: 0,
+      operators: 0,
+    });
+  }
+  const binOf = (gapMs: number): SeparationBin | null => {
+    for (const b of bins) if (gapMs >= b.loMs && gapMs < b.hiMs) return b;
+    return null; // gap abaixo do 1º edge (ex.: sobreposição temporal) → fora da curva, declarado
+  };
+
+  for (const list of by(eps)) {
+    const truth = list.find((e) => e.truthTag !== null)?.truthTag ?? null;
+    if (truth === null) continue;
+    const dec: { tag: string; startTs: number; endTs: number }[] = [];
+    for (const ep of list) {
+      const d = episodeDecisionAt(ep, minNEff, zCrit);
+      if (d.tag !== null) dec.push({ tag: d.tag, startTs: ep.startTs, endTs: ep.endTs });
+    }
+    if (dec.length < 2) continue;
+    const seen = new Set<SeparationBin>(); // p/ o modo conservador (1 par por operador por bin)
+    for (let i = 0; i < dec.length; i++) {
+      for (let j = i + 1; j < dec.length; j++) {
+        const b = binOf(dec[j].startTs - dec[i].endTs);
+        if (b === null) continue;
+        if (onePair && seen.has(b)) continue;
+        if (!seen.has(b)) {
+          b.operators++;
+          seen.add(b);
+        }
+        b.pairs++;
+        const same = dec[i].tag === dec[j].tag;
+        if (same) b.agree++;
+        if (dec[j].tag !== truth) b.secondWrong++;
+        if (dec[i].tag !== truth) {
+          b.firstWrong++;
+          if (same) b.firstWrongAndAgree++;
+        } else {
+          b.firstRight++;
+          if (same) b.firstRightAndAgree++;
+        }
+      }
+    }
+  }
+  return bins;
+}
+
+/** Os episódios de cada operador, em ordem cronológica (a MESMA de `groupByOperator`). */
+function by(eps: readonly OperatorEpisode[]): VisitEpisode[][] {
+  return [...groupByOperator(eps).values()];
 }
 
 /** "62,5% [IC95 35,4–83,7], n=16" — reexporta a régua de Wilson do arco (Regra 10: nunca uma

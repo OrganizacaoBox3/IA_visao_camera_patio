@@ -7,6 +7,7 @@
 //   • os sensores de inflação (sharedDataRisk / agreementOnFailure) acusam o que têm de acusar.
 import { describe, expect, it } from "vitest";
 import {
+  agreementBySeparation,
   agreementOnFailure,
   anchorByConcordance,
   anchorByFisherSum,
@@ -221,5 +222,111 @@ describe("anchor-policy — métricas de TURNO e os sensores de inflação (Regr
     expect(f.agree).toBe(2); // os dois operadores concordam consigo mesmos nos 2 episódios
     expect(f.firstWrong).toBe(1); // o operador BB erra…
     expect(f.firstWrongAndAgree).toBe(1); // …e REPETE o mesmo erro ⇒ a dupla-confirmação NÃO salva
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// DIVERSIDADE DE CONTEXTO (Regra 13) — a MECÂNICA da restrição de separação temporal, isolada do
+// simulador. O que ela COMPRA (concordância-no-erro cai) é medido em receiver-at-destino.test.ts;
+// o que ela FAZ (quais episódios a política consome) se prova aqui, à mão.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("anchor-policy — DIVERSIDADE DE CONTEXTO (minSeparationMs)", () => {
+  // Três episódios do MESMO operador: dois FRAGMENTOS colados (gap 1 s — o caso do tracker, onde os
+  // erros são correlacionados) e um TERCEIRO separado por 60 s (o "outro contexto").
+  const frag1 = ep(1, A, 0, 20000, [cand(A, -0.9, 10), cand(B, -0.1, 10)]); // decide A (CERTO)
+  const frag2 = ep(2, A, 21000, 40000, [cand(A, -0.1, 10), cand(B, -0.9, 10)]); // decide B (ERRADO)
+  const tarde = ep(3, A, 100000, 120000, [cand(A, -0.9, 10), cand(B, -0.1, 10)]); // decide A, +60 s
+
+  it("ADITIVO: sem minSeparationMs, a política é BIT-A-BIT a de antes (o pino da Regra 13)", () => {
+    const opts = { k: 2, minNEff: 3 };
+    expect(anchorByConcordance("op", [frag1, frag2, tarde], opts)).toEqual(
+      anchorByConcordance("op", [frag1, frag2, tarde], { ...opts, minSeparationMs: 0 }),
+    );
+    expect(anchorByFisherSum("op", [frag1, frag2, tarde], opts)).toEqual(
+      anchorByFisherSum("op", [frag1, frag2, tarde], { ...opts, minSeparationMs: 0 }),
+    );
+  });
+
+  it("SEM diversidade, o k=2 consome os dois FRAGMENTOS colados (1 s) — e abstém por discordância", () => {
+    const a = anchorByConcordance("op", [frag1, frag2, tarde], { k: 2, minNEff: 3 });
+    expect(a.nUsed).toBe(2);
+    expect(a.abstainedByDisagreement).toBe(true);
+    expect(a.decided).toBe(false); // o 3º episódio (CERTO) nem é olhado — os 2 primeiros já brigaram
+  });
+
+  it("COM diversidade (≥30 s), o k=2 PULA o fragmento colado e ancora em DOIS CONTEXTOS", () => {
+    const a = anchorByConcordance("op", [frag1, frag2, tarde], {
+      k: 2,
+      minNEff: 3,
+      minSeparationMs: 30000,
+    });
+    expect(a.nUsed).toBe(2);
+    expect(a.decided).toBe(true);
+    expect(a.decisionTag).toBe(A); // frag1 (t=0) + tarde (t=100 s): frag2 foi DESCARTADO (gap 1 s)
+    expect(a.correct).toBe(true);
+    expect(a.abstainedByDisagreement).toBe(false);
+  });
+
+  it("a cadeia é GULOSA e CRONOLÓGICA (política ONLINE — não escolhe o melhor par a posteriori)", () => {
+    // Separação exigida MAIOR que qualquer gap disponível ⇒ só o 1º episódio entra ⇒ sem âncora com k=2.
+    const a = anchorByConcordance("op", [frag1, frag2, tarde], {
+      k: 2,
+      minNEff: 3,
+      minSeparationMs: 200000,
+    });
+    expect(a.nUsed).toBe(0); // < k decididos na cadeia diversa ⇒ falta de evidência, não discordância
+    expect(a.decided).toBe(false);
+    expect(a.abstainedByDisagreement).toBe(false);
+  });
+
+  it("a diversidade também governa a SOMA DE FISHER-Z (o fragmento colado não entra na soma)", () => {
+    const a = anchorByFisherSum("op", [frag1, frag2, tarde], {
+      k: 2,
+      minNEff: 3,
+      minSeparationMs: 30000,
+    });
+    expect(a.nUsed).toBe(2); // frag1 + tarde (frag2 fora da cadeia)
+    expect(a.decisionTag).toBe(A);
+    expect(a.nEffEffective).toBeCloseTo(17, 6); // (10−3)+(10−3)+3
+  });
+});
+
+describe("anchor-policy — agreementBySeparation: a CURVA (concordância-no-erro × separação)", () => {
+  const EDGES = [0, 2000, 10000, 30000] as const; // 0-2 s, 2-10 s, 10-30 s, ≥30 s
+
+  it("classifica o par pelo GAP (start do 2º − end do 1º), e cada bin traz o PRÓPRIO teto", () => {
+    // Operador que ERRA (verdade B) nos dois fragmentos colados e ACERTA no episódio distante.
+    const eps: OperatorEpisode[] = [
+      { operator: "op", episode: ep(1, B, 0, 20000, [cand(A, -0.9, 10), cand(B, -0.1, 10)]) }, // →A ERRADO
+      { operator: "op", episode: ep(2, B, 21000, 40000, [cand(A, -0.9, 10), cand(B, -0.1, 10)]) }, // →A ERRADO (repete)
+      { operator: "op", episode: ep(3, B, 100000, 120000, [cand(A, -0.1, 10), cand(B, -0.9, 10)]) }, // →B CERTO
+    ];
+    const bins = agreementBySeparation(eps, 3, EDGES);
+    expect(bins.map((b) => b.label)).toEqual(["0s–2s", "2s–10s", "10s–30s", "30s–∞"]);
+
+    const b02 = bins[0]; // par (1,2): gap = 21000−20000 = 1 s
+    expect(b02.pairs).toBe(1);
+    expect(b02.firstWrong).toBe(1);
+    expect(b02.firstWrongAndAgree).toBe(1); // REPETE o mesmo erro — a correlação do fragmento
+    expect(b02.secondWrong).toBe(1); // teto de independência DESTE bin = 1/1
+
+    const bLong = bins[3]; // pares (1,3) gap 80 s e (2,3) gap 60 s
+    expect(bLong.pairs).toBe(2);
+    expect(bLong.firstWrong).toBe(2);
+    expect(bLong.firstWrongAndAgree).toBe(0); // o contexto distante NÃO repete o erro
+    expect(bLong.secondWrong).toBe(0);
+    expect(bins[1].pairs + bins[2].pairs).toBe(0); // bins vazios existem (ausência de dado é dado)
+  });
+
+  it("onePairPerOperator: o modo CONSERVADOR contra pseudo-replicação (≤1 par por operador por bin)", () => {
+    const eps: OperatorEpisode[] = [1, 2, 3, 4].map((i) => ({
+      operator: "op",
+      episode: ep(i, A, (i - 1) * 100000, (i - 1) * 100000 + 20000, [cand(A, -0.9, 10)]),
+    }));
+    const all = agreementBySeparation(eps, 3, EDGES);
+    const one = agreementBySeparation(eps, 3, EDGES, { onePairPerOperator: true });
+    expect(all[3].pairs).toBe(6); // C(4,2) — pares que COMPARTILHAM episódios (IC otimista)
+    expect(one[3].pairs).toBe(1); // um só par do operador ⇒ n honesto
+    expect(one[3].operators).toBe(1);
   });
 });

@@ -628,6 +628,79 @@ esperado vs 0,42 hoje). Software pronto (multiSourceFisher). Regra a priori pina
 GTSAM (estado é DISCRETO — Petri+HSMM é o formalismo); GNN/Sinkhorn/GP-completo/transformer antes
 das Ondas 0-2; prometer posição métrica por BLE; vender "AoA barato"/"universal".
 
+### ❌ PREVISÃO DO REVISOR **REFUTADA** (2026-07-12) — a concordância-no-erro **NÃO** cai com a separação temporal
+
+**A previsão registrada** (revisor externo, depois da Regra 13): *"os 41,2% de concordância-no-erro foram
+medidos no PIOR CASO — fragmentos do tracker separados por ~1 s, quase a MESMA medição duas vezes. Entre
+âncoras separadas por minutos/horas a correlação de erro DESPENCA para o teto de independência (8,8%). Se
+cair, a k=2 entre âncoras reais rende o que a soma promete — **e a compra de 2 Hz pode baixar**."*
+
+**A CURVA MEDIDA** (`receiver-at-destino.test.ts`, bloco "ADR-015 §2"; cenários **estendidos a 20 min** por
+OPÇÃO — o default pinado de 240 passos não sustenta bins de minutos; 1 Hz, receptor no destino, piso 10,
+τ→0, 156 operadores). Régua **A** = todos os pares (n grande, IC otimista na largura); régua **B** = ≤1 par
+por operador por bin (sem pseudo-replicação). Teto de independência é **bin-local e model-free**: P(repete o
+MESMO erro | 1º errado) ≤ P(2º erra):
+
+| separação | pares (A) | 1º ERRA → 2º REPETE (A) | teto do bin | × teto | régua B (n) |
+|---|---|---|---|---|---|
+| 0–2 s (fragmentos) | 1719 | **24,4%** [16,6–34,5], n=86 | 5,4% | **4,5×** | 33,3% (n=6) |
+| 2–10 s | 1335 | 17,9% [11,0–27,9], n=78 | 5,7% | 3,1× | 33,3% (n=12) |
+| 10–30 s | 3238 | 20,3% [15,2–26,7], n=187 | 6,2% | 3,3× | 38,5% (n=13) |
+| 30–60 s | 4720 | 19,0% [14,7–24,1], n=269 | 5,7% | 3,3× | 16,7% (n=12) |
+| 1–5 min | 33334 | 20,5% [18,7–22,3], n=1943 | 5,7% | 3,6× | 36,4% (n=11) |
+| **> 5 min** | 53241 | **21,5%** [20,1–23,0], n=3049 | 6,0% | **3,6×** | 36,4% (n=11) |
+
+**A curva é PLANA — não cai, não é monotônica, não converge para o teto.** Entre episódios separados por
+**mais de 5 minutos** o erro se repete tanto quanto entre fragmentos de 1 s.
+
+**A CAUSA (a leitura que sai disto).** O erro correlacionado **não é artefato do fragmento**: é **propriedade
+do OPERADOR, não do INSTANTE**. A geometria da trajetória daquela pessoa, **qual vizinho é confundível com
+ela**, a colocação da tag no corpo e a distribuição do viés corporal ao longo do turno são **as mesmas** 5
+minutos depois. **Separar no tempo não separa a CAUSA.** ⇒ **A Regra 13 sobrevive inteira** e o "n_eff
+19+19=38" segue FALSO — agora não só no pior caso, mas em **toda separação medível**.
+
+**A POLÍTICA COM DIVERSIDADE (implementada: `minSeparationMs` em `anchor-policy.ts`) — knob NULO.**
+k=2, 1 Hz, piso 10: SEM diversidade **97,9% [IC95 94,0–99,3], n=142** de precisão de turno / cobertura 91,0%.
+COM diversidade, o IC-inf varia entre **92,9% e 95,0%** conforme a separação exigida (≥10 s … ≥300 s) — a
+**dispersão é do tamanho do "ganho"**. Não há efeito; há ruído. E na tabela de compra ela **PIORA**: no alvo
+≥97% o piso exigido sobe de 12→14 (1 Hz) e 8→13 (2 Hz), porque exigir separação **remove âncoras** (n cai ⇒
+Wilson alarga ⇒ IC-inf cai) **sem remover erro**. **Não incluir diversidade na compra.**
+
+**LIMITE HONESTO DA REFUTAÇÃO.** O simulador modela mudança de **pose/rumo/região** ao longo da caminhada — e
+isso **não decorrelacionou nada**. Ele **não** modela trocar de roupa, mudar a tag de bolso ou entrar por
+outra porta. Refutado está *"a **separação temporal**, sozinha, decorrelaciona o erro"*. Se a decorrelação
+vier de trocar o **bolso** da tag, isso é experimento de **campo** + mudança de **procedimento** — não é o que
+a k=2 compra de graça no relógio.
+
+### 💰 A COMPRA REAVALIADA — e o que DE FATO a baixou (não foi a diversidade: foi a DURAÇÃO DO TURNO)
+
+Tabela com k=2 (concordância), receptor no destino, τ→0, **turno de 20 min** (contra os 120 s dos laudos
+anteriores — que já declaravam sua cobertura de turno como "um PISO, não uma previsão"):
+
+| alvo (IC95-inf) | política | Δt_tag | piso/ep | T exig. | corredor (1,1–1,2 m/s) | \|r\| exig. | cobertura turno |
+|---|---|---|---|---|---|---|---|
+| ≥95% | k=1 (ATUAL) | qualquer | — | — | **IMPOSSÍVEL** | — | — |
+| ≥95% | k=2 | 2,5 s (ATUAL) | 8 | 18,0 s | 19,8–21,6 m | 0,66 | 60,3% |
+| ≥95% | k=2 | 1 Hz | 12 | 11,5 s | **12,7–13,8 m** | **0,55** | 89,1% |
+| ≥95% | k=2 | 2 Hz | 8 | 4,0 s | 4,4–4,8 m | 0,66 | 87,2% |
+| ≥97% | k=1 (ATUAL) | qualquer | — | — | **IMPOSSÍVEL** | — | — |
+| ≥97% | k=2 | 2,5 s (ATUAL) | — | — | **IMPOSSÍVEL** (nenhum piso ≤20) | — | — |
+| ≥97% | k=2 | 1 Hz | 12 | 11,5 s | **12,7–13,8 m** | **0,55** | 89,1% |
+| ≥97% | k=2 | 2 Hz | 8 | 4,0 s | 4,4–4,8 m | 0,66 | 87,2% |
+
+**⇒ A TAG DE 2 Hz DEIXA DE SER OBRIGATÓRIA — mas o crédito é do k=2 + turno longo, não da diversidade.**
+O laudo anterior ("≥97% só com 2 Hz, corredor 9,4–10,2 m") mediu turno de 120 s. Num turno realista o
+operador tem **muitas mais oportunidades** de episódio ⇒ a k=2 acha dois decididos com muito mais frequência
+⇒ a **população ancorada muda**. **A tag de 1 Hz atinge ≥97%** com corredor de **~13–14 m** e |r| exigido de
+**0,55** (a faixa defensável — piso ≥12). **A tag ATUAL (2,5 s) NÃO atinge 97% em política nenhuma**: trocar a
+tag segue necessário; o que caiu é *qual* tag.
+
+**O QUE NÃO MUDA COM NADA DISSO** (é aritmética de contagem, não estatística — sobrevive à circularidade):
+`T exigido` e `corredor`. Para um mesmo piso, o corredor é o mesmo em todos os laudos.
+
+**A MEDIÇÃO DE CAMPO QUE FECHA A COMPRA (inalterada):** **existe um corredor reto de ~13–14 m** com a câmera
+observando e o receptor no fim? Se sim → **1 Hz** (bateria boa). Se não → **2 Hz** (corredor de ~5–8 m).
+
 ## Feito (no `main`)
 
 - Registro/nomeação de tags (`bt_tags` + `/tags-ble`).

@@ -118,6 +118,16 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
   ainda compra precisão (a **discordância** pega 58,8% dos erros), mas **compra menos do que a soma
   promete**. Sensor obrigatório: `agreementOnFailure` (em `anchor-policy.ts`) ao lado de qualquer
   agregação.
+  **Corolário medido (2026-07-12) — a saída fácil NÃO existe: erro correlacionado é propriedade do
+  SUJEITO, não do INSTANTE.** A hipótese natural ("aqueles 41,2% eram fragmentos colados de 1 s;
+  separando os episódios no tempo, o erro decorrelaciona") foi testada e **REFUTADA**: a curva
+  concordância-no-erro × separação temporal é **PLANA** — 24,4% [16,6–34,5] entre fragmentos de 0-2 s
+  e **21,5% [20,1–23,0] entre episódios separados por MAIS DE 5 MINUTOS**, contra um teto de
+  independência *bin-local* de ~6% (**3,6× acima, sem convergir**). Exigir separação (`minSeparationMs`)
+  não compra precisão e **piora** a compra (remove âncoras ⇒ n cai ⇒ Wilson alarga). **Não conserte
+  erro correlacionado com o relógio** — o que muda a causa (geometria da pessoa, vizinho confundível,
+  colocação da tag) é *procedimento/hardware*, não *tempo*. Ver `receiver-at-destino.test.ts`
+  ("ADR-015 §2") e `docs/analises/tags-bluetooth/PENDENCIAS.md`.
 - **Regra 12 — Restrição GLOBAL não cria identidade; só AMPLIFICA um sinal assimétrico.**
   A exclusividade ("um operador está em exatamente um lugar") é **permutacionalmente simétrica**:
   remove a opção "fora" de **todos igualmente**, então com N operadores intercambiáveis toda
