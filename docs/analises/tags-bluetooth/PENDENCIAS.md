@@ -142,6 +142,46 @@ decisivo é SIMULAR o receptor no destino (Δ3, autorizado pelo dono) e ver se o
 década e a visita fecha com significância HONESTA — isso decide se a Onda 1 (ESP32) tem caso feito
 ANTES de comprar hardware. Se nem no simulador fechar, a arquitetura pivota antes de gastar.
 
+### ONDA 1 (medição de bancada, 2026-07-11) — geometria do span + θ, e uma CORREÇÃO DE MÉTRICA importante
+
+Duas frentes paralelas (novos módulos, propriedade exclusiva; `receiver-geometry.ts`, `theta-discriminator.ts`):
+
+**θ (Δ2, ADR-014 item 9) — REFUTADO como 2º discriminador**, com números (`theta-discriminator.ts`).
+θ_verdadeiro é largo/instável (mediana ~21 dB/déc, IQR [8,6; 31]; e DENTRO do gate |r|≥0,7 sobe pra
+[27; 62] porque selecionar por |r| alto premia retas íngremes). θ_espúrio-perigoso espalha (IQR
+larg 86; 35% cai na faixa dos verdadeiros). Nenhuma banda de θ supera o baseline só-|r| (55,6%).
+Heterocedástico (peso 1/d²) empata. Causa exatamente o risco anti-v4: viés corporal infla o slope +
+span minúsculo deixa a estimativa ruidosa + o n do canal varia. **A ressalva de NÃO fixar θ≈22 se
+provou certa.** Re-testável só se o receptor-no-destino trouxer span de verdade (slope menos ruidosa).
+
+**Geometria do span (`receiver-geometry.ts`) + a CORREÇÃO que muda a leitura do gate**. O cálculo
+NÃO-CIRCULAR (trajetória × distância euclidiana, sem o modelo de rádio) mediu, extraindo a trajetória
+verdade por inversão de H: mover o receptor da câmera para o destino ganha **~3–4× no span radial**
+(std 0,09 → 0,29 no destino / 0,34 no ótimo de sala). O agente concluiu "pivô" porque o std absoluto
+(0,29) fica longe de 0,9. **MAS há uma confusão de métrica no próprio gate, que eu reconciliei**:
+- `spanDecades` no código (`visit-metrics.ts`) é **std populacional de log10(dist)**.
+- Os limiares 0,42/0,9 do ADR-014 são **RANGE**, não std: `log10(8/3)=0,426` (aproximação 8→3 m) e
+  `log10(8/1)=0,903` (8→1 m). Batem EXATAMENTE com range. O teto de STD de uma aproximação reta
+  idealizada é ~0,33 déc — std=0,9 exigiria razão ~1000:1 (irreal indoor). **Comparar std(0,29)
+  contra alvo-que-era-range(0,9) é maçã com laranja; o veredito de "pivô" está mal-fundamentado.**
+
+**O que sobrevive robusto** (independe de std/range): (a) o receptor no destino ganha 3–4× de
+gradiente radial — e é o gradiente/ruído, não o std absoluto, que move |r| acima do ruído (o driver
+REAL da significância; o span não decide nada no código — a significância Fisher-z decide); (b) o
+campo real é ainda mais pobre que o sim (std 0,018–0,166). (c) A decisão H1 "abstém com ρ=0,7" NÃO
+usa o span — é robusta à confusão.
+
+**PEÇA FALTANTE que decide o pivô DE VERDADE (ainda não medida)**: a métrica atual correlaciona
+RSSI(**estação**) × dist(**câmera**). Mover o receptor para o destino só ajuda se dist→estação e
+dist→câmera COVARIAREM na aproximação — se divergem (pessoa se aproxima da mesa mas se afasta da
+câmera), a correlação atual pode até PIORAR. Isso NÃO foi tocado. **Próxima medição (simulador,
+autorizado): posicionar o receptor no destino, gerar o RSSI relativo a ELE, e rodar a significância
+correlacionando contra dist-câmera E contra dist-estação — ver se a visita passa a DECIDIR (e
+corretamente), e com qual métrica.** É a metade circular/indicativa (usa o modelo de RSSI = funil de
+hipótese, não juiz): se NEM no sim otimista decidir, pivô forte; se decidir, indicação de seguir
+para hardware com validação de campo. Correção de rigor a fazer junto: `spanDecades` passa a reportar
+STD e RANGE lado a lado, e o ADR-014/comentários anotam que 0,42/0,9 eram range.
+
 **ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
 medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +
 confiabilidade de fronteira [⬜ decide H2]; GATE: se H1+H2 passam, segue; se H2 falha → evidência
