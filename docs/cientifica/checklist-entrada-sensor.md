@@ -19,6 +19,22 @@ Declare, ANTES de escrever código, no vocabulário de `src/fusion/evidence.ts`:
   primeira fonte POSICIONAL real entrar, `sigma` deixa de ser opcional no contrato (decisão
   registrada em `evidence.ts`).
 
+## 1.5 GEOMETRIA DE INSTALAÇÃO (Δ3 do especialista — pré-requisito que mata o piloto em silêncio)
+
+> Vale para todo sensor cuja evidência de identidade dependa de **variação** (o BLE-RSSI de hoje).
+
+- **O receptor vai NO DESTINO ou ATRÁS dele, sobre o EIXO do caminho dominante de aproximação.**
+  Caminhar até a mesa = caminhar em direção ao receptor = gradiente radial máximo (a inclinação da
+  log-distância é máxima perto do receptor — ~0,9 década de span numa aproximação 8→1 m, vs 0,42
+  medido com a estação junto da câmera).
+- **PROIBIDO instalar ao LADO da mesa**: a aproximação vira tangencial ao receptor → variação
+  radial ≈ 0 → a identidade NUNCA fecha, e a equipe passa semanas investigando o algoritmo enquanto
+  o bug está no suporte da parede. É o modo de falha mais perigoso porque é silencioso.
+- **Otimizável no simulador ANTES de furar parede**: simular os caminhos reais de aproximação
+  contra posições candidatas de receptor e maximizar o span radial esperado (em décadas). É
+  geometria pura — uso legítimo da bancada, sem risco de circularidade (não envolve o modelo de
+  RSSI, só a trajetória e a distância). Ver ADR-014 item 7.
+
 ## 2. Qual adapter escreve — e onde?
 
 - **Fonte de identidade (o caso BLE de hoje):** o adapter emite `RawReading` (`src/fusion/frame.ts`)
