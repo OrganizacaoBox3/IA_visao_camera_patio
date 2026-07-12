@@ -1,154 +1,228 @@
-# Onda 2 — Conservação de identidade (Petri) + prior de workflow — SPEC
+# Onda 2 — Atribuição OPERADOR↔ZONA sob restrições — SPEC (v2, RE-ESCOPADA)
 
-> Status: spec (fundação da Onda 2). Fonte de verdade desta frente. Deriva do **ADR-014, camada 3**
-> (zonas=places, operadores=tokens, cruzamentos=transições) e do gate medido em
-> `laudo-especialista-2026-07-12-gate-ondas-0-1.md`.
-> Escopo desta spec: **o MECANISMO**. O **MODELO** de workflow do CD é TBD (ver §5 — depende do dono).
+> Status: spec v2. **Esta é uma RETRATAÇÃO DE ARQUITETURA, não um refinamento.** A v1 (conservação
+> topológica + **prior de workflow**) foi construída, testada e **refutada por conhecimento de
+> domínio**. O prior de rota MORREU; o núcleo da conservação SOBREVIVEU; e a peça que nunca havíamos
+> explorado — **o conjunto de tags presentes** — passou a ser a base.
+> Fonte de verdade desta frente. Deriva do ADR-014 (camada 3) e do gate das Ondas 0/1
+> (`laudo-especialista-2026-07-12-gate-ondas-0-1.md`).
 
-## 1. Por que agora (o argumento aritmético que promoveu esta camada)
+---
 
-O gate das Ondas 0/1 mediu o teto da identidade por rádio: mesmo dobrando a cadência de advertising
-(1→2 Hz), a identidade por RSSI cobre **no máximo ~15,5% dos episódios** a ~98% de precisão — e só
-episódios LONGOS (≥~9 s de aproximação observada). Logo:
+## 1. O que continua valendo do gate (o motivo de a camada existir)
 
-> **≥84,5% dos episódios NÃO terão identidade por rádio, em cadência nenhuma.**
+O gate mediu o teto da identidade **por correlação de RSSI**: no melhor caso (tag a 2 Hz, aproximação
+longa) ela cobre **~15,5% dos episódios** a ~98% de precisão. O gargalo é o `n_eff` (independência
+temporal), não o span — e ele é limitado pelo advertising da tag.
 
-A arquitetura não pode repousar sobre o rádio. Os outros ≥84,5% precisam de identidade de uma fonte
-**independente do rádio**. As duas que o sistema tem são **topologia** (conservação por zona) e
-**workflow** (a sequência de postos que o operador percorre). São grátis: sem hardware, sem bateria,
-sem cadência. Isso reclassifica a camada 3 de "diferencial" para **PORTANTE**.
+> **≥84,5% dos episódios NÃO terão identidade por CORRELAÇÃO, em cadência nenhuma.**
 
-## 2. Conceito (a leitura literal do ADR-014, sem inventar formalismo)
+Esses 84,5% precisam de identidade de fontes **independentes da correlação**. A v1 apostou em duas:
+**topologia** (conservação por zona) e **workflow** (a sequência de postos). A segunda não existe.
 
-- **Places = zonas na granularidade do POSTO** (regra Δ1 do ADR: uma pessoa por posto). A
-  granularidade é o **parâmetro de projeto que controla a ambiguidade** — é por isso que se desenha
-  zona de posto e não de área.
-- **Tokens = identidades de operador.** Não são tracks. O track é o observador, não o objeto.
-- **Transições = cruzamentos de fronteira** (`ZoneEvent` de `zone-crossing.ts`).
-- **A conservação preserva o CONJUNTO de identidades presentes na zona, NÃO o vínculo individual
-  track↔pessoa** (precisão já registrada no ADR-014). Com **1 pessoa/posto**, o conjunto DETERMINA a
-  identidade. Com **N**, a topologia conserva {A,B,C} mas **não decide** qual track novo é qual — e
-  o sistema **tem de dizer isso**, não chutar.
-- "Petri" aqui é **contabilidade de conjuntos por zona com transições de fronteira** — não um motor
-  genérico de redes de Petri, não um solver (YAGNI, CLAUDE.md §2).
+---
 
-Invariante de projeto herdada de `zone-crossing.ts`: **morte de track NÃO decrementa ocupação**
-(decrementar seria confiar no tracker, exatamente o que a H2 rejeita). A identidade é segurada pelo
-BALANÇO de fronteira.
+## 2. RETRATAÇÃO — as 5 respostas do dono e o que elas MATARAM
 
-## 3. Critérios de aceite (Given/When/Then)
+O dono respondeu às perguntas de domínio que a v1 §5 deixou em aberto. As respostas **refutam a
+premissa central da v1**. Registrado aqui com a honestidade que a doutrina exige (CLAUDE.md §2.5):
 
-### CA-1 — Balanço de fronteira conserva a ocupação
-**Given** uma zona vazia e um track T com token A
-**When** T "entrou" na zona e depois "saiu"
-**Then** a ocupação vai 0→1→0 e o conjunto de tokens da zona vai {}→{A}→{} (e a última zona
-conhecida de A passa a ser essa zona).
+| # | Pergunta (v1 §5) | Resposta do dono | O que isso MATA |
+|---|---|---|---|
+| 1 | Qual a **sequência** típica? | **Não existe.** O operador **circula LIVRE** no turno. | ☠️ **P(próximo posto\|posto atual) é UNIFORME ⇒ INFORMAÇÃO ZERO.** Morre o **prior de rota**, morre o **conformance de sequência**, e a rede de Petri de **sequência** perde toda a estrutura restritiva. |
+| 2 | Postos são **adjacentes**? | **Sim** — são **mesas vizinhas, todas adjacentes**. | ☠️ **Não há zeros estruturais** na matriz de transição. E os zeros eram o único valor real dela ("o zero vale mais que a probabilidade fina" — v1, CA-11). Sem zeros, sobra a uniforme: nada. |
+| 3 | Capacidade real do posto? | **1–2 pessoas.** | ⚠️ A regra Δ1 ("1 pessoa/posto ⇒ conservar o conjunto É identificar") **só vale metade das vezes**. Com 2, o conjunto conserva {A,B} e **não decide** quem é quem. |
+| 4 | Quem circula além dos operadores? | **Anônimos circulam CONSTANTEMENTE** (visitantes, empilhadeira, manutenção). | ⚠️ O balanço de conservação `N = N₀ + E − X` **deixa de fechar** por si. O ocupante anônimo, que a v1 tratava como "veneno" acidental, é o **regime normal**. |
+| 5 | Quais são os postos? | Mesas de trabalho vizinhas (lista operacional do dono). | — (insumo de desenho de zona, não de modelo.) |
 
-### CA-2 — A identidade sobrevive à MORTE DE TRACK (o núcleo da H2)
-**Given** um posto com capacidade 1, onde o track T1 (token A) entrou
-**When** T1 **morre dentro** (o tracker perdeu a pessoa) e, depois, um track novo T2 **nasce dentro**
-da mesma zona, sem nenhum cruzamento de fronteira no intervalo
-**Then** a ocupação permanece 1 (a morte não decrementa), T2 **não** é contado como novo ocupante
-(sem dupla-contagem) e a identidade de T2 é **resolvida como A por CONSERVAÇÃO** — sem rádio, sem
-tracker, sem ReID.
+**Consequência de código (já aplicada):** `workflowPrior()`, `WorkflowModel`, `PriorCandidate`,
+`PriorEntry` foram **REMOVIDOS** de `src/fusion/petri-conservation.ts` — não rebaixados a "não
+usado", removidos. Um mecanismo cujo único modelo possível é a uniforme é um knob que não decide
+nada: ruído com aparência de capacidade (CLAUDE.md §5, filtro Signal×Noise). A remoção está marcada
+no arquivo com um bloco **RETRATAÇÃO** que aponta para esta seção. O CA-11 original virou um teste de
+que **`lastZone` sobreviveu** — mas agora como insumo da **continuidade física**, não de um prior de
+rota.
 
-### CA-3 — Com N pessoas na zona, o vínculo individual é AMBÍGUO e o sistema o DECLARA
-**Given** uma zona onde entraram A e B e ambos os tracks morreram dentro
-**When** um track novo nasce dentro
-**Then** o conjunto {A,B} permanece conservado, e a identidade do track novo é retornada como
-**ambígua com candidatos [A,B]** — nunca como um dos dois. Rótulo errado é pior que nenhum.
+**NÃO INVENTAR UM MODELO DE WORKFLOW.** Ele não existe. Qualquer número de transição escrito daqui
+para frente é ficção.
 
-### CA-4 — Ocupante ANÔNIMO contamina o conjunto e a ambiguidade é exposta
-**Given** uma zona com o token A e **um ocupante sem identidade** (entrou sem claim)
-**When** um track nasce dentro
-**Then** a identidade **não** é resolvida como A (candidato único não basta): retorna ambígua com
-candidatos [A] e `anonymousPossible: true`.
+---
 
-### CA-5 — Saída AMBÍGUA degrada o conjunto para SUPERCONJUNTO (honestidade, não silêncio)
-**Given** uma zona com o conjunto {A,B} e um track de identidade ambígua dentro dela
-**When** esse track "saiu"
-**Then** a ocupação decrementa, mas **nenhum token é removido** (não se sabe qual saiu): a zona fica
-com `tokens=[A,B]`, `occupancy` menor, e `supersetTokens: true` — o conjunto passa a ser um
-SUPERCONJUNTO declarado dos presentes.
+## 3. O que SOBREVIVEU (a nova base) — 4 restrições que continuam de graça
 
-### CA-6 — Nascer-dentro sem ocupante disponível = ocupante NOVO (a fronteira nunca o viu)
-**Given** uma zona com ocupação 0
-**When** um track nasce dentro (pessoa já presente no início da observação)
-**Then** a ocupação vira 1, o ocupante é contado como **anônimo**, e o diagnóstico
-`bornInsideNew` incrementa (é o risco de dupla-contagem do `zone-crossing.ts`, agora **medido**).
+1. **ESCALA DO TURNO.** Quem está trabalhando hoje. Se são 3 operadores na área, o espaço de
+   hipóteses é sobre **3**, não sobre os 20 do cadastro. Restrição de domínio, custo zero.
+2. **EXCLUSIVIDADE.** Um operador está em **exatamente um lugar**. Se X está confiantemente na mesa
+   4, X **não está** na mesa 7. É uma restrição **GLOBAL de atribuição** — é aqui que a atribuição
+   ótima finalmente paga (por **propagação a partir de um pino**; ver §7, honestidade).
+3. **CONTINUIDADE FÍSICA.** Ninguém se teleporta: alcançabilidade = saltos de vizinhança × tempo
+   decorrido.
+4. **🔑 O CONJUNTO DE TAGS PRESENTES.** O scan BLE devolve os **MACs presentes na área**. Isso é
+   **identidade de graça: sem correlação, sem movimento, sem `n_eff`. Só detecção.** É a peça que
+   nunca havíamos explorado — e a única que o gate das Ondas 0/1 **não** derrubou (o gate mediu a
+   *correlação*, não a *detecção*). Ela permite o bookkeeping que a resposta 4 quebrou:
 
-### CA-7 — Balanço negativo é diagnóstico, não crash
-**Given** uma zona com ocupação 0
-**When** chega um "saiu" (a fronteira perdeu a entrada correspondente)
-**Then** a ocupação é clampada em 0 e `negativeBalance` incrementa. Nenhum NaN, nenhuma exceção.
+   > **nº mínimo de ANÔNIMOS = pessoas(câmera) − tags(rádio).**
+   > Se a câmera vê 2 pessoas na mesa 4 e só 1 tag está na vizinhança, **uma delas é visitante.**
 
-### CA-8 — Capacidade do posto é sensor de saúde
-**Given** uma zona declarada com `capacity: 1` (posto)
-**When** a ocupação passa de 1
-**Then** `capacityViolations` incrementa (duas pessoas no posto **ou** track espúrio — o humano
-decide), sem alterar a lógica de resolução.
+E do core da v1 sobrevivem, **intactos e ainda portantes** (sustentam L0/L1 **sem identidade
+nenhuma**): ocupação por **balanço de fronteira**, **capacidade como sensor de saúde** (não como
+restrição dura), **token segurado na morte de track** (CA-2 — o núcleo da H2), e **ambiguidade
+exposta no tipo de retorno**.
 
-### CA-9 — Claim de identidade (BLE) durante a visita identifica o anônimo
-**Given** um ocupante anônimo dentro da zona
-**When** chega um `IdentityClaim` (track→token) — a contribuição da camada 2 nos ~15,5% em que ela
-fala
-**Then** o token entra no conjunto da zona, o contador de anônimos decrementa e a identidade do track
-passa a resolvida `via: "claim"`.
+---
 
-### CA-10 — Determinismo
-**Given** o mesmo conjunto de eventos e claims em QUALQUER ordem de entrada
-**When** a conservação roda
-**Then** a saída é byte-a-byte idêntica (ordenação estável por ts; conjuntos emitidos ordenados) e
-não contém NaN.
+## 4. A MUDANÇA DE NÍVEL (o insight que reposiciona tudo)
 
-### CA-11 — MECANISMO do prior de workflow (o MODELO é TBD)
-**Given** um `WorkflowModel` (matriz de transição P(próximo posto | posto anterior)) **fornecido de
-fora** e um conjunto de candidatos com sua última zona conhecida
-**When** um track entra numa zona e a identidade é ambígua
-**Then** `workflowPrior()` devolve uma distribuição **normalizada** sobre os candidatos (soma 1, sem
-NaN), ordenada; e se o modelo não tiver informação sobre a transição, devolve **uniforme** (ausência
-de modelo = ausência de opinião, nunca uma opinião inventada).
+O problema de atribuição **migra do TICK para a ZONA**:
 
-## 4. FORA DE ESCOPO (explícito)
+| | v1 / tentativas anteriores | v2 (esta spec) |
+|---|---|---|
+| Unidade | tag↔track por **tick** (500 ms) | operador↔**zona** |
+| Horizonte | instantâneo | **minutos** |
+| Estrutura | nenhuma (matching denso, ambíguo) | capacidade 1–2, exclusividade, conjunto-de-tags, ocupante anônimo |
+| Resultado histórico | **Hungarian FRACASSOU** (registrado) | problema pequeno, com estrutura real |
+| Dustbin | fabricado, no nível errado | o **anônimo** é um destino de atribuição **LEGÍTIMO e esperado** |
 
-- **O MODELO de workflow do CD** — quais postos existem, que sequência o operador percorre, com que
-  probabilidade. **Depende do dono** (ver §5). Só o MECANISMO entra agora.
-- **Motor genérico de redes de Petri** (inibidores, pesos de arco, marcação simbólica, solver de
-  alcançabilidade). Aqui Petri = contabilidade de conjuntos + transições de fronteira.
-- **Desambiguação por ReID visual / aparência.** Fonte independente legítima (ADR-014), mas outra
-  frente.
-- **HSMM / estado operacional / conformance** — camadas 4 e 5, Onda 3.
-- **Wiring em produção/UI** — este core é puro e sem consumidor ainda (mesma disciplina de
+E a **ausência** de rádio muda de valor com o horizonte: fraca no tick (advertising perdido), **forte
+em minutos** (uma tag a 1 Hz tem ~60 chances/min de ser vista). É por isso que a restrição 4 só é
+utilizável **neste nível**.
+
+---
+
+## 5. Critérios de aceite (Given/When/Then)
+
+### Sobreviventes da v1 (o core de conservação — continuam valendo, testes verdes)
+**CA-1** balanço de fronteira conserva a ocupação · **CA-2** a identidade sobrevive à **morte de
+track** (núcleo da H2) · **CA-3** com N pessoas o vínculo é **ambíguo e declarado** · **CA-4**
+ocupante anônimo contamina o conjunto · **CA-5** saída ambígua degrada o conjunto para
+**superconjunto** · **CA-6** nascer-dentro sem ocupante = ocupante novo · **CA-7** balanço negativo é
+diagnóstico · **CA-8** capacidade é sensor de saúde · **CA-9** claim identifica o anônimo · **CA-10**
+determinismo. *(Ver `petri-conservation.test.ts`. **CA-11 foi reescrito**: o que resta dele é que
+`lastZone` continua saindo da conservação — hoje insumo da continuidade.)*
+
+### Novos — a atribuição operador↔zona (`zone-assignment.ts`)
+
+#### CA-A1 — O conjunto de tags presentes é identidade de graça
+**Given** uma escala `[A,B,C]` e um scan que viu **só a tag de A**
+**When** a atribuição roda
+**Then** só **A** é atribuível; **B** e **C** saem como `ausente`; e uma tag vista **fora da escala**
+não é atribuível — entra em `offRoster` (anônimo *com* tag). Se houver locality de receptor
+(`nearZones`), ela **poda as zonas candidatas** — por **set-membership**, sem nenhum número de RSSI.
+
+#### CA-A2 — A contagem de anônimos (a conta do dono)
+**Given** uma zona onde a câmera conta **2 pessoas** e só **1 tag** presente na área
+**When** a atribuição roda
+**Then** `anonymousFloor = 1` e a zona reporta `anonymous.min ≥ 1` — **há PROVA de um anônimo**.
+**And** se as tags presentes **excederem** as pessoas contadas, `tagsExceedPeople > 0` é emitido como
+**diagnóstico** (tag esquecida na bancada / operador fora do FOV / subcontagem do detector) — nunca
+silêncio, nunca clamp mudo.
+
+#### CA-A3 — Exclusividade colapsa a ambiguidade da zona vizinha (é aqui que ela paga)
+**Given** A **fixado** na MESA4 pela conservação (`pinned`), B presente, e a MESA7 com 1 pessoa
+**When** a atribuição roda **com fechamento** (`tagsMustBeInSomeZone`)
+**Then** B é **`decidida` na MESA7 `via: "exclusao"`** — sem rádio direcional, sem correlação: só
+porque A **não pode** estar em dois lugares.
+**And** **sem** o fechamento, B sai **`ambigua` com `zones: [MESA7]` e `foraPossivel: true`** — a
+exclusividade **podou** a MESA4, mas **não decidiu**. A confissão está no tipo. *(Ver §7.)*
+
+#### CA-A4 — Continuidade física: ninguém se teleporta
+**Given** a última zona conhecida de A e uma topologia com `hopMs`
+**When** a zona-alvo está a mais saltos do que o tempo decorrido permite
+**Then** ela é **podada**. **And** sem topologia declarada, **nada é excluído** (ausência de modelo =
+ausência de opinião — a mesma disciplina que matou o prior).
+
+#### CA-A5 — Pino × rádio: a contradição é diagnóstico, não decisão silenciosa
+**Given** A **fixado** na MESA4 pela conservação, mas **ausente** do scan de rádio
+**When** a atribuição roda
+**Then** o **pino vence** (evidência posicional independente; rádio silencioso pode ser
+bateria/sombra) e a contradição sai em `pinnedNotDetected`.
+**And** restrições contraditórias na entrada (dois pinos numa zona de 1 pessoa; o mesmo token fixado
+em duas zonas) devolvem **`kind: "inviavel"` com as razões** — nunca uma saída inventada.
+
+#### CA-A6 — Capacidade continua sendo sensor de saúde, não restrição dura
+**Given** um posto de `capacity: 2` onde a câmera conta **3**
+**When** a atribuição roda
+**Then** `capacityViolation` sobe e a atribuição **prossegue** (o teto duro é a **ocupação vista**,
+não a capacidade **declarada** — restringir pela declaração seria confiar num número contra o que a
+câmera vê). Mesma semântica de `petri-conservation.ts` (CA-8).
+
+#### CA-A7 — Entailment, ambiguidade e determinismo
+**Given** o mesmo cenário em **qualquer ordem** de zonas/escala/tags
+**When** a atribuição roda
+**Then** a saída é **byte-a-byte idêntica**, sem NaN, com conjuntos ordenados; um operador só é
+`decidida` se **TODA** atribuição viável o põe naquela zona (**entailment**, não score, não limiar,
+não desempate); e se o **orçamento de busca** estourar, o resultado **degrada para ambíguo**
+(`budgetExceeded`) — jamais afirma o que a busca não provou.
+
+#### CA-A8 — A conservação alimenta a atribuição
+**Given** um token que a conservação segurou numa zona através da **morte do track** (CA-2)
+**When** `zoneObservationsFromConservation()` converte o estado
+**Then** esse token vira **`pinned`** naquela zona (e dispara a exclusividade).
+**And** se o conjunto da zona for um **SUPERCONJUNTO** (`supersetTokens` — houve saída ambígua),
+**nenhum pino é emitido**: a conservação não sabe quem ficou, e **pino falso é pior que nenhum pino**.
+
+---
+
+## 6. FORA DE ESCOPO (explícito)
+
+- **Qualquer modelo de workflow/sequência.** Morto por §2. Não voltará sem um fato novo do domínio.
+- **Solver genérico de atribuição** (Hungarian, LP, min-cost-flow). A estrutura é **pequena**
+  (poucos operadores, ocupação 1–2): um DFS com poda por ocupação enumera o espaço e devolve
+  **entailment**. Abstração só no 3º caso (CLAUDE.md §2). *(E o Hungarian já fracassou no nível do
+  tick — trazê-lo de volta para o nível da zona seria trazer a peça errada para o lugar certo.)*
+- **Score/probabilidade de atribuição.** Não há prior legítimo para calibrar peso — §2. O retorno é
+  **set-membership** (decidido / conjunto possível), não uma distribuição.
+- **A restrição disjuntiva do superconjunto** ("um de {A,B} ainda está na MESA4"): é informação real
+  que a conservação produz e que a atribuição hoje **descarta** (vira candidato comum). Registrado
+  como **pendência**, não implementado — exige constraint disjuntiva por zona, e o ganho ainda não
+  foi medido.
+- **HSMM / estado operacional / conformance com limites** — camadas 4–5, Onda 3. *(Conformance de
+  **sequência** está morto; conformance de **duração/limites** por posto continua vivo — não depende
+  de rota.)*
+- **ReID visual** (ADR-015) — fonte de pino independente, outra frente. O contrato `pinned` já a
+  aceita sem mudança.
+- **Wiring em produção/UI.** O core é puro e ainda sem consumidor (mesma disciplina de
   `floor-polygon.ts`).
-- **Desenho das zonas** (polígonos de posto) — vem do operador/dono, não deste módulo.
-- **Δ5 (bandeira de id-switch por contradição chegada×saída)** — precisa da camada 2 acoplada; fica
-  registrado como pendência, não implementado aqui.
+- **Desenho das zonas** (polígonos de mesa) e a **escala do turno** — vêm do dono/operação.
 
-## 5. GAP DE CONHECIMENTO DE DOMÍNIO — o MODELO precisa do DONO (não inventar)
+---
 
-O mecanismo do prior está construído e testado. **O modelo, não** — e ele não é inferível daqui sem
-mentir. Perguntas abertas ao dono / cliente (Grendene CD):
+## 7. Honestidade — a força REAL de cada restrição sobrevivente (medida ao implementar)
 
-1. **Quais são os POSTOS?** Lista dos postos de trabalho reais (mesa de conferência, expedição,
-   picking, etc.), com nome estável.
-2. **Qual a SEQUÊNCIA típica?** O operador segue uma ordem (A→B→C) ou circula livre? Existe posto
-   inicial/final de turno?
-3. **Capacidade real de cada posto** — é mesmo 1 pessoa/posto (regra Δ1)? Onde não for, a
-   ambiguidade é estrutural e o produto tem de conviver com ela.
-4. **Quem circula além dos operadores rastreados?** (visitantes, empilhadeira, manutenção) — cada
-   pessoa sem tag é um "ocupante anônimo" que degrada a conservação (CA-4).
-5. **Postos são adjacentes topologicamente?** (dá para ir de A a C sem passar por B?) — isso é o
-   suporte da matriz de transição; zeros estruturais valem mais que probabilidades finas.
+Pedido explícito do dono: *"se alguma das 4 restrições se revelar mais fraca do que parece, DIGA."*
+Duas se revelaram mais fracas:
 
-**Até essas respostas, `WorkflowModel` fica vazio → prior uniforme → a conservação carrega sozinha.**
-Nenhum número de transição foi inventado no código.
+- **EXCLUSIVIDADE (2) sozinha NÃO ENTRANHA NADA.** Sem pinos e sem fechamento, todo operador pode
+  estar **"fora"** (corredor, banheiro, zona sem câmera) — logo nenhuma atribuição é forçada. Ela
+  **poda** o espaço; ela só **decide** combinada com (a) um **pino** da conservação/claim, (b)
+  **saturação de ocupação**, ou (c) a assunção de **fechamento** (`tagsMustBeInSomeZone` — só válida
+  se as zonas ladrilham a área observada). Isso está **exposto no tipo** (`foraPossivel`) e testado
+  (CA-A3, 2º caso). **A leitura correta é: a exclusividade é o AMPLIFICADOR do pino, não uma fonte
+  autônoma de identidade.** Consequência prática: **cobertura de câmera nas zonas importa** — cada
+  buraco de FOV vira um "fora" que dissolve a força da restrição.
+- **CONTINUIDADE (3) é quase inerte NESTE CD.** Se as mesas são todas adjacentes (resposta 2), a
+  distância topológica entre qualquer par é **1 salto** — a restrição só exclui algo quando o tempo
+  decorrido é menor que **um** salto. Mantida porque é de graça e porque **endurece** onde houver
+  zonas realmente distantes (doca × mezanino). Hoje: quase zero informação. Testado explicitamente
+  (CA-A4, 3º caso).
 
-## 6. Riscos residuais declarados
+As duas que **se confirmaram fortes**:
 
-- A conservação é tão boa quanto a **detecção de fronteira**. Se a fronteira perde cruzamentos, o
-  balanço vaza (`negativeBalance`, `bornInsideNew` medem exatamente isso). Já se sabe que o `ttlMs`
-  do tracker (#27) é a alavanca barata que reduz o churn dentro da zona.
-- Ocupantes anônimos são o **veneno da determinação**: um único não-rastreado num posto derruba
-  CA-2 para CA-4. Isto é físico, não um bug — e está exposto no tipo de retorno.
-- A ambiguidade da SAÍDA (CA-5) só cresce; nada neste core a resolve. Quem resolve é o rádio (nos
-  ~15,5%), o workflow (quando houver modelo) ou o ReID.
+- **CONJUNTO DE TAGS (4)** é a única fonte de identidade **barata e não-refutada** que temos. É o
+  chão da atribuição — e é ela que torna a **contagem de anônimos** possível.
+- **ESCALA (1)** encolhe o espaço de hipóteses de 20 para 3 antes de qualquer inferência. Barata,
+  exata e imune a ruído de sensor.
+
+## 8. Riscos residuais declarados
+
+- **Anônimos são o regime normal** (resposta 4), não a exceção. Toda a métrica de identidade tem de
+  ser reportada **com a faixa de anônimos** (`anonymous.min/max`) ao lado. Um número de identidade
+  sem a contagem de anônimos ao lado é enganoso.
+- **A atribuição é tão boa quanto a contagem da câmera.** `occupancy` errado ⇒ `anonymousFloor`
+  errado nos dois sentidos (`tagsExceedPeople` é o sensor de que isso está acontecendo).
+- **`tagsMustBeInSomeZone` é uma ASSUNÇÃO**, não um fato. Ligá-la sem que as zonas ladrilhem a área
+  observada produz decisões **erradas com cara de certeza**. Default `false`, e assim deve ficar até
+  que o desenho de zonas justifique.
+- **Ausência de rádio ≠ prova de ausência** (bateria, sombra). No horizonte de minutos é evidência
+  forte, mas o `pinnedNotDetected` existe justamente porque ela pode mentir.

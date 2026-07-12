@@ -8,7 +8,6 @@ import { describe, it, expect } from "vitest";
 import {
   conserveIdentities,
   buildTrackZoneEvents,
-  workflowPrior,
   type TrackZoneEvent,
   type IdentityClaim,
   type Place,
@@ -334,77 +333,21 @@ describe("CA-10 — determinismo", () => {
   });
 });
 
-// —— CA-11 — MECANISMO do prior (o MODELO é TBD, do dono) ————————————————————————————————————————
+// —— CA-11 (v2) — `lastZone` sobrevive ao prior morto: agora é o insumo da CONTINUIDADE ——————————
+//
+// O CA-11 ORIGINAL testava o MECANISMO do prior de workflow (matriz de transição). Ele foi REMOVIDO:
+// o dono respondeu que o operador CIRCULA LIVRE ⇒ a matriz é uniforme ⇒ informação zero. O que
+// sobrevive é o HOOK: a última zona conhecida de cada token, datada — hoje insumo da restrição de
+// CONTINUIDADE FÍSICA em `zone-assignment.ts` (não mais de um prior de rota).
 
-describe("CA-11 — prior de workflow: MECANISMO pronto, MODELO ausente = opinião ausente", () => {
-  const cands = [
-    { token: "A", lastZoneId: "PICKING" },
-    { token: "B", lastZoneId: "EXPEDICAO" },
-  ];
-
-  it("sem modelo → UNIFORME (nunca uma opinião inventada)", () => {
-    const p = workflowPrior(cands, "CONFERENCIA");
-    expect(p.map((x) => x.p)).toEqual([0.5, 0.5]);
-  });
-
-  it("com modelo DADO → distribuição normalizada e ordenada", () => {
-    const model = {
-      transitions: { PICKING: { CONFERENCIA: 0.9 }, EXPEDICAO: { CONFERENCIA: 0.1 } },
-    };
-    const p = workflowPrior(cands, "CONFERENCIA", model);
-    expect(p[0]).toEqual({ token: "A", p: 0.9 });
-    expect(p[1].token).toBe("B");
-    expect(p[0].p + p[1].p).toBeCloseTo(1, 12);
-  });
-
-  it("transição estruturalmente impossível zera o candidato (o zero vale mais que a probabilidade fina)", () => {
-    const model = { transitions: { PICKING: { CONFERENCIA: 1 }, EXPEDICAO: { CONFERENCIA: 0 } } };
-    const p = workflowPrior(cands, "CONFERENCIA", model);
-    expect(p).toEqual([
-      { token: "A", p: 1 },
-      { token: "B", p: 0 },
-    ]);
-  });
-
-  it("modelo sem informação sobre a transição (soma 0) → uniforme, sem NaN", () => {
-    const model = { transitions: { OUTRA: { COISA: 5 } } };
-    const p = workflowPrior(cands, "CONFERENCIA", model);
-    expect(p.every((x) => Number.isFinite(x.p))).toBe(true);
-    expect(p.map((x) => x.p)).toEqual([0.5, 0.5]);
-  });
-
-  it("pesos inválidos (NaN/negativo) contam como 0 e não contaminam a normalização", () => {
-    const model = {
-      transitions: { PICKING: { CONFERENCIA: NaN }, EXPEDICAO: { CONFERENCIA: -3 } },
-    };
-    const p = workflowPrior(cands, "CONFERENCIA", model);
-    expect(p.map((x) => x.p)).toEqual([0.5, 0.5]); // tudo 0 → uniforme
-  });
-
-  it("sem candidatos → lista vazia (nada a rankear)", () => {
-    expect(workflowPrior([], "Z")).toEqual([]);
-  });
-
-  it("candidato sem última zona conhecida não recebe massa do modelo", () => {
-    const model = { transitions: { PICKING: { CONFERENCIA: 1 } } };
-    const p = workflowPrior([{ token: "A", lastZoneId: "PICKING" }, { token: "C" }], "CONFERENCIA", model);
-    expect(p).toEqual([
-      { token: "A", p: 1 },
-      { token: "C", p: 0 },
-    ]);
-  });
-
-  it("os candidatos e a última zona saem prontos da conservação (o hook do prior)", () => {
+describe("CA-11 — a última zona conhecida do token continua a sair da conservação", () => {
+  it("lastZone registra de onde o operador veio (insumo da continuidade, não de um prior de rota)", () => {
     const r = conserveIdentities(
-      [ev("T1", "PICKING", "entrou", 1000), ev("T1", "PICKING", "saiu", 2000)],
-      [posto("PICKING"), posto("CONFERENCIA")],
+      [ev("T1", "MESA4", "entrou", 1000), ev("T1", "MESA4", "saiu", 2000)],
+      [posto("MESA4"), posto("MESA7")],
       [claim("T1", "A", 900)],
     );
-    expect(r.lastZone.A).toBe("PICKING");
-    const p = workflowPrior([{ token: "A", lastZoneId: r.lastZone.A }], "CONFERENCIA", {
-      transitions: { PICKING: { CONFERENCIA: 1 } },
-    });
-    expect(p).toEqual([{ token: "A", p: 1 }]);
+    expect(r.lastZone.A).toBe("MESA4");
   });
 });
 

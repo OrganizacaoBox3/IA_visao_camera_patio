@@ -2,10 +2,17 @@
 // transições=cruzamentos de fronteira). Lógica PURA e determinística; sem DOM, sem rede, sem tracker.
 //
 // POR QUE ESTA CAMADA É PORTANTE (não decorativa): o gate das Ondas 0/1 mediu o TETO da identidade
-// por rádio — ~15,5% dos episódios, no melhor caso (tag a 2 Hz, aproximação longa). Logo ≥84,5% dos
-// episódios NÃO terão identidade por RSSI em cadência nenhuma. Esses 84,5% só podem receber
-// identidade de uma fonte INDEPENDENTE do rádio: a TOPOLOGIA (este módulo) e o WORKFLOW (o prior,
-// cujo MODELO depende do dono — ver `docs/cientifica/onda2-conservacao-workflow-spec.md` §5).
+// por RSSI — ~15,5% dos episódios, no melhor caso (tag a 2 Hz, aproximação longa). Logo ≥84,5% dos
+// episódios NÃO terão identidade por CORRELAÇÃO de RSSI em cadência nenhuma. Esses 84,5% só podem
+// receber identidade de fontes INDEPENDENTES da correlação: a TOPOLOGIA (este módulo), o CONJUNTO DE
+// TAGS PRESENTES e as restrições de atribuição (`zone-assignment.ts`).
+//
+// ATENÇÃO — RETRATAÇÃO (2026-07-12): a segunda fonte prevista aqui era o PRIOR DE WORKFLOW. O dono
+// respondeu: **o operador circula LIVRE**. Não há sequência esperada ⇒ o prior de rota morreu e foi
+// REMOVIDO deste arquivo (ver o bloco RETRATAÇÃO no fim). O que sobrevive deste core — ocupação por
+// balanço, capacidade como sensor, token segurado na morte de track (CA-2) e ambiguidade explícita —
+// segue VALENDO e é o que sustenta L0/L1 SEM identidade nenhuma. Ver
+// `docs/cientifica/onda2-conservacao-workflow-spec.md`.
 //
 // O QUE "PETRI" SIGNIFICA AQUI (YAGNI, CLAUDE.md §2): contabilidade de CONJUNTOS por zona com
 // transições de fronteira. NÃO é um motor genérico de redes de Petri (sem arcos com peso, sem
@@ -413,57 +420,18 @@ export function conserveIdentities(
 }
 
 // ————————————————————————————————————————————————————————————————————————————————————————————————
-// Prior de WORKFLOW — o MECANISMO. O MODELO é TBD (depende do dono; ver spec §5).
+// RETRATAÇÃO — o prior de WORKFLOW foi REMOVIDO daqui (2026-07-12)
 // ————————————————————————————————————————————————————————————————————————————————————————————————
-
-/**
- * Modelo de workflow: P(próximo posto | posto anterior). É a segunda fonte de identidade INDEPENDENTE
- * do rádio (ADR-014). **Este módulo NÃO o produz e não traz nenhum número embutido** — quais postos
- * existem no CD e que sequência o operador percorre é conhecimento de DOMÍNIO, do dono. Modelo vazio
- * ⇒ prior uniforme ⇒ a conservação carrega sozinha. Ausência de modelo é ausência de OPINIÃO, nunca
- * uma opinião inventada.
- */
-export type WorkflowModel = {
-  /** `transitions[deZonaId][paraZonaId] = peso ≥ 0` (não precisa somar 1: normaliza-se aqui). */
-  transitions: Readonly<Record<string, Readonly<Record<string, number>>>>;
-};
-
-/** Candidato ao vínculo, com a última zona conhecida do token (vem de `ConservationResult.lastZone`). */
-export type PriorCandidate = { token: TokenId; lastZoneId?: string };
-
-export type PriorEntry = { token: TokenId; p: number };
-
-/**
- * Aplica um `WorkflowModel` DADO como prior sobre os candidatos de uma identidade ambígua: quem
- * estava num posto de onde a transição para `toZoneId` é provável recebe mais massa.
- *
- * Determinístico, normalizado (soma 1), sem NaN. Se o modelo não tiver informação sobre NENHUM
- * candidato (soma de pesos ≤ 0) → UNIFORME. Pesos não-finitos/negativos contam como 0.
- * Ordena por p desc, depois por token asc (estável).
- *
- * NÃO é acoplado a `conserveIdentities` de propósito: colapsar uma ambiguidade num rótulo exige um
- * LIMIAR, e o limiar só pode ser calibrado depois que o MODELO existir (spec §5). O core topológico
- * permanece set-teórico e determinístico; o prior é uma função de ranking à parte.
- */
-export function workflowPrior(
-  candidates: readonly PriorCandidate[],
-  toZoneId: string,
-  model?: WorkflowModel,
-): PriorEntry[] {
-  const list = (candidates ?? []).filter((c) => !!c && typeof c.token === "string");
-  const n = list.length;
-  if (n === 0) return [];
-
-  const w = list.map((c) => {
-    const from = c.lastZoneId;
-    if (from === undefined || !model) return 0;
-    const raw = model.transitions?.[from]?.[toZoneId];
-    return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
-  });
-  const sum = w.reduce((a, b) => a + b, 0);
-  const p = sum > 0 ? w.map((x) => x / sum) : w.map(() => 1 / n);
-
-  return list
-    .map((c, i) => ({ token: c.token, p: p[i] }))
-    .sort((a, b) => b.p - a.p || (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
-}
+//
+// Este arquivo exportava `workflowPrior()` + `WorkflowModel` (matriz P(próximo posto|posto atual)).
+// As respostas de domínio do dono REFUTARAM a premissa: **o operador circula LIVRE no turno** — não
+// existe sequência esperada. Uma matriz de transição uniforme é INFORMAÇÃO ZERO, e as mesas são todas
+// adjacentes (sem zeros estruturais). O mecanismo estava correto e testado; o MODELO que ele
+// consumiria não existe e não vai existir. Manter a função seria manter um knob que só sabe devolver
+// uniforme — ruído com aparência de capacidade. Removido, não rebaixado (CLAUDE.md §5, Signal×Noise).
+//
+// O que ficou no lugar: `zone-assignment.ts` (atribuição operador↔zona sob as 4 restrições que
+// SOBREVIVERAM). `lastZone` (acima) NÃO morreu — deixou de alimentar o prior de rota e passou a
+// alimentar a CONTINUIDADE FÍSICA da atribuição (de onde ele veio, e se dá tempo de chegar aqui).
+//
+// Proveniência completa: `docs/cientifica/onda2-conservacao-workflow-spec.md` §2.
