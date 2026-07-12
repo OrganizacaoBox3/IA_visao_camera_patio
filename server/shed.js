@@ -62,8 +62,6 @@ function createShed({ io, cameras, socketById, rtsp, analysisViewer, effectiveFp
   const effFpsOf = typeof effectiveFps === "function" ? effectiveFps : () => 1;
   const focusedOf = typeof isFocused === "function" ? isFocused : () => false;
   const cfgFpsOf = (id) => (typeof rtsp.captureFps === "function" ? rtsp.captureFps(id) : null);
-  /** id -> último perfil pedido via `set-capture` (não deixar o shed sobrescrever o operador) */
-  const lastCaptureCfg = new Map();
   /** id -> epoch ms de quando ficou SEM espectador (debounce do shed) */
   const idleSince = new Map();
   /** ids de webcam atualmente rebaixadas para fps baixo */
@@ -114,8 +112,9 @@ function createShed({ io, cameras, socketById, rtsp, analysisViewer, effectiveFp
     shedWebcams.delete(cam.id);
     const target = socketById.get(cam.id);
     if (!target) return;
-    const manual = lastCaptureCfg.get(cam.id);
-    target.emit("capture", manual ?? { fps: WEBCAM_DEFAULT_FPS });
+    // Restaura o perfil default. (O perfil manual via socket "set-capture" saiu na faxina
+    // ADR-016: o listener era órfão — nenhum cliente jamais o emitiu.)
+    target.emit("capture", { fps: WEBCAM_DEFAULT_FPS });
     console.log(`[shed] ${cam.id} ganhou espectador — perfil de captura restaurado`);
   }
 
@@ -142,11 +141,6 @@ function createShed({ io, cameras, socketById, rtsp, analysisViewer, effectiveFp
 
   return {
     sweepShed,
-    // Guarda o último perfil pedido pelo operador (`set-capture`): restaurado ao religar, nunca
-    // sobrescrito pelo rebaixamento automático — o shed nunca apaga uma intenção manual.
-    setLastCapture(id, cfg) {
-      lastCaptureCfg.set(String(id), cfg);
-    },
     // Nó de câmera (re)conectou no perfil default — estado de shed anterior não vale mais.
     onCameraConnected(id) {
       shedWebcams.delete(String(id));

@@ -334,7 +334,8 @@ export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
 // O TC22 é MÓVEL: a última localização de cada tag = onde o celular estava quando a viu por
 // último (lat/lon + precisão + quando). SÓ metadados/coordenadas (LGPD): nenhum frame. `rotulo` =
 // nome cadastrado ou null; `acc` = raio de precisão em metros (ou null); `ts` = epoch-ms da leitura.
-// Existe também um socket `bt-locations`, mas a página de mapa usa POLLING deste GET (robustez).
+// A página de mapa usa POLLING deste GET (o socket `bt-locations` saiu na faxina ADR-016 —
+// era emitido e jamais consumido).
 export type TagLocation = {
   mac: string;
   rotulo: string | null;
@@ -355,8 +356,6 @@ export const createBtTag = (btName: string, rotulo: string) =>
   apiSend<BtTag>("POST", "/api/bt-tags", { btName, rotulo });
 export const updateBtTag = (id: string, patch: { rotulo?: string; ativo?: boolean; btName?: string }) =>
   apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
-export const deleteBtTag = (id: string) =>
-  apiSend<{ ok: true }>("DELETE", `/api/bt-tags/${encodeURIComponent(id)}`);
 
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
@@ -413,3 +412,11 @@ export const updateCamera = (id: string, patch: Partial<NewCamera>) =>
 // DELETE /api/cameras/:id → 200 {ok:true}. Auth: superadmin.
 export const deleteCamera = (id: string) =>
   apiSend<{ ok: true }>("DELETE", `/api/cameras/${encodeURIComponent(id)}`);
+
+// ── Câmeras CONECTADAS agora (as da grade da central) — busca do shell ───────────────────────
+// GET /api/cameras/connected → { cameras: [{ id, label, online }] }. Diferente do registro
+// /api/cameras (superadmin-only, com url SENSÍVEL), esta lista é só identidade+estado — sem url —
+// e vale para QUALQUER autenticado; inclui nós locais/webcam que não têm cadastro IP.
+export type ConnectedCamera = { id: string; label: string; online: boolean };
+export const getConnectedCameras = () =>
+  apiGet<{ cameras: ConnectedCamera[] }>("/api/cameras/connected");

@@ -119,6 +119,31 @@ Validação: `tsc` + `vite build` + `e2e 3/3` verdes. Plano em `docs/analises/fr
 - Drawer de alarmes usa CSS `:has()` (baseline 2023+).
 - Ampliar e2e para cobrir Tabs/AlertDialog (hoje cobre Select-em-Dialog).
 
+## Faxina de produto — pesquisa fora do main (2026-07-12)
+Auditoria código-por-código do produto vivo (aprovada pelo dono): só ~17% de `src/fusion` tinha
+consumidor no produto — o resto rodava no CI guardando afirmações científicas. O arco de pesquisa
+sai do main (≈7,4k linhas-fonte + ≈11k de teste), preservado INTEIRO na tag git
+`research-fusion-arc-2026-07-12`; o conhecimento permanece em `docs/cientifica/`, ADRs 012–015 e
+`docs/analises/tags-bluetooth/PENDENCIAS.md`. Decisão registrada no **ADR-016**.
+- **Deleções (pesquisa)**: ilhas de `src/fusion` (petri-conservation, zone-assignment, zone-crossing,
+  visit-metrics, event-metrics, anchor-policy, error-geometry, receiver-geometry,
+  receiver-at-destino.test, theta-discriminator, static-tracks-triage, residual-autocorr,
+  label-memory, regime-reliability, memory-metrics, persistence-*, floor-plan, floor-plan-gain,
+  evidence.ts) + motor test-only de `src/localizacao` (engine, fusion-engine, guarded-engine,
+  motion-engine, replay, scenarios, recording, simulate, metrics).
+- **Fica**: bancada `/replay` (ferramenta interna, gated canConfigure) e os testes do motor vivo
+  (associate, identity-metrics, replay-fusion, gates-recalibration, shuffle-baseline, world-spec,
+  funnel-session).
+- **Órfãos removidos**: emit socket `bt-locations` (nunca consumido — o mapa usa polling HTTP),
+  listener `set-capture` (nunca emitido; o `capture` hub→nó segue vivo via shed), `deleteBtTag`,
+  `reading/cluster.ts`, `server/_zxing_roundtrip_test.cjs`.
+- **Segurança**: `POST /api/bt/reading`, `POST /api/bt/tag-name` e `GET /api/bt/tags` exigem
+  `BT_STATION_TOKEN` em produção (503 explicativo se ausente; dev aberto com warn no boot);
+  `GET /api/bt/tags` aceita token OU sessão.
+- **Rota nova**: `GET /api/cameras/connected` (requireAuth) para a busca do shell.
+- **UX**: `setCameraCfg` propaga erro; Selects desabilitados sem `canConfigure`; OWL-ViT com latch
+  de falha permanente.
+
 ## Pendências para evolução futura (não bloqueantes)
 - Merge incremental de views/tripwires (hoje last-write-wins) para edição concorrente.
 - Métricas de alarme voláteis por processo (sem coordenação multi-instância).

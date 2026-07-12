@@ -33,9 +33,12 @@ de implementação: `docs/analises/implementacao-changelog.md`.
   Cine-loop é **buffer em memória, efêmero**; "salvar" é download local manual. Eventos de alarme = só metadados. (ADR-002)
 - **Segredos:** nunca versionar `.env`/credenciais/`wa-auth/`/`*.json` de runtime; nunca enviar segredos/PII a uma IA.
   `cameras.json`, `alarms.json`, `camcfg.json`, `alarm-shelves.json`, `rtsp.sources.json`, `wa-auth/` ficam no `.gitignore`.
-- **Contratos socket aditivos:** `frame`, `cameras`, `set-capture`/`capture`, `alert`, `camera-status`,
+- **Contratos socket aditivos:** `frame`, `cameras`, `capture`, `alert`, `camera-status`,
   `alarm-event`/`alarm-update`, `camcfg-updated`, `analysis-status`, `analysis-tracks` são contrato.
-  Adicione eventos novos; não quebre os existentes.
+  Adicione eventos novos; não quebre os existentes. (`set-capture` e `bt-locations` removidos por
+  órfãos na faxina de 2026-07-12 — o `capture` hub→nó segue vivo via shed; o mapa BLE usa polling HTTP. ADR-016.)
+- **Endpoints da estação BLE** (`POST /api/bt/reading`, `POST /api/bt/tag-name`, `GET /api/bt/tags`)
+  **exigem `BT_STATION_TOKEN` em produção** (503 explicativo se ausente; dev segue aberto com warn no boot). (ADR-016)
 - **Casca fullscreen da câmera NÃO vira Radix Dialog** (Portal/scroll-lock remontaria o `<canvas>` e quebraria o rAF/editor). Trap de foco manual permanece. (ADR-007)
 - **Radix é a camada de UI.** Todo controle interativo usa primitiva Radix via wrappers de `src/ui/`. (ADR-003, ADR-007)
 - **"Going gray":** cor é informação. Base neutra (tokens `--state-*`); saturada só para anormalidade.
@@ -73,6 +76,10 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 - **Sensores de acurácia no gate (CI):** `eval/` (detecção — `gate.mjs`, fixture COCO estratificado) e `eval/counting.mjs` (contagem fim-a-fim) rodam no CI e barram regressão de ML/heurística — toda mudança de knob de `precision.js` passa por eles (fonte única de config espelhada no eval).
 
 ### Regras de medição (compradas com sangue — violá-las já custou dois números errados publicados)
+
+> Nota (2026-07-12): os arquivos de pesquisa citados abaixo (`visit-metrics.ts`, `anchor-policy.ts`,
+> `receiver-at-destino.test.ts`) saíram do main na faxina do ADR-016 — vivem na tag
+> `research-fusion-arc-2026-07-12`. As regras permanecem: são doutrina, não código.
 
 - **Regra 8 — Deduplique ANTES de qualquer estatística. `n_eff ≤ nº de medições DISTINTAS`.**
   Isso é **contagem, não modelo**: não existe mais evidência independente do que medições distintas.

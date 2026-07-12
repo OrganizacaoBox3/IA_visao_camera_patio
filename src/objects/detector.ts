@@ -22,6 +22,10 @@ let cocoReady = false;
 // ── OWL-ViT (worker) ──
 let worker: Worker | null = null;
 let owlvitReady = false;
+// LATCH de falha (mesmo padrão de vision/detect.ts): erro no worker marca falha PERMANENTE —
+// sem o latch, cada ensureObjectDetector() recriava o worker e o download/init do modelo
+// recomeçava em loop. Falhou uma vez → fica no coco (ou "indisponível" se o coco também falhar).
+let workerFailed = false;
 let reqId = 0;
 type WorkerDet = {
   label: string;
@@ -43,8 +47,10 @@ function initWorker() {
       }
       if (m.type === "error") {
         worker = null;
+        workerFailed = true; // permanente: não recria em loop; coco segue como fallback
+        if (!owlvitReady && !cocoReady) backend = "indisponível";
         return;
-      } // mantém coco como fallback
+      }
       if (m.type === "result" && typeof m.id === "number") {
         const cb = pending.get(m.id);
         if (cb) {
@@ -55,15 +61,18 @@ function initWorker() {
     };
     worker.onerror = () => {
       worker = null;
+      workerFailed = true;
+      if (!owlvitReady && !cocoReady) backend = "indisponível";
     };
     worker.postMessage({ type: "init", model: APP_CONFIG.objects.model });
   } catch {
     worker = null;
+    workerFailed = true;
   }
 }
 
 export async function ensureObjectDetector(): Promise<void> {
-  if (!worker && !owlvitReady) initWorker(); // dispara o carregamento do OWL-ViT
+  if (!worker && !owlvitReady && !workerFailed) initWorker(); // dispara o carregamento do OWL-ViT (1×)
   try {
     await loadDetector();
     cocoReady = true;

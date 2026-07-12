@@ -15,7 +15,7 @@ export type DrawTrack = { id: number; bbox: readonly [number, number, number, nu
  *  (simulador `sim.ts`, produção com 1 estação): leituras sem sourceId são tratadas como vindas da
  *  mesma e única fonte, exatamente como antes do campo existir. Só o loader de gravação o preenche
  *  por ora (session-loader.ts); nenhum consumidor o exige — vocabulário aditivo p/ multi-fonte
- *  (2ª antena/AoA/UWB), ver src/fusion/evidence.ts. */
+ *  (2ª antena/AoA/UWB), ver evidence.ts (arquivado na tag research-fusion-arc-2026-07-12). */
 export type RawReading = {
   mac: string;
   rotulo: string | null;

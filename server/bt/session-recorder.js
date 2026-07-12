@@ -8,7 +8,7 @@
 //   {"t":"trk","ts":<ms>,"cameraId":"<id>","tracks":[{"id":<num>,"bbox":[x,y,w,h]}]}  // bbox 0..1
 //   {"t":"ble","ts":<ms>,"stationId":"<id>","sourceKind":"ble-rssi","readings":[{"mac":"<MAC>","rssi":<int>}]}
 //     — `sourceKind` (ADITIVO, ADR-013 item 3): tipo da FONTE da medição, no vocabulário universal
-//     de evidência (`src/fusion/evidence.ts`) — sensores futuros (AoA/UWB/mmWave) gravam o seu pela
+//     de evidência (evidence.ts, arquivado na tag research-fusion-arc-2026-07-12) — sensores futuros (AoA/UWB/mmWave) gravam o seu pela
 //     MESMA porta. O `stationId` É o `sourceId` do domínio BLE: o nome fica por retrocompat de
 //     contrato (loader/ingest antigos o conhecem assim), a generalização fica registrada aqui — o
 //     loader (`src/fusion/session-loader.ts`) o preserva como `sourceId` de cada reading quando a
@@ -253,7 +253,7 @@ function recordReadings(stationId, ts, readings) {
       mac: String((r && r.mac) || ""),
       rssi: Number(r && r.rssi),
     }));
-    // sourceKind: vocabulário universal de evidência (ADR-013 / src/fusion/evidence.ts) — ver header.
+    // sourceKind: vocabulário universal de evidência (ADR-013 / evidence.ts, arquivado na tag research-fusion-arc-2026-07-12) — ver header.
     append({
       t: "ble",
       ts: Number(ts) || Date.now(),

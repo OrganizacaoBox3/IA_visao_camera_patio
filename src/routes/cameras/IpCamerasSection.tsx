@@ -80,7 +80,7 @@ function shortId(id: string): string {
 type CameraRow = { id: string; label: string; ip: IpCamera | null; online: boolean };
 
 export function CamerasList() {
-  const { token, isSuper } = useAuth();
+  const { token, isSuper, canConfigure } = useAuth();
   const { toast } = useToast();
 
   // Fonte B — câmeras CONECTADAS (todos os papéis). Socket só-para-a-lista: `watch({ ids: [] })`
@@ -127,21 +127,22 @@ export function CamerasList() {
     void load();
   }, [load]);
 
-  // camcfg por câmera (papel/transporte). setCameraCfg persiste; este estado reflete no mesmo tick.
+  // camcfg por câmera (papel/transporte). setCameraCfg persiste (write-through) e responde
+  // sucesso/falha: falha no PUT vira toast — o ajuste não some mais em silêncio (fica só no
+  // cache local deste navegador). Estado local reflete no mesmo tick.
   const { setCfgs, cfgOf } = useCamCfgs(connected);
-  function setKind(id: string, fadiga: boolean) {
-    setCfgs((prev) => {
-      const merged: CameraCfg = { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" };
-      setCameraCfg(id, merged);
-      return { ...prev, [id]: merged };
+  function applyCfg(id: string, merged: CameraCfg) {
+    setCfgs((prev) => ({ ...prev, [id]: merged }));
+    void setCameraCfg(id, merged).then((ok) => {
+      if (!ok)
+        toast("Não foi possível salvar no servidor — ajuste mantido só neste navegador.", "alert");
     });
   }
+  function setKind(id: string, fadiga: boolean) {
+    applyCfg(id, { ...cfgOf(id), modo: fadiga ? "fadiga" : "atividade" });
+  }
   function setTransport(id: string, transport: CameraCfg["transport"]) {
-    setCfgs((prev) => {
-      const merged: CameraCfg = { ...cfgOf(id), transport };
-      setCameraCfg(id, merged);
-      return { ...prev, [id]: merged };
-    });
+    applyCfg(id, { ...cfgOf(id), transport });
   }
 
   // ── RECONCILIAÇÃO das duas fontes por id ──
@@ -334,7 +335,9 @@ export function CamerasList() {
           {rows.map((row) => {
             const cfg = cfgOf(row.id);
             const isFadiga = cfg.modo === "fadiga";
-            const canAdjust = row.online; // papel/vídeo só p/ câmera conectada (na grade)
+            // papel/vídeo só p/ câmera conectada E perfil de configuração — o PUT /api/camconfig
+            // exige canConfigure; deixar o Select habilitado p/ operador era falha silenciosa.
+            const canAdjust = row.online && canConfigure;
             return (
               <div key={`cam-${row.id}`} className="cam-row cam-set-row">
                 <div className="cam-row__name">
@@ -422,7 +425,9 @@ export function CamerasList() {
                   </div>
                   {!canAdjust && (
                     <span className="muted cam-adjust-hint">
-                      Conecte a câmera para ajustar tipo e vídeo.
+                      {canConfigure
+                        ? "Conecte a câmera para ajustar tipo e vídeo."
+                        : "Seu perfil não permite alterar tipo e vídeo."}
                     </span>
                   )}
                 </div>

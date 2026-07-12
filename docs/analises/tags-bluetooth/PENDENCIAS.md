@@ -5,6 +5,13 @@
 > Diretriz do usuário (jul/2026): **manter as pendências sempre registradas.**
 > Última atualização: jul/2026.
 
+> **📌 NOTA (2026-07-12) — arco de pesquisa ENCERRADO no main (ADR-016).** O código de pesquisa
+> (ilhas de `src/fusion` + motor test-only de `src/localizacao`) saiu do main na faxina de produto;
+> vive integralmente na tag git **`research-fusion-arc-2026-07-12`**. Este documento permanece como
+> **REGISTRO CIENTÍFICO** do arco — nada aqui foi apagado. As decisões de hardware pendentes
+> (tag 1Hz→2Hz, ESP32-instrumento, caminhada anotada) **continuam valendo** e seguem nas tasks abaixo;
+> quem reabrir o arco parte daqui + da tag.
+
 ## 🔭 VIRADA CONCEITUAL — o objetivo do cliente (2º parecer do especialista, 2026-07-11)
 
 O cliente quer saber **se o operador está trabalhando** (ocupação/ociosidade/conformidade de

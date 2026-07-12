@@ -1,15 +1,36 @@
-// Rotas de câmeras (superadmin): token de enrolamento + CRUD de câmeras IP/RTSP dinâmicas.
+// Rotas de câmeras: token de enrolamento + CRUD de câmeras IP/RTSP dinâmicas (superadmin) e
+// snapshot das câmeras CONECTADAS p/ a busca do shell (qualquer papel autenticado).
 // O CRUD reflete em runtime no ffmpeg (rtsp) sem reiniciar o hub. Persistido em cameras.json.
 const cameraStore = require("../cameras");
 const rtsp = require("../rtsp");
 
 async function handle(req, res, ctx) {
-  const { json, readBody, requireSuper } = ctx;
+  const { json, readBody, requireAuth, requireSuper, cameraList } = ctx;
 
   // Token de enrolamento de câmera (superadmin) — p/ montar o link /camera?key=
   if (req.url === "/api/camera-enroll" && req.method === "GET") {
     if (!requireSuper(req, res)) return true;
     json(res, 200, { token: process.env.CAMERA_TOKEN || null });
+    return true;
+  }
+
+  // Busca do shell: câmeras CONECTADAS agora (ctx.cameraList — o MESMO registry vivo que alimenta
+  // o evento socket "cameras"; sem estado duplicado). Qualquer papel autenticado: expõe só
+  // id/rótulo/disponibilidade (sem URL/credencial — o CRUD abaixo segue superadmin).
+  // CONTRATO com o front (não mudar o shape): { cameras: [{ id, label, online }] }.
+  if (req.url === "/api/cameras/connected" && req.method === "GET") {
+    if (!requireAuth(req, res)) return true;
+    // RTSP: online = ffmpeg entregando ("online") ou pausado pelo shed ("idle" — religa sozinho
+    // ao ganhar espectador); "connecting"/"error"/"stopped" = indisponível agora.
+    // Nó-navegador: estar no registry = socket conectado = online.
+    const rtspState = new Map(rtsp.statuses().map((s) => [s.id, s.state]));
+    json(res, 200, {
+      cameras: cameraList().map((c) => ({
+        id: String(c.id),
+        label: String(c.label || c.id),
+        online: c.kind === "rtsp" ? ["online", "idle"].includes(rtspState.get(c.id)) : true,
+      })),
+    });
     return true;
   }
 

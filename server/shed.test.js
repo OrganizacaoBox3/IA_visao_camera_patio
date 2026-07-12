@@ -122,7 +122,7 @@ describe("shed sem análise (comportamento base)", () => {
     expect(rtsp.vigilSource).not.toHaveBeenCalled();
   });
 
-  it("espectador religa: webcam volta ao perfil (default ou manual) e RTSP acorda", () => {
+  it("espectador religa: webcam volta ao perfil default e RTSP acorda", () => {
     const { shed, rooms, camSocket, rtsp } = makeHub();
     active = shed;
     elapseIdle(shed); // rebaixa os dois
@@ -132,18 +132,7 @@ describe("shed sem análise (comportamento base)", () => {
     shed.sweepShed();
     expect(camSocket.emit).toHaveBeenCalledWith("capture", { fps: 12 }); // WEBCAM_DEFAULT_FPS
     expect(rtsp.wakeSource).toHaveBeenCalledWith("r1");
-
-    // com set-capture manual guardado, restaura O PERFIL DO OPERADOR, não o default
-    rooms.clear();
-    shed.setLastCapture("w1", { width: 1280, quality: 0.8, fps: 24 });
-    vi.setSystemTime(BASE + 2 * IDLE_MS);
-    shed.sweepShed();
-    vi.setSystemTime(BASE + 3 * IDLE_MS);
-    shed.sweepShed(); // rebaixa de novo
-    camSocket.emit.mockClear();
-    rooms.set("cam:w1", new Set(["dash-b"]));
-    shed.sweepShed();
-    expect(camSocket.emit).toHaveBeenCalledWith("capture", { width: 1280, quality: 0.8, fps: 24 });
+    // (O perfil manual via socket "set-capture" saiu na faxina ADR-016 — o listener era órfão.)
   });
 });
 

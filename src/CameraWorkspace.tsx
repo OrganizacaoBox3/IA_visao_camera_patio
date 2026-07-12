@@ -27,7 +27,6 @@ import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
 import { filterExcludedPersons, type AtividadeCtx } from "./processors/atividade";
-import { pushRead, pushPass } from "./reading/cluster";
 import {
   recordSamples,
   recordAlert,
@@ -942,12 +941,12 @@ export function CameraWorkspace({
           );
           if (r.decodeMs != null) stageMsRef.current.decode = r.decodeMs;
           // Leitura é 100% cliente (o motor não cobre o modo) → sempre ingerida (ADR-009).
-          if (shouldIngest("reads", engine)) r.reads.forEach((rd) => recordReads(pushRead(rd)));
-          if (shouldIngest("pass", engine))
-            r.passes.forEach((ps) => {
-              const pr = pushPass(ps);
-              if (pr.newPassage) recordPass(ps.ponto, ps.ts);
-            });
+          // Dedup por câmera já é feita no LeituraProcessor (dedupWindowMs/passDebounceMs); o
+          // agregador multi-câmera por ponto saiu na faxina ADR-016 (store write-only) — cada
+          // leitura emitida conta como caixa nova (newBox) e multi-read não é mais computado.
+          if (shouldIngest("reads", engine))
+            r.reads.forEach((rd) => recordReads({ ...rd, newBox: true, becameMulti: false }));
+          if (shouldIngest("pass", engine)) r.passes.forEach((ps) => recordPass(ps.ponto, ps.ts));
           const prevR = resultsRef.current.get(z.id);
           const lastCode = r.reads.length
             ? r.reads[r.reads.length - 1].code

@@ -93,7 +93,9 @@ const httpServer = createServer(async (req, res) => {
   // Contexto passado aos grupos de rotas: helpers de resposta/auth + io (p/ emitir aos painéis).
   // io = ioAnalysis (tee): mesmo io de sempre, mas o motor de análise observa os emits que
   // consome (ex.: "camcfg-updated" recarrega zonas/tripwires no engine) — contrato intacto.
-  const ctx = { json, readBody, requireAuth, requireSuper, requireConfigurer, io: ioAnalysis };
+  // cameraList = snapshot das câmeras CONECTADAS (o MESMO estado que alimenta o evento
+  // "cameras" — sem duplicação) p/ GET /api/cameras/connected (routes/cameras.js).
+  const ctx = { json, readBody, requireAuth, requireSuper, requireConfigurer, io: ioAnalysis, cameraList };
   try {
     // Dispatch por grupo (ordem preservada do arquivo original; padrões de URL não colidem
     // entre grupos, então o agrupamento não altera qual handler casa).
@@ -267,6 +269,17 @@ io.on("connection", (socket) => {
         process.exit(1);
       }
     }
+  }
+  // Estação BLE (auditoria jul/12): sem BT_STATION_TOKEN, os endpoints de DEVICE (/api/bt/reading,
+  // /api/bt/tag-name, GET /api/bt/tags) ficam ABERTOS fora de produção (MVP em LAN) e respondem
+  // 503 em produção (fail-closed em routes/bt-station.js, SEM derrubar o boot — guard fail-closed
+  // não pode deadlockar o serviço que protege).
+  if (!process.env.BT_STATION_TOKEN) {
+    console.warn(
+      process.env.NODE_ENV === "production"
+        ? "[bt] BT_STATION_TOKEN ausente em PRODUÇÃO — os endpoints da estação BLE respondem 503 até você definir BT_STATION_TOKEN (env) e reiniciar o hub."
+        : "[bt] endpoints da estação BLE ABERTOS sem auth (dev/LAN) — defina BT_STATION_TOKEN no env para exigir o token do dispositivo.",
+    );
   }
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
   // Motor de análise no hub (ADR-009): D-FINE em worker process, ingest direto no pgstore.

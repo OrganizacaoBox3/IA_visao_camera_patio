@@ -2,8 +2,9 @@
 // Modo decide o pipeline: "atividade" (ocupação/ociosidade, padrão) | "leitura" (código de barras).
 // PERSISTÊNCIA (Onda 2): fonte de verdade = BACKEND (compartilhado por câmera, via api.ts
 // getCamConfig/saveCamConfig), com o localStorage (`vp-camcfg-<id>`) como CACHE/fallback offline.
-// getCameraCfg/setCameraCfg mantêm a assinatura SÍNCRONA (consumidas na central): setCameraCfg faz
-// write-through no backend; loadCamConfig (assíncrona) hidrata/migra o cache a partir do backend.
+// getCameraCfg segue SÍNCRONA (consumida na central); setCameraCfg grava o cache no mesmo tick e
+// faz write-through no backend respondendo sucesso/falha (Promise<boolean>, nunca rejeita);
+// loadCamConfig (assíncrona) hidrata/migra o cache a partir do backend.
 
 import { APP_CONFIG } from "./config";
 import { OBJECT_KEYS } from "./objects/catalog";
@@ -106,14 +107,19 @@ export function getCameraCfg(cameraId: string): CameraCfg {
   }
 }
 
-// Grava a config: cache local imediato (offline-safe) + write-through no BACKEND. Assinatura
-// SÍNCRONA preservada (a central chama sem await). O PUT exige perfil de configuração; para
-// operador (403) ou offline, degrada silenciosamente — o cache local mantém a UX.
-export function setCameraCfg(cameraId: string, cfg: CameraCfg) {
+// Grava a config: cache local imediato (offline-safe) + write-through no BACKEND. Responde
+// SUCESSO/FALHA do PUT (Promise<boolean>, NUNCA rejeita — caller fire-and-forget segue seguro):
+// quem tem superfície de feedback (ex.: /cameras) mostra o erro em vez de a falha sumir em
+// silêncio. Em falha (403 do operador, offline), o cache local ainda mantém a UX desta máquina.
+export function setCameraCfg(cameraId: string, cfg: CameraCfg): Promise<boolean> {
   cacheCameraCfg(cameraId, cfg);
-  saveCamConfig(cameraId, cfg).catch((e) => {
-    console.warn("[camconfig] write-through falhou — mantendo apenas o cache local", e);
-  });
+  return saveCamConfig(cameraId, cfg).then(
+    () => true,
+    (e) => {
+      console.warn("[camconfig] write-through falhou — mantendo apenas o cache local", e);
+      return false;
+    },
+  );
 }
 
 // Carga da câmera com o BACKEND como fonte de verdade + FALLBACK gracioso (Onda 2). ASSÍNCRONA.

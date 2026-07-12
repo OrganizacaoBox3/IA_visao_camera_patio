@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../auth";
 import type { Papel } from "../auth";
-import { listCameras, type Camera } from "../api";
+import { listCameras, getConnectedCameras, type Camera, type ConnectedCamera } from "../api";
 import { DropdownMenu, Tooltip, type DropdownItem } from "../ui";
 import "./appshell.css";
 
@@ -136,18 +136,27 @@ export function AppShell() {
   const [query, setQuery] = useState("");
   const [listOpen, setListOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
-  // Câmeras na busca — LIMITAÇÃO documentada (A5): GET /api/cameras devolve as câmeras
-  // CADASTRADAS (IP/RTSP, cameraStore) e é restrito a superadmin. As câmeras CONECTADAS
-  // (nós de webcam) só existem no evento socket `cameras` do Dashboard — não há endpoint
-  // HTTP nem store compartilhado; expô-las aqui exigiria elevar o socket do DashboardPage
-  // a um contexto do shell (refactor fora desta frente — anotar no retrofit R2).
-  // Portanto: superadmin busca menu + câmeras cadastradas; demais papéis, só menu (o
-  // aria-label do campo não promete câmeras p/ eles). Carga lazy no primeiro foco;
-  // falha transitória libera nova tentativa no próximo foco.
+  // Câmeras na busca — DUAS fontes, deduplicadas por id:
+  //   • CONECTADAS (GET /api/cameras/connected, QUALQUER autenticado): as mesmas câmeras da
+  //     grade do Monitoramento, inclusive nós locais/webcam — sem url, só id/label/online.
+  //   • CADASTRADAS (GET /api/cameras, superadmin-only): registro IP/RTSP, inclui as offline
+  //     que ainda nem conectaram.
+  // Carga lazy no primeiro foco; falha transitória libera nova tentativa no próximo foco.
   const isSuper = user.papel === "superadmin";
   const [cams, setCams] = useState<Camera[]>([]);
+  const [liveCams, setLiveCams] = useState<ConnectedCamera[]>([]);
   const camsRequested = useRef(false);
+  const liveRequested = useRef(false);
   const loadCams = useCallback(() => {
+    if (!liveRequested.current) {
+      liveRequested.current = true;
+      getConnectedCameras()
+        .then((r) => setLiveCams(r.cameras))
+        .catch(() => {
+          liveRequested.current = false; // permite retry num próximo foco
+          setLiveCams([]);
+        });
+    }
     if (!isSuper || camsRequested.current) return;
     camsRequested.current = true;
     listCameras()
@@ -258,6 +267,16 @@ export function AppShell() {
     .map((g) => (mobile ? { ...g, items: g.items.filter((i) => !i.mobileHide) } : g))
     .filter((g) => g.items.length > 0);
 
+  // União das câmeras buscáveis: conectadas (todos os papéis) primeiro, depois as cadastradas
+  // (superadmin) que ainda não conectaram — dedup por id (a câmera IP online está nas duas fontes).
+  const seenCam = new Set<string>();
+  const searchCams: { id: string; label: string }[] = [];
+  for (const c of [...liveCams, ...cams]) {
+    if (seenCam.has(c.id)) continue;
+    seenCam.add(c.id);
+    searchCams.push({ id: c.id, label: c.label || c.id });
+  }
+
   // Resultados: itens do menu (sempre) + câmeras (quando carregadas), acento-insensível.
   const q = norm(query.trim());
   const hits: SearchHit[] = !q
@@ -273,12 +292,12 @@ export function AppShell() {
             icon: i.icon,
             to: i.to,
           })),
-        ...cams
-          .filter((c) => norm(c.label || c.id).includes(q))
+        ...searchCams
+          .filter((c) => norm(c.label).includes(q))
           .slice(0, 6)
           .map((c) => ({
             id: `cam:${c.id}`,
-            label: c.label || c.id,
+            label: c.label,
             hint: "Câmera",
             icon: Cctv,
             to: "/monitoramento",
@@ -405,7 +424,7 @@ export function AppShell() {
                 className="rail-search-in"
                 type="text"
                 role="combobox"
-                aria-label={isSuper ? "Buscar no menu e câmeras cadastradas" : "Buscar no menu"}
+                aria-label="Buscar no menu e câmeras"
                 aria-expanded={searchOpen}
                 aria-controls={searchOpen ? "rail-search-list" : undefined}
                 aria-activedescendant={searchOpen && hits[sel] ? `rs-opt-${sel}` : undefined}

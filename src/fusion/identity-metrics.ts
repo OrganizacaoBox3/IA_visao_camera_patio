@@ -166,7 +166,7 @@ export function computeIdentityMetrics(
   };
 }
 
-/** Tabela texto alinhada (estilo formatTable de src/localizacao/scenarios.ts) — só p/ diagnóstico humano. */
+/** Tabela texto alinhada (estilo formatTable do antigo src/localizacao/scenarios.ts, arquivado na tag research-fusion-arc-2026-07-12) — só p/ diagnóstico humano. */
 export function formatIdentityTable(rows: { scenario: string; m: IdentityMetrics }[]): string {
   const header = [
     "cenário",

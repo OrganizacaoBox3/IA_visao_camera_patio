@@ -7,13 +7,37 @@ const btTags = require("../bt/bt-tags");
 const recorder = require("../bt/recorder");
 const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 const users = require("../users");
+const { bearer } = require("../http-auth");
 
-// Token opcional (como o CAMERA_TOKEN): se BT_STATION_TOKEN estiver definido, exige o header; senão aceita
-// (MVP em LAN). Comparação em tempo ~constante.
-function tokenOk(req) {
+// Header de device válido? (comparação em tempo ~constante; false quando não há token configurado)
+function stationTokenOk(req) {
   const want = process.env.BT_STATION_TOKEN;
-  if (!want) return true;
-  return users.constantTimeEqual(String(req.headers["x-station-token"] || ""), want);
+  return !!want && users.constantTimeEqual(String(req.headers["x-station-token"] || ""), want);
+}
+
+// Auth de DEVICE (espelha o CAMERA_TOKEN), fail-closed EM PRODUÇÃO (auditoria jul/12):
+//  • BT_STATION_TOKEN definido → exige x-station-token válido, senão 401;
+//  • sem token FORA de produção → aberto (MVP em LAN), com aviso no boot (index.js);
+//  • sem token EM produção → 503 explicativo. NÃO derruba o boot: guard fail-closed não pode
+//    deadlockar o serviço que protege (lição da casa) — fecha SÓ estes endpoints.
+// Devolve true quando a requisição pode seguir; senão já respondeu (401/503).
+function deviceAuth(req, res, json) {
+  const want = process.env.BT_STATION_TOKEN;
+  if (!want) {
+    if (process.env.NODE_ENV === "production") {
+      json(res, 503, {
+        error:
+          "endpoints da estação BLE desabilitados em produção: defina BT_STATION_TOKEN no ambiente do hub e reinicie",
+      });
+      return false;
+    }
+    return true;
+  }
+  if (!stationTokenOk(req)) {
+    json(res, 401, { error: "token de estação inválido" });
+    return false;
+  }
+  return true;
 }
 
 async function handle(req, res, ctx) {
@@ -21,10 +45,7 @@ async function handle(req, res, ctx) {
 
   // Estação → hub: leituras de RSSI (efêmeras). Relaya aos painéis; nunca persiste.
   if (req.url === "/api/bt/reading" && req.method === "POST") {
-    if (!tokenOk(req)) {
-      json(res, 401, { error: "token de estação inválido" });
-      return true;
-    }
+    if (!deviceAuth(req, res, json)) return true;
     let body;
     try {
       body = JSON.parse((await readBody(req)) || "{}");
@@ -42,17 +63,14 @@ async function handle(req, res, ctx) {
     // não tem GPS; o recorder.record abaixo só cobre o modelo AirTag). Fail-safe: jamais lança.
     sessionRecorder.recordReadings(body.stationId, Date.now(), enriched);
     // Modelo AirTag: se o batch traz a posição do celular (lat/lon), toda tag vista AGORA está nela.
-    // Guarda a última localização por tag (last-known) e relaya o snapshot ao mapa. LGPD: só metadado.
+    // Guarda a última localização por tag (last-known); o mapa consome por POLLING do GET
+    // /api/bt/locations (o emit socket "bt-locations" era órfão — jamais consumido — e foi
+    // removido na faxina jul/12). LGPD: só metadado.
     const lat = Number(body.lat);
     const lon = Number(body.lon);
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
       const acc = Number(body.acc);
       for (const rec of enriched) btLocations.update(rec.mac, { lat, lon, acc });
-      io.to("dashboards").volatile.emit("bt-locations", {
-        ts: Date.now(),
-        phone: { lat, lon, acc: Number.isFinite(acc) ? acc : null },
-        tags: btLocations.snapshot(),
-      });
       // Event-sourcing OPT-IN (BT_RECORD) p/ o harness de replay do motor de localização (ADR-012).
       // Aditivo, fail-safe, só metadados: não altera a resposta nem bloqueia se falhar. Só relatórios
       // COM posição (lat/lon) são úteis ao motor, então gravamos aqui, depois de persistir/relayar.
@@ -79,10 +97,7 @@ async function handle(req, res, ctx) {
   // Estação/app (TC22) → hub: NOMEIA uma tag pelo app (UPSERT por MAC). Mesma auth de device do /reading.
   // Enriquece bt-readings/mapa via bt-tags.match(mac). LGPD: só cadastro (metadado) é persistido.
   if (req.url === "/api/bt/tag-name" && req.method === "POST") {
-    if (!tokenOk(req)) {
-      json(res, 401, { error: "token de estação inválido" });
-      return true;
-    }
+    if (!deviceAuth(req, res, json)) return true;
     let body;
     try {
       body = JSON.parse((await readBody(req)) || "{}");
@@ -103,11 +118,24 @@ async function handle(req, res, ctx) {
     return true;
   }
 
-  // App (TC22) → hub: PUXA os nomes cadastrados das tags (sync bidirecional). Mesma auth de device do /reading.
+  // App (TC22) → hub: PUXA os nomes cadastrados das tags (sync bidirecional). Auth DUPLA
+  // (auditoria jul/12 — antes vazava o cadastro sem auth nenhuma): token de estação válido
+  // (device) OU sessão autenticada (qualquer papel). Sem token configurado, espelha o
+  // deviceAuth: aberto fora de produção (MVP em LAN), 503 explicativo em produção.
   // MAC MAIÚSCULO + rótulo; só tags ativas. LGPD: só metadado (cadastro).
   if (req.url === "/api/bt/tags" && req.method === "GET") {
-    if (!tokenOk(req)) {
-      json(res, 401, { error: "token de estação inválido" });
+    const want = process.env.BT_STATION_TOKEN;
+    const authorized =
+      stationTokenOk(req) ||
+      !!users.verifyToken(bearer(req)) ||
+      (!want && process.env.NODE_ENV !== "production");
+    if (!authorized) {
+      if (!want)
+        json(res, 503, {
+          error:
+            "endpoints da estação BLE desabilitados em produção: defina BT_STATION_TOKEN no ambiente do hub e reinicie",
+        });
+      else json(res, 401, { error: "token de estação inválido ou sessão não autenticada" });
       return true;
     }
     json(res, 200, btTags.listForDevice());

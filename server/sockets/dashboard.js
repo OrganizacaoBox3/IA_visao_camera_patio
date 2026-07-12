@@ -1,16 +1,18 @@
 // Protocolo socket do DASHBOARD: rooms/snapshot inicial, assinatura por câmera (watch),
-// foco de análise, perfil de captura (set-capture) e entrada do pipeline de alarme (alert).
+// foco de análise e entrada do pipeline de alarme (alert).
 // Espelha o padrão de server/routes/: o corpo do handler mora aqui; index.js só compõe.
-// Contrato ADITIVO (CLAUDE.md §3): "cameras", "camera-status", "watch", "analysis-focus",
-// "set-capture"/"capture" e "alert" → "alarm-event" byte-a-byte.
+// Contrato ADITIVO (CLAUDE.md §3): "cameras", "camera-status", "watch", "analysis-focus"
+// e "alert" → "alarm-event" byte-a-byte. O listener "set-capture" foi REMOVIDO na faxina
+// jul/12 (órfão: nenhum cliente jamais o emitiu); o evento "capture" hub→nó-câmera segue
+// VIVO — é o shed.js quem o emite (rebaixar/restaurar perfil).
 const pipeline = require("../alarm/pipeline");
 
 /**
  * Anexa os handlers de dashboard a um socket recém-conectado.
  * @param socket socket.io autenticado (io.use em index.js)
- * @param ctx { io, cameras, cameraList, socketById, shed, analysis, rtsp }
+ * @param ctx { io, cameras, cameraList, shed, analysis, rtsp }
  */
-function attach(socket, { io, cameras, cameraList, socketById, shed, analysis, rtsp }) {
+function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
   socket.join("dashboards");
   // Retrocompat: todo dashboard começa na room LEGADA (recebe TODOS os frames). Um dashboard
   // novo emite `watch` e migra para rooms por câmera; um antigo segue recebendo tudo.
@@ -58,17 +60,6 @@ function attach(socket, { io, cameras, cameraList, socketById, shed, analysis, r
   // Dashboard saiu: remove sua contribuição à união de foco (evita foco órfão prendendo o boost).
   socket.on("disconnect", () => {
     analysis.clearFocus(socket.id);
-  });
-
-  // Central define o perfil de captura por câmera (ex.: leitura = alta resolução).
-  // payload: { id, width, quality, fps }
-  socket.on("set-capture", (cfg) => {
-    if (!cfg || !cfg.id) return;
-    // Guarda o último perfil pedido pelo operador: o shed restaura ESTE perfil ao religar,
-    // não o default — o rebaixamento automático nunca sobrescreve uma intenção manual.
-    shed.setLastCapture(cfg.id, { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
-    const target = socketById.get(String(cfg.id));
-    if (target) target.emit("capture", { width: cfg.width, quality: cfg.quality, fps: cfg.fps });
   });
 
   // Alerta do painel → pipeline de alarme (política → canais → persistência → broadcast).

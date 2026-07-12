@@ -56,7 +56,7 @@
 //   (retrocompat dura, provada por teste — nem a chave `sourceId` existe), e é a linha que DECLARA
 //   seu sourceKind que opta pelo vocabulário multi-fonte. Nenhum consumidor exige o campo hoje
 //   (fonte única implícita — ver frame.ts); ele existe p/ a 2ª antena/AoA/UWB entrarem pela mesma
-//   porta (src/fusion/evidence.ts).
+//   porta (evidence.ts, arquivado na tag research-fusion-arc-2026-07-12).
 import { replayFusion } from "./replay-fusion";
 import { TagTrackAssociator } from "./associate";
 import type { FusionConfig, PairFunnel } from "./associate";
