@@ -5,6 +5,73 @@
 > Diretriz do usuário (jul/2026): **manter as pendências sempre registradas.**
 > Última atualização: jul/2026.
 
+## 🔭 VIRADA CONCEITUAL — o objetivo do cliente (2º parecer do especialista, 2026-07-11)
+
+O cliente quer saber **se o operador está trabalhando** (ocupação/ociosidade/conformidade de
+rota), não a posição em cm. Isso NÃO estreita o projeto — dissolve o problema central. Registrado
+aqui porque reordena TODAS as prioridades abaixo. Os pontos e o que já medimos:
+
+1. **Complementaridade de dois regimes (o argumento mais forte do projeto)**: deslocamento → a
+   correlação funciona (−0,91 medido); permanência → a correlação morre MAS sobra TEMPO, e um
+   receptor de zona resolve por PROXIMIDADE (média), não correlação. Conta do especialista: 8min
+   a 0,5Hz ≈ 230 leituras, n_eff ≈ 20-25, erro-padrão da média ~1,2dB; 2 mesas a 4m = ~15dB de
+   separação = >10σ. O viés corporal (assassino da v4) é neutralizado por tempo (quantil alto) +
+   restrição da câmera (assignment limitado por zona). "Onde falta movimento sobra tempo; onde
+   falta tempo sobra movimento."
+2. **A MÉTRICA ESTÁ ERRADA — otimizamos POR TICK, o cliente compra EVENTO** ("esta visita à mesa
+   4 foi do operador 17?"). Cobertura de 30%/tick numa aproximação de 15s (~30 ticks) = ~9 falas
+   a 82% → acurácia de EPISÓDIO muito acima disso; cobertura vira "houve ≥1 fala confiante na
+   aproximação?" = altíssima. **Consequência: a persistência v1 pode NÃO ser fracasso — resolvia
+   cobertura-por-tick, que o cliente não tem.** 🔬 EM MEDIÇÃO (event-metrics.ts + Fisher-z por
+   episódio, verdade sintética do harness).
+3. ✅🔬 **§3 RISCO CRÍTICO MEDIDO HOJE — a sobrevivência de tracks estáticos (a população que a
+   mineração de fragmentação FILTROU FORA como "flicker de mobília")**. Re-mineração READ-ONLY da
+   gravação passiva (988 tracks): **track ESTÁTICO (maxDisp<0,02) vive mediana 3,0s, p90 16,1s,
+   MAX 59,2s — NENHUM chega a 1 minuto** (over1min=0, over8min=0). O especialista: "se vive 8min a
+   arquitetura fecha; se morre a cada 40s, o receptor de zona vira REQUISITO, não luxo". **Veredito:
+   morre em SEGUNDOS → o receptor de zona (2ª estação na mesa) é REQUISITO.** RESSALVA HONESTA: a
+   gravação passiva tinha pouca gente parada REAL — a maioria desses 484 estáticos é mobília/
+   flicker, então o número da PESSOA parada especificamente ainda precisa do hello world (operador
+   sentar 8min e ver quanto o track dele dura). Mas a direção é inequívoca: sustentação de ID sobre
+   alvo de baixo movimento é frágil com a config atual do tracker. **Alavanca de engenharia barata
+   registrada**: aumentar o track_buffer/max_time_lost do ByteTrack pode sustentar tracks parados
+   mais tempo — testável sem hardware, antes de concluir que precisa de estação.
+4. **2ª antena RE-JUSTIFICADA**: não é "dimensão de assinatura no centro da área útil" — é
+   **receptor de zona SEMÂNTICA (na mesa/ponto de coleta)**, resolvendo permanência (§1) +
+   reidentificação pós-morte-de-track (§3). Dimensão de assinatura vem de brinde. O LUGAR é
+   decidido pelo processo do cliente, não pela geometria de trilateração.
+5. **Combinatividade verificada pelo especialista** (com prior art checado): (a) **conformance
+   checking com eventos incertos** (Pegoraro/Uysal/van der Aalst, Information Systems 2021) — saída
+   com LIMITES ("conformidade entre X e Y dada a incerteza"), a invariante da abstenção propagada
+   até o relatório do cliente — o pilar mais sólido; (b) **HSMM** (van Kasteren; Switching-HSMM faz
+   detecção de anormalidade por DURAÇÃO) = o detector de ociosidade com pedigree, aprende o normal
+   de dados não-segmentados; (c) **workflow como prior de identidade** ("só o operador 17 estava
+   escalado pra mesa 4") — a tese "restrições carregam mais bits que o BLE" RESSUSCITA (estava
+   certa, o tipo de restrição — processo, não parede — é que estava errado). CORTAR: DTW, GP de
+   interferência. Acréscimo prático: **ponderar a correlação pela confiança da homografia** (erro
+   heterocedástico — preciso perto da câmera, lixo perto do ponto de fuga; pode estar comendo sinal
+   hoje) — barato, testável.
+6. **IP — o mecanismo central NÃO é novo e ESTÁ patenteado** (US 9772395/10571546/11467247 —
+   casamento de trajetória visão×rádio; ID-Match, EyeFi). Encerra a fantasia de patentear
+   "associação BLE×trajetória". MAS a novidade MUDOU DE LUGAR: ninguém propaga incerteza de
+   identidade até conformidade de processo com LIMITES, nem usa workflow como prior, nem faz a
+   troca de regime correlação↔proximidade. "Fomos empurrados PRA CIMA na pilha — o lugar mais
+   defensável e mais vendável."
+7. **Parar de vender "universal"**: câmera não vê no escuro/fumaça/atrás de obstáculo — AoA/UWB
+   sim. A moldura honesta e MAIS FORTE: UWB/AoA dizem ONDE a tag está (pergunta que o cliente não
+   fez); a câmera é o ÚNICO sensor do kit que tenta a pergunta REAL (está trabalhando?). "Não é um
+   AoA barato — é a única combinação capaz de responder à pergunta comercial."
+8. **Convergência jurídica**: "ocioso" é acusação com passivo trabalhista/LGPD. A invariante
+   "rótulo errado é pior que nenhum" é o ESCUDO jurídico-ético + diferencial comercial. O sistema
+   nunca conclui ociosidade — apresenta evidência com confiança e limites; humano decide.
+   **Posicionar como otimização de fluxo/conformidade de processo, não vigilância individual** —
+   mesmos dados, aceitação sindical e exposição legal radicalmente diferentes.
+
+**Próximos passos em ordem de custo (especialista)**: (1) §2 re-scoring por evento [em medição];
+(2) §3 sobrevivência de tracks estáticos [✅ medido: morre em segundos]; (3) receptor de zona na
+mesa (o experimento que decide o resto); (4) HSMM + conformance com limites só quando existir a 1ª
+sequência de tarefa modelada.
+
 ## Feito (no `main`)
 
 - Registro/nomeação de tags (`bt_tags` + `/tags-ble`).
