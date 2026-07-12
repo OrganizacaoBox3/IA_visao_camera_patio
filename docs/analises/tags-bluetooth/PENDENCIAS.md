@@ -22,8 +22,28 @@ aqui porque reordena TODAS as prioridades abaixo. Os pontos e o que já medimos:
    4 foi do operador 17?"). Cobertura de 30%/tick numa aproximação de 15s (~30 ticks) = ~9 falas
    a 82% → acurácia de EPISÓDIO muito acima disso; cobertura vira "houve ≥1 fala confiante na
    aproximação?" = altíssima. **Consequência: a persistência v1 pode NÃO ser fracasso — resolvia
-   cobertura-por-tick, que o cliente não tem.** 🔬 EM MEDIÇÃO (event-metrics.ts + Fisher-z por
-   episódio, verdade sintética do harness).
+   cobertura-por-tick, que o cliente não tem.** ✅🔬 **§2 MEDIDA (event-metrics.ts, verdade
+   sintética, 12 cenários) — a tese SE CONFIRMA, refinada em DOIS eixos ortogonais que estavam
+   colados**:
+   - **Eixo IDENTIDADE** ("dado um evento numa pessoa COM tag, a tag estava certa?"): a agregação
+     por evento **bate o tick em 9 de 10 cenários** — canonico 82,4→**90,9%**, bloco 80→**100%**,
+     ruído 69,2→**87,5%**, multidão 61,5→**75%**. Agregado: **tick 74,5% → evento 79,6%** (+5,1pp;
+     até +20pp por cenário). **A tese do especialista está certa neste eixo.**
+   - **Eixo REJEITAR-QUEM-NÃO-TEM-TAG**: a agregação NÃO resolve — um falso-rótulo SUSTENTADO vira
+     falso-EVENTO (a persistência ajuda o erro tanto quanto o acerto). Por isso a precisão de
+     evento GLOBAL fica perto/abaixo do tick. Este eixo é o falso-positivo, não a identidade.
+   - **Refinamento CRÍTICO (a prescrição LITERAL refutava a tese)**: argmax do z_comb cru + "falar
+     sempre" compara tick-COM-guarda vs evento-SEM-guarda e DESPENCA (canonico 82→62%, viola a
+     invariante). A agregação só ajuda quando (a) agrega as falas JÁ GUARDADAS do motor (não
+     re-deriva da correlação crua) E (b) exige sustentação (≥3 falas) + dominância (margem top-2).
+   - **Exceção honesta pinada**: `cruzamento` 78,4→66,7% — o id-switch troca a verdade física no
+     meio do episódio; a agregação não conserta pista cuja verdade trocou.
+   - **A "cobertura de 30%" vira ~55% no nível de evento** (canonico 37→55%), NÃO os ~100%
+     idealizados — os episódios do sim são curtos (dropout/id-switch/warmup); sobe ~1,5-2×, real.
+   - **Gravação REAL (_19, sem verdade → só consistência)**: 39 episódios, z_comb NÃO aponta tag
+     dominante estável (concordância tick-a-tick 37,5%) — consistente com o "silêncio do campo" de
+     1 estação. Reforça §1/§4: caminhada de 1 estação não produz assinatura limpa; o receptor de
+     zona é o que fecha.
 3. ✅🔬 **§3 RISCO CRÍTICO MEDIDO HOJE — a sobrevivência de tracks estáticos (a população que a
    mineração de fragmentação FILTROU FORA como "flicker de mobília")**. Re-mineração READ-ONLY da
    gravação passiva (988 tracks): **track ESTÁTICO (maxDisp<0,02) vive mediana 3,0s, p90 16,1s,
