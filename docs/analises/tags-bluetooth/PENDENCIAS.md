@@ -187,7 +187,53 @@ circular/indicativa (o sim gera RSSI = f(dist→estação) + ruído, então |r| 
 que o testa é se o RUÍDO do modelo, no span maior, ainda deixa a significância passar; funil de
 hipótese, não juiz): se NEM no sim otimista decidir, pivô forte; se decidir, indicação de seguir para
 hardware com validação de campo. Correção de rigor a fazer junto: `spanDecades` reporta STD e RANGE
-lado a lado, e o ADR-014/comentários anotam que 0,42/0,9 eram range.
+lado a lado, e o ADR-014/comentários anotam que 0,42/0,9 eram range. [✅ FEITO: `visit-metrics.ts`
+ganhou `rangeDecades`/`medianRangeDecades`.]
+
+### VEREDITO DA ONDA 1 (medição de bancada fechada, 2026-07-12) — o gargalo é n_eff, não span; e a saída é regime-dependente
+
+`receiver-at-destino.test.ts` (knob aditivo `stationWorldOverride` no `sim.ts`, cenários bit-a-bit
+intactos — 58 testes de pinning verdes) mediu, com ρ=0,7 honesto, pooled sobre 325 visitas-com-tag:
+
+**1. Estação no destino confirma o span (0,13→0,27 std, cross-check com receiver-geometry) MAS quase
+não decide** (0/325 → 1/325 no destino → 2/325 no ótimo de sala). **O gargalo diagnosticado é o
+n_eff, NÃO o span**: o n_eff MÁXIMO da suíte inteira é 6,88 (mal supera o piso 3); aí a variância de
+Fisher `√(1/(n_eff−3))` explode e o gate exige |r| ≥ 0,76 — o ganho de span não vence essa barra.
+Mover o receptor não toca o n_eff (independência temporal). As duas metades (geometria pura +
+significância) CONCORDAM.
+
+**2. VARREDURA DE CADÊNCIA — a alavanca real, e a nuance que refina o pivô**. O n_eff é governado pela
+cadência de refresh REAL do RSSI (advertising da tag), não pelo POST (a correção Δ4 500ms não cria
+leituras distintas se a tag anuncia devagar — `distinctConsecutive` deduplica). Dobrar o refresh de
+**1 Hz → 2 Hz** (`rssiPeriodTicks` 2→1):
+
+| cadência | maxNeff | eps c/ n_eff>3 | cobertura | precisão |
+|---|---|---|---|---|
+| 1 Hz (atual) | 6,88 | 42/325 | **0,3 %** | 100 % |
+| 2 Hz (dobrado) | 15,88 | 122/291 | **15,5 %** | 97,8 % |
+
+Cadência de advertising **é uma alavanca de hardware real** — abre o gate 0,3%→15,5%. **Mas o ganho é
+por DURAÇÃO de episódio, não por aproximação**: n_eff mediano por regime (a 2 Hz) — aproximação
+3-8 s = **1,76** (abaixo do piso), longo 8-16 s = 3,88, muito-longo ≥16 s = 7,59. Alcançar n_eff>3
+exige >17 leituras distintas ≈ **9 s a 2 Hz** (17 s a 1 Hz) — mais longo que uma aproximação real.
+
+**3. LEITURA HONESTA (cuidado com a métrica "dwell")**: os episódios que decidem são observações
+LONGAS EM MOVIMENTO (têm span + muitas leituras) — NÃO parada estacionária: o cenário `parado`
+(span 0) nunca decide, a qualquer cadência. Logo: a identidade RSSI fecha na **aproximação
+longa/observada** (precisa de tag rápida + span); o operador **parado num posto** não fecha por RSSI
+(span 0) — a identidade tem de ser estabelecida na chegada e **CONSERVADA pela topologia** (camada 3,
+a alavanca ttlMs de #27). **Isto NÃO é pivô contra o ADR-014 — é a validação empírica quantificada da
+arquitetura de 5 camadas**: camada 2 (identidade RSSI) só contribui com advertising rápido E via a
+aproximação; camada 3 (conservação por zona) faz o resto; camadas 4-5 (duração/conformance) leem
+trabalho/ocioso. A significância per-visita por aproximação breve é estruturalmente inalcançável →
+identidade ACUMULA entre visitas, não fecha por uma.
+
+**DECISÃO DE HARDWARE (regime-dependente, para o dono/especialista pesarem)**: se o alvo é
+permanência observada no posto → **tag de advertising rápido (≥2 Hz) é a alavanca de maior ROI, mais
+que a 2ª antena**; o receptor no destino ajuda o span mas não é o gargalo. Se o alvo é fluxo de
+passagem breve → nenhum receptor/cadência fecha per-visita; priorizar as camadas de acúmulo (Petri +
+HSMM) e evidência objetiva. **#26 (ESP32) deixa de ser "o experimento decisivo" isolado** — o
+experimento decisivo virou *cadência de advertising × duração de observação*.
 
 **ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
 medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +

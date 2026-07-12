@@ -80,9 +80,16 @@ export type VisitEpisode = {
   endTs: number;
   nTicks: number;
   /** Span radial em DÉCADAS: std populacional de log10(dist) sobre o episódio — a métrica de
-   *  IDENTIFICABILIDADE (o especialista referencia ~0,42 década medido, ~0,9 esperado com receptor
-   *  no destino). 0 quando <2 amostras de distância. */
+   *  IDENTIFICABILIDADE. ATENÇÃO À MÉTRICA (correção 2026-07-12): este é o STD, não o range. Os
+   *  limiares "~0,42/~0,9 década" do ADR-014 são RANGE (log10(8/3)=0,426 numa aproximação 8→3 m;
+   *  log10(8/1)=0,903 numa 8→1 m), NÃO std — o teto de std de uma aproximação reta idealizada é
+   *  ~0,33 déc. Comparar spanDecades(std) com aqueles limiares(range) é maçã×laranja; use
+   *  `rangeDecades` para comparar com o ADR. (A decisão de visita NÃO usa o span — usa a
+   *  significância Fisher-z/n_eff; o span é descritivo.) 0 quando <2 amostras de distância. */
   spanDecades: number;
+  /** Range radial em DÉCADAS: max−min de log10(dist) sobre o episódio — a métrica COMPARÁVEL aos
+   *  limiares do ADR-014 (0,42/0,9 são range). 0 quando <2 amostras. */
+  rangeDecades: number;
   candidates: VisitCandidate[];
   /** A tag decidida para a visita (null = inconclusiva — nenhum candidato significativo com s>0). */
   decisionTag: string | null;
@@ -105,8 +112,10 @@ export type VisitMetrics = {
   visitPrecisionTagged: number;
   /** decidedWithTag/episodesWithTag — cobertura na unidade do cliente. */
   visitCoverage: number;
-  /** Mediana do span radial (décadas) sobre os episódios com span definido — identificabilidade. */
+  /** Mediana do span radial STD (décadas) sobre os episódios com span definido — identificabilidade. */
   medianSpanDecades: number;
+  /** Mediana do RANGE radial (décadas) — comparável aos limiares 0,42/0,9 do ADR-014 (que são range). */
+  medianRangeDecades: number;
 };
 
 const DEFAULT_WARMUP_MS = 8000; // idem event-metrics/identity: a janela de 8 s do motor enchendo
@@ -169,6 +178,20 @@ function spanDecades(dists: readonly number[]): number {
   let s = 0;
   for (const x of logs) s += (x - m) * (x - m);
   return Math.sqrt(s / logs.length);
+}
+
+/** range de log10(max(dist, piso)) — max−min em décadas; a métrica comparável aos limiares do
+ *  ADR-014 (0,42/0,9 são range, não std). 0 se <2 amostras. */
+function rangeDecades(dists: readonly number[]): number {
+  if (dists.length < 2) return 0;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const d of dists) {
+    const l = Math.log10(Math.max(d, DIST_FLOOR_M));
+    if (l < lo) lo = l;
+    if (l > hi) hi = l;
+  }
+  return hi - lo;
 }
 
 /** Um episódio recortado (antes de decidir): a série de amostras contíguas. */
@@ -266,6 +289,7 @@ function decideEpisode(ep: RawEpisode, rho: number, zCrit: number, minSamples: n
     endTs: ep.endTs,
     nTicks: ep.samples.length,
     spanDecades: spanDecades(dists),
+    rangeDecades: rangeDecades(dists),
     candidates,
     decisionTag,
     decided,
@@ -309,11 +333,15 @@ export function computeVisitMetrics(ticks: readonly VisitTick[], opts?: VisitOpt
   let decidedWithTag = 0;
   let decidedCorrect = 0;
   const spans: number[] = [];
+  const ranges: number[] = [];
 
   for (const ep of episodes) {
     const withTag = ep.truthTag !== null;
     if (withTag) episodesWithTag++;
-    if (ep.nTicks >= 2) spans.push(ep.spanDecades);
+    if (ep.nTicks >= 2) {
+      spans.push(ep.spanDecades);
+      ranges.push(ep.rangeDecades);
+    }
     if (ep.decided) {
       decided++;
       if (withTag) decidedWithTag++;
@@ -333,6 +361,7 @@ export function computeVisitMetrics(ticks: readonly VisitTick[], opts?: VisitOpt
     visitPrecisionTagged: decidedWithTag === 0 ? 1 : decidedCorrect / decidedWithTag,
     visitCoverage: episodesWithTag === 0 ? 0 : decidedWithTag / episodesWithTag,
     medianSpanDecades: median(spans),
+    medianRangeDecades: median(ranges),
   };
 }
 

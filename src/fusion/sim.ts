@@ -54,6 +54,18 @@ export type SimOpts = {
   uncalibrated?: boolean;
   /** true = estação BLE instalada junto da câmera (premissa do caminho C do frame.ts); ver cabeçalho. */
   stationAtCamera?: boolean;
+  /** ONDA 1 do ADR-014 — posição da ESTAÇÃO/receptor em coords de MUNDO (metros). Quando PRESENTE:
+   *  (a) vira a `rssiOrigin` (a origem física do log-distância do RSSI — tem PRECEDÊNCIA sobre
+   *      `stationAtCamera`), e (b) o `stationPx` EXPORTADO passa a ser `worldToPixel(H, override)`,
+   *  de modo que o `dist` da correlação em frame.ts (pé→stationWorld) meça pessoa→override. É o knob
+   *  do experimento INDICATIVO "mover o receptor para o DESTINO da caminhada fabrica span radial
+   *  suficiente para a significância honesta passar a DECIDIR?" (complemento CIRCULAR do experimento
+   *  geométrico puro de receiver-geometry.ts). Default undefined ⇒ comportamento ATUAL 100%
+   *  preservado. NÃO consome RNG (só troca a POSIÇÃO usada no log10 e na projeção — nenhum sorteio
+   *  novo, ordem do stream intacta, pinos bit-a-bit dos FUSION_SCENARIOS preservados). Se o ponto
+   *  projetar FORA da imagem [0,1]², a mesma guarda da estação do canto lança erro explícito (nunca
+   *  NaN mudo) — override deve cair sobre o chão calibrado (área útil do sim está bem dentro dele). */
+  stationWorldOverride?: Vec2;
   /** true (v4) = emite 4 tags-âncora ESTÁTICAS nos cantos de um retângulo 2,5×1,2 m ao redor da
    *  estação (espelha o campo real do dono — span ESTREITO de distâncias, regime anchors-offset
    *  do fitPathLoss), com o MESMO modelo log-distância + mesmo ruído das tags de pessoa. */
@@ -526,14 +538,20 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const calib = computeHomography(FLOOR_PAIRS);
   if (!calib.ok) throw new Error(`simulador: homografia degenerada (${calib.error})`);
   const H = calib.H;
-  const stationPx = worldToPixel(H, STATION_WORLD);
+  // Ponto EXPORTADO como estação: o canto (0,0) por padrão, ou o override de mundo (Onda 1) quando
+  // presente — o `dist` da correlação (frame.ts) mede pessoa→este ponto. Guarda de projeção mantida
+  // (vale pro override também: ponto fora da imagem = erro explícito, nunca NaN mudo). Sem override,
+  // é worldToPixel(H, STATION_WORLD) — byte-idêntico ao anterior.
+  const stationExportWorld = opts.stationWorldOverride ?? STATION_WORLD;
+  const stationPx = worldToPixel(H, stationExportWorld);
   if (!stationPx || stationPx.x < 0 || stationPx.x > 1 || stationPx.y < 0 || stationPx.y > 1)
     throw new Error("simulador: estação projeta fora da imagem — geometria fixa inválida");
 
   const rng = lcg(seed);
   const movers = createMovers(walk, people, rng);
-  // Origem física do RSSI: estação do canto (default) ou junto da câmera (caminho C do frame.ts).
-  const rssiOrigin = opts.stationAtCamera ? CAMERA_WORLD : STATION_WORLD;
+  // Origem física do RSSI: override de mundo (Onda 1, tem precedência) → estação do canto (default)
+  // → junto da câmera (caminho C do frame.ts). Só troca a POSIÇÃO do log-distância; não consome RNG.
+  const rssiOrigin = opts.stationWorldOverride ?? (opts.stationAtCamera ? CAMERA_WORLD : STATION_WORLD);
 
   // Tags-âncora (v4): retângulo 2,5×1,2 m centrado na origem do RSSI. São só emissoras BLE —
   // NÃO viram tracks de câmera (âncora é ferragem fixa, não pessoa) e NÃO entram na verdade

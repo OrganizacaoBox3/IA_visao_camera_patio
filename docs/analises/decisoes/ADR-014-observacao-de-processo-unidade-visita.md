@@ -135,3 +135,24 @@ estabilidade prolongada e taxa de falso-alerta operacional.
 - **Critério de pivô honesto**: se a Onda 0 refutar H1 E H2, ou a Onda 1 não der ganho por visita,
   abandonar identidade contínua por rádio → câmera como twin principal + BLE só em portais +
   evidência local forte (NFC/scanner/botão) + UWB só onde o cliente pagar.
+
+## Atualização 2026-07-12 — Ondas 0 e 1 MEDIDAS na bancada (ver PENDENCIAS.md p/ números)
+
+- **H1 (identidade por visita)**: a métrica honesta (janela única + n_eff do ρ=0,7) se ABSTÉM nos
+  dados atuais — mas por falta de SPAN, não de sinal (controle negativo por shift circular: real
+  82,6% vs shift 7,7%). A agregação de ticks da métrica anterior (event-metrics) estava INFLANDO.
+- **H2 (conservação por fronteira)**: necessária-não-suficiente com o tracker atual; a alavanca
+  barata `ttlMs=6000` (#27) cura a fragmentação (track para de nascer/morrer dentro da zona).
+- **θ (Δ2, item 9) REFUTADO** como 2º discriminador: θ_verdadeiro é largo/instável (viés corporal
+  infla o slope) — a ressalva de NÃO fixar θ≈22 se provou certa. Não adotar.
+- **Correção de métrica**: os "~0,42/~0,9 década" citados acima são **RANGE** (log10(8/3), log10(8/1)),
+  não STD; o código media STD. `visit-metrics.ts` agora reporta ambos (`rangeDecades`).
+- **Refino do critério de pivô (o achado central da Onda 1)**: mover o receptor ao destino confirma o
+  ganho de span mas NÃO abre o gate — **o gargalo é o n_eff (independência temporal), não o span**.
+  A alavanca real é a **cadência de advertising da tag**: dobrar 1→2 Hz abre a cobertura 0,3%→15,5%
+  a ~98% de precisão. MAS só para episódios LONGOS observados (≥~9 s a 2 Hz); a aproximação breve
+  (3-8 s) é estruturalmente curta demais a qualquer cadência representável, e o operador PARADO
+  (span 0) não fecha por RSSI. **Conclusão: não é pivô contra a arquitetura — é a confirmação
+  quantificada de que a identidade RSSI só contribui na aproximação longa (com tag rápida) e a
+  CONSERVAÇÃO topológica (camada 3) carrega o resto.** #26 (2ª antena) deixa de ser "o experimento
+  decisivo" isolado: o eixo decisivo virou *cadência de advertising × duração de observação*.
