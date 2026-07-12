@@ -481,6 +481,55 @@ volta a ser alavanca LINEAR** (verificado: T_viável escala com Δt_tag). Contra
 ou alimentar a métrica com fonte mais rápida que a tag. `sim.ts` exporta `REAL_TAG_PERIOD_TICKS=5` com
 proveniência + aviso alto no cabeçalho (default 2 intacto — 45 testes de pinning verdes).
 
+### 🎯 A CAUSA DO ERRO DE IDENTIDADE: O RIVAL RADIALMENTE CONFUNDÍVEL (`error-geometry.ts`, 2026-07-12)
+
+**O melhor achado do arco.** O erro correlacionado (Regra 13: quando um episódio erra, outro do mesmo
+operador repete o MESMO erro em 41,2%, vs 8,8% de independência) **tem CAUSA FÍSICA, e ela é PURA
+GEOMETRIA DE CÂMERA** — computável **ANTES de o rádio falar**.
+
+**A 1ª suspeita (tangencialidade) está REFUTADA**: AUC 0,49 — uma moeda. Não sabe nada sobre o erro.
+
+**A CAUSA REAL — `rivalDistCorr`**: a correlação entre o **meu** perfil radial e o do **VIZINHO**.
+**Se o vizinho espelha meu perfil de distância, o RSSI da tag DELE explica a MINHA distância tão bem
+quanto a minha** → o ranqueamento por −r não os separa. **AUC 0,92** (e **0,97 nos erros REPETIDOS**):
+
+| rival-corr | precisão (IC95 Wilson) |
+|---|---|
+| < 0,50 | **99,7%** [98,4–99,9], n=352 |
+| 0,50–0,80 | 93,3% [88,8–96,0], n=193 |
+| 0,80–0,90 | 83,3% [69,4–91,7], n=42 |
+| 0,90–0,95 | 64,5% [46,9–78,9], n=31 |
+| **> 0,95** | **38,5%** [17,7–64,5], n=13 |
+
+**🔑 É A ÚNICA CAUSA QUE EXPLICA O ERRO REPETIDO: o vizinho de trabalho é O MESMO o turno inteiro.**
+Mesma dupla, mesmo par espúrio, mesmo erro. **O mecanismo é estável porque A EQUIPE é estável.**
+→ Isso EXPLICA a curva PLANA da concordância-no-erro × separação temporal (o erro não decorrelaciona
+com o tempo **porque o RIVAL não muda**). **As duas medições contam a mesma história por lados opostos.**
+
+**O VETO (`geometricVeto`) DOMINA SUBIR O PISO — nas DUAS pontas:**
+- Elimina **72,5% dos erros** ao custo de **11,2% dos acertos** (precisão 94,1% → **98,1%** [96,6–98,9]).
+- **A assinatura da Regra 13 cai de 41,2% → 0,0%** — ataca o **MECANISMO**, não a média.
+- Mesma precisão (98,1%): o piso pagaria cobertura 10,3% → **o veto fala 2,7× mais (27,9%)**.
+- Mesma cobertura (~26%): o piso dá 95,3% → **o veto dá 98,1%**.
+- O peso está TODO no rival (sozinho: 97,6%, 65% dos erros); o tangencial é marginal (12,5%).
+
+**CIRCULARIDADE — DEFESA ESTRUTURAL, NÃO RETÓRICA (o ponto que dá validade ao achado):**
+**NENHUM `FUSION_SCENARIO` do experimento liga o `bodyBias`.** O viés corporal direcional **NEM EXISTIA
+no gerador** ⇒ é **IMPOSSÍVEL** que o achado seja o modelo de sombra do sim voltando pela porta dos
+fundos. **O que se achou é geometria pura.**
+- **Tudo que o veto usa é OBSERVÁVEL EM CAMPO**: trajetória do pé (via H⁻¹, já em produção), posição
+  cadastrada da estação, posições dos vizinhos. **O veto é computável ANTES de o motor falar.** A única
+  física assumida é "RSSI cai com a distância" — a premissa do PRODUTO, não do simulador.
+- `headingToStationDeg` (semi-circular — é literalmente o argumento do `bodyBiasDb`): **reportada,
+  NUNCA usada**, com um **assert que quebra o build** se alguém a colocar no veto.
+- **Robustez**: com `bodyBias` LIGADO (física mais suja que a da derivação), o veto ainda remove
+  **61,8% dos erros por 8,8% dos acertos**.
+
+**CONSEQUÊNCIA DE PRODUTO: o sistema passa a saber QUANDO NÃO SABE — antes de abrir a boca.** É a
+CALIBRAÇÃO exigida desde o início (o gate do ADR-014 é calibração, não precisão), e ela é **GRÁTIS**:
+sai da CÂMERA, não do rádio. Ressalva: os ABSOLUTOS são do simulador (indicativos); o que é robusto é
+a **ESTRUTURA** (a concentração e o domínio sobre o piso). Validação exige verdade anotada (#4).
+
 ### 🔴 O ρ=0,7 NÃO TEM BASE FÍSICA DEMONSTRADA (re-mineração das 56 h — pendência #38 FECHADA)
 
 - ✅ **A inflação está PROVADA sem depender de estimador**: **44–86% dos pares** no lag de 2 s são do
