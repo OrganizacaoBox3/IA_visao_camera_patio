@@ -15,6 +15,24 @@
 //   ("estação junto da câmera"). É a config recomendada para operar SEM calibração: o proxy 1/bh
 //   e o RSSI medem a distância ao MESMO ponto.
 // 100% determinístico — LCG(seed) + Box–Muller; zero Math.random/Date.now (replay-safe, doutrina).
+//
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// ‼ ARMADILHA — O DEFAULT `rssiPeriodTicks=2` É OTIMISTA vs O CAMPO. LEIA ANTES DE MEDIR. ‼
+//
+//   default rssiPeriodTicks = 2  ⇒  Δt = 2 × 500 ms =  1,0 s  (1 Hz)   ← O SIMULADOR
+//   TAG REAL medida em campo     ⇒  Δt ≈           ~2,5 s  (0,4 Hz)  ← A FÍSICA
+//
+// O simulador emite RSSI FRESCO 2,5× MAIS RÁPIDO do que a tag real anuncia. Toda métrica que conta
+// EVIDÊNCIA INDEPENDENTE (n_eff, cobertura por visita, significância de Fisher) fica INFLADA ~2,5×
+// se medida com o default. Foi exatamente esse o bug que inflou o n_eff máx a 39 e a cobertura por
+// visita a 45,2% no laudo de 2026-07-12 (n_eff=39 exigiria um episódio de ~97 s com a tag real —
+// nenhuma aproximação a uma mesa dura isso). Ver "A LEI COMPLETA DO n_eff" em visit-metrics.ts.
+//
+// O DEFAULT NÃO MUDA (de propósito): os FUSION_SCENARIOS estão PINADOS bit-a-bit contra ele, e
+// rssiPeriodTicks altera o consumo de RNG (o ε do RSSI é sorteado em mais/menos ticks) — mudá-lo
+// re-sortearia todas as trajetórias e invalidaria os pinos. Para medir com a FÍSICA REAL, passe
+// explicitamente `rssiPeriodTicks: REAL_TAG_PERIOD_TICKS`.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 import { computeHomography, worldToPixel } from "../vision/homography";
 import type { Matrix3, Vec2 } from "../vision/homography";
 import type { DrawTrack, RawReading } from "./frame";
@@ -210,6 +228,24 @@ const BH_NOISE_SIGMA = 0.05; // ruído multiplicativo da altura da caixa (σ 5% 
 const BH_MIN = 0.02; // clamp inferior da bh ruidosa (caixa nunca degenera/negativa)
 
 const TICK_MS = 500;
+
+/**
+ * CADÊNCIA DE ADVERTISING DA TAG REAL, em ticks do simulador — a FÍSICA, não o default.
+ *
+ * PROVENIÊNCIA: intervalo de advertising MEDIDO em campo, ~2,5 s entre leituras FRESCAS (é o mesmo
+ * dado que revelou o sample-and-hold do snapshot; ver residual-autocorr.ts/.test.ts, gravação
+ * server/bt/fusion-session-2026-07-11_20). 2,5 s ÷ 500 ms/tick = 5 ticks.
+ *
+ * USE ISTO em toda medição que conte EVIDÊNCIA INDEPENDENTE (n_eff, cobertura por visita,
+ * significância). O default `rssiPeriodTicks=2` (1 Hz) é 2,5× OTIMISTA — ver o aviso no cabeçalho.
+ * NÃO vire o default: os pinos bit-a-bit dos FUSION_SCENARIOS dependem dele (rssiPeriodTicks muda o
+ * consumo de RNG).
+ */
+export const REAL_TAG_PERIOD_TICKS = 5;
+/** Δt de advertising da tag REAL, em segundos (= REAL_TAG_PERIOD_TICKS × 500 ms). O Δt_tag da lei
+ *  n_eff ≤ min(T/Δt_tag, T/2τ) — o teto FÍSICO de leituras distintas por episódio. */
+export const REAL_TAG_PERIOD_S = (REAL_TAG_PERIOD_TICKS * TICK_MS) / 1000;
+
 const SPEED_M_PER_TICK = 1.2 * (TICK_MS / 1000); // 1,2 m/s → 0,6 m por tick
 const ARRIVE_M = 0.3; // raio de "cheguei ao waypoint"
 const AREA = { minX: 0.5, maxX: 7.5, minY: 0.5, maxY: 5.5 }; // onde as pessoas andam (margem do chão)

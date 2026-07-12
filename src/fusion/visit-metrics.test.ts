@@ -27,7 +27,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { TagTrackAssociator } from "./associate";
 import { buildFusionFrame } from "./frame";
-import { simulateFusionScenario } from "./sim";
+import { REAL_TAG_PERIOD_S, REAL_TAG_PERIOD_TICKS, simulateFusionScenario } from "./sim";
 import { FUSION_SCENARIOS } from "./replay-fusion";
 import { parseFusionSession } from "./session-loader";
 import { computeEventMetrics } from "./event-metrics";
@@ -36,7 +36,9 @@ import {
   circularShiftTicks,
   computeVisitEpisodes,
   computeVisitMetrics,
+  countingViolations,
   formatVisitTable,
+  maxDistinctReadings,
 } from "./visit-metrics";
 import type { VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
 
@@ -304,4 +306,144 @@ describe.skipIf(!WALK_FILE)("visit-metrics — gravação REAL da caminhada (spa
     expect(ticks.length).toBeGreaterThan(0);
     expect(withSamples.length).toBeGreaterThan(0);
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// REGRA 8 — O INVARIANTE DE CONTAGEM (2026-07-12, achado por revisão externa; assert PERMANENTE)
+//
+//     n_eff ≤ nDistinct ≤ ⌊T_episódio / Δt_tag⌋ + 1
+//
+// É CONTAGEM, não estatística: não pode existir mais evidência INDEPENDENTE do que medição
+// DISTINTA, nem mais medição distinta do que a tag EMITIU no tempo do episódio. Estes testes
+// FALHAM se alguém (a) reintroduzir contagem de duplicatas na métrica, (b) relaxar o clamp de
+// nEff, ou (c) alimentar a métrica com uma fonte que anuncia mais rápido que a tag real.
+// Ver "A LEI COMPLETA DO n_eff" no cabeçalho de visit-metrics.ts.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("REGRA 8 — invariante de CONTAGEM (n_eff ≤ nDistinct ≤ teto físico da tag)", () => {
+  /** Feed de visita com uma cadência de advertising EXPLÍCITA (ticks do sim entre leituras frescas). */
+  function ticksAtPeriod(entry: ScenarioEntry, rssiPeriodTicks: number): VisitTick[] {
+    const sc = simulateFusionScenario({ ...entry.opts, rssiPeriodTicks }, entry.seed);
+    const excludeTags =
+      sc.anchors && sc.anchors.length > 0
+        ? new Set(sc.anchors.map((a) => a.mac.toUpperCase()))
+        : undefined;
+    const stationPx = sc.H && !entry.omitStationPx ? sc.stationPx : undefined;
+    const out: VisitTick[] = [];
+    for (const tick of sc.ticks) {
+      if (tick.readings.length === 0) continue;
+      const frame = buildFusionFrame(tick.tracks, tick.readings, sc.H, tick.ts, stationPx, excludeTags);
+      const rssiByTag: Record<string, number> = {};
+      for (const r of frame.readings) rssiByTag[r.tag] = r.rssi;
+      const tracks: VisitTrackObs[] = [];
+      for (const t of frame.tracks) {
+        if (!(t.trackId in tick.truthTagByTrack)) continue;
+        tracks.push({ trackId: t.trackId, truthTag: tick.truthTagByTrack[t.trackId], dist: t.dist });
+      }
+      out.push({ ts: tick.ts, tracks, rssiByTag });
+    }
+    return out;
+  }
+
+  it("teto físico: nDistinct ≤ ⌈T/Δt_tag⌉+1 — aritmética pura, incluindo entradas degeneradas", () => {
+    expect(maxDistinctReadings(0, 2.5)).toBe(1); // episódio instantâneo: só a leitura CARREGADA
+    expect(maxDistinctReadings(7500, 2.5)).toBe(4); // 7,5 s / 2,5 s → 3 refreshes + a carregada
+    expect(maxDistinctReadings(37500, 1)).toBe(39); // 37,5 s a 1 Hz → 39 = EXATAMENTE o n_eff do laudo
+    expect(maxDistinctReadings(37500, 2.5)).toBe(16); // O MESMO episódio, tag REAL → 16, não 39
+    // O que o n_eff=39 do laudo EXIGIRIA da tag real: ~97 s de episódio contínuo numa mesa.
+    expect(maxDistinctReadings(97000, 2.5)).toBe(40);
+    expect(maxDistinctReadings(-1, 2.5)).toBe(0); // degenerado → 0, nunca NaN
+    expect(maxDistinctReadings(1000, 0)).toBe(0);
+    expect(maxDistinctReadings(1000, Number.NaN)).toBe(0);
+  });
+
+  it("DEDUP: distinctConsecutive conta TRANSIÇÕES — o snapshot repetido não vira evidência nova", () => {
+    // 12 ticks alinhados, mas o RSSI só MUDA a cada 3 ticks (sample-and-hold) → 4 leituras frescas.
+    // Se alguém reintroduzir contagem de duplicatas, nDistinct vira 12 e este teste QUEBRA.
+    const ticks: VisitTick[] = [];
+    for (let i = 0; i < 12; i++) {
+      ticks.push({
+        ts: 10000 + i * 500,
+        tracks: [{ trackId: 1, truthTag: "AA:AA", dist: 1 + i * 0.3 }],
+        rssiByTag: { "AA:AA": -50 - Math.floor(i / 3) * 5 },
+      });
+    }
+    const [ep] = computeVisitEpisodes(ticks, { rho: 0 });
+    const c = ep.candidates.find((x) => x.tag === "AA:AA");
+    expect(c).toBeDefined();
+    expect(c!.n).toBe(12); // amostras ALINHADAS (com repetição) — o que entra na correlação
+    expect(c!.nDistinct).toBe(4); // leituras FRESCAS — o que entra no n_eff
+    expect(c!.nEff).toBeLessThanOrEqual(c!.nDistinct); // ρ=0 ⇒ n_eff = nDistinct (o teto)
+    // E o teto físico: o "advertising" aqui é 1,5 s (3 ticks); span = 5,5 s ⇒ ⌈5,5/1,5⌉+1 = 5 ≥ 4.
+    expect(c!.nDistinct).toBeLessThanOrEqual(maxDistinctReadings(ep.endTs - ep.startTs, 1.5));
+    expect(countingViolations([ep], 1.5)).toEqual([]);
+  });
+
+  it("n_eff ≤ nDistinct SEMPRE — inclusive com ρ<0 (o clamp explícito, não a boa sorte da fórmula)", () => {
+    const ticks: VisitTick[] = [];
+    for (let i = 0; i < 12; i++) {
+      ticks.push({
+        ts: 10000 + i * 500,
+        tracks: [{ trackId: 1, truthTag: "AA:AA", dist: 1 + i * 0.3 }],
+        rssiByTag: { "AA:AA": -50 - i * 2 },
+      });
+    }
+    // ρ = −0,9: a fórmula CRUA daria nDistinct·(1,9/0,1) = 19× nDistinct — mais evidência do que
+    // medição. O clamp o impede. (ρ<0 não é físico aqui; o ponto é que o invariante NÃO depende disso.)
+    for (const rho of [-0.9, -0.5, 0, 0.3, 0.7, 0.95]) {
+      const [ep] = computeVisitEpisodes(ticks, { rho });
+      for (const c of ep.candidates) expect(c.nEff).toBeLessThanOrEqual(c.nDistinct);
+      expect(countingViolations([ep], 0.5)).toEqual([]);
+    }
+  });
+
+  it("SUÍTE INTEIRA: nenhum episódio viola o teto — na cadência do SIM (1 s) e na da TAG REAL (2,5 s)", () => {
+    let epsSim = 0;
+    let epsReal = 0;
+    let maxNdSim = 0;
+    let maxNdReal = 0;
+    for (const entry of FUSION_SCENARIOS) {
+      // (a) cadência do simulador (default rssiPeriodTicks=2 ⇒ Δt=1 s)
+      const sim = computeVisitEpisodes(visitTicksForScenario(entry), { rho: 0 });
+      expect(countingViolations(sim, 1.0)).toEqual([]);
+      epsSim += sim.length;
+      for (const ep of sim) for (const c of ep.candidates) maxNdSim = Math.max(maxNdSim, c.nDistinct);
+
+      // (b) cadência da TAG REAL (REAL_TAG_PERIOD_TICKS ⇒ Δt=2,5 s) — a física
+      const real = computeVisitEpisodes(ticksAtPeriod(entry, REAL_TAG_PERIOD_TICKS), { rho: 0 });
+      expect(countingViolations(real, REAL_TAG_PERIOD_S)).toEqual([]);
+      epsReal += real.length;
+      for (const ep of real) for (const c of ep.candidates) maxNdReal = Math.max(maxNdReal, c.nDistinct);
+    }
+    expect(epsSim).toBeGreaterThan(0);
+    expect(epsReal).toBeGreaterThan(0);
+    console.log(
+      `REGRA 8 (suíte): 0 violações. nDistinct MÁX — sim(Δt=1 s)=${maxNdSim} (${epsSim} eps) | ` +
+        `tag REAL(Δt=${REAL_TAG_PERIOD_S} s)=${maxNdReal} (${epsReal} eps).`,
+    );
+  }, 120000);
+
+  it("O BUG, PINADO: o SIM a 1 Hz VIOLA o teto da tag REAL (2,5 s) — é a inflação de 2,5×", () => {
+    // Este é o teste que prova a CAUSA. Os MESMOS episódios do simulador, medidos contra o teto
+    // FÍSICO da tag real, estouram: o sim entrega leituras frescas que a tag não teria emitido.
+    // Se um dia o default do sim virar a cadência real, este teste passa a não achar violação e
+    // QUEBRA — de propósito: força reler a lei antes de mudar a física da bancada.
+    let violations = 0;
+    let episodes = 0;
+    let worst = { nDistinct: 0, ceiling: 0 };
+    for (const entry of FUSION_SCENARIOS) {
+      const eps = computeVisitEpisodes(visitTicksForScenario(entry), { rho: 0 });
+      episodes += eps.length;
+      for (const v of countingViolations(eps, REAL_TAG_PERIOD_S)) {
+        violations++;
+        if (v.nDistinct - v.ceiling > worst.nDistinct - worst.ceiling) worst = v;
+      }
+    }
+    console.log(
+      `REGRA 8 (o BUG): ${violations} violações do teto da tag REAL em ${episodes} episódios do sim ` +
+        `(default 1 Hz). Pior: nDistinct=${worst.nDistinct} contra teto físico ${worst.ceiling} ` +
+        `(inflação ${(worst.nDistinct / Math.max(1, worst.ceiling)).toFixed(1)}×).`,
+    );
+    expect(violations).toBeGreaterThan(0); // o sim É otimista — declarado, não escondido
+    expect(worst.nDistinct).toBeGreaterThan(worst.ceiling * 1.8); // ~2,4× de inflação observada
+  }, 120000);
 });

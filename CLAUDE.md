@@ -71,6 +71,22 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 - **`npm run verify` = `lint` (ESLint) + `typecheck` (`tsc --noEmit`) + `build` (Vite) + `test` (Vitest) + `audit` (`npm audit`).** Gate local via **pre-push hook** (`.githooks/pre-push`, `core.hooksPath`) + CI (`.github/workflows/ci.yml`). **Vermelho não entra.** Para mudança que toca o front/fluxo, rode também o e2e: `npx playwright test`.
 - **Critérios de aceite viram teste** (ao menos caminhos críticos/invariantes). "Validado manual" é ponto de partida, não chegada. Regressão corrigida → vira teste (ex.: Select-em-Dialog no `e2e/`). Lógicas puras com unit test em Vitest (`*.test.ts`/`*.test.js` ao lado do código).
 - **Sensores de acurácia no gate (CI):** `eval/` (detecção — `gate.mjs`, fixture COCO estratificado) e `eval/counting.mjs` (contagem fim-a-fim) rodam no CI e barram regressão de ML/heurística — toda mudança de knob de `precision.js` passa por eles (fonte única de config espelhada no eval).
+
+### Regras de medição (compradas com sangue — violá-las já custou dois números errados publicados)
+
+- **Regra 8 — Deduplique ANTES de qualquer estatística. `n_eff ≤ nº de medições DISTINTAS`.**
+  Isso é **contagem, não modelo**: não existe mais evidência independente do que medições distintas.
+  Um snapshot que repete a última leitura entre atualizações reais cria duplicatas com ρ=1 por
+  construção — elas carregam informação ZERO. Vira **assert** (não comentário): o invariante
+  `nEff ≤ nDistinct ≤ T/Δt_sensor` trava no CI. *Origem: reportamos n_eff=39 (exigiria episódio de
+  97 s) porque o simulador anunciava 2,5× mais rápido que a tag real.*
+- **Regra 9 — Antes de estimar um parâmetro físico, verifique se o pipeline consegue RESOLVÊ-LO.**
+  Um app que posta a 550 ms **não enxerga** a física de uma tag que atualiza a 2,5 s — a ACF que sai
+  é a **do pipeline**, não a do canal. Se a resolução do instrumento é mais grossa que a escala do
+  fenômeno, o número medido é do instrumento. *É a mesma classe de erro dos tracks estáticos
+  filtrados como "flicker de mobília" (medir a população errada), agora na dimensão do TEMPO.*
+  Corolário: declare o **ponto cego** — "τ ≲ 1 s" NÃO é "τ = 0"; abaixo da cadência do sensor, nada
+  é observável, e apostar ali é aposta, não medição.
 - **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `docs/analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `docs/analises/saude/`.*
 
 ## 7. Definition of Done

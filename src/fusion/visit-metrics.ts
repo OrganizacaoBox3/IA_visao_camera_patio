@@ -39,6 +39,35 @@
 //
 // Responsabilidade única: só medir/decidir por visita. Não simula, não associa, não alimenta o
 // motor. Puro e determinístico. Nenhum NaN (séries vazias/constantes → candidato não entra).
+//
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// A LEI COMPLETA DO n_eff (2026-07-12 — a correção de CONTAGEM, achada por revisão externa)
+//
+//     n_eff = (T/Δt) · tanh(Δt / 2τ)   ≤   min( T/Δt_tag , T/(2τ) )
+//                                             └─ CONTAGEM ─┘  └─ AUTOCORRELAÇÃO ─┘
+//   (a forma exata do 1º termo, com a borda da grade de advertising: ⌈T/Δt_tag⌉+1 — ver
+//    `maxDistinctReadings`. O min acima é a LEI; a função é o teto com as bordas certas.)
+//
+// O gate das Ondas 0/1 só tinha o SEGUNDO termo (o desconto AR(1)) e ignorava o PRIMEIRO — e o
+// primeiro é uma verdade de CONTAGEM, não um modelo: **não pode existir mais evidência independente
+// do que medições DISTINTAS**. A tag anuncia a cada Δt_tag (medido em campo: ~2,5 s); um episódio de
+// T segundos NÃO PODE conter mais que ⌊T/Δt_tag⌋+1 leituras frescas, e n_eff ≤ isso, sempre.
+//
+// QUEM MORDE, em cada regime:
+//   • Tag PARADA / τ longo → morde o 2º termo (autocorrelação). Foi o regime que o gate assumiu.
+//   • Tag MÓVEL / τ curto (o resíduo é BRANCO na escala observável — residual-autocorr.ts) → o 2º
+//     termo EXPLODE (τ→0 ⇒ T/2τ → ∞) e quem morde é o **1º**: a TAXA DE ATUALIZAÇÃO DA TAG.
+// CONSEQUÊNCIA (inverte a leitura do laudo anterior): com τ pequeno NÃO há saturação em 1–2 Hz. A
+// cadência volta a ser alavanca LINEAR — não para vencer autocorrelação (não há), mas para ter
+// PONTOS SUFICIENTES para ajustar a reta. E o teto de pontos é físico: a tag.
+//
+// O BUG QUE ISTO MATA (confirmado, 2026-07-12): o SIMULADOR emitia RSSI fresco a cada 1 s
+// (`rssiPeriodTicks=2` × 500 ms), mas a tag REAL anuncia a cada ~2,5 s. O sim entregava 2,5× mais
+// leituras genuinamente distintas do que a física permite ⇒ n_eff inflado 2,5× ⇒ cobertura inflada.
+// O n_eff máx de 39 que reportamos exigiria um episódio de ~97 s com a tag real. Ver REAL_TAG_PERIOD_TICKS
+// em sim.ts. A MÉTRICA aqui estava certa (distinctConsecutive deduplica); a FÍSICA da fonte é que
+// mentia. Este cabeçalho + `maxDistinctReadings` + o clamp de `nEff` fecham a porta para sempre.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /** O que um tick sabe de UMA pista: a verdade daquele trackId (MAC ou null=sem tag; para dado real
  *  sem anotação, sempre null → só span/consistência, não precisão) e sua DISTÂNCIA à estação no
@@ -62,7 +91,10 @@ export type VisitCandidate = {
   n: number;
   /** Amostras de RSSI DISTINTAS (dedup consecutivo do snapshot) — o n de n_eff. */
   nDistinct: number;
-  /** n_eff = nDistinct·(1−ρ)/(1+ρ) — correção AR(1) da autocorrelação do RSSI. */
+  /** n_eff = min( nDistinct·(1−ρ)/(1+ρ) , nDistinct ) — desconto AR(1), TRAVADO pelo teto de
+   *  CONTAGEM (não existe mais evidência independente do que medição distinta). Ver "A LEI COMPLETA
+   *  DO n_eff" no cabeçalho. O clamp só é ativo para ρ<0 (a fórmula já o respeita para ρ≥0), mas é
+   *  explícito de propósito: é o invariante, não uma consequência que alguém pode reintroduzir. */
   nEff: number;
   /** z = atanh(r) (Fisher). */
   z: number;
@@ -146,6 +178,66 @@ export function effectiveRho(rhoFixed: number, tau?: number, dtS?: number): numb
   if (tau === undefined || !Number.isFinite(tau) || tau <= 0) return rhoFixed;
   if (dtS === undefined || !Number.isFinite(dtS) || dtS <= 0) return rhoFixed;
   return Math.exp(-dtS / tau);
+}
+
+/**
+ * TETO FÍSICO DE CONTAGEM — quantas leituras DISTINTAS de RSSI um episódio de `spanMs` pode conter,
+ * dada uma tag que anuncia a cada `dtTagS` segundos. É ARITMÉTICA, não estatística:
+ *
+ *     nDistinct ≤ ⌈ span / Δt_tag ⌉ + 1
+ *
+ * DERIVAÇÃO (os dois termos, ambos apertados — medido, não chutado):
+ *   • ⌈span/Δt⌉ = o nº MÁXIMO de advertisements que caem DENTRO da janela (t0, t0+span]. É ⌈⌉ e não
+ *     ⌊⌋ porque a grade de advertising não está alinhada com o início do episódio: uma janela de
+ *     7,5 s pode conter 8 refreshes de 1 s se cair "atravessada" na grade.
+ *   • "+1" = a leitura CARREGADA: no instante t0 o snapshot já segura um valor, vindo de um
+ *     advertisement ANTERIOR ao episódio. É evidência legítima (a leitura existiu), mas é UMA só.
+ *
+ * `span` = endTs − startTs do episódio (tempo de PAREDE coberto — não nTicks, não nº de amostras).
+ * Amostrar/POSTar mais rápido que a tag anuncia NÃO cria leituras distintas (o snapshot repete o
+ * último batch — sample-and-hold; `distinctConsecutive` deduplica). Qualquer nDistinct acima deste
+ * teto é BUG DE CONTAGEM NA FONTE do dado, e infla o n_eff — e a cobertura — linearmente.
+ * Devolve 0 para span negativo/não-finito ou Δt_tag ≤ 0 (entrada inválida, nunca NaN mudo).
+ */
+export function maxDistinctReadings(spanMs: number, dtTagS: number): number {
+  if (!Number.isFinite(spanMs) || spanMs < 0) return 0;
+  if (!Number.isFinite(dtTagS) || dtTagS <= 0) return 0;
+  return Math.ceil(spanMs / 1000 / dtTagS) + 1;
+}
+
+/** Uma violação do invariante de contagem: episódio cujo nDistinct excedeu o teto físico da tag. */
+export type CountingViolation = {
+  trackId: number;
+  tag: string;
+  spanMs: number;
+  nDistinct: number;
+  ceiling: number;
+};
+
+/**
+ * REGRA 8 (o assert permanente): varre episódios já decididos e devolve TODA violação do invariante
+ * de contagem — `nDistinct > ⌊span/Δt_tag⌋+1` (mais leituras frescas do que a tag pode ter emitido)
+ * ou `nEff > nDistinct` (mais evidência independente do que medição distinta). Lista VAZIA = são.
+ *
+ * Não lança: é um SENSOR, e quem o consome (teste/CI) decide o que fazer. É contagem, não modelo —
+ * um assert barato que trava no CI para sempre contra reintrodução de contagem de duplicatas ou de
+ * uma fonte de dados que anuncia mais rápido do que a tag real.
+ */
+export function countingViolations(
+  episodes: readonly VisitEpisode[],
+  dtTagS: number,
+): CountingViolation[] {
+  const out: CountingViolation[] = [];
+  for (const ep of episodes) {
+    const spanMs = ep.endTs - ep.startTs;
+    const ceiling = maxDistinctReadings(spanMs, dtTagS);
+    for (const c of ep.candidates) {
+      if (c.nDistinct > ceiling || c.nEff > c.nDistinct) {
+        out.push({ trackId: ep.trackId, tag: c.tag, spanMs, nDistinct: c.nDistinct, ceiling });
+      }
+    }
+  }
+  return out;
 }
 
 type VisitOpts = {
@@ -298,7 +390,10 @@ function decideEpisode(ep: RawEpisode, rho: number, zCrit: number, minSamples: n
     const r = pearson(rssi, dist);
     if (r === null) continue; // série constante → tag não é candidata
     const nDistinct = distinctConsecutive(rssi);
-    const nEff = (nDistinct * (1 - rho)) / (1 + rho);
+    // INVARIANTE DE CONTAGEM (trava explícita — ver "A LEI COMPLETA DO n_eff" no cabeçalho):
+    // n_eff NUNCA excede o nº de medições DISTINTAS. Segue da fórmula para ρ≥0; o Math.min torna
+    // impossível violá-lo mesmo se alguém passar ρ<0 ou trocar a fórmula do desconto.
+    const nEff = Math.min((nDistinct * (1 - rho)) / (1 + rho), nDistinct);
     const rc = Math.max(-FISHER_R_CLAMP, Math.min(FISHER_R_CLAMP, r));
     const z = Math.atanh(rc);
     const significant = nEff > 3 && Math.abs(z) >= zCrit * Math.sqrt(1 / (nEff - 3));

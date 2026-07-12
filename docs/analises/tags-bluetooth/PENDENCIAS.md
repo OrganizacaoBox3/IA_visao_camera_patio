@@ -349,6 +349,138 @@ distância — CIRCULAR por construção). Os 45,2% são **INDICATIVOS, não cam
 **→ Validar exige verdade anotada: a caminhada do dono (#4) virou o GATE CRÍTICO** — sem ela medimos se a
 visita DECIDE, mas não se ela ACERTA.
 
+### 🔴🔴 RETRATAÇÃO 4 (2026-07-12) — os 45,2% CAEM: era BUG DE CONTAGEM no simulador (não estatística)
+
+Revisor externo pegou o que passou por todos nós: **`n_eff ≤ nº de medições DISTINTAS = T/Δt_tag`**. É
+CONTAGEM — não pode existir mais evidência independente do que leitura fresca. **Diagnóstico CONFIRMADO por
+medição** (não por argumento):
+
+- **A causa NÃO era a métrica.** `distinctConsecutive()` (visit-metrics.ts) deduplica corretamente (medido:
+  n=12 amostras alinhadas → nDistinct=4 quando o valor só muda a cada 3 ticks).
+- **A causa É o SIMULADOR.** `sim.ts` usa `rssiPeriodTicks ?? 2` × TICK_MS=500 ⇒ RSSI fresco a cada **1,0 s**.
+  A **tag real anuncia a cada ~2,5 s** (medido em campo — o mesmo dado do sample-and-hold). O sim entregava
+  **2,5× mais leituras genuinamente distintas do que a física permite**. Medido nos cenários: `nDistinct ≈
+  T/0,99 s` (o sim) contra `T/2,24 s` (com a cadência real). **1285 episódios violam o teto físico da tag;
+  pior caso nDistinct=45 contra teto 20 (2,3× de inflação).**
+- **O n_eff=39 exigiria um episódio de ~97 s** contínuos com a tag real. Nenhuma aproximação a uma mesa dura isso.
+
+**A COBERTURA HONESTA (mesma suíte, mesma geometria, mesmo τ — só a cadência da tag corrigida):**
+
+| τ (s) | n_eff máx (1 s → **2,5 s**) | BASE cob% (1 s → **2,5 s**) | DESTINO cob% (1 s → **2,5 s**) | DEST prec% |
+|---|---|---|---|---|
+| **0 (BRANCO)** ← pontual | 39,00 → **23,00** | 24,9% → **7,6%** | **45,2% → 2,5%** | 100% |
+| 0,50 | 29,70 → **22,69** | 16,9% → **7,3%** | 32,9% → **2,3%** | 100% |
+| 1,00 | 18,02 → **19,51** | 4,6% → **3,9%** | 11,1% → **0,8%** | 100% |
+| 1,68 (bound) | 11,28 → **14,53** | 0,6% → **1,1%** | 4,6% → **0,0%** | — |
+
+**→ A RETRATAÇÃO 1 é RE-RETRATADA: H1 NÃO fecha.** A cobertura por visita no destino cai de **45,2% para
+2,5%**. Os 45,2% eram o simulador anunciando a 1 Hz.
+
+**→ A RETRATAÇÃO 2 CAI JUNTO — e a #26 (ESP32 no destino) perde a justificativa de COBERTURA.** Com a tag
+real o destino fica ABAIXO do baseline em cobertura (2,5% vs 7,6%) — inversão que a régua inflada escondia.
+**MAS olhar só a cobertura engana:** a precisão do baseline DESABA para **55,6%** (quase cara-ou-coroa), e a
+do destino se mantém em **100%**. **O receptor no destino compra QUALIDADE (precisão), não cobertura.**
+
+**A LEI COMPLETA** (registrada em `visit-metrics.ts`; antes só tínhamos o 2º termo):
+
+> **n_eff = (T/Δt)·tanh(Δt/2τ) ≤ min( T/Δt_tag , T/(2τ) )**
+
+Para a tag **MÓVEL** (τ→0, resíduo branco) quem MORDE é o **1º termo — a taxa de atualização da tag**.
+**Consequência que INVERTE o laudo anterior: com τ pequeno NÃO há saturação em 1–2 Hz** → a cadência volta a
+ser alavanca **LINEAR** (não para vencer autocorrelação — não há — mas para ter **pontos suficientes para
+ajustar a reta**). "A cadência satura, não compre tag rápida" só valia para τ longo (tag PARADA).
+
+**A ARITMÉTICA QUE MATA A APROXIMAÇÃO** (sobrevive a qualquer modelo — é contagem). Com a tag real (2,5 s),
+uma aproximação de **3–8 s produz 3–5 leituras distintas**. O teste de Fisher tem **√(n_eff−3) no
+denominador** ⇒ com n_eff ≤ 3 ele é **INDEFINIDO, não "difícil"**. Não há knob, span, receptor ou τ que
+conserte: **faltam PONTOS**.
+
+**ESPECIFICAÇÃO DE PROJETO** — (T, Δt_tag) → nDistinct → barra |r| → veredito (τ→0, a ponta otimista):
+
+| T (s) | Δt_tag (s) | nDistinct | n_eff | \|r\| exigido | veredito |
+|---|---|---|---|---|---|
+| 8 | 2,5 | 5 | 5,0 | 0,88 | MARGINAL |
+| **20** | **2,5** | 9 | 9,0 | 0,66 | **VIÁVEL** |
+| 40 | 2,5 | 17 | 17,0 | 0,48 | CONFORTÁVEL |
+| 20 | 1,0 | 21 | 21,0 | 0,43 | CONFORTÁVEL |
+| 8 | 0,5 | 17 | 17,0 | 0,48 | CONFORTÁVEL |
+
+**T MÍNIMO do episódio** (τ→0): tag real (2,5 s) → o teste **EXISTE a partir de 5,5 s**, fica **VIÁVEL
+(|r|≤0,7) só a partir de 18 s**. A 2 Hz: **1,5 s / 4,0 s** (~5× menos permanência exigida — a alavanca
+LINEAR). **→ Só PERMANÊNCIA fecha: o receptor precisa cobrir a janela em que o operador FICA, não a em que
+ele PASSA.**
+
+**BLINDAGEM PERMANENTE (Regra 8, no CI para sempre):** `visit-metrics.ts` agora TRAVA `nEff ≤ nDistinct`
+(clamp explícito) e expõe `maxDistinctReadings(spanMs, dtTagS)` = ⌈T/Δt⌉+1 + `countingViolations()`. Testes
+falham se alguém reintroduzir contagem de duplicatas OU alimentar a métrica com fonte mais rápida que a tag.
+`sim.ts` exporta `REAL_TAG_PERIOD_TICKS=5` (2,5 s) e avisa **no cabeçalho** que o default 2 é OTIMISTA — o
+default NÃO mudou (os 58 pinos bit-a-bit dos FUSION_SCENARIOS dependem dele).
+
+### 🔴🔴 RETRATAÇÃO DA RETRATAÇÃO (2026-07-12, tarde) — os 45,2% eram BUG DE CONTAGEM. O número honesto é 2,5%.
+
+**O invariante que fecha a questão (é CONTAGEM, não estatística — Regra 8):**
+`n_eff ≤ nº de medições DISTINTAS ≤ ⌈T/Δt_tag⌉+1`. Não existe mais evidência independente do que
+medições distintas. n_eff=39 exigiria um episódio de ~97 s com a tag real. **Nenhuma aproximação dura isso.**
+
+**A causa (medida, não argumentada):** a métrica está LIMPA (`distinctConsecutive` deduplica certo —
+verificado). **O bug é o SIMULADOR**: `sim.ts` usa `rssiPeriodTicks=2` (RSSI fresco a cada **1,0 s**), mas
+a **tag real anuncia a ~2,5 s**. O sim entregava **2,3× mais leituras genuinamente distintas do que a
+física permite** — **1285 episódios violavam o teto físico** (pior caso: nDistinct=45 contra teto 20).
+
+**COBERTURA HONESTA (tag 2,5 s) vs INFLADA (1 s)** — mesma suíte, mesma geometria, mesmo τ:
+
+| τ (s) | n_eff máx (1 s → **2,5 s**) | BASE cob% | **DEST cob%** (1 s → **2,5 s**) | DEST prec% |
+|---|---|---|---|---|
+| **0 (BRANCO)** | 39,00 → **23,00** | 24,9% → **7,6%** | **45,2% → 2,5%** | **100%** |
+| 0,50 | 29,70 → 22,69 | 16,9% → 7,3% | 32,9% → 2,3% | 100% |
+| 1,00 | 18,02 → 19,51 | 4,6% → 3,9% | 11,1% → 0,8% | 100% |
+| 1,68 | 11,28 → 14,53 | 0,6% → 1,1% | 4,6% → 0,0% | — |
+
+**Os 45,2% caem para 2,5%** — pior que os ~20% previstos pelo revisor.
+
+**🔄 E O RECEPTOR NO DESTINO SE INVERTE OUTRA VEZ — mas SOBREVIVE, por outro motivo.** Com a tag real, o
+destino fica ABAIXO do baseline em COBERTURA (2,5% vs 7,6%). Mas olhar só cobertura ENGANA: a **precisão do
+baseline DESABA para 55,6%** (quase cara-ou-coroa) enquanto o **destino mantém 100%**. **O receptor no
+destino compra QUALIDADE, não cobertura.** Dada a invariante da casa (*rótulo errado é pior que nenhum*) e
+a métrica-que-mata (<1 falso alerta/turno), 2,5% a 100% vale MUITO mais que 7,6% a 55,6%. **#26 sobrevive —
+por precisão, não por span.**
+
+### 📐 A ARITMÉTICA QUE MATA A APROXIMAÇÃO (o achado que nenhuma correção futura derruba)
+
+**Aproximação de 3–8 s com tag de 2,5 s → 3–5 leituras distintas.** O teste de Fisher tem √(n_eff−3) no
+denominador: com n_eff ≤ 3 ele **não é difícil — é INDEFINIDO**. Não depende de ρ, estimador, simulador
+nem algoritmo. **A aproximação típica está morta por CONTAGEM.**
+
+**TABELA DE REQUISITOS (τ→0, a ponta otimista) — vira ESPECIFICAÇÃO DE INSTALAÇÃO:**
+
+| T (s) | Δt_tag (s) | nDistinct | n_eff | \|r\| exigido | veredito |
+|---|---|---|---|---|---|
+| 8 | 2,5 | 5 | 5,0 | 0,88 | MARGINAL |
+| **20** | **2,5** | 9 | 9,0 | 0,66 | **VIÁVEL** |
+| 40 | 2,5 | 17 | 17,0 | 0,48 | CONFORTÁVEL |
+| 20 | 1,0 | 21 | 21,0 | 0,43 | CONFORTÁVEL |
+| 8 | 0,5 | 17 | 17,0 | 0,48 | CONFORTÁVEL |
+
+**T MÍNIMO (tag atual de 2,5 s): o teste EXISTE em 5,5 s; fica VIÁVEL em 18 s.**
+**Com tag a 2 Hz: 1,5 s / 4,0 s** — ~5× menos permanência exigida.
+
+### ⚖️ A LEI COMPLETA — e as DUAS recomendações de hardware de ontem SE INVERTEM
+
+**`n_eff ≤ min( T/Δt_tag , T/(2τ) )`** — antes só tínhamos o 2º termo. Para a tag MÓVEL (τ→0, resíduo
+branco) quem MORDE é o **1º**: a taxa de atualização da TAG. **Logo NÃO há saturação em 1–2 Hz: a cadência
+volta a ser alavanca LINEAR** (verificado: T_viável escala com Δt_tag). Contra-prova pinada: com τ=1,68 s,
+25× de cadência quase não move o T exigido — a saturação só valia para τ LONGO (tag PARADA).
+
+- **"Não comprar tag de 2 Hz" (laudo de ontem): REVERTIDA.** A tag rápida é a alavanca LINEAR que derruba
+  a permanência exigida de **18 s → 4 s**.
+- **"ESP32 no destino pelo span/cobertura": REVERTIDA na razão, MANTIDA na conclusão.** Ele compra
+  **precisão (100% vs 55,6%)**, não cobertura.
+
+**Blindagem permanente (Regra 8 no CI):** `visit-metrics.ts` clampa `nEff = min(…, nDistinct)` e exporta
+`maxDistinctReadings()`/`countingViolations()`; testes FALHAM se alguém reintroduzir contagem de duplicatas
+ou alimentar a métrica com fonte mais rápida que a tag. `sim.ts` exporta `REAL_TAG_PERIOD_TICKS=5` com
+proveniência + aviso alto no cabeçalho (default 2 intacto — 45 testes de pinning verdes).
+
 ### 🔴 O ρ=0,7 NÃO TEM BASE FÍSICA DEMONSTRADA (re-mineração das 56 h — pendência #38 FECHADA)
 
 - ✅ **A inflação está PROVADA sem depender de estimador**: **44–86% dos pares** no lag de 2 s são do

@@ -28,12 +28,20 @@
 // inverto H sobre o PÉ de cada track e agrupo por truthTagByTrack (MAC = pessoa, robusto a id-switch).
 // O override NÃO altera trajetórias (não consome RNG), então extraio do cenário BASELINE.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ‼‼ AVISO DE 2026-07-12 — TUDO ABAIXO QUE RODA NA CADÊNCIA DO SIMULADOR (rssiPeriodTicks ∈ {1,2},
+// Δt ∈ {0,5; 1,0} s) ESTÁ INFLADO. A tag REAL anuncia a cada ~2,5 s (REAL_TAG_PERIOD_TICKS=5). O
+// simulador entregava 2,5× mais leituras DISTINTAS do que a física permite ⇒ n_eff inflado ⇒
+// cobertura inflada. Os testes antigos ficam (são o registro do que reportamos, e pinam a régua
+// antiga); a MEDIÇÃO HONESTA é o último teste deste arquivo ("CADÊNCIA REAL DA TAG"). Ver "A LEI
+// COMPLETA DO n_eff" em visit-metrics.ts.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 import { describe, expect, it } from "vitest";
-import { simulateFusionScenario } from "./sim";
+import { REAL_TAG_PERIOD_S, REAL_TAG_PERIOD_TICKS, simulateFusionScenario } from "./sim";
 import type { SimFusionScenario, SimOpts } from "./sim";
 import { FUSION_SCENARIOS } from "./replay-fusion";
 import { buildFusionFrame } from "./frame";
-import { computeVisitEpisodes, computeVisitMetrics } from "./visit-metrics";
+import { computeVisitEpisodes, computeVisitMetrics, maxDistinctReadings } from "./visit-metrics";
 import type { VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
 import { pixelToWorld } from "../vision/homography";
 import { DEFAULT_ROOM_GRID, optimalReceiver, radialSpan, type Pt } from "./receiver-geometry";
@@ -871,3 +879,371 @@ describe("receiver-at-destino — a significância HONESTA passa a decidir com o
 function rhoFromTauLocal(dtS: number, tauS: number): number {
   return tauS > 0 ? Math.exp(-dtS / tauS) : 0;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// A MEDIÇÃO HONESTA — CADÊNCIA REAL DA TAG (Δt ≈ 2,5 s), 2026-07-12.
+//
+// O BUG (confirmado por medição, não por argumento): TODA a varredura acima roda com o default do
+// simulador, `rssiPeriodTicks=2` ⇒ RSSI fresco a cada 1,0 s. A tag REAL anuncia a cada ~2,5 s
+// (medido em campo; é o mesmo dado que revelou o sample-and-hold — residual-autocorr.ts). O sim
+// entrega 2,5× mais leituras GENUINAMENTE DISTINTAS do que a física permite. Como
+// n_eff ≤ nDistinct ≤ ⌈T/Δt_tag⌉+1 (CONTAGEM, não estatística — Regra 8, visit-metrics.ts), o n_eff
+// vinha inflado ~2,5×, e com ele a cobertura por visita.
+//
+// O NÚMERO QUE CAI: reportamos n_eff MÁX = 39 e cobertura de 45,2% (destino, τ→0). Um n_eff de 39
+// exige 39 leituras distintas — o que, com a tag real, exige um episódio de ~97 s CONTÍNUOS na mesma
+// aproximação. Nenhuma visita a uma mesa dura isso. O 39 era o sim falando, não a tag.
+//
+// Este teste RE-RODA a varredura de τ com `rssiPeriodTicks: REAL_TAG_PERIOD_TICKS` e reporta as duas
+// tabelas LADO A LADO — a inflada (1 s) e a honesta (2,5 s). Achado negativo tem o mesmo peso.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("CADÊNCIA REAL DA TAG (2,5 s) — a cobertura HONESTA, e a aritmética que mata a aproximação", () => {
+  type SweepRow = {
+    dtS: number;
+    tau: number;
+    rho: number;
+    base: { dec: number; cor: number; eps: number };
+    dest: { dec: number; cor: number; eps: number };
+    maxNeff: number;
+    medNeff: number;
+    maxNDistinct: number;
+    reach: number;
+    withTag: number;
+    rBar: number;
+  };
+
+  /** Varredura pooled (baseline vs destino) numa cadência (`period` em ticks do sim) e num τ. */
+  function sweepAt(period: number, tau: number): SweepRow {
+    const dtS = period * TICK_S;
+    // τ=0 (o BRANCO — a estimativa PONTUAL de campo) ⇒ ρ=0, o limite da lei. Ver effectiveRho.
+    const vo = tau > 0 ? { tau, dtS } : { rho: 0 };
+    const rho = tau > 0 ? Math.exp(-dtS / tau) : 0;
+    const base = { dec: 0, cor: 0, eps: 0 };
+    const dest = { dec: 0, cor: 0, eps: 0 };
+    let maxNeff = 0;
+    let maxNDistinct = 0;
+    let reach = 0;
+    let withTag = 0;
+    const neffs: number[] = [];
+
+    for (const entry of FUSION_SCENARIOS.filter(inOverrideScope)) {
+      const opts = { ...entry.opts, rssiPeriodTicks: period };
+      const traj = person0Trajectory(opts, entry.seed);
+      if (traj.length < 2) continue;
+      const destino = destinationOf(traj);
+
+      const b = computeVisitMetrics(
+        visitTicksFromScenario(simulateFusionScenario(opts, entry.seed)),
+        vo,
+      );
+      base.dec += b.decidedWithTag;
+      base.cor += b.decidedCorrect;
+      base.eps += b.episodesWithTag;
+
+      const ticksD = visitTicksFromScenario(
+        simulateFusionScenario({ ...opts, stationWorldOverride: destino }, entry.seed),
+      );
+      const d = computeVisitMetrics(ticksD, vo);
+      dest.dec += d.decidedWithTag;
+      dest.cor += d.decidedCorrect;
+      dest.eps += d.episodesWithTag;
+
+      for (const e of computeVisitEpisodes(ticksD, vo).filter((x) => x.truthTag !== null)) {
+        withTag++;
+        let best = 0;
+        let bestNd = 0;
+        for (const c of e.candidates) {
+          if (c.nEff > best) best = c.nEff;
+          if (c.nDistinct > bestNd) bestNd = c.nDistinct;
+        }
+        if (best > 3) reach++;
+        if (best > maxNeff) maxNeff = best;
+        if (bestNd > maxNDistinct) maxNDistinct = bestNd;
+        neffs.push(best);
+      }
+    }
+    return {
+      dtS,
+      tau,
+      rho,
+      base,
+      dest,
+      maxNeff,
+      medNeff: medianOf(neffs),
+      maxNDistinct,
+      reach,
+      withTag,
+      rBar: maxNeff > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (maxNeff - 3))) : 1,
+    };
+  }
+
+  const TAUS = [0, 0.5, 1.0, TAU_MOVEL_S];
+
+  it(
+    "TABELA HONESTA: cobertura por visita com a tag REAL (2,5 s) vs a INFLADA do sim (1 s), por τ",
+    () => {
+      const real = TAUS.map((t) => sweepAt(REAL_TAG_PERIOD_TICKS, t)); // Δt = 2,5 s — A FÍSICA
+      const infl = TAUS.map((t) => sweepAt(2, t)); // Δt = 1,0 s — o default do sim (INFLADO)
+
+      const head =
+        "τ (s)".padEnd(13) +
+        "  ρ      n_eff máx  n_eff med  ndist máx  eps n_eff>3  |r| exigido  BASE cob%  BASE prec%  DEST cob%  DEST prec%";
+      const fmt = (r: SweepRow): string =>
+        `${r.tau === 0 ? "0 (BRANCO)" : r.tau.toFixed(2)}${r.tau === TAU_MOVEL_S ? "*" : ""}`.padEnd(13) +
+        `  ${r.rho.toFixed(3)}  ` +
+        `${r.maxNeff.toFixed(2).padStart(9)}  ${r.medNeff.toFixed(2).padStart(9)}  ` +
+        `${String(r.maxNDistinct).padStart(9)}  ` +
+        `${`${r.reach}/${r.withTag}`.padStart(10)}  ` +
+        `${r.rBar.toFixed(2).padStart(11)}  ` +
+        `${pct(r.base.eps ? r.base.dec / r.base.eps : 0).padStart(8)}%  ` +
+        `${(r.base.dec ? `${pct(r.base.cor / r.base.dec)}%` : "—").padStart(9)}  ` +
+        `${pct(r.dest.eps ? r.dest.dec / r.dest.eps : 0).padStart(8)}%  ` +
+        `${(r.dest.dec ? `${pct(r.dest.cor / r.dest.dec)}%` : "—").padStart(9)}`;
+
+      console.log(
+        `\n═══ HONESTA — TAG REAL (Δt=${REAL_TAG_PERIOD_S} s, rssiPeriodTicks=${REAL_TAG_PERIOD_TICKS}) ═══\n` +
+          `${head}\n${"-".repeat(head.length)}\n${real.map(fmt).join("\n")}\n` +
+          `\n═══ INFLADA — CADÊNCIA DO SIM (Δt=1,0 s, o default rssiPeriodTicks=2) — O QUE REPORTAMOS ═══\n` +
+          `${head}\n${"-".repeat(head.length)}\n${infl.map(fmt).join("\n")}\n` +
+          `(* = τ=1,68 s, o LIMITE SUPERIOR conservador medido em campo; τ=0 = a estimativa PONTUAL.)`,
+      );
+
+      const rW = real[0]; // tag real, τ=0 (a ponta MAIS otimista que a física permite)
+      const iW = infl[0]; // sim 1 Hz, τ=0 — a linha que gerou o "n_eff 39 / cobertura 45,2%"
+      const covRealDest = rW.dest.eps ? rW.dest.dec / rW.dest.eps : 0;
+      const covInflDest = iW.dest.eps ? iW.dest.dec / iW.dest.eps : 0;
+      const covRealBase = rW.base.eps ? rW.base.dec / rW.base.eps : 0;
+      const covInflBase = iW.base.eps ? iW.base.dec / iW.base.eps : 0;
+
+      console.log(
+        `\nVEREDITO (o número que sustenta a decisão de COMPRA, corrigido):\n` +
+          `  n_eff MÁX na suíte:  sim(1 s)=${iW.maxNeff.toFixed(2)}  →  TAG REAL(2,5 s)=${rW.maxNeff.toFixed(2)}  ` +
+          `(razão ${(iW.maxNeff / Math.max(1e-9, rW.maxNeff)).toFixed(2)}× — a inflação da cadência)\n` +
+          `  COBERTURA no DESTINO (τ→0, a ponta otimista):  ${pct(covInflDest)}% (inflada)  →  ` +
+          `${pct(covRealDest)}% (HONESTA)\n` +
+          `  COBERTURA no BASELINE (τ→0): ${pct(covInflBase)}% (inflada)  →  ${pct(covRealBase)}% (HONESTA), ` +
+          `prec ${rW.base.dec ? `${pct(rW.base.cor / rW.base.dec)}%` : "—"}\n` +
+          `  ⇒ O "45,2%" que reportamos era o SIMULADOR anunciando a 1 Hz. A tag que existe anuncia a\n` +
+          `    cada 2,5 s, e a mesma suíte, mesma geometria, mesmo τ, entrega ${pct(covRealDest)}%.\n` +
+          `  ⚠ UMA INVERSÃO APARENTE, E O QUE ELA REALMENTE DIZ: com a tag REAL a COBERTURA do DESTINO\n` +
+          `    fica ABAIXO da do baseline (${pct(covRealDest)}% vs ${pct(covRealBase)}%) — o oposto da régua de 1 Hz (45,2% vs\n` +
+          `    24,9%). MAS olhar só a cobertura ENGANA: a PRECISÃO do baseline DESABA para ` +
+          `${rW.base.dec ? pct(rW.base.cor / rW.base.dec) : "—"}%\n` +
+          `    (quase cara-ou-coroa na identidade), enquanto o DESTINO decide a ` +
+          `${rW.dest.dec ? pct(rW.dest.cor / rW.dest.dec) : "—"}%. O baseline não\n` +
+          `    "cobre mais": ele FALA ERRADO mais — e falar errado viola a invariante do dono (rótulo\n` +
+          `    errado é pior que nenhum). Sem span, o vencedor do ranking é ruído com |r| que cruzou a\n` +
+          `    barra por acaso; o span do destino é o que separa o verdadeiro do espúrio.\n` +
+          `    ⇒ LEITURA PARA A COMPRA: o receptor no destino compra QUALIDADE (precisão), NÃO cobertura.\n` +
+          `      O salto de cobertura que justificava o ESP32 (24,9%→45,2%) era artefato da cadência\n` +
+          `      inflada e NÃO sobrevive à tag real. (Achado NEGATIVO — mesmo peso, doutrina §5.)\n` +
+          `  ⇒ O que NÃO muda: o que o destino decide, decide certo (${pct(rW.dest.dec ? rW.dest.cor / rW.dest.dec : 1)}%). A abstenção honesta\n` +
+          `    segue de pé — o motor não passou a mentir; ele passou a se calar mais.\n` +
+          `  ⇒ E A CADÊNCIA VOLTA A SER ALAVANCA LINEAR: com τ→0 (resíduo branco) NÃO há saturação —\n` +
+          `    quem morde o n_eff é o 1º termo da lei (T/Δt_tag), a TAXA DA TAG. Uma tag 2,5× mais\n` +
+          `    rápida devolve ~2,5× de n_eff. Não para vencer autocorrelação (não há) — para TER PONTOS.`,
+      );
+
+      // ── Assertivas ROBUSTAS ──
+      // 1) Determinismo.
+      expect(sweepAt(REAL_TAG_PERIOD_TICKS, 0)).toEqual(rW);
+      // 2) O TETO DE CONTAGEM morde: com a tag real, nDistinct não passa do que a tag EMITE.
+      expect(rW.maxNDistinct).toBeLessThan(iW.maxNDistinct);
+      expect(rW.maxNeff).toBeLessThan(iW.maxNeff);
+      // 3) O n_eff=39 do laudo é IMPOSSÍVEL com a tag real nesta suíte — é o coração do bug.
+      expect(iW.maxNeff).toBeGreaterThan(35); // reproduz o "39" reportado (régua INFLADA)
+      expect(rW.maxNeff).toBeLessThan(30); // a física não chega lá
+      // 4) A COBERTURA HONESTA DESABA vs a inflada — o achado NEGATIVO, selado. Se isto flipar
+      //    (a real alcançar a inflada), alguém mexeu na física da bancada: re-examinar.
+      expect(covRealDest).toBeLessThan(covInflDest * 0.75);
+      expect(covRealDest).toBeLessThan(0.1); // a cobertura honesta no destino é MARGINAL (<10%)
+      // 4b) A INVERSÃO que a régua inflada escondia: com a tag REAL o destino NÃO bate o baseline em
+      //     COBERTURA (com 1 Hz ele quase DOBRAVA). O salto que justificava o ESP32 era artefato.
+      expect(covInflDest).toBeGreaterThan(covInflBase); // régua inflada: destino VENCIA em cobertura
+      expect(covRealDest).toBeLessThan(covRealBase); // régua honesta: destino PERDE em cobertura
+      // 4c) MAS a cobertura do baseline é COMPRADA COM RÓTULO ERRADO: a precisão dele desaba para
+      //     ~perto do acaso, enquanto a do destino se mantém. O receptor no destino compra
+      //     QUALIDADE, não cobertura — é o que o span faz quando faltam pontos. Selado nos dois lados.
+      expect(rW.base.cor / rW.base.dec).toBeLessThan(0.7); // baseline decide MAL com a tag real
+      expect(rW.dest.cor / rW.dest.dec).toBeGreaterThan(0.9); // destino decide BEM
+      expect(rW.dest.cor / rW.dest.dec).toBeGreaterThan(rW.base.cor / rW.base.dec);
+      // 5) MAS o que decide, decide HONESTO — a precisão não desaba junto (não é lixo).
+      for (const r of real) if (r.dest.dec > 0) expect(r.dest.cor / r.dest.dec).toBeGreaterThan(0.75);
+      // 6) A monotonia da física sobrevive à correção: mais τ ⇒ mais ρ ⇒ menos n_eff.
+      for (let i = 1; i < real.length; i++) {
+        expect(real[i].rho).toBeGreaterThan(real[i - 1].rho);
+        expect(real[i].maxNeff).toBeLessThanOrEqual(real[i - 1].maxNeff + 1e-9);
+      }
+    },
+    300000,
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // A ARITMÉTICA QUE MATA A APROXIMAÇÃO — e que sobrevive a qualquer modelo (é CONTAGEM).
+  //
+  // O teste de Fisher tem √(n_eff − 3) no DENOMINADOR. Com n_eff ≤ 3 ele não é "difícil": é
+  // INDEFINIDO — não existe. Com a tag real (2,5 s), uma aproximação típica a uma mesa (3–8 s)
+  // produz ⌈T/2,5⌉+1 = 3 a 5 leituras distintas. É estruturalmente insuficiente. Não há knob de
+  // software, posição de receptor ou τ que conserte: faltam PONTOS PARA AJUSTAR A RETA.
+  //
+  // Este teste produz a ESPECIFICAÇÃO DE PROJETO: (T, Δt_tag) → nDistinct → barra |r| → veredito.
+  // É quem responde "onde o receptor precisa estar" e "vale comprar tag rápida?".
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  it("REQUISITOS: (T, Δt_tag) → nDistinct → barra |r| → veredito; e o T MÍNIMO para o teste EXISTIR", () => {
+    /** n_eff pela lei, com o teto de CONTAGEM: n_eff = min(nDistinct·(1−ρ)/(1+ρ), nDistinct). */
+    const neffOf = (tS: number, dtS: number, tau: number): number => {
+      const nd = maxDistinctReadings(tS * 1000, dtS);
+      const rho = tau > 0 ? Math.exp(-dtS / tau) : 0;
+      return Math.min((nd * (1 - rho)) / (1 + rho), nd);
+    };
+    /** Barra de |r| exigida pelo gate; NaN quando o teste NÃO EXISTE (n_eff ≤ 3). */
+    const rBarOf = (neff: number): number =>
+      neff > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (neff - 3))) : Number.NaN;
+    /** Menor T (passo 0,5 s) que satisfaz uma condição sobre a barra de |r|. */
+    const minTFor = (dtS: number, tau: number, ok: (rBar: number) => boolean): number => {
+      for (let t = 0.5; t <= 600; t += 0.5) if (ok(rBarOf(neffOf(t, dtS, tau)))) return t;
+      return Number.POSITIVE_INFINITY;
+    };
+    const exists = (rBar: number): boolean => Number.isFinite(rBar); // n_eff > 3
+    const viable = (rBar: number): boolean => Number.isFinite(rBar) && rBar <= 0.7; // |r| plausível
+
+    // ── (a) A APROXIMAÇÃO TÍPICA (3–8 s), com a tag real: quantas leituras DISTINTAS? ──
+    const approach = [3, 4, 5, 6, 7, 8].map((t) => ({
+      t,
+      nd: maxDistinctReadings(t * 1000, REAL_TAG_PERIOD_S),
+      neffWhite: neffOf(t, REAL_TAG_PERIOD_S, 0),
+      neffBound: neffOf(t, REAL_TAG_PERIOD_S, TAU_MOVEL_S),
+    }));
+    console.log(
+      `\n═══ (a) APROXIMAÇÃO TÍPICA a uma mesa, com a TAG REAL (Δt=${REAL_TAG_PERIOD_S} s) ═══\n` +
+        "T (s)   nDistinct   n_eff(τ=0)   n_eff(τ=1,68)   teste de Fisher\n" +
+        "-".repeat(76) +
+        "\n" +
+        approach
+          .map(
+            (a) =>
+              `${a.t.toFixed(0).padStart(5)}   ${String(a.nd).padStart(9)}   ` +
+              `${a.neffWhite.toFixed(2).padStart(10)}   ${a.neffBound.toFixed(2).padStart(13)}   ` +
+              `${a.neffWhite > 3 ? `existe (exige |r| ≥ ${rBarOf(a.neffWhite).toFixed(2)})` : "INDEFINIDO (n_eff ≤ 3)"}`,
+          )
+          .join("\n"),
+    );
+
+    // ── (b) T MÍNIMO para o teste EXISTIR (n_eff>3) e para ser VIÁVEL (|r| exigido ≤ 0,7) ──
+    const cadences: { label: string; dtS: number }[] = [
+      { label: "TAG REAL (2,5 s)", dtS: REAL_TAG_PERIOD_S },
+      { label: "tag 1 Hz (1,0 s)", dtS: 1.0 },
+      { label: "tag 2 Hz (0,5 s)", dtS: 0.5 },
+      { label: "tag 10 Hz (0,1 s)", dtS: 0.1 },
+    ];
+    console.log(
+      `\n═══ (b) T MÍNIMO DO EPISÓDIO — o que a GEOMETRIA DE INSTALAÇÃO tem de entregar ═══\n` +
+        "cadência da tag".padEnd(20) +
+        "──────── τ=0 (BRANCO) ────────  ────── τ=1,68 s (bound) ──────\n" +
+        "".padEnd(20) +
+        "existe(n_eff>3)  viável(|r|≤0,7)  existe(n_eff>3)  viável(|r|≤0,7)\n" +
+        "-".repeat(86) +
+        "\n" +
+        cadences
+          .map((c) => {
+            const f = (x: number): string => (Number.isFinite(x) ? `${x.toFixed(1)} s` : "NUNCA");
+            return (
+              c.label.padEnd(20) +
+              f(minTFor(c.dtS, 0, exists)).padStart(15) +
+              f(minTFor(c.dtS, 0, viable)).padStart(17) +
+              f(minTFor(c.dtS, TAU_MOVEL_S, exists)).padStart(17) +
+              f(minTFor(c.dtS, TAU_MOVEL_S, viable)).padStart(17)
+            );
+          })
+          .join("\n"),
+    );
+
+    // ── (c) A TABELA DE REQUISITOS: (T, Δt) → nDistinct → barra |r| → veredito ──
+    const reqs: { t: number; dt: number }[] = [
+      { t: 8, dt: REAL_TAG_PERIOD_S },
+      { t: 20, dt: REAL_TAG_PERIOD_S },
+      { t: 40, dt: REAL_TAG_PERIOD_S },
+      { t: 97, dt: REAL_TAG_PERIOD_S },
+      { t: 20, dt: 1 },
+      { t: 40, dt: 1 },
+      { t: 8, dt: 0.5 },
+      { t: 20, dt: 0.5 },
+    ];
+    const verdictOf = (rBar: number): string =>
+      !Number.isFinite(rBar)
+        ? "INDEFINIDO — o teste nem existe (√(n_eff−3) imaginário)"
+        : rBar > 0.9
+          ? "INÚTIL — exige |r| quase perfeito"
+          : rBar > 0.7
+            ? "MARGINAL — exige |r| alto; só com span grande"
+            : rBar > 0.5
+              ? "VIÁVEL — barra plausível no destino"
+              : "CONFORTÁVEL";
+    console.log(
+      `\n═══ (c) TABELA DE REQUISITOS — a ESPECIFICAÇÃO DE PROJETO (τ=0, a ponta OTIMISTA) ═══\n` +
+        "T (s)  Δt_tag (s)  nDistinct  n_eff  |r| exigido   veredito\n" +
+        "-".repeat(100) +
+        "\n" +
+        reqs
+          .map(({ t, dt }) => {
+            const nd = maxDistinctReadings(t * 1000, dt);
+            const ne = neffOf(t, dt, 0);
+            const rb = rBarOf(ne);
+            return (
+              `${t.toFixed(0).padStart(5)}  ${dt.toFixed(1).padStart(10)}  ${String(nd).padStart(9)}  ` +
+              `${ne.toFixed(1).padStart(5)}  ${(Number.isFinite(rb) ? rb.toFixed(2) : "—").padStart(11)}   ` +
+              verdictOf(rb)
+            );
+          })
+          .join("\n"),
+    );
+
+    const tExistReal = minTFor(REAL_TAG_PERIOD_S, 0, exists);
+    const tViableReal = minTFor(REAL_TAG_PERIOD_S, 0, viable);
+    const tExist2Hz = minTFor(0.5, 0, exists);
+    const tViable2Hz = minTFor(0.5, 0, viable);
+    console.log(
+      `\nVEREDITO DE ESPECIFICAÇÃO (a conclusão de ENGENHARIA, que sobrevive a todo modelo):\n` +
+        `  • Com a tag REAL (2,5 s), uma aproximação de 3–8 s produz ${approach[0].nd}–${approach[approach.length - 1].nd} leituras DISTINTAS.\n` +
+        `    O teste de Fisher tem √(n_eff−3) no denominador ⇒ com n_eff ≤ 3 ele é INDEFINIDO, não\n` +
+        `    "difícil". A identidade por UMA aproximação breve NÃO é um problema de ajuste fino: é uma\n` +
+        `    IMPOSSIBILIDADE ARITMÉTICA. Nenhum τ, span, receptor ou knob a conserta.\n` +
+        `  • T MÍNIMO (tag real, τ→0): o teste EXISTE a partir de ${tExistReal.toFixed(1)} s; fica VIÁVEL (|r|≤0,7) a\n` +
+        `    partir de ${tViableReal.toFixed(1)} s. Ou seja: só PERMANÊNCIA fecha — o receptor precisa cobrir a janela\n` +
+        `    em que o operador FICA, não a em que ele PASSA.\n` +
+        `  • VALE TAG RÁPIDA? SIM, e a lei diz por quê: com τ→0 (resíduo BRANCO, o medido) NÃO há\n` +
+        `    saturação — quem morde é o 1º termo, T/Δt_tag. A 2 Hz o teste passa a EXISTIR com ${tExist2Hz.toFixed(1)} s e a\n` +
+        `    ser VIÁVEL com ${tViable2Hz.toFixed(1)} s (contra ${tExistReal.toFixed(1)}/${tViableReal.toFixed(1)} s da tag real): ~5× menos permanência exigida.\n` +
+        `    Isto RETIFICA o laudo anterior ("a cadência satura; não compre tag rápida") — aquilo valia\n` +
+        `    para τ LONGO (tag parada). Para a tag MÓVEL (τ→0), a cadência é alavanca LINEAR.`,
+    );
+
+    // ── Assertivas ROBUSTAS (a ARITMÉTICA — se isto quebrar, a lei mudou) ──
+    // 1) A aproximação típica é estruturalmente indecidível com a tag real.
+    expect(maxDistinctReadings(3000, REAL_TAG_PERIOD_S)).toBe(3); // T=3 s → 3 leituras
+    expect(maxDistinctReadings(8000, REAL_TAG_PERIOD_S)).toBe(5); // T=8 s → 5 leituras
+    expect(neffOf(3, REAL_TAG_PERIOD_S, 0)).toBeLessThanOrEqual(3); // INDEFINIDO
+    expect(rBarOf(neffOf(3, REAL_TAG_PERIOD_S, 0))).toBeNaN(); // o teste NÃO EXISTE
+    expect(neffOf(5, REAL_TAG_PERIOD_S, TAU_MOVEL_S)).toBeLessThanOrEqual(3); // com o τ do bound, idem
+    // 2) O T MÍNIMO com a tag real (τ→0, a ponta OTIMISTA — inclui a leitura CARREGADA): o teste
+    //    EXISTE a partir de 5,5 s; fica VIÁVEL (|r|≤0,7) só a partir de 18 s. Uma aproximação de
+    //    3–5 s não chega nem a EXISTIR.
+    expect(tExistReal).toBe(5.5);
+    expect(tViableReal).toBe(18);
+    // 3) A CADÊNCIA É ALAVANCA LINEAR com τ→0 (NÃO satura): acelerar a tag corta o T exigido na
+    //    MESMA proporção — é o 1º termo da lei (T/Δt_tag) mordendo, não o 2º (autocorrelação).
+    //    Prova da LINEARIDADE: o T viável escala com Δt_tag (razão dos T ≈ razão dos Δt).
+    expect(tExist2Hz).toBeLessThan(tExistReal);
+    expect(tViable2Hz).toBeLessThanOrEqual(tViableReal / 4); // 2,5 s→0,5 s (5×) corta o T ≥4×
+    const tViable1Hz = minTFor(1.0, 0, viable);
+    expect(tViable1Hz / tViableReal).toBeCloseTo(1.0 / REAL_TAG_PERIOD_S, 1); // LINEAR em Δt_tag
+    // 3b) CONTRA-PROVA (a lei tem DOIS termos): com τ LONGO o 2º termo domina e a cadência SATURA —
+    //     acelerar a tag NÃO ajuda mais. É por isso que o laudo antigo (τ de âncora) via saturação.
+    const satReal = minTFor(REAL_TAG_PERIOD_S, TAU_MOVEL_S, viable);
+    const sat10Hz = minTFor(0.1, TAU_MOVEL_S, viable);
+    expect(sat10Hz).toBeGreaterThan(satReal * 0.8); // 25× de cadência quase não move o T exigido
+    // 4) O n_eff=39 do laudo, traduzido em requisito físico: ~97 s de episódio com a tag real.
+    expect(maxDistinctReadings(97000, REAL_TAG_PERIOD_S)).toBeGreaterThanOrEqual(39);
+    expect(maxDistinctReadings(40000, REAL_TAG_PERIOD_S)).toBeLessThan(39); // 40 s NÃO basta
+  });
+});
