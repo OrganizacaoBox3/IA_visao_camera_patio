@@ -53,6 +53,19 @@ workflow (morto pela circulação livre), track visual (já sabíamos frágil).
    - Nenhum embedding sai do hub, nunca vai para uma IA externa, nunca entra em log.
    - Violar isto transforma um produto de conformidade de processo em vigilância biométrica — que é
      exatamente o que o posicionamento do ADR-014 recusa.
+   - **CONSEQUÊNCIA DE DESENHO (não é efeito colateral — é requisito):** sem galeria entre dias, o
+     ReID **NÃO reidentifica quem sai e volta**. **Toda REENTRADA exige RE-ANCORAGEM.** Isso está
+     certo (é o que o portal faz), mas fixa o requisito: **a âncora tem de disparar em TODA entrada,
+     não uma vez por dia** — inclusive volta de intervalo, de refeição, de banheiro. Isso torna a
+     **frequência de re-ancoragem** um número de projeto (ver a pergunta 4 ao cliente, abaixo).
+
+6. **A MÉTRICA DE ÂNCORA (a régua certa — 3ª correção de unidade do arco).** O rádio é de **alta
+   qualidade e baixa vazão** ⇒ **não é sensor contínuo, é ÂNCORA.** E âncora **não se mede por
+   cobertura — mede-se por confiabilidade quando é lançada.** A pergunta certa não é "qual a cobertura
+   por episódio?" (2,5% é *irrelevante*, não catastrófico) e sim:
+   > **Cada operador foi ancorado ao menos uma vez, CORRETAMENTE, em cada entrada?**
+   A unidade migrou: **tick → visita → ÂNCORA DE TURNO/ENTRADA.** É a 3ª vez que a régua errada faz
+   um sistema bom parecer ruim (as outras: tick vs visita; span vs n_eff).
 
 5. **Custo declarado (a única peça deste desenho que NÃO é grátis):** ReID exige rodar um modelo de
    aparência por pessoa por frame, no hub (que hoje roda D-FINE-S + ByteTrack). É a única peça que
@@ -93,11 +106,45 @@ O problema de atribuição **migra do TICK para a ZONA**:
   precisou de identidade. É o que se vende hoje (escada do PO).
 - **A caminhada anotada muda de LUGAR**: grava-se no **corredor de entrada**, não perto da mesa. O
   protocolo foi corrigido (`protocolo-teste-campo-indoor.md`, bloco de 2026-07-12).
-- **Pergunta em aberto que vale ouro (ao dono/cliente):** existe algum **evento de sistema** quando o
-  operador começa a trabalhar — leitura de código de barras, abertura de ordem, login em terminal,
-  acionamento de máquina? **Se existir e carregar a matrícula, é uma âncora de identidade
-  DETERMINÍSTICA** — melhor que qualquer coisa que o rádio possa dar, e **ressuscitaria tudo que a
-  resposta "circula livre" derrubou.** É o item de maior ROI ainda não investigado.
+## O ESP32 — posição FINAL (após três reviravoltas, e a geometria que explica o erro)
+
+O especialista empurrou o receptor-no-destino (Δ3) com força e **retratou-se**, com o diagnóstico
+certo: **um receptor NO DESTINO é ESPECIALISTA** (ótimo para quem vai *àquela* mesa, **tangencial para
+todos os outros** — e tangencial = gradiente radial ≈ 0). **O receptor na ORIGEM/câmera é
+GENERALISTA.** **Com múltiplas mesas, o especialista PERDE.** Foi o que medimos (condicionado a T,
+o baseline decidiu mais, e a 100%).
+
+- **ESP32 como FROTA (um por mesa): MORTO.** O **filtro por T compra a precisão de graça**, e o
+  receptor no destino decide *menos* (no episódio longo a pessoa termina em cima dele → o span
+  colapsa na permanência).
+- **ESP32 como INSTRUMENTO: VIVO, e barato.** É a **única via** para (a) medir **τ sub-segundo** e
+  (b) testar **diversidade de canal** — o Android **não expõe o canal** do advertisement
+  (`ScanResult`, confirmado em `MainActivity.java:230`), e canal vale potencialmente **3× no n_eff**,
+  que é a **variável ligante**. **Um dispositivo, duas perguntas, dezenas de reais.**
+- Preserva o princípio já aprovado: **instrumento antes de frota.**
+
+## AS QUATRO PERGUNTAS AO CLIENTE (não é uma — e a resposta muda o produto)
+
+**Item nº 1 do projeto.** Promovido porque a medição mostrou que as restrições "grátis"
+(exclusividade, continuidade) **NÃO carregam identidade sozinhas — só AMPLIFICAM uma âncora.**
+Sem âncora, nada é entranhado.
+
+1. **Existe evento quando o operador COMEÇA A TRABALHAR?** (apontamento de produção, abertura de OP,
+   leitura de código de barras, login em terminal, acionamento de máquina)
+2. **O evento carrega a MATRÍCULA/crachá?** — se **não** carregar, é **evidência de trabalho (L3)**,
+   mas **não é âncora de identidade**. A distinção é decisiva.
+3. **Existe controle de acesso por CRACHÁ na entrada da área?** (catraca, porta) — **se existir, o
+   portal JÁ ESTÁ INSTALADO, é determinístico e é grátis. Melhor que qualquer rádio.**
+4. **Qual a FREQUÊNCIA típica desses eventos por turno?** — define a **taxa de re-ancoragem**, que o
+   escopo efêmero do ReID (item 4 acima) transformou em requisito de projeto.
+
+**O insight que torna isto urgente:** se o evento carrega matrícula, **a âncora de identidade e a
+evidência de trabalho (L3) COLAPSAM NA MESMA INTEGRAÇÃO. Um conector, dois problemas resolvidos** — e
+ele ressuscita, por outra porta, tudo que a resposta "circula livre" derrubou.
+
+**E a ironia elegante que fecha o argumento:** o evento **existe quando o operador TRABALHA** e **não
+existe quando ele está OCIOSO** — que é exatamente o caso a detectar. **A AUSÊNCIA de evento vira
+SINAL, não lacuna.**
 
 ## Retratação registrada
 

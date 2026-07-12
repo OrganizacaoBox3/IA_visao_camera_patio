@@ -87,6 +87,21 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
   filtrados como "flicker de mobília" (medir a população errada), agora na dimensão do TEMPO.*
   Corolário: declare o **ponto cego** — "τ ≲ 1 s" NÃO é "τ = 0"; abaixo da cadência do sensor, nada
   é observável, e apostar ali é aposta, não medição.
+- **Regra 10 — O piso onde um teste é DEFINIDO não é o piso onde ele é CONFIÁVEL; e o piso operacional
+  é ESCOLHA DE PRODUTO, não constante da natureza.**
+  O gate de Fisher-z exige n_eff > 3 (é onde √(n_eff−3) existe). Isso **não** é onde ele é confiável: o
+  nível de significância nominal é fantasia em n pequeno (a distribuição amostral de r é assimétrica; o
+  atanh só corrige em parte). **Meça a curva precisão × n — e reporte a curva INTEIRA, porque ela não
+  tem joelho.** *Medido (1464 episódios): em n_eff ∈ [3,5) o teste **não decide NADA** (barra |r| ≈
+  0,97); a precisão sobe numa **rampa ruidosa de ~85% (piso 3) a ~94% (piso 20), SEM patamar**. Não há
+  piso "natural" a descobrir — há um **trade-off**: piso 3 → 84,6% prec / 41,2% cob; piso 9 → 88,8% /
+  34,7%; piso 19 → 94,2% / 17,6%. Alvo de 95% de precisão é **inalcançável** neste canal.*
+  **Consequência: o piso se escolhe pelo alvo de negócio (a métrica-que-mata), e o alvo tem de caber
+  sob o teto medido.** Corolário barato: **calar mais** — o sistema não estava quebrado, estava
+  **falando quando não tinha nada a dizer**.
+- **Corolário (estatística honesta, obrigatório):** **13/13 NÃO é 100%.** Toda proporção sai com **n e
+  intervalo de Wilson 95%** (13/13 → ≥77%; 6/6 → ≥61%). `wilsonInterval()` existe em
+  `visit-metrics.ts` — usar. Ao cliente se promete **a curva e o gate**, nunca o ponto.
 - **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `docs/analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `docs/analises/saude/`.*
 
 ## 7. Definition of Done

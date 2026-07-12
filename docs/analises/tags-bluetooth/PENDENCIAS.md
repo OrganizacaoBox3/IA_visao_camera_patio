@@ -535,6 +535,77 @@ fonte, e a única independente do rádio é o **workflow** (+ topologia). **Prom
 ESTRUTURA PORTANTE — e é grátis.** Fazer campo ANTES da Onda 2 seria testar a coisa errada (com prior de
 workflow, a decisão de identidade é outra).
 
+### 🔴🔴🔴 RETRATAÇÃO 5 (2026-07-12, noite) — o PISO OPERACIONAL: os 39,4% do "portal" CAEM (revisor externo)
+
+**O FURO (confirmado por medição).** O gate `n_eff > 3` é o piso da **FÓRMULA** de Fisher (abaixo dele
+√(n_eff−3) é imaginário — o teste NÃO EXISTE). Nós o usamos como se fosse o piso onde o teste **FUNCIONA**.
+Não é: a distribuição amostral de r é assimétrica em n pequeno, atanh só corrige em parte, e **o nível
+nominal de 95% é fantasia**. Medido: rodando com `minNEff=3` (o que o código fazia), a precisão do sistema é
+**84,6% [IC95 81,5–87,2], n=603** — não 95%. O "portal" (T≥18 s, tag real 2,5 s) roda a **n_eff = 9**, abaixo
+do piso — **os 39,4% saíram de um regime que a própria curva condena.**
+
+**A CURVA precisão × n_eff (MEDIDA, 1464 episódios-com-tag; 3 cadências × 2 posições; τ→0).** Como subir o
+piso só REMOVE decisões abaixo dele, a linha "minNEff=k" **É** o desempenho do sistema com aquele parâmetro —
+é curva de TRADE-OFF, não gráfico descritivo:
+
+| minNEff = k | PRECISÃO do sistema (IC95 Wilson) | COBERTURA (IC95) |
+|---|---|---|
+| **3 (hoje)** | 84,6% [81,5–87,2], n=603 | 41,2% [38,7–43,7], n=1464 |
+| 9 | 88,8% [85,7–91,2], n=508 | 34,7% [32,3–37,2] |
+| 12 | 90,6% [87,4–93,0], n=415 | 28,3% [26,1–30,7] |
+| **19 (PISO)** | **94,2% [90,6–96,4], n=257** | 17,6% [15,7–19,6] |
+| 20 | 94,5% [90,9–96,8], n=238 | 16,3% [14,5–18,2] |
+
+**PISO OPERACIONAL = n_eff ≥ 19** (menor k cujo **IC95-inferior** da precisão ≥ 90%, com ≥10 decisões).
+Sensibilidade declarada (o piso é ESCOLHA DE PRODUTO, não constante da natureza): alvo 80% ⇒ piso 3; **85% ⇒
+piso 9; 90% ⇒ piso 19; 95% ⇒ NUNCA alcançado** (o teto da suíte é ~94%). Só-destino ⇒ piso 14; só-baseline ⇒
+nunca (span nulo não se conserta com piso nenhum).
+
+**A curva do revisor está REFUTADA na forma, CONFIRMADA no fundo.** Ele citou "n_eff 4 → 0% · 6 → 15,4% ·
+10 → 100%". Medido: em **n_eff ∈ [3,5) o teste NÃO DECIDE NADA** (0 decisões em 273 episódios — a barra
+|r| ≥ tanh(1,96/√(n_eff−3)) é ~0,97 lá; não há "0% de precisão", há ZERO precisão) e ela **NÃO estabiliza em
+100%**: é uma **RAMPA RUIDOSA** de ~85% (k=3) a ~94% (k=20), **sem joelho**. O fundo (o piso 3 é fantasia)
+está certo; o degrau limpo não existe.
+
+**A PREVISÃO DO 1 Hz — GATE BINÁRIO: ❌ NÃO SE CONFIRMA (por 3 s de T).** Previsão registrada: "tag 1 Hz +
+T ≥ 15 s ⇒ cobertura >70% a alta precisão". Medido (receptor no destino, piso 19):
+cobertura **53,1% [IC95 39,4–66,3], n=49**, precisão 88,5% [71,0–96,0], n=26. **Causa é CONTAGEM, não sinal:**
+a 1 Hz, T=15 s tem teto de **16** leituras distintas — **abaixo do piso 19**; nenhum episódio de 15 s PODE
+decidir. **MAS o mecanismo se confirma logo ali**: a T ≥ 18 s (n_eff = 19 = o piso) a cobertura é **70,3%
+[54,2–82,5]** e a T ≥ 20 s, **85,2% [67,5–94,1]**. Ele acertou o efeito e errou o T. (No piso que ele
+POSTULOU — 10 — a previsão passaria: 91,8% [80,8–96,8]. **A diferença entre confirmar e não confirmar É o
+piso — e o piso é medido, não postulado.**)
+
+**TABELA DE DIMENSIONAMENTO DA COMPRA** (piso 19; T e corredor = ARITMÉTICA de contagem, sobrevivem a
+qualquer modelo; cobertura/precisão = SIMULADOR ⇒ INDICATIVAS, circular por construção):
+
+| Δt_tag | T exigido | corredor @1,1–1,2 m/s | cobertura cond. (IC95) | precisão (IC95) |
+|---|---|---|---|---|
+| **2,5 s (tag REAL)** | 43,0 s | **47–52 m** | n=2 — **amostra pequena demais** | n=1 — **idem** |
+| **1,0 s (1 Hz)** | 17,5 s | **19–21 m** | 68,4% [52,5–80,9], n=38 | 88,5% [71,0–96,0], n=26 |
+| **0,5 s (2 Hz)** | 9,0 s | **10–11 m** | 85,2% [77,6–90,6], n=115 | 96,9% [91,4–99,0], n=98 |
+
+**VEREDITO — o portal FECHA, mas não com a tag de hoje, e a recomendação de compra SE INVERTE:**
+- **tag atual (2,5 s): MORTA.** Exige ~52 m de corredor observável (o revisor previu 27 m; com o piso medido
+  é o DOBRO). Não existe no CD. **Nenhum receptor, span ou knob conserta — faltam PONTOS.**
+- **1 Hz: ~21 m de corredor** — NÃO os ~11 m que o revisor previu (ele postulou piso 8–10; o piso medido é 19,
+  e o corredor DOBRA). Fecha **só se a planta tiver um trecho de ~20 m observável de ponta a ponta.**
+- **2 Hz (0,5 s): ~11 m** — cabe em qualquer planta, a 96,9% de precisão. Custa bateria (contexto: 1 Hz ≈ 1–2
+  anos de CR2032; 0,5 s ≈ meses–1 ano).
+- ⇒ **A PERGUNTA QUE DECIDE A COMPRA NÃO É DE RÁDIO, É DE PLANTA:** existe um trecho de ~20 m em que a câmera
+  vê o operador ANDANDO até o posto? **Se sim → 1 Hz** (bateria boa). **Se não → 2 Hz** (o único que cabe).
+  A "1 Hz é o ponto ótimo" da nota de bateria **só valia com o piso postulado**.
+
+**Blindagem (Regra 10, no CI):** `visit-metrics.ts` ganhou `minNEff` (piso EXPLÍCITO, default 3 = aditivo,
+comportamento histórico intacto) + `wilsonInterval()`/`formatProportion()` — **nunca mais se reporta precisão
+sem IC e sem n**. A curva, o gate binário da previsão e a tabela de compra estão pinados em
+`receiver-at-destino.test.ts` ("REGRA 10"). Regra 8 checada em toda colheita: **0 violações**.
+
+**PENDENTE (o que esta medição NÃO resolve):** (a) a cobertura/precisão são do SIMULADOR (circular — ele gera
+RSSI = f(dist) + ruído); o que é honesto aqui é a ARITMÉTICA (T, corredor) e o COMPORTAMENTO do teste. (b) A
+verdade anotada (#4, a caminhada do dono) segue sendo o GATE CRÍTICO — mede se a visita ACERTA, não só se
+DECIDE. (c) **Medir a planta**: existe o corredor de ~20 m? É essa a medição de campo que fecha a compra.
+
 **PREVISÕES REGISTRADAS (para cobrar)**: (a) τ do resíduo da tag móvel virá MUITO menor que o das âncoras
 (~1–2 s); (b) se vier, n_eff sobe, a barra |r| cai para perto de 0,5 e a cobertura por episódio salta bem
 acima dos 15,5%; (c) a diversidade de canal, se o stack expuser, entrega mais n_eff que dobrar a cadência

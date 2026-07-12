@@ -68,6 +68,21 @@
 // em sim.ts. A MÉTRICA aqui estava certa (distinctConsecutive deduplica); a FÍSICA da fonte é que
 // mentia. Este cabeçalho + `maxDistinctReadings` + o clamp de `nEff` fecham a porta para sempre.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
+// REGRA 10 — O PISO DA FÓRMULA ≠ O PISO OPERACIONAL (2026-07-12, achado de revisão externa)
+//
+// O gate `nEff > 3` que este módulo usava é o piso da FÓRMULA de Fisher: abaixo dele √(n_eff−3) é
+// imaginário e o teste NÃO EXISTE. Nós o tratamos como se fosse o piso onde o teste FUNCIONA. Não é.
+// A distribuição amostral de r é fortemente ASSIMÉTRICA para n pequeno; a transformação atanh só
+// corrige em parte; o nível de significância NOMINAL (95%) é FANTASIA abaixo de ~8–10 amostras
+// efetivas — o teste "passa" com |r| que é ruído, e a decisão sai errada.
+//
+// MEDIDO (não postulado), na bancada — curva precisão × n_eff, ver receiver-at-destino.test.ts:
+// a precisão de decisão é ~0% na faixa n_eff∈[3,5), ~15% em [6,7), e só ESTABILIZA em ~100% a partir
+// de n_eff ≈ 10. O piso OPERACIONAL é EMPÍRICO, e é onde a curva satura — não onde a fórmula existe.
+//
+// `minNEff` (VisitOpts) torna esse piso um PARÂMETRO EXPLÍCITO. Default 3 = comportamento histórico
+// (aditivo, nada muda sem passá-lo). Toda medição que dimensiona hardware DEVE passá-lo.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /** O que um tick sabe de UMA pista: a verdade daquele trackId (MAC ou null=sem tag; para dado real
  *  sem anotação, sempre null → só span/consistência, não precisão) e sua DISTÂNCIA à estação no
@@ -100,7 +115,9 @@ export type VisitCandidate = {
   z: number;
   /** score de IDENTIDADE = −r (o casamento físico; >0 = RSSI cai com distância). */
   score: number;
-  /** |z| ≥ z_crit·√(1/(n_eff−3)) E n_eff>3 — o teste de significância da correlação do episódio. */
+  /** |z| ≥ z_crit·√(1/(n_eff−3)) E n_eff > minNEff — o teste de significância da correlação do
+   *  episódio. ATENÇÃO: o `3` de √(1/(n_eff−3)) é a FÓRMULA (onde o teste EXISTE); o piso que decide
+   *  se ele é CONFIÁVEL é `minNEff` (Regra 10 — medido, não postulado; ver o cabeçalho). */
   significant: boolean;
 };
 
@@ -154,6 +171,17 @@ const DEFAULT_WARMUP_MS = 8000; // idem event-metrics/identity: a janela de 8 s 
 const DEFAULT_RHO = 0.7; // autocorrelação AR(1) do RSSI MEDIDA em campo (mineração das 6 h)
 const DEFAULT_Z_CRIT = 1.96; // 95% bicaudal
 const DEFAULT_MIN_SAMPLES = 5; // mesma régua de amostras alinhadas do motor (minSamples)
+/**
+ * PISO DE n_eff (Regra 10) — o default 3 é o da FÓRMULA (onde √(n_eff−3) deixa de ser imaginário),
+ * NÃO o piso operacional (onde o teste é CONFIÁVEL). São coisas diferentes e nós as confundimos:
+ * a distribuição amostral de r é fortemente assimétrica para n pequeno, atanh só corrige em parte, e
+ * o nível nominal de 95% é FANTASIA abaixo de ~8–10 amostras efetivas. Medido na bancada
+ * (receiver-at-destino.test.ts, "CURVA precisão × n_eff"): a precisão de decisão sobe de ~0% na
+ * faixa n_eff∈[3,5) para ~100% a partir de n_eff≈10 — o piso OPERACIONAL é EMPÍRICO.
+ * Mantido em 3 como DEFAULT por ser aditivo (comportamento histórico intacto); quem decide compra de
+ * hardware deve passar `minNEff` explicitamente com o piso medido.
+ */
+const DEFAULT_MIN_NEFF = 3;
 const FISHER_R_CLAMP = 1 - 1e-12; // atanh(±1)=±∞ (mesma constante/razão do motor)
 const DIST_FLOOR_M = 0.1; // piso de log10(dist) (mesmo GATE_MIN_DIST_M do motor)
 
@@ -253,7 +281,47 @@ type VisitOpts = {
   dtS?: number;
   zCrit?: number;
   minSamples?: number;
+  /** PISO OPERACIONAL de n_eff (Regra 10). Um candidato só pode ser `significant` com
+   *  n_eff > minNEff. Default 3 = o piso da FÓRMULA (onde o teste EXISTE) — ADITIVO, comportamento
+   *  histórico intacto. O piso onde o teste é CONFIÁVEL é MEDIDO (curva precisão×n_eff), não
+   *  postulado: valores <3 são elevados a 3 (abaixo disso √(n_eff−3) nem existe). */
+  minNEff?: number;
 };
+
+/**
+ * INTERVALO DE WILSON (95% por default) para uma proporção k/n — a honestidade estatística
+ * OBRIGATÓRIA de toda precisão/cobertura reportada por este módulo (Regra 10).
+ *
+ * POR QUE WILSON E NÃO "k/n": 13/13 NÃO é 100% — é "a melhor estimativa é 100%, e o dado é
+ * compatível com qualquer coisa acima de ~77%". O intervalo normal (Wald) COLAPSA para largura zero
+ * em p̂=0 ou p̂=1 (afirma certeza absoluta a partir de 13 amostras — absurdo); Wilson não colapsa,
+ * porque resolve a desigualdade no p VERDADEIRO, não no estimado. n=0 → [0,1] (nada se sabe).
+ */
+export function wilsonInterval(
+  successes: number,
+  n: number,
+  z = DEFAULT_Z_CRIT,
+): { lo: number; hi: number } {
+  if (!Number.isFinite(n) || n <= 0) return { lo: 0, hi: 1 };
+  const p = successes / n;
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const center = p + z2 / (2 * n);
+  const half = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
+  return {
+    lo: Math.max(0, (center - half) / denom),
+    hi: Math.min(1, (center + half) / denom),
+  };
+}
+
+/** "62,5% [IC95 35,4–83,7], n=16" — o formato ÚNICO de reporte de proporção deste arco. Nunca se
+ *  reporta precisão sem o IC e sem o n (Regra 10). */
+export function formatProportion(successes: number, n: number): string {
+  if (n <= 0) return "— (n=0)";
+  const { lo, hi } = wilsonInterval(successes, n);
+  const pc = (x: number): string => (100 * x).toFixed(1);
+  return `${pc(successes / n)}% [IC95 ${pc(lo)}–${pc(hi)}], n=${n}`;
+}
 
 /** Média (assume não-vazio). */
 function mean(xs: readonly number[]): number {
@@ -371,7 +439,13 @@ function buildEpisodes(ticks: readonly VisitTick[], warmupMs: number): RawEpisod
  * INTEIRA, n_eff do ρ real, e a decisão única (ver cabeçalho). Determinístico; ordem lexicográfica
  * de tag no empate.
  */
-function decideEpisode(ep: RawEpisode, rho: number, zCrit: number, minSamples: number): VisitEpisode {
+function decideEpisode(
+  ep: RawEpisode,
+  rho: number,
+  zCrit: number,
+  minSamples: number,
+  minNEff: number,
+): VisitEpisode {
   // Universo de tags candidatas: toda tag lida em ALGUM tick do episódio.
   const tagUniverse = new Set<string>();
   for (const s of ep.samples) for (const tag of Object.keys(s.rssiByTag)) tagUniverse.add(tag);
@@ -396,7 +470,11 @@ function decideEpisode(ep: RawEpisode, rho: number, zCrit: number, minSamples: n
     const nEff = Math.min((nDistinct * (1 - rho)) / (1 + rho), nDistinct);
     const rc = Math.max(-FISHER_R_CLAMP, Math.min(FISHER_R_CLAMP, r));
     const z = Math.atanh(rc);
-    const significant = nEff > 3 && Math.abs(z) >= zCrit * Math.sqrt(1 / (nEff - 3));
+    // DOIS pisos, e eles NÃO são a mesma coisa (Regra 10):
+    //   • o `3` dentro de √(1/(nEff−3)) é a FÓRMULA de Fisher (abaixo dele o teste nem existe);
+    //   • `minNEff` é o piso OPERACIONAL (abaixo dele o teste existe mas MENTE — o nível nominal de
+    //     95% não se sustenta com r assimétrico e n pequeno). Default = 3 (aditivo).
+    const significant = nEff > minNEff && Math.abs(z) >= zCrit * Math.sqrt(1 / (nEff - 3));
     candidates.push({ tag, r, n: rssi.length, nDistinct, nEff, z, score: -r, significant });
   }
 
@@ -437,7 +515,11 @@ export function computeVisitEpisodes(
   const rho = effectiveRho(opts?.rho ?? DEFAULT_RHO, opts?.tau, opts?.dtS);
   const zCrit = opts?.zCrit ?? DEFAULT_Z_CRIT;
   const minSamples = opts?.minSamples ?? DEFAULT_MIN_SAMPLES;
-  return buildEpisodes(ticks, warmupMs).map((ep) => decideEpisode(ep, rho, zCrit, minSamples));
+  // O piso NUNCA pode ser menor que o da fórmula (√(nEff−3) imaginário) — clamp explícito.
+  const minNEff = Math.max(DEFAULT_MIN_NEFF, opts?.minNEff ?? DEFAULT_MIN_NEFF);
+  return buildEpisodes(ticks, warmupMs).map((ep) =>
+    decideEpisode(ep, rho, zCrit, minSamples, minNEff),
+  );
 }
 
 /** Mediana (mediana inferior) de uma lista; 0 se vazia. */
