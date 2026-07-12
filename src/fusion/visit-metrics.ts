@@ -125,9 +125,40 @@ const DEFAULT_MIN_SAMPLES = 5; // mesma régua de amostras alinhadas do motor (m
 const FISHER_R_CLAMP = 1 - 1e-12; // atanh(±1)=±∞ (mesma constante/razão do motor)
 const DIST_FLOOR_M = 0.1; // piso de log10(dist) (mesmo GATE_MIN_DIST_M do motor)
 
+/**
+ * ρ EFETIVO de um par (tau, dtS) — a CORREÇÃO FÍSICA do n_eff (especialista, 2026-07-12).
+ *
+ * O ρ FIXO (DEFAULT_RHO=0,7) é um erro de categoria: ρ NÃO é uma constante do RSSI, é uma função da
+ * CADÊNCIA. A lei é ρ(Δt) = e^(−Δt/τ), com τ = tempo de correlação do resíduo. Duas consequências
+ * que o ρ fixo escondia:
+ *   1. n_eff SATURA. Com n = T/Δt e ρ = e^(−Δt/τ):
+ *          n_eff = n·(1−ρ)/(1+ρ) = (T/Δt)·tanh(Δt/2τ)  →  T/(2τ)  quando Δt→0.
+ *      Com ρ FIXO, dobrar a cadência DOBRA o n_eff (n dobra, ρ não muda) — uma alavanca de hardware
+ *      que NÃO EXISTE. Com a lei, dobrar a cadência quase não move o n_eff (ρ SOBE junto).
+ *   2. O τ que vale é o da TAG MÓVEL, não o da ÂNCORA PARADA. Medido em campo (residual-autocorr.ts,
+ *      gravação de 2026-07-11_20): τ_móvel ≤ 1,68 s — o resíduo é BRANCO na escala observável —
+ *      contra os 2,8–32 s minerados das âncoras que geraram o ρ=0,7. Aplicar o τ de âncora à tag
+ *      móvel SUBESTIMA o n_eff (a barra de significância fica alta demais e a visita se cala).
+ *
+ * ADITIVO E OPT-IN: sem `tau`, o comportamento é o de sempre (ρ fixo). Ver VisitOpts.
+ */
+export function effectiveRho(rhoFixed: number, tau?: number, dtS?: number): number {
+  if (tau === undefined || !Number.isFinite(tau) || tau <= 0) return rhoFixed;
+  if (dtS === undefined || !Number.isFinite(dtS) || dtS <= 0) return rhoFixed;
+  return Math.exp(-dtS / tau);
+}
+
 type VisitOpts = {
   warmupMs?: number;
+  /** ρ AR(1) FIXO (default 0,7). Ignorado quando `tau` E `dtS` são fornecidos — ver `effectiveRho`. */
   rho?: number;
+  /** Tempo de correlação do RESÍDUO de RSSI, em SEGUNDOS (opcional). Presente (com `dtS`) → o ρ passa
+   *  a ser CALCULADO por ρ=e^(−dtS/tau) em vez do fixo, e o n_eff SATURA como a física manda.
+   *  AUSENTE → comportamento 100% intacto (ρ fixo). Medir com `residual-autocorr.ts`. */
+  tau?: number;
+  /** Intervalo REAL entre leituras DISTINTAS de RSSI, em SEGUNDOS (a cadência de advertising
+   *  efetiva). Só tem efeito junto de `tau`. */
+  dtS?: number;
   zCrit?: number;
   minSamples?: number;
 };
@@ -307,7 +338,8 @@ export function computeVisitEpisodes(
   opts?: VisitOpts,
 ): VisitEpisode[] {
   const warmupMs = opts?.warmupMs ?? DEFAULT_WARMUP_MS;
-  const rho = opts?.rho ?? DEFAULT_RHO;
+  // ρ do par (tau, dtS) quando fornecidos — senão o ρ fixo de sempre (ADITIVO, ver effectiveRho).
+  const rho = effectiveRho(opts?.rho ?? DEFAULT_RHO, opts?.tau, opts?.dtS);
   const zCrit = opts?.zCrit ?? DEFAULT_Z_CRIT;
   const minSamples = opts?.minSamples ?? DEFAULT_MIN_SAMPLES;
   return buildEpisodes(ticks, warmupMs).map((ep) => decideEpisode(ep, rho, zCrit, minSamples));

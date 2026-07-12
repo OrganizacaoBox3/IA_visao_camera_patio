@@ -235,6 +235,138 @@ passagem breve → nenhum receptor/cadência fecha per-visita; priorizar as cama
 HSMM) e evidência objetiva. **#26 (ESP32) deixa de ser "o experimento decisivo" isolado** — o
 experimento decisivo virou *cadência de advertising × duração de observação*.
 
+### PARECER DO ESPECIALISTA SOBRE O GATE (2026-07-12) — a lei de saturação e o τ da população errada
+
+Ele confirmou o achado E expôs **um 2º erro metodológico meu**. Registrado porque muda a leitura:
+
+**1. A LEI (n_eff satura).** Com ρ=e^(−Δt/τ) e n=T/Δt:
+`n_eff = (T/Δt)·tanh(Δt/2τ) → T/(2τ)` quando Δt→0.
+**Aumentar cadência só ajuda até Δt ≪ τ; depois, amostrar mais rápido não cria informação.** O teto é
+a duração observada dividida por 2τ — nada mais. Isso prevê que 4 Hz/10 Hz NÃO salvam (não queimar
+bateria atrás disso). E a barra cai rápido: n_eff 6,88 → |r|≥0,76; n_eff 20 → |r|≥**0,44** (a diferença
+entre falar em 15% dos episódios e na MAIORIA).
+⚠️ **Isso INVALIDA parcialmente a minha varredura de cadência**: usei ρ=0,7 **FIXO** a 1 Hz *e* a 2 Hz.
+Mas ρ depende de Δt — a 2 Hz, com o mesmo τ, ρ deveria SUBIR (não ficar em 0,7). **O ganho "0,3%→15,5%"
+está provavelmente INFLADO.** Correção em curso (n_eff τ-based).
+
+**2. O τ PODE TER SIDO MEDIDO NA POPULAÇÃO ERRADA** (a mesma classe de erro do "flicker de mobília"):
+o τ (2,8–32 s) foi minerado das **ÂNCORAS — que são PARADAS** (fading estático, τ longo, dominado por
+deriva ambiental). **A tag do operador está em MOVIMENTO**: a coerência espacial do fading é ~λ/2 ≈ 6 cm
+a 2,4 GHz, então a 1,2 m/s ele atravessa um fade a cada ~50 ms → a componente de fading fica quase
+**BRANCA** → τ_móvel é dominado pelo que sobra (orientação corporal, marcha), **provavelmente ~1–2 s,
+não 10–30 s**. Contas: T=20 s com τ=10 s → teto n_eff = **1**; com τ=1,5 s → teto **6,7** (suspeitosamente
+perto do 6,88 que medi). **Se o τ estiver errado, o gate disparou no número errado.**
+→ **TESTE DECISIVO, barato, sobre dado que JÁ EXISTE**: autocorrelação do **RESÍDUO da tag MÓVEL** na
+caminhada de campo (RSSI observado − previsto pela distância-câmera), não das âncoras.
+**[✅ MEDIDO 2026-07-12 — ver o veredito abaixo. O especialista estava certo, e por baixo.]**
+
+### ✅ VEREDITO DO τ_MÓVEL (`residual-autocorr.ts`) — e a 3ª correção metodológica (a mais grave)
+
+**A ACF ingênua estava medindo o SNAPSHOT, não o canal.** O app posta a cada ~550 ms mas a tag só
+atualiza o RSSI a cada ~2,5 s → a série do JSONL é uma **ESCADA** (sample-and-hold). Uma ACF ingênua
+sobre uma escada DECAI mesmo que o sinal por baixo seja BRANCO — o decaimento é do hold, não da física.
+Testado contra a hipótese nula do hold (ρ(Δ)=E[(L−Δ)⁺]/E[L], a ACF que ruído branco retido produz), ela
+bate **lag a lag**:
+
+| lag (s) | 0,5 | 1,2 | 2,2 | 3,2 | 4,2 | 5,2 |
+|---|---|---|---|---|---|---|
+| ACF crua | 0,801 | 0,604 | 0,369 | 0,268 | 0,175 | 0,090 |
+| HOLD puro (nula) | 0,823 | 0,607 | 0,342 | 0,213 | 0,148 | 0,097 |
+| **CORRIGIDA** | −0,123 | −0,010 | 0,041 | 0,070 | 0,032 | −0,008 |
+
+**O decaimento é 100% artefato de amostragem.** Corrigido, o resíduo da tag móvel é **BRANCO**:
+τ_móvel = **0 s** pelos dois métodos (lag-1 da série fresca; ajuste exp. da ACF corrigida); **limite
+superior honesto ≤ 1,68 s** (o usado no n_eff, conservador). Sem corrigir, leríamos 2,52 s — artefato.
+vs **τ_âncora 2,8–32 s** que o ρ=0,7 embutia. Blindagem anti-auto-engano: **controle positivo** — a
+correção recupera um τ=4 s PLANTADO (não é uma máquina de zerar τ).
+
+⚠️ **BOMBA (pendência aberta):** o τ CRU das 5 tags — móvel **E paradas** — cai em 1,96–38,8 s, DENTRO
+da faixa 2,8–32 s da mineração original. **Indício forte (não prova — a mineração não foi re-rodada) de
+que o τ das ÂNCORAS era ele próprio SAMPLE-AND-HOLD, não física** ⇒ o **ρ=0,7 "medido em campo" que
+alimenta a métrica desde sempre pode ser artefato da cadência do POST.** → RE-RODAR a mineração das 6 h
+com a correção de hold (pendência registrada).
+
+**Erro MEU corrigido pelo agente:** eu instruí "escolher o par de maior |r|" — que é CEGO AO SINAL, e
+elegeu uma tag com θ=−29,8 (RSSI SUBINDO com a distância — fisicamente impossível p/ tag carregada). A
+regra certa é o maior r COM SINAL físico. (O `visit-metrics.ts` já fazia certo — ranqueia por score=−r
+exigindo score>0; a cegueira estava só na minha heurística de seleção do prompt.)
+
+### ✅ TABELA DE CADÊNCIA CORRIGIDA — o gate disparou no número errado, nas DUAS pontas
+
+| métrica | 1 Hz (antiga) | 2 Hz (antiga) | **1 Hz (CORR)** | **2 Hz (CORR)** |
+|---|---|---|---|---|
+| ρ usado | 0,700 | 0,700 | **0,551** | **0,743** |
+| n_eff MÁX | 6,88 | 15,88 | **11,28** | **13,29** |
+| episódios n_eff>3 | 42 | 122 | **104** | **102** |
+| **COBERTURA** | 0,3% | **15,5%** | **4,6%** | **10,0%** |
+| precisão | 100% | 97,8% | 86,7% | 100% |
+| barra \|r\| @maxNeff | 0,76 | 0,50 | **0,59** | **0,54** |
+
+- **SUBESTIMEI** o n_eff da cadência ATUAL (τ de âncora parada aplicado a tag móvel): 6,88 → **11,28**;
+  a barra |r| cai de 0,76 → **0,59**.
+- **SUPERESTIMEI** o ganho de dobrar a cadência (ρ CONGELADO nas duas cadências): 15,5% → **10,0%**.
+
+**A CADÊNCIA SATURA, como a lei previa**: 1→2 Hz rende só **1,18×** de n_eff (era 2,31× — o "dobro" era
+o ρ congelado), e os episódios que cruzam o piso ficam **PLANOS** (104→102, contra 42→122 da régua
+falsa). *Nuance honesta:* a cobertura ainda sobe 2,16× (4,6→10,0%) — não porque nasçam episódios acima
+do piso, mas porque os que já passavam ganham n_eff e a barra |r| cede. Cadência não é alavanca NULA; é
+**muito menor** do que vendemos.
+
+**🔄 A RECOMENDAÇÃO DE HARDWARE SE INVERTE: NÃO comprar tag de 2 Hz.** "Comprar tag rápida" era
+conclusão do número inflado. **O ganho de graça é outro: só CORRIGIR A MÉTRICA leva a cobertura de
+0,3% → 4,6% no hardware ATUAL (15×), sem comprar nada.** As alavancas que sobram são as que o
+especialista já ranqueou: **T (duração/geometria de câmera — grátis)** e **separação de canais (ESP32 —
+3 olhares quase-independentes)**. Ambas confirmadas empiricamente.
+
+**MAS H1 SEGUE NÃO FECHANDO** (4,6–10% de cobertura por visita, mesmo no sim otimista e com a física
+certa). **O gate estava com o NÚMERO errado, não com a CONCLUSÃO errada**: identidade por UMA aproximação
+não fecha; as camadas de acúmulo (Onda 2: topologia + workflow) seguem sendo o caminho.
+
+**Placar das previsões do especialista:** (a) τ_móvel ≪ τ_âncora → **CONFIRMADA** (e por baixo: é branco);
+(b) "cobertura salta bem acima de 15,5%" → **REFUTADA** (é 10,0% — os 15,5% é que eram falsos); (c) canal
+> dobrar cadência → **SUSTENTADA** (cadência satura em 1,18×; canal valeria ~3×).
+
+**3. AS 4 ALAVANCAS SOBRE O n_eff, RANQUEADAS** (a nova ordem de prioridade):
+1. **T (duração observada)** — linear, GRÁTIS, e é GEOMETRIA. "Aproximação de 3-8 s" NÃO é constante
+   física — é **artefato do FOV**. Um operador caminhando 20 m até a mesa leva ~16 s; se a câmera só vê
+   os últimos 5 m, observamos 4 s e jogamos fora 75% da informação. **Conserte a câmera, não a tag.**
+   Promove o Δ3 de "radial" para **"radial E LONGO"**: câmera cobrindo o corredor inteiro de aproximação
+   + receptor no destino. Compõem-se, e custam só onde se parafusa o suporte.
+2. **τ (diversidade de canal)** — potencialmente **3×**. BLE anuncia em 3 canais (2402/2426/2480 MHz,
+   separados por 24 e 54 MHz); a banda de coerência indoor (delay spread 50–200 ns) é ~1–4 MHz → o fading
+   em cada canal é essencialmente INDEPENDENTE → 3 olhares quase-independentes do mesmo path loss (~3×
+   n_eff, ou √3 de redução de ruído). Foi o fator que mais ajudou na campanha que chegou a ~1 m indoor.
+   ⛔ **BLOQUEIO CONFIRMADO POR MIM NO CÓDIGO (2026-07-12)**: o scanner do TC22 usa a API padrão do Android
+   (`ScanResult.getRssi()`, `MainActivity.java:230`), e o Android **NÃO expõe o canal do advertisement**
+   (dá PHY e txPower, nunca o índice 37/38/39). A gravação só tem {mac, rssi}. **→ Esta é a razão NOVA e
+   FORTE para o receptor #2 ser ESP32/NimBLE e não outro Android: por ACESSO À FÍSICA, não por preço.**
+   (Corolário: o nosso RSSI atual é canal-MISTURADO — injeta ruído branco no resíduo, o que enviesa o τ
+   medido para BAIXO e derruba |r|.)
+3. **Receptores independentes** — a 2ª antena RE-justificada, mas por outro motivo: não como "dimensão de
+   assinatura" (formulação antiga, morta) e sim como **multiplicador de n_eff** (o multipath em B é
+   largamente independente do de A → somar Fisher-z soma informação REAL). O quanto depende de ρ_AB,
+   medível assim que B existir.
+4. **Cadência** — SATURANTE. Ir a ~2 Hz e parar; não perseguir além até saber τ_móvel.
+
+**4. RESPOSTA ÀS 3 PERGUNTAS**: (Q1 tags rápidas) **NÃO comprometer recurso ainda** — medir τ_móvel
+primeiro; há 2 alavancas melhores e mais baratas na frente (T = geometria de câmera; canal = ESP32), ambas
+grátis em bateria. (Q2 regime) **É PERMANÊNCIA no posto** — e permanência é exatamente onde o RSSI dá ZERO
+(span 0) ⇒ **a identidade TEM que fechar na APROXIMAÇÃO**, o elo fraco ⇒ isso transforma "estender T" de
+otimização em **requisito de projeto de 1ª classe**. (Q3 Onda 2) **AGORA, e independe de tudo acima** — o
+argumento é aritmético: mesmo no melhor caso medido, ≥84,5% dos episódios NÃO terão identidade por rádio
+em cadência nenhuma ⇒ a arquitetura NÃO pode repousar sobre o rádio ⇒ os outros 84,5% precisam de outra
+fonte, e a única independente do rádio é o **workflow** (+ topologia). **Promovido de diferencial a
+ESTRUTURA PORTANTE — e é grátis.** Fazer campo ANTES da Onda 2 seria testar a coisa errada (com prior de
+workflow, a decisão de identidade é outra).
+
+**PREVISÕES REGISTRADAS (para cobrar)**: (a) τ do resíduo da tag móvel virá MUITO menor que o das âncoras
+(~1–2 s); (b) se vier, n_eff sobe, a barra |r| cai para perto de 0,5 e a cobertura por episódio salta bem
+acima dos 15,5%; (c) a diversidade de canal, se o stack expuser, entrega mais n_eff que dobrar a cadência
+— e sem custo de bateria.
+
+**ORDEM DE EXECUÇÃO**: medir τ_móvel (hoje, dado existente) → arrancar a Onda 2 em PARALELO (não espera
+nada) → decidir cadência/ESP32 com o τ na mão. A #31 fica onde está.
+
 **ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
 medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +
 confiabilidade de fronteira [⬜ decide H2]; GATE: se H1+H2 passam, segue; se H2 falha → evidência

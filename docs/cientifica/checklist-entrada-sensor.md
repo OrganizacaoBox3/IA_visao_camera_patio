@@ -23,6 +23,26 @@ Declare, ANTES de escrever código, no vocabulário de `src/fusion/evidence.ts`:
 
 > Vale para todo sensor cuja evidência de identidade dependa de **variação** (o BLE-RSSI de hoje).
 
+### ⚠️ A REGRA VIROU "RADIAL **E LONGO**" (atualização 2026-07-12 — a alavanca nº 1, e é GRÁTIS)
+
+A bancada mediu que o gargalo da identidade NÃO é o span radial e sim o **n_eff** (amostras
+independentes), cujo teto é `T/(2τ)` — **T = a DURAÇÃO OBSERVADA**. E T é **geometria de câmera**:
+
+- **"A aproximação típica dura 3-8 s" NÃO é constante física — é ARTEFATO DO FOV.** Um operador
+  caminhando 20 m até a mesa leva ~16 s. Se a câmera só enxerga os últimos 5 m, você observa 4 s e
+  **joga fora 75% da informação que existia**. O n_eff (e portanto a identidade) morre por
+  enquadramento, não por rádio.
+- **REGRA: a câmera cobre o CORREDOR INTEIRO de aproximação, não só a mesa.** Maximize T. É a alavanca
+  de maior ROI sobre o n_eff — linear, sem custo de bateria, sem hardware novo. **Conserte a câmera,
+  não a tag.**
+- As duas regras se COMPÕEM: **câmera cobrindo o corredor longo de aproximação + receptor no destino,
+  sobre o eixo desse corredor.** Custam apenas onde se parafusa o suporte.
+- Corolário comercial: como o cliente pergunta sobre PERMANÊNCIA no posto — e permanência é exatamente
+  onde o RSSI dá ZERO (span 0, pessoa parada) — **a identidade TEM que fechar na APROXIMAÇÃO**. Isso
+  torna "estender T" um **requisito de projeto de 1ª classe**, não uma otimização.
+
+### A regra radial (original)
+
 - **O receptor vai NO DESTINO ou ATRÁS dele, sobre o EIXO do caminho dominante de aproximação.**
   Caminhar até a mesa = caminhar em direção ao receptor = gradiente radial máximo (a inclinação da
   log-distância é máxima perto do receptor — ~0,9 década de span numa aproximação 8→1 m, vs 0,42
