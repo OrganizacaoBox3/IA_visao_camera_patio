@@ -87,10 +87,38 @@ aqui porque reordena TODAS as prioridades abaixo. Os pontos e o que já medimos:
    **Posicionar como otimização de fluxo/conformidade de processo, não vigilância individual** —
    mesmos dados, aceitação sindical e exposição legal radicalmente diferentes.
 
-**Próximos passos em ordem de custo (especialista)**: (1) §2 re-scoring por evento [em medição];
-(2) §3 sobrevivência de tracks estáticos [✅ medido: morre em segundos]; (3) receptor de zona na
-mesa (o experimento que decide o resto); (4) HSMM + conformance com limites só quando existir a 1ª
-sequência de tarefa modelada.
+## 🎯 PLANO DE ONDAS COM GATE (parecer FINAL do especialista, 2026-07-11 — ver ADR-014)
+
+O produto é **observação de processo com identidade probabilística**; a unidade é a **VISITA**, não
+o tick (aproximação+entrada+permanência+saída+consolidação). Arquitetura de 5 camadas: observação
+visual → identidade probabilística (Fisher-z na aproximação + prior de workflow) → conservação por
+zona (rede de Petri) → estado operacional (HSMM por duração) → conformidade com eventos incertos
+(saída em LIMITES) + evidência objetiva de processo. RSSI absoluto está MORTO para decisão (regra
+nº6). TRL 3-4: princípio provado em campo, produto NÃO provado.
+
+**As 3 hipóteses que decidem o futuro** (H3 já resolvida na forma corrigida = gradiente, o −0,91):
+- **H1**: o episódio de aproximação contém identidade suficiente? 🔬 EM MEDIÇÃO (visit-metrics.ts —
+  correção crítica: UMA correlação sobre a janela do episódio INTEIRO, não agregação de ticks
+  deslizantes que compartilham 15/16 dos dados; span radial em décadas; controle negativo).
+- **H2**: a identidade sobrevive à permanência? Via CONSERVAÇÃO de zona, não rádio. Parcial: §3
+  mediu que track estático morre em ~3s (não sustenta ID pelo tracker) — falta a confiabilidade de
+  cruzamento de FRONTEIRA (a conservação não precisa do tracker, precisa da fronteira estável).
+- **H3** REFUTADA na forma "proximidade por RSSI médio distingue mesas" (15dB entre âncoras
+  equidistantes) → SUBSTITUÍDA por "gradiente de aproximação distingue tags" = o −0,91 medido.
+
+**ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
+medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +
+confiabilidade de fronteira [⬜ decide H2]; GATE: se H1+H2 passam, segue; se H2 falha → evidência
+local forte (NFC/botão) antes de refinar algoritmo.
+**ONDA 1 — receptor de zona** (ESP32 na mesa, amplificador de gradiente NO DESTINO — ~0,9 década
+esperado vs 0,42 hoje). Software pronto (multiSourceFisher). Regra a priori pinada.
+**ONDA 2** — zonas semânticas + rede de Petri + workflow como prior de identidade.
+**ONDA 3** — HSMM (duração) + conformance com limites.
+**ONDA 4** — evidência objetiva (PLC/scanner/botão) — sem ela, só presença, não produtividade.
+
+**LISTA DE PARADA** (não fazer, economiza meses): RSSI→metros p/ decidir; retomar v4; factor graph/
+GTSAM (estado é DISCRETO — Petri+HSMM é o formalismo); GNN/Sinkhorn/GP-completo/transformer antes
+das Ondas 0-2; prometer posição métrica por BLE; vender "AoA barato"/"universal".
 
 ## Feito (no `main`)
 

@@ -37,6 +37,17 @@ futuro, não só o que já rodou:
    uma fórmula errada; o erro era da ESPECIFICAÇÃO. O modo de falha mais perigoso de uma spec é o
    entendimento certo com o documento errado, porque ninguém desconfia dela. Um exemplo direcional
    de dez segundos no §4 teria pego o bug antes de virar curva retratada.
+6. **Sempre que alguém — inclusive o especialista — propuser usar RSSI ABSOLUTO para decidir
+   qualquer coisa, a tabela das 4 âncoras vai à mesa ANTES da discussão.** Nasceu do parecer final
+   (2026-07-11): âncoras fixas EQUIDISTANTES leem 15 dB diferentes (`…CE:89` a 0,85m = −58dBm;
+   `…CE:3C` a 0,78m = −73dBm), e uma âncora a 0,78m lê o mesmo que outra a 2,05m. Se tags fixas
+   equidistantes não se separam por RSSI absoluto, tags no corpo jamais se separam. Só a FORMA
+   temporal (diferencial) do sinal decide identidade — o valor absoluto, nunca. Mata: v4,
+   trilateração, proximidade por RSSI médio.
+7. **Toda métrica deve estar NA UNIDADE DA DECISÃO DO CLIENTE.** Nasceu da virada tick→visita
+   (parecer final): medir por tick o que o cliente compra por VISITA faz um sistema bom parecer
+   ruim (e vice-versa). A "cobertura catastrófica de 30%/tick" era artefato de unidade — no nível
+   de visita a régua é outra. Ver ADR-014.
 
 ### Recalibrações do material original (assumidas pelo próprio especialista)
 
