@@ -171,16 +171,23 @@ REAL da significância; o span não decide nada no código — a significância 
 campo real é ainda mais pobre que o sim (std 0,018–0,166). (c) A decisão H1 "abstém com ρ=0,7" NÃO
 usa o span — é robusta à confusão.
 
-**PEÇA FALTANTE que decide o pivô DE VERDADE (ainda não medida)**: a métrica atual correlaciona
-RSSI(**estação**) × dist(**câmera**). Mover o receptor para o destino só ajuda se dist→estação e
-dist→câmera COVARIAREM na aproximação — se divergem (pessoa se aproxima da mesa mas se afasta da
-câmera), a correlação atual pode até PIORAR. Isso NÃO foi tocado. **Próxima medição (simulador,
-autorizado): posicionar o receptor no destino, gerar o RSSI relativo a ELE, e rodar a significância
-correlacionando contra dist-câmera E contra dist-estação — ver se a visita passa a DECIDIR (e
-corretamente), e com qual métrica.** É a metade circular/indicativa (usa o modelo de RSSI = funil de
-hipótese, não juiz): se NEM no sim otimista decidir, pivô forte; se decidir, indicação de seguir
-para hardware com validação de campo. Correção de rigor a fazer junto: `spanDecades` passa a reportar
-STD e RANGE lado a lado, e o ADR-014/comentários anotam que 0,42/0,9 eram range.
+**CORREÇÃO de uma premissa minha (honestidade)**: cheguei a levantar um "câmera vs estação" — que a
+métrica correlacionaria RSSI(estação) × dist(câmera). **Errado**: `frame.ts:69` computa `dist` como
+distância pessoa→ESTAÇÃO (o `stationWorld`, o receptor), não à câmera. Logo a métrica JÁ segue o
+receptor — mover a estação para o destino faz o `dist` da correlação virar dist→destino
+automaticamente; não há problema de covariância. (Resíduo real, de 2ª ordem: perto do destino a
+homografia observa a pessoa com mais erro — heterocedasticidade, o que o #28 testou e empatou.)
+
+**A pergunta de pivô, agora bem-posta e medível**: mover a estação para o destino leva o span de
+dist→estação de **0,13 → 0,29 std** (medido, `receiver-geometry.ts`). Esse ganho de gradiente empurra
+|r| além do gate de significância descontado por n_eff (ρ=0,7), fazendo a visita passar a DECIDIR
+corretamente onde hoje abstém? **Próxima medição (simulador, autorizado): posicionar a estação no
+destino da caminhada, regenerar, rodar `computeVisitMetrics` honesto e ver se DECIDE.** É a metade
+circular/indicativa (o sim gera RSSI = f(dist→estação) + ruído, então |r| é alto por construção — o
+que o testa é se o RUÍDO do modelo, no span maior, ainda deixa a significância passar; funil de
+hipótese, não juiz): se NEM no sim otimista decidir, pivô forte; se decidir, indicação de seguir para
+hardware com validação de campo. Correção de rigor a fazer junto: `spanDecades` reporta STD e RANGE
+lado a lado, e o ADR-014/comentários anotam que 0,42/0,9 eram range.
 
 **ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
 medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +
