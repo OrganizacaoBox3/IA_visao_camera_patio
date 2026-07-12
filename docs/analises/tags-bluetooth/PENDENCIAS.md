@@ -51,11 +51,21 @@ aqui porque reordena TODAS as prioridades abaixo. Os pontos e o que já medimos:
    arquitetura fecha; se morre a cada 40s, o receptor de zona vira REQUISITO, não luxo". **Veredito:
    morre em SEGUNDOS → o receptor de zona (2ª estação na mesa) é REQUISITO.** RESSALVA HONESTA: a
    gravação passiva tinha pouca gente parada REAL — a maioria desses 484 estáticos é mobília/
-   flicker, então o número da PESSOA parada especificamente ainda precisa do hello world (operador
-   sentar 8min e ver quanto o track dele dura). Mas a direção é inequívoca: sustentação de ID sobre
-   alvo de baixo movimento é frágil com a config atual do tracker. **Alavanca de engenharia barata
-   registrada**: aumentar o track_buffer/max_time_lost do ByteTrack pode sustentar tracks parados
-   mais tempo — testável sem hardware, antes de concluir que precisa de estação.
+   flicker, então o número da PESSOA parada especificamente ainda precisa do hello world.
+   - ✅🔬 **VEREDITO REFINADO pela alavanca barata (task #27, medida via bancada sintética,
+     2026-07-11): a permanência NÃO exige hardware — era artefato do knob.** O parâmetro é `ttlMs`
+     (ms de relógio, não frames), default 1500ms, CONCORDA cliente↔hub, JÁ configurável.
+     **Divergência efetiva em produção**: o FRONT roda 1500ms fixo, o HUB já roda 8000ms (via probe
+     do motion-gate) — o buraco da permanência está no FRONT, não no motor. Buffer **4× (6000ms) →
+     pessoa parada vive os 8min inteiros como UM id, zero id-switch, zero custo no cruzamento em
+     movimento** (satura em 4×; a "morte em 3s" era 100% artefato de ttlMs=1500). CUSTO decomposto
+     (regra nº2): ghost/hijack cresce linear (12→50→67→100% em 1500→6000→8000→12000ms) — mas é
+     problema DIFERENTE (uma pessoa NOVA herdar o id de quem ficou parado no mesmo pixel), não a
+     morte do track, e tem mitigações (gates de teleporte `maxDist 0.35`, `reassocMaxGapMs`).
+     **CONCLUSÃO: o receptor de zona resolve a DESAMBIGUAÇÃO de identidade (o ghost), NÃO a
+     sobrevivência do track — para a permanência em si, subir o FRONT de 1500→~6000ms fecha o
+     buraco de graça.** Recomendação p/ TORNEIO (não promoção direta — regra da casa): alinhar o
+     FRONT ao hub via `eval:counting`.
 4. **2ª antena RE-JUSTIFICADA**: não é "dimensão de assinatura no centro da área útil" — é
    **receptor de zona SEMÂNTICA (na mesa/ponto de coleta)**, resolvendo permanência (§1) +
    reidentificação pós-morte-de-track (§3). Dimensão de assinatura vem de brinde. O LUGAR é
@@ -96,15 +106,41 @@ zona (rede de Petri) → estado operacional (HSMM por duração) → conformidad
 (saída em LIMITES) + evidência objetiva de processo. RSSI absoluto está MORTO para decisão (regra
 nº6). TRL 3-4: princípio provado em campo, produto NÃO provado.
 
-**As 3 hipóteses que decidem o futuro** (H3 já resolvida na forma corrigida = gradiente, o −0,91):
-- **H1**: o episódio de aproximação contém identidade suficiente? 🔬 EM MEDIÇÃO (visit-metrics.ts —
-  correção crítica: UMA correlação sobre a janela do episódio INTEIRO, não agregação de ticks
-  deslizantes que compartilham 15/16 dos dados; span radial em décadas; controle negativo).
-- **H2**: a identidade sobrevive à permanência? Via CONSERVAÇÃO de zona, não rádio. Parcial: §3
-  mediu que track estático morre em ~3s (não sustenta ID pelo tracker) — falta a confiabilidade de
-  cruzamento de FRONTEIRA (a conservação não precisa do tracker, precisa da fronteira estável).
-- **H3** REFUTADA na forma "proximidade por RSSI médio distingue mesas" (15dB entre âncoras
-  equidistantes) → SUBSTITUÍDA por "gradiente de aproximação distingue tags" = o −0,91 medido.
+**As 3 hipóteses que decidem o futuro — GATE DA ONDA 0 RODADO (2026-07-11)**:
+- **H1 (visita janela-única) — ⚠️ FALHA NOS DADOS ATUAIS, mas por falta de SPAN, não de sinal; e
+  RETRATA a minha leitura otimista da §2**: a medição HONESTA (uma correlação sobre a janela do
+  episódio inteiro, n_eff do ρ=0,7 real) decide ZERO episódios em todos os 12 cenários sintéticos e
+  no campo — o span radial real é **0,03-0,11 década, uma ORDEM DE GRANDEZA abaixo** do 0,42 "passa
+  por pouco" (e do ~0,9 que o receptor-no-destino daria). **A agregação de ticks da §2 INFLAVA**
+  (confirmado): somar Fisher-z sobre ticks deslizantes que compartilham 15/16 dos dados fabricava
+  um n aparente — o "evento 79,6%" da §2 está retratado; a métrica honesta se abstém. **MAS o
+  controle negativo (shift temporal circular, o correto — não o embaralhamento cego) PROVA que o r
+  é sinal físico quando há span: real 82,6% vs shift 7,7% (Δ 74,9pp).** A física está viva; falta
+  span, que é GEOMETRIA DE INSTALAÇÃO (Δ3). Nuance honesta a refinar: o "episódio" medido foi o
+  track INTEIRO (inclui permanência, que dilui a correlação); o −0,91 era uma janela de
+  aproximação. Segmentar a FASE de aproximação é o refinamento pendente — mas o span baixo com a
+  estação junto da câmera é robusto. **→ H1 é condicional ao span → a Onda 1 (receptor no destino)
+  é o experimento decisivo, e testável no SIMULADOR antes do hardware.**
+- **H2 (conservação por fronteira) — CONDICIONALMENTE SUSTENTADA; a fronteira é NECESSÁRIA mas não
+  suficiente com o tracker atual**: o detector de fronteira é sólido (cruzamento genuíno é limpo em
+  58-100%; a histerese N=2 zera a oscilação de borda). MAS a maioria dos tracks NASCE E MORRE
+  DENTRO da zona (fragmentação — a mesma morte-em-segundos da §3), então a fronteira raramente
+  testemunha as transições de identidade e a ocupação dispara sem saídas. **CONVERGÊNCIA COM #27**:
+  isso é exatamente o que a alavanca barata cura — `ttlMs=6000` faz o track parado viver 8min como
+  UM id, então ele para de fragmentar dentro da zona e a fronteira passa a testemunhar entrada E
+  saída. **H2 fecha pela engenharia grátis (ttlMs), sem hardware.** Ressalva: as zonas testadas
+  eram quadrantes arbitrários, não na granularidade do POSTO (regra Δ1) — zonas de posto reduzem
+  cruzamentos e mudam a distribuição nasceu/morreu-dentro. Bônus: geometria de bbox NÃO separa
+  mobília de operador parado (aspect ~2,5 vs 2,8, sobrepõem) — só duração; o número da pessoa
+  parada ainda exige verdade anotada (hello world).
+- **H3** REFUTADA na forma "proximidade por RSSI médio distingue mesas" → SUBSTITUÍDA por
+  "gradiente de aproximação distingue tags" = o −0,91 medido.
+
+**LEITURA DO GATE**: nenhuma hipótese foi REFUTADA; ambas são condicionais com alavanca conhecida —
+H2 pela engenharia grátis (ttlMs 6000), H1 pela geometria (receptor no destino). O próximo passo
+decisivo é SIMULAR o receptor no destino (Δ3, autorizado pelo dono) e ver se o span vai a ~0,9
+década e a visita fecha com significância HONESTA — isso decide se a Onda 1 (ESP32) tem caso feito
+ANTES de comprar hardware. Se nem no simulador fechar, a arquitetura pivota antes de gastar.
 
 **ONDA 0 — hoje, sem hardware, decide o resto**: (1) re-scoring por VISITA janela-única [🔬 em
 medição, decide H1]; (2) tracks estáticos [✅ medido] + separar mobília de pessoa parada +
