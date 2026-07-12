@@ -102,6 +102,29 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 - **Corolário (estatística honesta, obrigatório):** **13/13 NÃO é 100%.** Toda proporção sai com **n e
   intervalo de Wilson 95%** (13/13 → ≥77%; 6/6 → ≥61%). `wilsonInterval()` existe em
   `visit-metrics.ts` — usar. Ao cliente se promete **a curva e o gate**, nunca o ponto.
+- **Regra 11 — Meça a precisão do que o MECANISMO comprou, não a precisão GLOBAL.**
+  Um agregado pode ser **inflado por um mecanismo diferente que funciona**, escondendo uma
+  subpopulação **100% errada**. *Origem: ao testar o fechamento por planta baixa, ele produziu 12
+  rótulos, **TODOS errados (0% de precisão)** — enquanto a precisão **GLOBAL** marcava **99,6%**,
+  porque os **pinos** (verdadeiros, vindos da conservação) dominavam o agregado. Olhar só o global
+  teria mandado rótulo falso **com cara de certeza** para produção.* **Toda feature nova reporta a
+  precisão do SEU delta, isolada** — nunca só o número agregado.
+- **Regra 13 — Dado independente NÃO significa ERRO independente. Meça a concordância-no-erro antes de somar evidências.**
+  Somar evidências (Fisher-z, votos, ensembles) só rende o que a fórmula promete se os ERROS forem
+  independentes. *Medido: episódios do mesmo operador têm **ZERO** dado compartilhado (janelas
+  disjuntas — não é a inflação da Regra 8) — e ainda assim, **quando o 1º erra, o 2º repete o MESMO
+  erro em 41,2%**, contra um teto model-free de independência de **8,8%: 4,7× acima.** É o mesmo viés
+  corporal/geometria duas vezes. "n_eff 19+19=38" é FALSO como evidência independente.* A agregação
+  ainda compra precisão (a **discordância** pega 58,8% dos erros), mas **compra menos do que a soma
+  promete**. Sensor obrigatório: `agreementOnFailure` (em `anchor-policy.ts`) ao lado de qualquer
+  agregação.
+- **Regra 12 — Restrição GLOBAL não cria identidade; só AMPLIFICA um sinal assimétrico.**
+  A exclusividade ("um operador está em exatamente um lugar") é **permutacionalmente simétrica**:
+  remove a opção "fora" de **todos igualmente**, então com N operadores intercambiáveis toda
+  permutação segue viável e **o entailment fica VAZIO**. *Medido: fechamento total das zonas →
+  ganho **0,0%**.* Só quebra a simetria um sinal **assimétrico por operador** (pino de fronteira,
+  localidade de receptor, ReID). **Antes de investir em restrição, pergunte: ela é simétrica? Se
+  for, ela não decide nada sozinha — precisa de uma ÂNCORA.**
 - **Pendência de segurança humana (ainda aberta):** rotacionar a senha do Postgres e o `AUTH_SECRET`/senha de admin do homolog, que hoje aceitam defaults inseguros — ver `docs/analises/saude/01-auditoria-doutrina-2026-07.md` (achados P1). *Status histórico das ondas de retrofit vive no git e em `docs/analises/saude/`.*
 
 ## 7. Definition of Done

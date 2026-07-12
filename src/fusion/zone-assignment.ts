@@ -82,16 +82,38 @@ export type RadioPresence = {
 export type Topology = {
   neighbors: Readonly<Record<ZoneId, readonly ZoneId[]>>;
   hopMs: number;
+  /** A TOPOLOGIA REAL, quando há PLANTA BAIXA (`floor-plan.ts`): tempo MÍNIMO de deslocamento
+   *  zona→zona, contornando os obstáculos. Quando presente para a zona de origem, VENCE
+   *  `neighbors`/`hopMs` — porque "mesa vizinha" no abstrato pode ser "dar a volta no rack" no real.
+   *
+   *  Um par AUSENTE do mapa é um ZERO ESTRUTURAL: não existe caminho navegável — transição
+   *  IMPOSSÍVEL em qualquer tempo. É o que a planta acrescenta e a topologia abstrata não tem.
+   *
+   *  Os tempos são LIMITE INFERIOR (a geodésica sai de uma grade 8-conexa, que subestima o percurso):
+   *  a poda erra sempre para o lado de NÃO excluir. Nunca se descarta um trajeto que era possível. */
+  minTravelMs?: Readonly<Record<ZoneId, Readonly<Record<ZoneId, number>>>>;
 };
 
 /** Última zona conhecida de cada operador e QUANDO (vem de `ConservationResult.lastZone`, datado). */
 export type LastSeen = Readonly<Record<TokenId, { zoneId: ZoneId; ts: number }>>;
 
 export type AssignmentOptions = {
-  /** FECHAMENTO: assumir que toda tag presente está DENTRO de alguma zona observada. Só é verdade se
-   *  as zonas ladrilham a área observada. Default `false` (honesto: "fora" continua possível). É o
-   *  knob que dá dentes à exclusividade — e é uma ASSUNÇÃO, por isso é explícita. */
+  /** FECHAMENTO TOTAL: assumir que toda tag presente está DENTRO de alguma zona observada. Só é
+   *  verdade se as zonas ladrilham a área observada E não há buraco de FOV. Default `false`
+   *  (honesto: "fora" continua possível). Açúcar para `foraCapacity: 0` — e é uma ASSUNÇÃO, por isso
+   *  é explícita. */
   tagsMustBeInSomeZone?: boolean;
+  /** FECHAMENTO PARCIAL — o teto de quantos operadores da escala podem estar FORA de todas as zonas
+   *  observadas. É o modelo honesto que a PLANTA BAIXA destrava (`floor-plan.ts`,
+   *  `foraCapacityFromPlan`): o corredor entre as mesas está DENTRO do campo da câmera, então quem
+   *  está ali é CONTADO — o "fora" deixa de ser um saco sem fundo e vira um place com ocupação
+   *  medida. `undefined` = ILIMITADO (o comportamento de hoje: há buraco de FOV / banheiro / corredor
+   *  externo onde ninguém é contado). `0` ≡ `tagsMustBeInSomeZone`.
+   *
+   *  NOTA (a lição que a medição deu): o que fecha a exclusividade não é "as zonas ladrilham 100%",
+   *  é "a área OBSERVÁVEL é completa". Com a área completa, cobertura de 70% já fecha quase tanto
+   *  quanto 100% — porque o teto passa a ser o punhado de pessoas vistas no corredor, não ∞. */
+  foraCapacity?: number;
   /** Teto de nós da busca. Estourou ⇒ o resultado deixa de ser entailment e degrada para os
    *  domínios (superconjunto SÃO — nunca uma decisão inventada). Default 200_000. */
   searchBudget?: number;
@@ -155,6 +177,9 @@ export type AssignmentDiagnostics = {
    *  o rádio silencioso pode ser bateria/sombra. Exposto, não escondido. */
   pinnedNotDetected: TokenId[];
   capacityViolations: number;
+  /** O TETO DO "FORA" efetivamente aplicado. `"ilimitado"` = nenhum fechamento (hoje); um número =
+   *  quantos operadores podem, no máximo, estar fora de todas as zonas (a planta o mede). */
+  foraCapacity: number | "ilimitado";
   /** Atribuições viáveis enumeradas. 1 ⇒ o cenário é totalmente determinado. */
   solutions: number;
   /** Orçamento de busca estourado ⇒ NÃO houve entailment: `certain`/`decidida` caem para o que os
@@ -176,9 +201,18 @@ const sortStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
  *  com tempo incoerente ⇒ `true` (sem opinião — nunca uma restrição inventada). */
 function reachable(topo: Topology | undefined, from: ZoneId, to: ZoneId, elapsedMs: number): boolean {
   if (!topo || from === to) return true;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return true; // dado incoerente: não opinar
+
+  // A PLANTA vence a topologia abstrata: tempo real de deslocamento contornando obstáculos.
+  const travel = topo.minTravelMs?.[from];
+  if (travel !== undefined) {
+    const t = travel[to];
+    if (t === undefined) return false; // ZERO ESTRUTURAL: não há caminho navegável — nunca é possível
+    return Number.isFinite(t) ? elapsedMs >= t : false;
+  }
+
   const hop = Number.isFinite(topo.hopMs) && topo.hopMs > 0 ? topo.hopMs : 0;
   if (hop <= 0) return true;
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return true; // dado incoerente: não opinar
   const budget = Math.floor(elapsedMs / hop);
   if (budget <= 0) return false; // teleporte: nem um salto caberia no tempo decorrido
   let frontier: ZoneId[] = [from];
@@ -268,6 +302,15 @@ export function assignOperators(input: AssignmentInput): AssignmentResult {
     return zz?.capacity !== undefined && zz.occupancy > zz.capacity;
   }).length;
 
+  // —— o TETO DO "FORA" (fechamento total, parcial ou nenhum) ————————————————————————————————————
+  // `tagsMustBeInSomeZone` é açúcar de `foraCapacity: 0`. Sem nenhum dos dois, o "fora" é ILIMITADO —
+  // o estado honesto de hoje, em que a exclusividade poda mas não entranha.
+  const foraLimit: number = opts.tagsMustBeInSomeZone === true
+    ? 0
+    : Number.isFinite(opts.foraCapacity) && (opts.foraCapacity as number) >= 0
+      ? Math.floor(opts.foraCapacity as number)
+      : Number.POSITIVE_INFINITY;
+
   const diagnostics: AssignmentDiagnostics = {
     peopleCounted,
     tagsPresent,
@@ -276,12 +319,13 @@ export function assignOperators(input: AssignmentInput): AssignmentResult {
     offRoster,
     pinnedNotDetected,
     capacityViolations,
+    foraCapacity: Number.isFinite(foraLimit) ? foraLimit : "ilimitado",
     solutions: 0,
     budgetExceeded: false,
   };
 
   // —— domínios (as restrições 2/3/4 podam ANTES da busca) ————————————————————————————————————————
-  const closure = opts.tagsMustBeInSomeZone === true;
+  const closure = foraLimit <= 0; // fechamento TOTAL: "fora" nem entra no domínio
   const domains: { token: TokenId; values: string[] }[] = [];
   for (const token of assignable) {
     const pin = pinOf.get(token);
@@ -309,8 +353,12 @@ export function assignOperators(input: AssignmentInput): AssignmentResult {
   }
 
   // —— busca: enumera TODAS as atribuições viáveis (exclusividade é estrutural: 1 valor por operador) —
-  const limit = new Map<ZoneId, number>(zoneIds.map((z) => [z, zoneById.get(z)?.occupancy ?? 0]));
-  const count = new Map<ZoneId, number>(zoneIds.map((z) => [z, 0]));
+  // O "FORA" é apenas mais um place — com um TETO (`foraLimit`). Quando a planta o mede (as pessoas
+  // que a câmera conta no corredor), a exclusividade passa a entranhar sem fingir fechamento perfeito.
+  const limit = new Map<string, number>(zoneIds.map((z) => [z, zoneById.get(z)?.occupancy ?? 0]));
+  limit.set(FORA, foraLimit);
+  const count = new Map<string, number>(zoneIds.map((z) => [z, 0]));
+  count.set(FORA, 0);
   const valuesSeen = new Map<TokenId, Set<string>>(domains.map((d) => [d.token, new Set<string>()]));
   const zoneMin = new Map<ZoneId, number>(zoneIds.map((z) => [z, Number.POSITIVE_INFINITY]));
   const zoneMax = new Map<ZoneId, number>(zoneIds.map((z) => [z, 0]));
@@ -340,17 +388,14 @@ export function assignOperators(input: AssignmentInput): AssignmentResult {
       return;
     }
     for (const v of domains[i].values) {
-      if (v !== FORA) {
-        const c = (count.get(v) ?? 0) + 1;
-        if (c > (limit.get(v) ?? 0)) continue; // não se pode identificar mais gente do que a câmera vê
-        count.set(v, c);
-        chosen[i] = v;
-        dfs(i + 1);
-        count.set(v, c - 1);
-      } else {
-        chosen[i] = FORA;
-        dfs(i + 1);
-      }
+      const c = (count.get(v) ?? 0) + 1;
+      // Nem a zona (teto = pessoas que a câmera vê nela) nem o FORA (teto = pessoas que a câmera vê
+      // no corredor, ou ∞ sem planta) podem receber mais operadores do que comportam.
+      if (c > (limit.get(v) ?? 0)) continue;
+      count.set(v, c);
+      chosen[i] = v;
+      dfs(i + 1);
+      count.set(v, c - 1);
       if (budgetExceeded) return;
     }
   };

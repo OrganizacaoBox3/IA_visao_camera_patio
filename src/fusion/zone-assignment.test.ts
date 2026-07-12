@@ -423,6 +423,118 @@ describe("CA-A7 — determinismo, ordenação e ausência de NaN", () => {
   });
 });
 
+// —— CA-A9 — FECHAMENTO PARCIAL: o "fora" é um place com TETO, não um saco sem fundo ————————————
+//
+// O que a PLANTA BAIXA (`floor-plan.ts`) destrava: o corredor entre as mesas está DENTRO do campo da
+// câmera, então quem anda por ali é CONTADO. `foraCapacity` = essa contagem. É o meio-termo honesto
+// entre "fora é impossível" (fechamento total, uma assunção forte) e "fora é ilimitado" (hoje).
+
+describe("CA-A9 — fechamento PARCIAL (o teto do 'fora' que a planta mede)", () => {
+  const zones = [
+    { zoneId: "MESA4", occupancy: 1, capacity: 2, pinned: ["A"] },
+    { zoneId: "MESA7", occupancy: 1, capacity: 2 },
+  ];
+  const cenario = (foraCapacity?: number) =>
+    assignOperators(base({ zones, roster: ["A", "B"], radio: { present: ["A", "B"] }, options: { foraCapacity } }));
+
+  it("teto 0 (as zonas ladrilham, a área é completa) ≡ tagsMustBeInSomeZone: B é DECIDIDO por exclusão", () => {
+    expect(pl(cenario(0), "B")).toEqual({ kind: "decidida", token: "B", zoneId: "MESA7", via: "exclusao" });
+    expect(ok(cenario(0)).diagnostics.foraCapacity).toBe(0);
+  });
+
+  it("teto 1 (a câmera vê 1 pessoa no corredor) ⇒ B volta a ser AMBÍGUO — o corredor cabe nele", () => {
+    // HONESTIDADE: cobertura parcial NÃO é fechamento. Se há uma vaga no corredor, ela é um destino
+    // viável, e o sistema diz "não sei" — em vez de empurrar B para a MESA7 com cara de certeza.
+    expect(pl(cenario(1), "B")).toEqual({ kind: "ambigua", token: "B", zones: ["MESA7"], foraPossivel: true });
+    expect(ok(cenario(1)).diagnostics.foraCapacity).toBe(1);
+  });
+
+  it("sem planta, o teto é ILIMITADO — e é assim que o contrato o declara", () => {
+    expect(ok(cenario(undefined)).diagnostics.foraCapacity).toBe("ilimitado");
+    expect(pl(cenario(undefined), "B")).toMatchObject({ kind: "ambigua", foraPossivel: true });
+  });
+
+  it("o TETO do 'fora' é uma restrição de CONTAGEM: 2 operadores, 1 vaga no corredor, 1 vaga na mesa", () => {
+    // MESA4 conta 1 pessoa; o corredor, 1. Dois operadores presentes ⇒ um está na mesa e o outro no
+    // corredor — mas QUAL é qual, ninguém sabe. A saturação existe, a simetria permanece: AMBÍGUO.
+    const r = assignOperators(
+      base({
+        zones: [{ zoneId: "MESA4", occupancy: 1, capacity: 2 }],
+        roster: ["A", "B"],
+        radio: { present: ["A", "B"] },
+        options: { foraCapacity: 1 },
+      }),
+    );
+    expect(pl(r, "A")).toEqual({ kind: "ambigua", token: "A", zones: ["MESA4"], foraPossivel: true });
+    expect(pl(r, "B")).toEqual({ kind: "ambigua", token: "B", zones: ["MESA4"], foraPossivel: true });
+    expect(ok(r).diagnostics.solutions).toBe(2); // {A na mesa, B fora} ou {B na mesa, A fora}
+    expect(zn(r, "MESA4").anonymous).toEqual({ min: 0, max: 0 }); // mas a MESA4 sabe que NÃO tem anônimo
+  });
+
+  it("o teto do 'fora' pode tornar o cenário INVIÁVEL — e a falha é SEGURA (nenhum rótulo é emitido)", () => {
+    // 2 operadores, nenhuma zona ocupada e nenhuma vaga no corredor: a premissa de fechamento
+    // CONTRADIZ a contagem. É exatamente o que acontece quando a área observável NÃO era completa.
+    const r = assignOperators(
+      base({
+        zones: [{ zoneId: "MESA4", occupancy: 0 }],
+        roster: ["A", "B"],
+        radio: { present: ["A", "B"] },
+        options: { foraCapacity: 0 },
+      }),
+    );
+    expect(r.kind).toBe("inviavel");
+  });
+
+  it("`tagsMustBeInSomeZone` continua sendo o açúcar de teto 0 (contrato antigo intacto)", () => {
+    const a = assignOperators(base({ zones, roster: ["A", "B"], radio: { present: ["A", "B"] }, options: { tagsMustBeInSomeZone: true } }));
+    expect(JSON.stringify(a)).toBe(JSON.stringify(cenario(0)));
+  });
+});
+
+// —— CA-A10 — TOPOLOGIA REAL: os ZEROS ESTRUTURAIS que a planta deriva ———————————————————————————
+
+describe("CA-A10 — minTravelMs (a planta) vence a vizinhança abstrata", () => {
+  it("par AUSENTE do mapa = ZERO ESTRUTURAL: nem com o turno inteiro de tempo ele é alcançável", () => {
+    const r = assignOperators(
+      base({
+        ts: 8 * 3600_000, // 8 horas depois
+        zones: [
+          { zoneId: "MESA4", occupancy: 1 },
+          { zoneId: "ILHA", occupancy: 1 },
+        ],
+        roster: ["A"],
+        radio: { present: ["A"] },
+        lastSeen: { A: { zoneId: "MESA4", ts: 0 } },
+        // A planta diz: da MESA4 só se chega à MESA4. A ILHA está atrás de uma parede.
+        topology: { neighbors: {}, hopMs: 0, minTravelMs: { MESA4: { MESA4: 0 } } },
+        options: { tagsMustBeInSomeZone: true },
+      }),
+    );
+    expect(pl(r, "A")).toEqual({ kind: "decidida", token: "A", zoneId: "MESA4", via: "exclusao" });
+  });
+
+  it("DESVIO (contornar o rack): a mesa 'vizinha' custa 20 s — em 10 s ela é podada, em 30 s não", () => {
+    const topology = { neighbors: {}, hopMs: 0, minTravelMs: { MESA4: { MESA4: 0, MESA7: 20_000 } } };
+    const cen = (elapsed: number) =>
+      assignOperators(
+        base({
+          ts: elapsed,
+          zones: [
+            { zoneId: "MESA4", occupancy: 1 },
+            { zoneId: "MESA7", occupancy: 1 },
+          ],
+          roster: ["A"],
+          radio: { present: ["A"] },
+          lastSeen: { A: { zoneId: "MESA4", ts: 0 } },
+          topology,
+          options: { tagsMustBeInSomeZone: true },
+        }),
+      );
+    expect(pl(cen(10_000), "A")).toEqual({ kind: "decidida", token: "A", zoneId: "MESA4", via: "exclusao" });
+    expect(pl(cen(30_000), "A")).toMatchObject({ kind: "ambigua", zones: ["MESA4", "MESA7"] });
+  });
+});
+
 // —— CA-A8 — ponte com a CONSERVAÇÃO (o que sobreviveu do core antigo) ——————————————————————————
 
 describe("CA-A8 — zoneObservationsFromConservation: a conservação alimenta a atribuição", () => {

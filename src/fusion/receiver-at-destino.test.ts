@@ -52,6 +52,14 @@ import {
   wilsonInterval,
 } from "./visit-metrics";
 import type { VisitEpisode, VisitMetrics, VisitTick, VisitTrackObs } from "./visit-metrics";
+import {
+  agreementOnFailure,
+  computeAnchorMetrics,
+  computeAnchors,
+  falseAnchors,
+  sharedDataRisk,
+} from "./anchor-policy";
+import type { AnchorMetrics, OperatorEpisode, PolicyVariant } from "./anchor-policy";
 import { pixelToWorld } from "../vision/homography";
 import { DEFAULT_ROOM_GRID, optimalReceiver, radialSpan, type Pt } from "./receiver-geometry";
 
@@ -2070,6 +2078,503 @@ describe("REGRA 10 — piso operacional de n_eff, a previsão do 1 Hz, e a tabel
       expect(hz1.corr).toBeGreaterThan(15);
       expect(hz1.corr).toBeLessThan(25);
       expect(hz2.corr).toBeLessThan(12);
+    },
+    900000,
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// ADR-015 — A POLÍTICA DE ÂNCORA: o teto de 94% é do CANAL ou da POLÍTICA? (2026-07-12)
+//
+// A TESE DO REVISOR, literal: "a curva 85→94% mede a precisão de UM episódio ISOLADO. Mas o portal
+// não é um episódio isolado — é uma ÂNCORA DE TURNO, e o operador entra, sai, volta. A precisão não
+// é propriedade do canal. É propriedade da POLÍTICA DE DECISÃO sobre o canal. O teto de 94% é o teto
+// de FALAR NA PRIMEIRA OPORTUNIDADE. Não é o teto de ESPERAR DUAS CONCORDAREM."
+// PREVISÃO REGISTRADA: "dupla-confirmação (2 episódios concordantes, piso ~10 cada) entrega >97% de
+// precisão com cobertura de TURNO alta — melhor que qualquer piso único."
+//
+// A UNIDADE MUDA (é o coração do achado): a métrica NÃO é mais por episódio — é por OPERADOR.
+// Cobertura de TURNO = fração de operadores ancorados; precisão = fração dos ancorados que levou a
+// tag certa. Um operador = (cenário × seed × MAC-verdade) — todos os episódios daquela pessoa.
+//
+// ‼ CIRCULARIDADE (declarada, doutrina §5): cobertura e precisão saem do SIMULADOR (RSSI = f(dist)
+//   + ruído ⇒ |r| alto POR CONSTRUÇÃO) ⇒ INDICATIVAS, nunca campo. O que NÃO é circular e dimensiona
+//   a compra é a ARITMÉTICA de contagem (T exigido → corredor) e a MECÂNICA da política.
+// ‼ ONDE A CIRCULARIDADE MAIS MORDE: em piso BAIXO a barra |r| é quase perfeita (n_eff=4 ⇒ |r|≥0,96)
+//   — o sim CRUZA essa barra (o RSSI vem da distância), o campo não vai cruzar. Toda leitura de
+//   "corredor curto porque o piso caiu" tem de vir acompanhada da barra |r| exigida. A tabela mostra.
+// ‼ O "TURNO" AQUI TEM 120 s (o cenário do sim), não 8 h. Um turno real dá ao operador MUITO mais
+//   oportunidades de ancorar ⇒ a cobertura de turno medida aqui é um PISO, não uma previsão. A
+//   PRECISÃO não sofre desse viés.
+// ‼ E OS EPISÓDIOS DE UM OPERADOR AQUI SÃO, EM SUA MAIORIA, FRAGMENTOS DA MESMA CAMINHADA (gap
+//   mediano de 1,0 s — a fragmentação do tracker com ttlMs=1500, o achado #27), NÃO visitas
+//   separadas por minutos. Isso é o CASO DIFÍCIL para a tese: fragmentos vizinhos compartilham o
+//   viés corporal e a geometria do instante ⇒ os erros deles são os MAIS correlacionados possíveis.
+//   Se a dupla-confirmação funciona AQUI, funciona a fortiori entre visitas de verdade. Ver TAREFA 0.
+// ‼ RÉPLICAS DE MONTE-CARLO: cada cenário roda com SEED_REPLICATES sementes (mesmo gerador, outros
+//   sorteios) — é o que dá n de operadores suficiente para o IC de Wilson dizer algo. Réplicas são
+//   pessoas DIFERENTES (trajetórias distintas), não a mesma pessoa medida duas vezes.
+// ‼ τ→0 (ρ=0) em todo o bloco (resíduo da tag móvel é BRANCO — residual-autocorr.ts); receptor no
+//   DESTINO nas tabelas de decisão (a geometria do portal), com o BASELINE entrando na derivação do
+//   piso (pooled, como na medição de episódio único).
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+describe("ADR-015 — POLÍTICA DE ÂNCORA (k-confirmação): o teto de 94% é do canal ou da política?", () => {
+  const SEED_REPLICATES = 8; // sementes por cenário — Monte-Carlo, para o n de operadores existir
+  const PISOS = [3, 6, 10, 14, 19] as const; // piso de n_eff POR EPISÓDIO
+  const KS = [1, 2, 3] as const; // k=1 é a política ATUAL (falar na primeira oportunidade)
+  const CADS = [
+    { period: REAL_TAG_PERIOD_TICKS, dtS: REAL_TAG_PERIOD_S, label: "2,5 s (tag REAL)" },
+    { period: 2, dtS: 1.0, label: "1,0 s (1 Hz)" },
+    { period: 1, dtS: 0.5, label: "0,5 s (2 Hz)" },
+  ] as const;
+  const VARIANTS: PolicyVariant[] = ["concordance", "fisher"];
+  const WALK_LO = 1.1; // m/s
+  const WALK_HI = 1.2; // m/s
+  const MIN_DEC = 10; // decisões mínimas p/ o IC de Wilson dizer algo (a régua do laudo anterior)
+  const OLD_CEILING = 0.94; // o "teto do canal" que este bloco testa: 94% (precisão de episódio)
+
+  /** Episódios da suíte etiquetados por OPERADOR, numa cadência × posição de receptor. τ→0.
+   *  Memoizado: 3 cadências × 2 posições × 10 cenários × 8 seeds é caro (e determinístico). */
+  const opCache = new Map<string, { eps: OperatorEpisode[]; viol: number }>();
+  function collectOps(period: number, at: "base" | "dest"): { eps: OperatorEpisode[]; viol: number } {
+    const key = `${period}|${at}`;
+    const hit = opCache.get(key);
+    if (hit) return hit;
+    const vo = { rho: 0 }; // τ→0 (BRANCO — a estimativa pontual de campo)
+    const dtTagS = period * TICK_S;
+    const eps: OperatorEpisode[] = [];
+    let viol = 0;
+    for (const entry of FUSION_SCENARIOS.filter(inOverrideScope)) {
+      for (let r = 0; r < SEED_REPLICATES; r++) {
+        const seed = entry.seed + 1000 * r;
+        const opts = { ...entry.opts, rssiPeriodTicks: period };
+        const traj = person0Trajectory(opts, seed);
+        if (traj.length < 2) continue;
+        const simOpts = at === "dest" ? { ...opts, stationWorldOverride: destinationOf(traj) } : opts;
+        const episodes = computeVisitEpisodes(
+          visitTicksFromScenario(simulateFusionScenario(simOpts, seed)),
+          vo,
+        );
+        viol += countingViolations(episodes, dtTagS).length; // Regra 8 — violou = BUG na fonte
+        for (const e of episodes) {
+          if (e.candidates.length === 0) continue;
+          // O OPERADOR: a pessoa (MAC-verdade) dentro daquele cenário-semente. Sem tag → pseudo-
+          // operador por trackId (o eixo "rejeitar quem-não-tem-tag", contado à parte).
+          const who = e.truthTag ?? `SEM-TAG#${e.trackId}`;
+          eps.push({ operator: `${entry.name}#${seed}|${who}`, episode: e });
+        }
+      }
+    }
+    const out = { eps, viol };
+    opCache.set(key, out);
+    return out;
+  }
+
+  /** Métrica de TURNO de uma célula (cadência × posição × variante × piso × k). */
+  const cell = (
+    period: number,
+    at: "base" | "dest",
+    variant: PolicyVariant,
+    minNEff: number,
+    k: number,
+  ): AnchorMetrics =>
+    computeAnchorMetrics(computeAnchors(collectOps(period, at).eps, variant, { k, minNEff }));
+
+  const wl = (kk: number, n: number): number => wilsonInterval(kk, n).lo;
+
+  // O PISO OPERACIONAL é derivado POR CADÊNCIA, na geometria do PORTAL (`cadFloor`, na TAREFA 3) —
+  // porque é isso que se COMPRA: uma tag (Δt) e uma instalação. Um piso "pooled" sobre cadências e
+  // posições (a receita da medição de episódio único) misturaria a tag real com a de 2 Hz e o
+  // receptor do canto com o do destino — diluiria exatamente a decisão que se quer tomar.
+
+  /** A MELHOR célula de uma política (variante × k): a de maior IC95-INFERIOR da precisão (não a de
+   *  maior estimativa pontual — 13/13 não é 100%), com ≥10 âncoras. É o "teto IC-honesto" daquela
+   *  política, e é o número que responde à pergunta do revisor. */
+  type Best = { variant: PolicyVariant; k: number; piso: number; cad: string; lo: number; m: AnchorMetrics };
+  function bestCell(variant: PolicyVariant, k: number): Best | null {
+    let best: Best | null = null;
+    for (const c of CADS) {
+      for (const piso of PISOS) {
+        const m = cell(c.period, "dest", variant, piso, k);
+        if (m.anchored < MIN_DEC) continue;
+        const lo = wl(m.anchoredCorrect, m.anchored);
+        if (best === null || lo > best.lo) best = { variant, k, piso, cad: c.label, lo, m };
+      }
+    }
+    return best;
+  }
+
+  it(
+    "TAREFA 0 (Regra 8) — a soma de Fisher-z entre episódios é LEGÍTIMA? (dado compartilhado × erro correlacionado)",
+    () => {
+      const lines: string[] = [];
+      let totalOverlap = 0;
+      let totalPairs = 0;
+      for (const c of CADS) {
+        const { eps, viol } = collectOps(c.period, "dest");
+        expect(viol).toBe(0); // Regra 8 na FONTE: nDistinct ≤ ⌈T/Δt_tag⌉+1 e nEff ≤ nDistinct
+        const r = sharedDataRisk(eps, c.dtS);
+        totalOverlap += r.overlapping;
+        totalPairs += r.pairs;
+        lines.push(
+          `  Δt=${c.label.padEnd(17)} pares=${String(r.pairs).padStart(4)}  ` +
+            `SOBREPOSIÇÃO TEMPORAL=${String(r.overlapping).padStart(3)}  ` +
+            `gap<Δt_tag=${String(r.tightGaps).padStart(4)} (${pct(r.tightGaps / Math.max(1, r.pairs))}%)  ` +
+            `gap mediano=${r.medianGapS.toFixed(1)} s`,
+        );
+      }
+
+      // O 2º sensor, e o que REALMENTE decide a legitimidade: quando um episódio erra, o seguinte
+      // REPETE o erro? (erro sistemático ⇒ a concordância não é evidência independente — é o mesmo
+      // viés corporal/geometria duas vezes, e a dupla-confirmação só correlacionaria o próprio erro.)
+      const failLines: string[] = [];
+      const f10 = agreementOnFailure(collectOps(2, "dest").eps, 10); // 1 Hz, destino, piso 10
+      // O TETO DA INDEPENDÊNCIA (model-free): para o 2º episódio REPETIR o mesmo erro ele precisa,
+      // no MÍNIMO, errar. Logo, se os erros fossem independentes,
+      //     P(2º repete o MESMO erro | 1º errado) ≤ P(2º errado) = taxa de erro do episódio.
+      // (É um TETO, não uma igualdade — repetir a MESMA tag errada é ainda mais improvável.) A taxa
+      // de erro do episódio vem da política k=1 no mesmo piso/cadência (a 1ª decisão do operador).
+      const errRate = 1 - cell(2, "dest", "concordance", 10, 1).precision;
+      for (const piso of [3, 10, 19]) {
+        const f = agreementOnFailure(collectOps(2, "dest").eps, piso);
+        failLines.push(
+          `  piso ${String(piso).padStart(2)}: operadores c/ ≥2 episódios decididos = ${String(f.operators).padStart(3)}  |  ` +
+            `1º CERTO → 2º concorda: ${formatProportion(f.firstRightAndAgree, f.firstRight)}  |  ` +
+            `1º ERRADO → 2º REPETE O MESMO ERRO: ${formatProportion(f.firstWrongAndAgree, f.firstWrong)}`,
+        );
+      }
+
+      console.log(
+        `\n═══ TAREFA 0 — A INDEPENDÊNCIA, MEDIDA (a inflação que já nos pegou 2×) ═══\n` +
+          `(1) DADO COMPARTILHADO entre episódios do MESMO operador (receptor no destino):\n` +
+          `${lines.join("\n")}\n` +
+          `  ⇒ episódios de um operador são janelas CONTÍGUAS DISJUNTAS (buildEpisodes fecha o episódio\n` +
+          `    quando a pista some/troca de verdade): ${totalOverlap === 0 ? "ZERO sobreposição temporal" : `${totalOverlap} SOBREPOSIÇÕES — BUG`} em ${totalPairs} pares ⇒ NENHUMA\n` +
+          `    amostra entra em dois z. NÃO é a inflação de event-metrics.ts (lá, ticks vizinhos dividiam\n` +
+          `    15/16 da janela deslizante).\n` +
+          `  ⚠ O VAZAMENTO QUE EXISTE, medido e DECLARADO: quando o gap entre episódios é < Δt_tag, a\n` +
+          `    leitura CARREGADA no 1º tick do episódio seguinte pode ser o MESMO advertisement que\n` +
+          `    fechou o anterior. Com a tag REAL (2,5 s) isso atinge a MAIORIA dos pares (gap mediano\n` +
+          `    1,0 s — os "episódios" aqui são FRAGMENTOS do tracker, não visitas separadas). É no\n` +
+          `    MÁXIMO 1 leitura por par (o snapshot só segura UM valor) contra n_eff de vários — um\n` +
+          `    viés de 2ª ordem, não a inflação multiplicativa de antes. A 2 Hz ele ZERA.\n\n` +
+          `(2) ERRO CORRELACIONADO — o risco que a disjunção temporal NÃO resolve (1 Hz, destino):\n` +
+          `${failLines.join("\n")}\n` +
+          `  ⇒ VEREDITO: os erros SÃO correlacionados — ${formatProportion(f10.firstWrongAndAgree, f10.firstWrong)} de repetição do MESMO erro (piso 10).\n` +
+          `    O TETO DA INDEPENDÊNCIA é model-free: para repetir o MESMO erro, o 2º precisa no mínimo\n` +
+          `    ERRAR ⇒ sob independência, P(repete o mesmo erro) ≤ taxa de erro do episódio = ${pct(errRate)}%.\n` +
+          `    Medimos ${pct(f10.firstWrongAndAgree / Math.max(1, f10.firstWrong))}% — ${(f10.firstWrongAndAgree / Math.max(1, f10.firstWrong) / Math.max(1e-9, errRate)).toFixed(1)}× o TETO da independência. A concordância\n` +
+          `    NÃO é evidência independente — é o mesmo viés corporal/geometria visto duas vezes. MAS a\n` +
+          `    repetição está LONGE de 100%: ~${pct(1 - f10.firstWrongAndAgree / Math.max(1, f10.firstWrong))}% dos erros do 1º episódio SÃO pegos pelo 2º\n` +
+          `    (discordância → abstenção). É por isso que a política compra precisão SEM que os episódios\n` +
+          `    sejam independentes — e é por isso que ela compra MENOS do que a conta de independência\n` +
+          `    (n_eff 19+19=38) promete. A soma de Fisher-z é LEGÍTIMA quanto ao DADO (disjunto), e\n` +
+          `    OTIMISTA quanto ao ERRO (correlacionado) — declarado, não escondido.`,
+      );
+
+      // ── Assertivas (o VEREDITO, não números frágeis) ──
+      expect(totalOverlap).toBe(0); // DADO compartilhado: ZERO (a soma de Fisher é legítima nesse eixo)
+      expect(totalPairs).toBeGreaterThan(50); // a medição tem massa
+      // O ERRO é correlacionado (bem acima do acaso) — o achado que impede vender a conta ingênua…
+      expect(f10.firstWrongAndAgree / f10.firstWrong).toBeGreaterThan(0.2);
+      // …e mesmo assim a MAIORIA dos erros é pega pela discordância (senão a política não serviria).
+      expect(f10.firstWrongAndAgree / f10.firstWrong).toBeLessThan(0.6);
+    },
+    900000,
+  );
+
+  it(
+    "TAREFA 1+2 — A TABELA QUE DECIDE: piso × k × Δt_tag (precisão e cobertura DE TURNO, IC95 Wilson)",
+    () => {
+      const head =
+        "piso".padEnd(6) +
+        "k".padEnd(4) +
+        "PRECISÃO de turno (IC95, n=âncoras)".padEnd(40) +
+        "COBERTURA de turno (IC95, n=operadores)".padEnd(42) +
+        "cob. ÚTIL (ancorado E certo)";
+      const out: string[] = [];
+      for (const variant of VARIANTS) {
+        for (const c of CADS) {
+          const rows: string[] = [
+            `\n── variante ${variant === "concordance" ? "(a) CONCORDÂNCIA" : "(b) SOMA DE FISHER-Z"} · Δt_tag = ${c.label} · receptor no DESTINO ──`,
+            head,
+            "-".repeat(head.length),
+          ];
+          for (const piso of PISOS) {
+            for (const k of KS) {
+              const m = cell(c.period, "dest", variant, piso, k);
+              rows.push(
+                `${String(piso).padEnd(6)}${String(k).padEnd(4)}` +
+                  `${(m.anchored ? formatProportion(m.anchoredCorrect, m.anchored) : "— (nada ancorado)").padEnd(40)}` +
+                  `${formatProportion(m.anchored, m.operators).padEnd(42)}` +
+                  `${pct(m.correctTurnCoverage)}%`,
+              );
+            }
+          }
+          out.push(rows.join("\n"));
+        }
+      }
+
+      // ── O VEREDITO IC-HONESTO: o TETO de cada política (maior IC95-INFERIOR da precisão) ──
+      const bests = VARIANTS.flatMap((v) => KS.map((k) => bestCell(v, k))).filter(
+        (b): b is Best => b !== null,
+      );
+      const best1 = bests.filter((b) => b.k === 1).reduce((a, b) => (b.lo > a.lo ? b : a));
+      const bestK2plus = bests.filter((b) => b.k >= 2).reduce((a, b) => (b.lo > a.lo ? b : a));
+
+      // ── A PREVISÃO REGISTRADA: piso 10, k=2, CONCORDÂNCIA ⇒ >97% de precisão? ──
+      // CRITÉRIO DECLARADO ANTES DE OLHAR: a previsão se confirma numa cadência se a precisão de
+      // turno PONTUAL passa de 97% E a cobertura de turno é ALTA (≥50% dos operadores), com ≥10
+      // âncoras. (O ">97%" é do revisor; o "alta" é a leitura mais generosa possível de "cobertura
+      // de TURNO alta" — se nem assim confirmar, não foi por régua apertada.)
+      const pred = CADS.map((c) => {
+        const m = cell(c.period, "dest", "concordance", 10, 2);
+        const single = cell(c.period, "dest", "concordance", 19, 1);
+        return {
+          label: c.label,
+          m,
+          single,
+          confirmed: m.precision > 0.97 && m.turnCoverage >= 0.5 && m.anchored >= MIN_DEC,
+        };
+      });
+      const predConfirmed = pred.some((p) => p.confirmed);
+
+      // O eixo separado (rejeitar quem NÃO tem tag) — a §2 mediu que a agregação POR SUSTENTAÇÃO não
+      // o resolvia; a ABSTENÇÃO POR DISCORDÂNCIA é outro mecanismo. Medido à parte, sem misturar.
+      const fa1 = falseAnchors(
+        computeAnchors(collectOps(2, "dest").eps, "concordance", { k: 1, minNEff: 10 }),
+      );
+      const fa2 = falseAnchors(
+        computeAnchors(collectOps(2, "dest").eps, "concordance", { k: 2, minNEff: 10 }),
+      );
+
+      console.log(
+        `\n═══ TAREFA 1+2 — A TABELA QUE DECIDE (unidade = ÂNCORA/OPERADOR; τ→0; SIMULADOR ⇒ indicativa) ═══` +
+          `${out.join("\n")}\n` +
+          `\n★★ O TETO DE CADA POLÍTICA (a MELHOR célula de cada k — maior IC95-INFERIOR da precisão,\n` +
+          `   não a maior estimativa pontual; ≥${MIN_DEC} âncoras) ★★\n` +
+          bests
+            .map(
+              (b) =>
+                `  ${(b.variant === "concordance" ? "(a) concordância" : "(b) Fisher-z").padEnd(18)} k=${b.k}  ` +
+                `melhor célula: piso ${String(b.piso).padStart(2)}, Δt=${b.cad.padEnd(17)} ⇒ ` +
+                `precisão ${formatProportion(b.m.anchoredCorrect, b.m.anchored).padEnd(38)} ` +
+                `cobertura ${formatProportion(b.m.anchored, b.m.operators)}`,
+            )
+            .join("\n") +
+          `\n\n  ⇒ TETO da política de EPISÓDIO ÚNICO (k=1): IC95-inf = ${pct(best1.lo)}%  ` +
+          `(${best1.variant === "concordance" ? "concordância" : "Fisher-z"}, piso ${best1.piso}, ${best1.cad})\n` +
+          `  ⇒ TETO da política de k≥2:                 IC95-inf = ${pct(bestK2plus.lo)}%  ` +
+          `(${bestK2plus.variant === "concordance" ? "concordância" : "Fisher-z"}, k=${bestK2plus.k}, piso ${bestK2plus.piso}, ${bestK2plus.cad})\n` +
+          `  ⇒ O TETO DE ${pct(OLD_CEILING)}% ERA DA POLÍTICA? ${
+            bestK2plus.lo > OLD_CEILING && bestK2plus.lo >= 0.97
+              ? "**SIM — DISSOLVIDO**. Nenhuma política de episódio\n" +
+                `    único sustenta 97% (o melhor IC-inf é ${pct(best1.lo)}%); a k-confirmação sustenta ${pct(bestK2plus.lo)}% com\n` +
+                `    cobertura de turno de ${pct(bestK2plus.m.turnCoverage)}%. A precisão É propriedade da POLÍTICA — o revisor está certo.`
+              : "NÃO — o teto resistiu à política."
+          }\n` +
+          `\n★★ A PREVISÃO LITERAL DO REVISOR (piso ~10 por episódio, k=2 CONCORDANTES ⇒ >97%) ★★\n` +
+          pred
+            .map(
+              (p) =>
+                `  Δt=${p.label.padEnd(17)} precisão ${(p.m.anchored ? formatProportion(p.m.anchoredCorrect, p.m.anchored) : "— (nada ancorado)").padEnd(38)} ` +
+                `cobertura ${formatProportion(p.m.anchored, p.m.operators).padEnd(38)} ⇒ ${p.confirmed ? "**CONFIRMA**" : "não confirma"}`,
+            )
+            .join("\n") +
+          `\n  ⇒ VEREDITO BINÁRIO DA CÉLULA PREVISTA: ${predConfirmed ? "**SE CONFIRMA**" : "**NÃO SE CONFIRMA**"} ` +
+          `(critério declarado ANTES: precisão pontual >97% E cobertura ≥50%, com ≥${MIN_DEC} âncoras).\n` +
+          `    A DIREÇÃO da tese está certa e o MECANISMO funciona; o que a medição corrige é o PONTO:\n` +
+          `    o piso 10 NÃO é onde a dupla-confirmação entrega 97% — e com a TAG REAL (2,5 s) a política\n` +
+          `    de concordância COLAPSA (dois episódios com n_eff>10 exigiriam 2×~23 s de observação: quase\n` +
+          `    nenhum operador tem isso). A célula que dissolve o teto é ${bestK2plus.variant === "concordance" ? "concordância" : "Fisher-z"} k=${bestK2plus.k}, piso ${bestK2plus.piso}, ${bestK2plus.cad}.\n` +
+          `\n  ABSTENÇÃO POR DISCORDÂNCIA (o mecanismo que converte erro em silêncio) — 1 Hz, piso 10:\n` +
+          `    k=1: ${cell(2, "dest", "concordance", 10, 1).abstainedByDisagreement} (por construção — o k=1 nunca compara)   ` +
+          `k=2: ${cell(2, "dest", "concordance", 10, 2).abstainedByDisagreement} abstenções por discordância\n` +
+          `\n★ O EIXO QUE MAIS IMPORTA PARA A MÉTRICA-QUE-MATA (<1 falso alerta/turno): rejeitar quem NÃO\n` +
+          `  tem tag (1 Hz, piso 10; ${fa1.noTagOperators} pseudo-operadores SEM tag na suíte):\n` +
+          `    âncoras FALSAS com k=1: ${fa1.anchored}   com k=2: ${fa2.anchored}` +
+          `${fa1.anchored > 0 ? `   ⇒ ${(100 * (1 - fa2.anchored / fa1.anchored)).toFixed(0)}% de REDUÇÃO de falso alerta` : ""}\n` +
+          `    (a §2 mediu que a agregação POR SUSTENTAÇÃO não resolvia este eixo — um falso rótulo\n` +
+          `     sustentado virava falso evento. A ABSTENÇÃO POR DISCORDÂNCIA é outro mecanismo, e ELE resolve.)`,
+      );
+
+      // ── Assertivas ROBUSTAS (o VEREDITO, não números frágeis) ──
+      // 1) População com massa.
+      expect(cell(2, "dest", "concordance", 3, 1).operators).toBeGreaterThan(30);
+      // 2) k=1 é o BASELINE fiel: nunca abstém por discordância (não há com quem discordar).
+      expect(cell(2, "dest", "concordance", 10, 1).abstainedByDisagreement).toBe(0);
+      // 3) O TRADE central: subir k NUNCA aumenta a cobertura (exige mais evidência).
+      for (const c of CADS) {
+        expect(cell(c.period, "dest", "concordance", 10, 2).turnCoverage).toBeLessThanOrEqual(
+          cell(c.period, "dest", "concordance", 10, 1).turnCoverage,
+        );
+      }
+      // 4) ★ O ACHADO, SELADO: NENHUMA política de episódio único sustenta 97% (IC-honesto)…
+      expect(best1.lo).toBeLessThan(0.97);
+      // …e a k-confirmação SUSTENTA — o teto de 94% era da POLÍTICA, não do canal.
+      expect(bestK2plus.lo).toBeGreaterThanOrEqual(0.97);
+      expect(bestK2plus.lo).toBeGreaterThan(best1.lo);
+      expect(bestK2plus.m.turnCoverage).toBeGreaterThan(0.5); // e com cobertura de turno ALTA
+      // 5) E a política ATACA a métrica-que-mata: k=2 corta o falso alerta de quem não tem tag.
+      expect(fa2.anchored).toBeLessThan(fa1.anchored);
+    },
+    900000,
+  );
+
+  it(
+    "TAREFA 3 — A COMPRA RECOMPUTADA COM A POLÍTICA: o corredor encolhe?",
+    () => {
+      /** MENOR T (passo 0,5 s) em que um episódio PODE cruzar o piso. ESTRITO (`> floor`), porque o
+       *  gate é `nEff > minNEff` — com nDistinct == floor o episódio NUNCA decide. (A tabela do laudo
+       *  anterior usava `>=`, o que subestima o T exigido em UM advertisement — corrigido aqui.) */
+      const tForFloor = (dtS: number, floor: number): number => {
+        for (let t = 0.5; t <= 600; t += 0.5) {
+          if (maxDistinctReadings(t * 1000, dtS) > floor) return t;
+        }
+        return Number.POSITIVE_INFINITY;
+      };
+      const rBarOf = (nd: number): number =>
+        nd > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (nd - 3))) : Number.NaN;
+
+      // A LADEIRA DE ALVOS: o piso NÃO é constante da natureza — é o preço que se aceita pagar
+      // (Regra 10). Sob k=2 o mesmo alvo de precisão se compra com piso MENOR ⇒ T menor ⇒ corredor
+      // menor. É EXATAMENTE isso que a tabela mede.
+      const TARGETS = [0.9, 0.95, 0.97] as const;
+      const head =
+        "alvo(IC-inf)".padEnd(14) +
+        "política".padEnd(22) +
+        "piso/ep".padEnd(9) +
+        "Δt_tag".padEnd(18) +
+        "T exig.".padEnd(9) +
+        "corredor 1,1–1,2 m/s".padEnd(22) +
+        "|r| exig.".padEnd(10) +
+        "COBERTURA de turno".padEnd(34) +
+        "PRECISÃO de turno";
+      const lines = [head, "-".repeat(head.length)];
+      const corridor: Record<string, number> = {}; // `${target}|${k}|${dtS}` → metros
+      const floorAt: Record<string, number> = {}; // `${target}|${k}` → piso
+
+      // O PISO É DERIVADO POR CADÊNCIA, na geometria do PORTAL (receptor no destino) — porque é isso
+      // que se COMPRA: uma tag (Δt) e uma instalação. O piso "pooled" (que mistura a tag real com a
+      // de 2 Hz e o receptor no canto com o do destino) dilui exatamente a decisão que se quer tomar.
+      const cadFloor = (period: number, k: number, target: number): number => {
+        for (let p = 3; p <= 20; p++) {
+          const m = cell(period, "dest", "concordance", p, k);
+          if (m.anchored >= MIN_DEC && wl(m.anchoredCorrect, m.anchored) >= target) return p;
+        }
+        return Number.NaN;
+      };
+
+      for (const target of TARGETS) {
+        for (const k of [1, 2] as const) {
+          for (const c of CADS) {
+            const floor = cadFloor(c.period, k, target);
+            floorAt[`${target}|${k}|${c.dtS}`] = floor;
+            const pol = k === 1 ? "k=1 (ATUAL: 1ª fala)" : "k=2 (dupla-confirm.)";
+            if (!Number.isFinite(floor)) {
+              lines.push(
+                `${`≥${pct(target)}%`.padEnd(14)}${pol.padEnd(22)}${"—".padEnd(9)}${c.label.padEnd(18)}` +
+                  `IMPOSSÍVEL — nenhum piso ≤20 sustenta este alvo nesta cadência`,
+              );
+              continue;
+            }
+            const t = tForFloor(c.dtS, floor);
+            const nd = maxDistinctReadings(t * 1000, c.dtS);
+            const m = cell(c.period, "dest", "concordance", floor, k);
+            corridor[`${target}|${k}|${c.dtS}`] = t * WALK_HI;
+            lines.push(
+              `${`≥${pct(target)}%`.padEnd(14)}` +
+                `${pol.padEnd(22)}` +
+                `${String(floor).padEnd(9)}` +
+                `${c.label.padEnd(18)}` +
+                `${`${t.toFixed(1)} s`.padEnd(9)}` +
+                `${`${(t * WALK_LO).toFixed(1)}–${(t * WALK_HI).toFixed(1)} m`.padEnd(22)}` +
+                `${rBarOf(nd).toFixed(2).padEnd(10)}` +
+                `${formatProportion(m.anchored, m.operators).padEnd(34)}` +
+                `${m.anchored ? formatProportion(m.anchoredCorrect, m.anchored) : "— (nada ancorado)"}`,
+            );
+          }
+        }
+      }
+
+      // A COMPARAÇÃO SEM TRUQUE: piso 19 FIXO (o do laudo anterior) ⇒ corredor FIXO pela aritmética.
+      // Só a POLÍTICA muda. É aqui que se lê o que a k-confirmação compra e o que ela paga.
+      const fixedPiso19 = CADS.map((c) => {
+        const t = tForFloor(c.dtS, 19);
+        const m1 = cell(c.period, "dest", "concordance", 19, 1);
+        const m2 = cell(c.period, "dest", "concordance", 19, 2);
+        return (
+          `    ${c.label.padEnd(17)} corredor ${`${(t * WALK_LO).toFixed(0)}–${(t * WALK_HI).toFixed(0)} m`.padEnd(9)} (T=${t.toFixed(1)} s)\n` +
+          `      k=1: precisão ${(m1.anchored ? formatProportion(m1.anchoredCorrect, m1.anchored) : "— (nada ancorado)").padEnd(38)} cobertura ${formatProportion(m1.anchored, m1.operators)}\n` +
+          `      k=2: precisão ${(m2.anchored ? formatProportion(m2.anchoredCorrect, m2.anchored) : "— (nada ancorado)").padEnd(38)} cobertura ${formatProportion(m2.anchored, m2.operators)}`
+        );
+      });
+
+      const shrink = (target: number, dt: number): string => {
+        const a = corridor[`${target}|1|${dt}`];
+        const b = corridor[`${target}|2|${dt}`];
+        const f1 = floorAt[`${target}|1|${dt}`];
+        const f2 = floorAt[`${target}|2|${dt}`];
+        if (!Number.isFinite(f1) && Number.isFinite(f2))
+          return `IMPOSSÍVEL com episódio único → ${b.toFixed(0)} m com k=2 (piso ${f2})`;
+        if (!Number.isFinite(f1) || !Number.isFinite(f2)) return "IMPOSSÍVEL em ambas";
+        return `${a.toFixed(0)} m (piso ${f1}) → ${b.toFixed(0)} m (piso ${f2})` +
+          `${a === b ? " — MESMO corredor: o que a política compra aqui é PRECISÃO, não metro" : ` (${(a / b).toFixed(1)}× menor)`}`;
+      };
+
+      console.log(
+        `\n═══ TAREFA 3 — A TABELA DE COMPRA RECOMPUTADA COM A POLÍTICA (τ→0; concordância) ═══\n` +
+          `${lines.join("\n")}\n\n` +
+          `  T exigido = o MENOR episódio que PODE cruzar o piso (aritmética de contagem: ⌈T/Δt⌉+1 > piso).\n` +
+          `  corredor  = T × velocidade de caminhada = o que a CÂMERA precisa OBSERVAR (receptor no fim).\n` +
+          `  Com k=2 o operador precisa PASSAR 2× pelo corredor (entrada + volta do intervalo, p.ex.) —\n` +
+          `  o corredor ENCOLHE, a exigência de REPETIÇÃO aparece. É a troca que a política faz.\n\n` +
+          `★★ O CORREDOR ENCOLHEU? (mesmo ALVO de precisão, episódio único → dupla-confirmação) ★★\n` +
+          TARGETS.map(
+            (t) =>
+              `  alvo ≥${pct(t)}% (IC95-inf da precisão de turno):\n` +
+              `      tag REAL 2,5 s: ${shrink(t, 2.5)}\n` +
+              `      1 Hz:           ${shrink(t, 1)}\n` +
+              `      2 Hz:           ${shrink(t, 0.5)}`,
+          ).join("\n") +
+          `\n\n⚠ HONESTIDADE OBRIGATÓRIA SOBRE ESTE ENCOLHIMENTO (a coluna "|r| exigido" existe para isto):\n` +
+          `  o piso cair leva a barra de correlação às alturas — em n_eff=4 o teste exige |r| ≥ 0,96. O\n` +
+          `  SIMULADOR cruza essa barra (ele GERA o RSSI a partir da distância); o CAMPO não vai cruzar.\n` +
+          `  ⇒ O corredor curto derivado de piso BAIXO (as linhas de alvo 90%, piso 3) é a parte MAIS\n` +
+          `    circular desta medição — NÃO dimensione compra por ela. As linhas com |r| exigido ≤ ~0,6\n` +
+          `    (piso ≥ 12) são as defensáveis.\n\n` +
+          `★★ A COMPARAÇÃO APPLES-TO-APPLES COM A TABELA ANTERIOR (piso 19 FIXO ⇒ CORREDOR FIXO) ★★\n` +
+          `  A tabela do laudo anterior (episódio único, piso 19) deu: 2,5 s → 47-52 m (MORTA) · 1 Hz →\n` +
+          `  19-21 m · 2 Hz → 10-11 m. Aqueles pisos saíram da curva POR EPISÓDIO; os desta tabela saem da\n` +
+          `  curva POR ÂNCORA (população diferente) — comparar os PISOS entre laudos seria maçã×laranja.\n` +
+          `  O que se compara sem truque é: MESMO piso 19, MESMO corredor, k=1 × k=2 — só a POLÍTICA muda:\n` +
+          fixedPiso19.join("\n") +
+          `\n  ⇒ NO MESMO CORREDOR, a política troca cobertura por precisão. É a resposta honesta a "o\n` +
+          `    corredor encolhe?": no alvo ALTO (≥97%), ele NÃO encolhe — ele CONTINUA ~10 m (2 Hz), mas\n` +
+          `    passa a EXISTIR (com episódio único, 97% é inalcançável em qualquer corredor). O encolhimento\n` +
+          `    real aparece nos alvos mais baixos, e vem com barra |r| que o campo não sustenta.`,
+      );
+
+      // ── Assertivas: a ARITMÉTICA (contagem), não os números do sim ──
+      // 1) O gate é ESTRITO: com nDistinct == piso o episódio não decide (o T exigido tem de dar +1).
+      expect(maxDistinctReadings(tForFloor(1.0, 10) * 1000, 1.0)).toBeGreaterThan(10);
+      expect(maxDistinctReadings((tForFloor(1.0, 10) - 0.5) * 1000, 1.0)).toBeLessThanOrEqual(10);
+      // 2) O PISO sob k=2 nunca é MAIOR que sob k=1 para o mesmo alvo E cadência (exigir concordância
+      //    só REMOVE decisão errada — nunca adiciona). É o mecanismo do encolhimento do corredor.
+      for (const t of TARGETS) {
+        for (const c of CADS) {
+          const f1 = floorAt[`${t}|1|${c.dtS}`];
+          const f2 = floorAt[`${t}|2|${c.dtS}`];
+          if (Number.isFinite(f1) && Number.isFinite(f2)) expect(f2).toBeLessThanOrEqual(f1);
+        }
+      }
+      // 3) ★ O ALVO DE 97% (o da previsão) é IMPOSSÍVEL com episódio único em TODA cadência, e
+      //    POSSÍVEL com k=2 em ALGUMA — o achado que redimensiona a compra. Se flipar, re-ler o laudo.
+      for (const c of CADS) expect(Number.isFinite(floorAt[`0.97|1|${c.dtS}`])).toBe(false);
+      expect(CADS.some((c) => Number.isFinite(floorAt[`0.97|2|${c.dtS}`]))).toBe(true);
+      // 4) A cadência segue sendo alavanca LINEAR sobre o T exigido (a lei, 1º termo).
+      expect(tForFloor(1.0, 10)).toBeLessThan(tForFloor(REAL_TAG_PERIOD_S, 10));
+      expect(tForFloor(0.5, 10)).toBeLessThan(tForFloor(1.0, 10));
     },
     900000,
   );
