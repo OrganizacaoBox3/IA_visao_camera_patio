@@ -17,15 +17,13 @@ import { buildFusionFrame } from "./frame";
 import { parseFusionSession } from "./session-loader";
 import {
   dedupeConsecutiveRssi,
+  estimateFreshTau,
   estimateTau,
   fitPathLoss,
-  fitTauToAcf,
-  holdCorrectedAcf,
   holdOnlyAcf,
   nEffFromTau,
   rhoFromTau,
   rssiBlockDurationsS,
-  tauUpperBoundS,
   timeBinnedAcf,
 } from "./residual-autocorr";
 import type { RssiSample } from "./residual-autocorr";
@@ -182,16 +180,17 @@ describe("residual-autocorr (sintético — o estimador recupera um τ conhecido
       expect(Math.abs(crua.acf[i].rho - nul[i])).toBeLessThan(0.15); // a curva É o hold
     }
 
-    // (3) A CORREÇÃO devolve a verdade: ρ_fresca ≈ 0 em todo lag, e o τ colapsa. Sem isto,
-    //     qualquer τ "medido" de um snapshot retido é indistinguível de artefato de amostragem.
-    const corr = holdCorrectedAcf(crua.acf, blocks);
-    for (const p of corr) if (p.pairs >= 50) expect(Math.abs(p.rho)).toBeLessThan(0.2);
-    expect(fitTauToAcf(corr).tauS).toBeLessThan(0.6);
+    // (3) O ESTIMADOR HONESTO (pares do MESMO degrau EXCLUÍDOS) devolve a verdade: ρ_fresca ≈ 0 em
+    //     todo lag, e o τ colapsa. Sem isto, qualquer τ "medido" de um snapshot retido é
+    //     indistinguível de artefato de amostragem.
+    const fresh = estimateFreshTau(raw, { binS: 0.5, maxLagS: 10 })!;
+    for (const p of fresh.acf) if (p.pairs >= 50) expect(Math.abs(p.rho)).toBeLessThan(0.2);
+    expect(fresh.tauS).toBeLessThan(0.6);
   });
 
-  it("a correção do hold PRESERVA memória REAL (não é uma máquina de zerar τ)", () => {
-    // Controle positivo da correção: AR(1) com τ=4 s AMOSTRADO E RETIDO como no campo. A correção
-    // tem de RECUPERAR o τ≈4 s — se ela zerasse tudo, o teste acima não provaria nada.
+  it("o estimador honesto PRESERVA memória REAL (não é uma máquina de zerar τ)", () => {
+    // Controle positivo: AR(1) com τ=4 s AMOSTRADO E RETIDO como no campo. O estimador tem de
+    // RECUPERAR o τ≈4 s — se ele zerasse tudo, o teste acima não provaria nada.
     const randn = makeRandn(31);
     const postS = 0.55;
     const advS = 2.5;
@@ -210,9 +209,7 @@ describe("residual-autocorr (sintético — o estimador recupera um τ conhecido
       }
       raw.push({ ts: t * 1000, dist: distAt(t), rssi: held });
     }
-    const crua = estimateTau(raw, { binS: 0.5, maxLagS: 20, dedupe: false })!;
-    const corr = holdCorrectedAcf(crua.acf, rssiBlockDurationsS(raw));
-    const tau = fitTauToAcf(corr).tauS;
+    const tau = estimateFreshTau(raw, { binS: 0.5, maxLagS: 20 })!.tauS;
     expect(tau).toBeGreaterThan(2.5); // recupera a memória real (τ=4 s), ±
     expect(tau).toBeLessThan(6.5);
   });
@@ -364,33 +361,19 @@ describe.skipIf(!WALK_FILE)("residual-autocorr — τ_MÓVEL na gravação REAL 
       dedup: NonNullable<ReturnType<typeof estimateTau>>;
       raw: NonNullable<ReturnType<typeof estimateTau>>;
       blocks: number[];
-      corrAcf: ReturnType<typeof holdCorrectedAcf>;
-      tauCorr: number;
-      tauUpper: number;
+      fresh: NonNullable<ReturnType<typeof estimateFreshTau>>;
     };
     const rows: Row[] = [];
     for (const tag of tags) {
       const s = sampleFor(tag);
       // (a) série DEDUPLICADA (só as transições = as leituras FRESCAS) — é o que o n_eff conta;
       // (b) série CRUA (snapshot com as repetições) — DIAGNÓSTICO: exibe o platô de sample-and-hold;
-      // (c) a CRUA CORRIGIDA do hold — o estimador HONESTO do decaimento (ver holdCorrectedAcf).
+      // (c) estimateFreshTau — o HONESTO: ACF com os pares do MESMO degrau EXCLUÍDOS.
       const dedup = estimateTau(s, { binS: 1, maxLagS: 20 });
       const raw = estimateTau(s, { binS: 1, maxLagS: 20, dedupe: false });
-      if (!dedup || !raw) continue;
-      const blocks = rssiBlockDurationsS(s);
-      const corrAcf = holdCorrectedAcf(raw.acf, blocks);
-      rows.push({
-        tag,
-        dedup,
-        raw,
-        blocks,
-        corrAcf,
-        tauCorr: fitTauToAcf(corrAcf).tauS,
-        // τ CONSERVADOR: o maior τ que algum bin da ACF corrigida ainda sustenta (ver tauUpperBoundS).
-        // Quando a ACF corrigida é ≈0 (branco), o AJUSTE devolve 0 — mas o dado só prova que τ está
-        // ABAIXO da resolução de advertising, não que é ZERO. É este o número que vai ao n_eff.
-        tauUpper: tauUpperBoundS(corrAcf, { maxLagS: 8 }),
-      });
+      const fresh = estimateFreshTau(s, { binS: 1, maxLagS: 8 });
+      if (!dedup || !raw || !fresh) continue;
+      rows.push({ tag, dedup, raw, blocks: rssiBlockDurationsS(s), fresh });
     }
     expect(rows.length).toBeGreaterThan(0);
 
@@ -414,14 +397,13 @@ describe.skipIf(!WALK_FILE)("residual-autocorr — τ_MÓVEL na gravação REAL 
           `  ${r.dedup.fit.r.toFixed(3).padStart(7)}  ${r.dedup.fit.theta.toFixed(1).padStart(6)}  ` +
           `${String(r.dedup.nSamples).padStart(6)}  ${r.dedup.dtS.toFixed(2).padStart(5)}  ` +
           `${r.dedup.rho1.toFixed(3).padStart(10)}  ${r.raw.tauFitS.toFixed(2).padStart(9)}  ` +
-          `${r.tauCorr.toFixed(2).padStart(11)}  ${r.tauUpper.toFixed(2).padStart(12)}`,
+          `${r.fresh.tauS.toFixed(2).padStart(11)}  ${r.fresh.tauUpperS.toFixed(2).padStart(12)}`,
       );
     }
     out.push(
-      "  ⇒ τ_CRUA (o que se leria do JSONL sem corrigir) fica em 2–39 s — DENTRO da faixa 2,8–32 s da\n" +
-        "    mineração de âncoras que gerou o ρ=0,7. Depois de remover o hold, o τ de TODAS as tags\n" +
-        "    (móvel E paradas) colapsa a ~0. FORTE indício de que o τ de âncora era, ele mesmo,\n" +
-        "    sample-and-hold — não física. (Não é prova: não re-rodei a mineração original.)",
+      "  ⇒ τ_CRUA (o que se leria do JSONL sem corrigir) cai DENTRO da faixa 2,8–32 s da mineração de\n" +
+        "    âncoras que gerou o ρ=0,7 — mas aqui a tag é MÓVEL. A re-mineração das ÂNCORAS (bloco\n" +
+        "    abaixo, sobre bt-recording.jsonl) é quem decide se aquele τ era física ou sample-and-hold.",
     );
 
     // A prova do artefato, tag a tag: a ACF crua É a curva do hold (hipótese nula), lag a lag.
@@ -438,8 +420,8 @@ describe.skipIf(!WALK_FILE)("residual-autocorr — τ_MÓVEL na gravação REAL 
           .slice(0, 7)
           .map((v, i) => `ρ(${best.raw.acf[i].lagS.toFixed(1)})=${v.toFixed(3)}`)
           .join("  ") +
-        `\n  CORRIGIDA (o resíduo real):` +
-        best.corrAcf
+        `\n  FRESCA (mesmo-degrau EXCL.):` +
+        best.fresh.acf
           .slice(0, 7)
           .map((p) => ` ρ(${p.lagS.toFixed(1)})=${p.rho.toFixed(3)}`)
           .join(" "),
@@ -450,14 +432,14 @@ describe.skipIf(!WALK_FILE)("residual-autocorr — τ_MÓVEL na gravação REAL 
     //    ainda sustenta. É o CONSERVADOR: τ maior ⇒ ρ maior ⇒ n_eff MENOR ⇒ barra mais alta. Não
     //    publicamos τ=0 (que o ajuste devolve): o dado prova que τ está ABAIXO da resolução de
     //    advertising, não que é exatamente zero.
-    const tauMob = best.tauUpper;
+    const tauMob = best.fresh.tauUpperS;
     const T = 20; // episódio de aproximação típico (s)
     const ceiling = tauMob > 0 ? T / (2 * tauMob) : Infinity;
     out.push(
       `\nVEREDITO 1 (τ_MÓVEL vs τ_ÂNCORA) — tag ${best.tag} (única FÍSICA: θ=+${best.dedup.fit.theta.toFixed(1)}):\n` +
         `  método (a) lag-1 da série FRESCA (Δt=${best.dedup.dtS.toFixed(2)} s, ρ1=${best.dedup.rho1.toFixed(3)}): ` +
         `τ = ${best.dedup.tauLag1S.toFixed(2)} s\n` +
-        `  método (b) ajuste exp. da ACF CORRIGIDA do hold:                 τ = ${best.tauCorr.toFixed(2)} s\n` +
+        `  método (b) ajuste exp. da ACF FRESCA (pares do mesmo degrau EXCLUÍDOS): τ = ${best.fresh.tauS.toFixed(2)} s\n` +
         `  LIMITE SUPERIOR honesto (maior τ que algum bin sustenta):        τ ≤ ${tauMob.toFixed(2)} s  ← o que vai ao n_eff\n` +
         `  (o τ que se leria do JSONL SEM corrigir o hold: ${best.raw.tauFitS.toFixed(2)} s — ARTEFATO DE AMOSTRAGEM)\n` +
         `  τ_âncora (tags PARADAS — o que o ρ=0,7 fixo embutia): 2,8–32 s\n` +
@@ -505,4 +487,209 @@ describe.skipIf(!WALK_FILE)("residual-autocorr — τ_MÓVEL na gravação REAL 
     //    0,7 fixo que o gate usou → o n_eff do gate foi SUBESTIMADO.
     expect(rhoFromTau(best.dedup.dtS, tauMob)).toBeLessThan(0.7);
   }, 60000);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// RE-MINERAÇÃO DO τ DAS ÂNCORAS (a pendência GRAVE, 2026-07-12) — o ρ=0,7 tem base física?
+//
+// O ρ=0,7 que alimenta visit-metrics, o ADR-014 e as regras institucionalizadas DESDE SEMPRE veio da
+// mineração das ~6 h de `server/bt/bt-recording.jsonl`: "autocorrelação 0,49–0,94 num lag de 2 s ⇒
+// τ ≈ 2,8–32 s". Aquela mineração NÃO corrigiu o sample-and-hold. A gravação é uma ESCADA (o app
+// posta a cada ~2 s; a tag só atualiza o RSSI de vez em quando), e a escada SOZINHA fabrica
+// autocorrelação alta — como este arquivo já provou na tag móvel.
+//
+// PERGUNTA: depois de remover o hold, o τ das âncoras PARADAS SOBREVIVE longo (física real: deriva
+// ambiental — gente passando, portas, temperatura) ou COLAPSA para branco (era artefato)?
+//
+// O desfecho é ASSIMÉTRICO e os DOIS são informativos:
+//   • SOBREVIVE longo ⇒ o τ de âncora é física REAL. O erro do gate foi só aplicá-lo à população
+//     ERRADA (a tag MÓVEL) — exatamente a tese do especialista. O ρ=0,7 é válido PARA ÂNCORAS.
+//   • COLAPSA ⇒ o ρ=0,7 nunca teve base física: é a cadência do POST, e tudo que se apoiou nele
+//     precisa ser reavaliado.
+// LEITURA APENAS (CLAUDE.md §3).
+const ANCHOR_FILE = "server/bt/bt-recording.jsonl";
+const HAS_ANCHOR = existsSync(ANCHOR_FILE);
+
+/** Série de RSSI por MAC da gravação longa. Sem câmera/distância — a âncora é PARADA (dist fixo). */
+function anchorSeries(lines: string[]): Map<string, RssiSample[]> {
+  const out = new Map<string, RssiSample[]>();
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let o: { ts?: unknown; tags?: unknown };
+    try {
+      o = JSON.parse(t) as { ts?: unknown; tags?: unknown };
+    } catch {
+      continue; // dado real vem sujo
+    }
+    if (typeof o.ts !== "number" || !Number.isFinite(o.ts) || !Array.isArray(o.tags)) continue;
+    for (const item of o.tags) {
+      const r = item as { mac?: unknown; rssi?: unknown };
+      if (typeof r.mac !== "string" || typeof r.rssi !== "number" || !Number.isFinite(r.rssi)) continue;
+      const mac = r.mac.toUpperCase();
+      let arr = out.get(mac);
+      if (!arr) {
+        arr = [];
+        out.set(mac, arr);
+      }
+      // dist=1 constante: a âncora não se move. detrend:false — não há tendência a remover.
+      arr.push({ ts: o.ts, dist: 1, rssi: r.rssi });
+    }
+  }
+  return out;
+}
+
+describe.skipIf(!HAS_ANCHOR)("residual-autocorr — RE-MINERAÇÃO do τ das ÂNCORAS (o ρ=0,7 é física?)", () => {
+  it("o τ da âncora PARADA sobrevive à correção de hold (física) ou colapsa (artefato)?", () => {
+    const lines = readFileSync(ANCHOR_FILE, "utf8").split(/\r?\n/);
+    const series = anchorSeries(lines);
+    expect(series.size).toBeGreaterThan(0);
+
+    const out: string[] = ["TAU-ANCORA-BEGIN", `arquivo: ${ANCHOR_FILE} (${lines.length} linhas)`];
+    const durH = (() => {
+      const any = [...series.values()][0];
+      return (any[any.length - 1].ts - any[0].ts) / 3600000;
+    })();
+    out.push(
+      `duração: ${durH.toFixed(1)} h | tags: ${series.size} | TODAS PARADAS (âncoras de calibração no chão)`,
+    );
+    out.push(
+      "\nMÉTODO: mesma pipeline da tag móvel, com detrend:false (âncora parada não tem tendência de\n" +
+        "distância — a deriva ambiental fica DENTRO do resíduo de propósito: é ela que se quer medir).",
+    );
+    out.push(
+      "\nDOIS ESTIMADORES INDEPENDENTES do ρ SEM hold (validação cruzada — não confiamos em nenhum\n" +
+        "sozinho, e NENHUM depende de 'corrigir' analiticamente a curva crua):\n" +
+        "  (A) ρ1 da série DEDUPLICADA (só as leituras frescas, lag = Δt ≈ 2,2 s);\n" +
+        "  (B) ρ(2s) da série CRUA com os pares do MESMO DEGRAU EXCLUÍDOS.\n" +
+        "Se (A) e (B) concordam, o número é robusto a como se normaliza a variância.\n",
+    );
+    out.push(
+      "tag".padEnd(21) +
+        " nRaw   nFresh  Δt(s)  p(2s)  ρ(2s)CRUA  (A)ρ1dedup  (B)ρ2s-excl  τ_CRUA(s)  τ_FRESCO(s)",
+    );
+
+    type ARow = {
+      mac: string;
+      tauCrua: number;
+      tauFresh: number;
+      tauUpper: number;
+      rhoFresh: number;
+      rhoRaw: number;
+      rhoDedup: number;
+      pSame: number;
+    };
+    const rows: ARow[] = [];
+    for (const mac of [...series.keys()].sort()) {
+      const s = series.get(mac)!;
+      // CRUA (a escada do JSONL — o que a mineração original enxergou) vs FRESCA (pares do mesmo
+      // degrau de retenção EXCLUÍDOS — o estimador exato, sem modelo de renovação).
+      const raw = estimateTau(s, { binS: 2, maxLagS: 300, dedupe: false, detrend: false });
+      const dedup = estimateTau(s, { binS: 2, maxLagS: 300, detrend: false });
+      const fresh = estimateFreshTau(s, { binS: 2, maxLagS: 300, detrend: false });
+      if (!raw || !dedup || !fresh) continue;
+      const bin2 = (a: readonly { lagS: number; rho: number; pairs: number }[]) =>
+        a.find((q) => q.lagS >= 1 && q.lagS < 3);
+      const bRaw = bin2(raw.acf);
+      const bFresh = bin2(fresh.acf);
+      const rhoRaw = bRaw ? bRaw.rho : NaN;
+      const rhoFresh = bFresh ? bFresh.rho : NaN;
+      // p EMPÍRICO = fração de pares do bin que são do MESMO degrau (contada: pares_todos − pares_entre).
+      const pSame = bRaw && bFresh ? 1 - bFresh.pairs / bRaw.pairs : NaN;
+      rows.push({
+        mac,
+        tauCrua: raw.tauFitS,
+        tauFresh: fresh.tauS,
+        tauUpper: fresh.tauUpperS,
+        rhoFresh, // (B) pares do mesmo degrau EXCLUÍDOS
+        rhoRaw,
+        rhoDedup: dedup.rho1, // (A) lag-1 da série deduplicada
+        pSame,
+      });
+      out.push(
+        mac.padEnd(21) +
+          `${String(s.length).padStart(6)}  ${String(dedup.nSamples).padStart(6)}  ` +
+          `${dedup.dtS.toFixed(2).padStart(5)}  ${pSame.toFixed(3).padStart(5)}  ` +
+          `${rhoRaw.toFixed(3).padStart(9)}  ${dedup.rho1.toFixed(3).padStart(10)}  ` +
+          `${rhoFresh.toFixed(3).padStart(11)}  ${raw.tauFitS.toFixed(1).padStart(9)}  ` +
+          `${fresh.tauS.toFixed(1).padStart(11)}`,
+      );
+    }
+    expect(rows.length).toBeGreaterThan(0);
+
+    // Validação cruzada: os DOIS estimadores independentes (A e B) têm de contar a mesma história.
+    const maxAbDiff = Math.max(...rows.map((r) => Math.abs(r.rhoDedup - r.rhoFresh)));
+
+    const rhoRawMin = Math.min(...rows.map((r) => r.rhoRaw));
+    const rhoRawMax = Math.max(...rows.map((r) => r.rhoRaw));
+    const tauCruaMax = Math.max(...rows.map((r) => r.tauCrua));
+    const tauFreshMax = Math.max(...rows.map((r) => r.tauFresh));
+
+    const pSameMax = Math.max(...rows.map((r) => r.pSame));
+    const pSameMin = Math.min(...rows.map((r) => r.pSame));
+    // O MAIOR ρ(2s) que QUALQUER estimador sem-hold sustenta, em QUALQUER âncora — o teto honesto.
+    const rhoDeheldMax = Math.max(...rows.flatMap((r) => [r.rhoDedup, r.rhoFresh]));
+
+    out.push(
+      `\nVALIDAÇÃO CRUZADA: maior divergência |(A) − (B)| = ${maxAbDiff.toFixed(3)} ` +
+        `(${maxAbDiff < 0.25 ? "os dois CONCORDAM" : "DIVERGEM — e isso é um ACHADO, não um bug"})\n` +
+        `POR QUE DIVERGEM (e por que NÃO vou fingir um número único): a fração de pares do MESMO\n` +
+        `degrau no lag de 2 s é p = ${pSameMin.toFixed(2)}–${pSameMax.toFixed(2)}. Com p tão alto, o estimador (B) — que EXCLUI\n` +
+        `esses pares — sobra com uma minoria SELECIONADA (só os instantes em que o valor MUDOU entre\n` +
+        `dois posts), o que é uma amostra enviesada para o RUÍDO e DEPRIME o ρ. Já o (A) correlaciona\n` +
+        `blocos consecutivos, mas os gaps entre blocos são MUITO irregulares (mediana 2,2 s, média ~9,6 s),\n` +
+        `então o "lag 1" dele é uma MISTURA de lags. Nenhum dos dois é limpo NESTA gravação — e a\n` +
+        `repetição de valor é IRRECUPERÁVEL por construção (duas leituras frescas iguais são\n` +
+        `indistinguíveis de uma retida). Portanto: o ρ(2s) VERDADEIRO da âncora fica em [~0 ; ~0,5] e\n` +
+        `esta gravação NÃO o resolve. Digo isso em vez de escolher o estimador que dá a resposta bonita.\n` +
+        `(Na tag MÓVEL os dois estimadores CONCORDAM — p lá é bem menor —, por isso AQUELE veredito vale.)`,
+    );
+    out.push(
+      `\nVEREDITO 2 (o ρ=0,7 tem base física?) — o que o dado PROVA, o que ele NÃO prova:\n` +
+        `\n  ✅ PROVADO — a mineração original correlacionou a MESMA MEDIÇÃO consigo mesma:\n` +
+        `     ρ(2s) da série CRUA (a escada): ${rhoRawMin.toFixed(2)}–${rhoRawMax.toFixed(2)} — REPRODUZ o 0,49–0,94 dela.\n` +
+        `     E ${(100 * pSameMin).toFixed(0)}–${(100 * pSameMax).toFixed(0)}% dos pares naquele lag são do MESMO DEGRAU: leituras que o snapshot\n` +
+        `     REPETIU, não observações independentes. Correlacionar um valor com uma CÓPIA dele dá 1 por\n` +
+        `     construção. Logo o 0,49–0,94 está SUBSTANCIALMENTE inflado — isto não depende de estimador.\n` +
+        `\n  ✅ PROVADO — removido o hold (por QUALQUER dos dois estimadores), o ρ(2s) máximo de QUALQUER\n` +
+        `     âncora cai para ${rhoDeheldMax.toFixed(2)} — ABAIXO do ρ=0,7 que o repo adotou. O 0,7 não é sustentado\n` +
+        `     por nenhuma leitura des-retida do dado, em nenhuma tag.\n` +
+        `\n  ✅ PROVADO — a âncora PARADA TEM memória lenta REAL: τ até ${tauFreshMax.toFixed(0)} s (~${(tauFreshMax / 60).toFixed(0)} min). É deriva\n` +
+        `     AMBIENTAL (gente passando, portas, temperatura) — exatamente o que se espera de um fading\n` +
+        `     ESTÁTICO. A âncora NÃO é branca em toda escala. A tag MÓVEL é (τ ≤ 1,68 s). A ASSIMETRIA\n` +
+        `     que se esperava EXISTE e está medida.\n` +
+        `\n  ❌ NÃO PROVADO — o valor exato do ρ(2s) da âncora depois do hold: os dois estimadores dão\n` +
+        `     ~0 e ~0,5 e ambos são enviesados nesta amostragem (ver acima). Fica em [~0; ~0,5].\n` +
+        `     NÃO afirmo "a âncora também é branca" — o dado não sustenta isso.\n` +
+        `\n  ⇒ CONCLUSÃO DEFENSÁVEL: o ρ=0,7 (τ=2,8–32 s) NÃO tem base física demonstrada. Ele foi lido de\n` +
+        `    uma curva onde ${(100 * pSameMin).toFixed(0)}–${(100 * pSameMax).toFixed(0)}% dos pares eram a mesma medição repetida, e nenhuma leitura\n` +
+        `    des-retida chega perto dele (teto ${rhoDeheldMax.toFixed(2)}). A física que sobra é BIMODAL — deriva lenta de\n` +
+        `    MINUTOS na âncora + branco em segundos — e NENHUMA das duas é um AR(1) de τ=2,8–32 s.\n` +
+        `  ⇒ E o ponto que MAIS importa para a métrica: seja qual for o ρ da ÂNCORA, ele não transfere\n` +
+        `    para a TAG MÓVEL — lá os dois estimadores concordam em BRANCO. Aplicar ρ=0,7 à visita foi\n` +
+        `    errado nas DUAS pontas: número inflado E população errada.\n` +
+        `  ⚠ IMPACTO: visit-metrics, ADR-014 e as regras institucionalizadas herdaram esse ρ. A varredura\n` +
+        `    de τ (receiver-at-destino) mostra que a cobertura por visita vai de 4,6% a 45,2% conforme a\n` +
+        `    ponta do intervalo — o ρ não é um detalhe de segunda ordem.`,
+    );
+    out.push("TAU-ANCORA-END");
+    console.log(out.join("\n"));
+
+    // ── Assertivas: só o que o dado SUSTENTA. Qualquer flip força re-exame.
+    // 1) Reproduzi a mineração original NA SÉRIE CRUA (a MESMA que ela viu): ρ(2s) na faixa 0,49–0,94.
+    expect(rhoRawMax).toBeGreaterThan(0.49);
+    // 2) A INFLAÇÃO, provada sem depender de estimador: a MAIORIA dos pares no lag de 2 s é do MESMO
+    //    degrau — o snapshot correlacionando uma cópia consigo mesma.
+    expect(pSameMax).toBeGreaterThan(0.5);
+    // 3) O TETO HONESTO: removido o hold, NENHUM estimador, em NENHUMA âncora, alcança o ρ=0,7 adotado.
+    expect(rhoDeheldMax).toBeLessThan(0.7);
+    // 4) A ASSIMETRIA REAL: a âncora parada TEM memória lenta (τ de minutos) — não é branca em toda
+    //    escala, ao contrário da tag móvel. Achado POSITIVO (não só negativo).
+    expect(tauFreshMax).toBeGreaterThan(60);
+    // 5) HONESTIDADE: os dois estimadores DIVERGEM nesta gravação (p alto demais). NÃO cravamos o ρ da
+    //    âncora. Se um dia isto CONVERGIR (p menor, tag mais rápida), o número poderá ser cravado.
+    expect(maxAbDiff).toBeGreaterThan(0.25);
+    // 6) O τ da escada crua cai na faixa da mineração original (2,8–32 s e além) — a origem do número.
+    expect(tauCruaMax).toBeGreaterThan(2.8);
+  }, 120000);
 });

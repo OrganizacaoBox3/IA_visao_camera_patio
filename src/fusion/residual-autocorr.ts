@@ -182,6 +182,7 @@ export function timeBinnedAcf(
   e: readonly number[],
   binS = DEFAULT_BIN_S,
   maxLagS = DEFAULT_MAX_LAG_S,
+  blockIds?: readonly number[],
 ): AcfPoint[] {
   const n = e.length;
   if (n < 2) return [];
@@ -200,6 +201,9 @@ export function timeBinnedAcf(
     for (let j = i + 1; j < n; j++) {
       const lag = (ts[j] - ts[i]) / 1000;
       if (lag >= maxLagS) break; // ts ordenado → o resto do j só afasta
+      // blockIds presente ⇒ PULA pares do MESMO degrau de retenção: eles são literalmente a MESMA
+      // medição repetida pelo snapshot (correlação 1 por construção), não duas observações.
+      if (blockIds && blockIds[i] === blockIds[j]) continue;
       const b = Math.floor(lag / binS);
       sums[b] += c[i] * c[j];
       lagSums[b] += lag;
@@ -257,30 +261,47 @@ export function holdOnlyAcf(blockDurationsS: readonly number[], lagsS: readonly 
 }
 
 /**
- * ACF crua CORRIGIDA do hold — o estimador honesto da autocorrelação do processo FRESCO.
- * Decomposição: ρ_crua(Δ) ≈ P(Δ)·1 + (1 − P(Δ))·ρ_fresca(Δ)  [mesmo degrau → correlação 1]
- *          ⇒    ρ_fresca(Δ) = (ρ_crua(Δ) − P(Δ)) / (1 − P(Δ))
- * Bins com P(Δ) ≈ 1 (lag muito abaixo da duração do degrau) são DESCARTADOS: ali a série crua não
- * carrega informação nenhuma sobre o processo fresco (é a mesma medição repetida), e a divisão
- * explodiria. Este é o número que responde "há memória de verdade?" — e é imune tanto ao platô do
- * hold (que INFLA a ACF crua) quanto ao viés de alternância da dedup (que a DEPRIME).
+ * Índice do DEGRAU de retenção de cada amostra CRUA (runs de RSSI igual consecutivo). Alimenta o
+ * `blockIds` de `timeBinnedAcf`, que então PULA pares do mesmo degrau — o estimador honesto.
+ * As amostras devem estar ordenadas por ts (a série crua, sem dedup).
  */
-export function holdCorrectedAcf(
-  rawAcf: readonly AcfPoint[],
-  blockDurationsS: readonly number[],
-  maxSameBlockProb = 0.9,
-): AcfPoint[] {
-  const p = holdOnlyAcf(blockDurationsS, rawAcf.map((a) => a.lagS));
-  const out: AcfPoint[] = [];
-  for (let i = 0; i < rawAcf.length; i++) {
-    if (p[i] >= maxSameBlockProb) continue;
-    out.push({
-      lagS: rawAcf[i].lagS,
-      rho: (rawAcf[i].rho - p[i]) / (1 - p[i]),
-      pairs: rawAcf[i].pairs,
-    });
+export function blockIdsOf(samples: readonly RssiSample[]): number[] {
+  const out: number[] = [];
+  let id = 0;
+  for (let i = 0; i < samples.length; i++) {
+    if (i > 0 && samples[i].rssi !== samples[i - 1].rssi) id++;
+    out.push(id);
   }
   return out;
+}
+
+/**
+ * O ESTIMADOR HONESTO DA ACF do processo FRESCO: a ACF da série CRUA com os pares do MESMO DEGRAU
+ * EXCLUÍDOS (via `blockIdsOf` → `timeBinnedAcf(..., blockIds)`).
+ *
+ * POR QUE ESTE E NÃO UMA "CORREÇÃO" ANALÍTICA (erro cometido e corrigido na bancada, 2026-07-12):
+ * a primeira versão corrigia a ACF crua subtraindo o P(Δ) do MODELO DE RENOVAÇÃO
+ * (`holdOnlyAcf` = E[(L−Δ)⁺]/E[L]). Esse modelo pressupõe que os posts cobrem o tempo
+ * UNIFORMEMENTE — falso na gravação longa, que tem horas SEM post (device desligado). Os "degraus"
+ * dessas lacunas inflam E[L], P(Δ) sobe a ~0,9, e a divisão por (1−P) EXPLODE: saíram ρ corrigidos
+ * de −3,8 a −5,1 (impossíveis: |ρ|≤1). A exclusão de pares NÃO assume nada sobre a distribuição
+ * temporal — ela simplesmente não conta o par que é a mesma medição. É exata por construção.
+ * (`holdOnlyAcf` continua exportada: é a hipótese NULA usada como EXIBIÇÃO do artefato, e vale
+ * enquanto a amostragem for regular — o caso da gravação curta de fusão.)
+ */
+export function freshAcf(
+  samples: readonly RssiSample[],
+  e: readonly number[],
+  binS = DEFAULT_BIN_S,
+  maxLagS = DEFAULT_MAX_LAG_S,
+): AcfPoint[] {
+  return timeBinnedAcf(
+    samples.map((s) => s.ts),
+    e,
+    binS,
+    maxLagS,
+    blockIdsOf(samples),
+  );
 }
 
 export type TauOpts = {
@@ -301,6 +322,17 @@ export type TauOpts = {
   /** Lag mínimo (s) que entra no AJUSTE exponencial — os bins abaixo dele ainda são REPORTADOS em
    *  `acf`, só não pesam no τ. Default 0. */
   fitMinLagS?: number;
+  /**
+   * `false` = NÃO remover tendência de path-loss; o resíduo é simplesmente RSSI − média.
+   * Default `true`.
+   *
+   * PARA QUE SERVE: uma tag ÂNCORA está PARADA — não existe tendência de distância a remover (o
+   * `dist` é constante e `fitPathLoss` devolveria null). O que sobra no "resíduo" dela é justamente
+   * o que queremos medir: a DERIVA AMBIENTAL (gente passando, portas, temperatura) — a memória lenta
+   * que a mineração original atribuiu ao canal. Com `detrend:false` o τ da âncora é medido sem
+   * inventar uma regressão que não existe.
+   */
+  detrend?: boolean;
 };
 
 /** Resultado do ajuste ρ(Δ)=A·e^(−Δ/τ) sobre uma ACF já pronta. τ=0 = sem decaimento ajustável. */
@@ -382,8 +414,15 @@ export function estimateTau(
           .sort((a, b) => a.ts - b.ts)
       : dedupeConsecutiveRssi(samples);
   if (fresh.length < 4) return null;
-  const fit = fitPathLoss(fresh);
-  if (!fit) return null;
+  // detrend:false (âncora PARADA — ver TauOpts.detrend): não há tendência de distância; o resíduo é
+  // o desvio da média, e a deriva ambiental lenta fica DENTRO dele de propósito.
+  let fit: PathLossFit | null;
+  if (opts?.detrend === false) {
+    fit = { beta: mean(fresh.map((s) => s.rssi)), theta: 0, r: 0, n: fresh.length };
+  } else {
+    fit = fitPathLoss(fresh);
+    if (!fit) return null;
+  }
   const e = residualsOf(fresh, fit);
   const ts = fresh.map((s) => s.ts);
 
@@ -451,6 +490,51 @@ export function tauUpperBoundS(
     if (t > tau) tau = t;
   }
   return tau;
+}
+
+/** O veredito honesto sobre UMA série: o τ do processo FRESCO (hold excluído por construção). */
+export type FreshTau = {
+  /** ACF do processo fresco (pares do mesmo degrau EXCLUÍDOS) — o estimador exato. */
+  acf: AcfPoint[];
+  /** τ do ajuste exponencial sobre essa ACF. 0 = sem decaimento ajustável (resíduo BRANCO). */
+  tauS: number;
+  /** O MAIOR τ que algum bin ainda sustenta — o LIMITE SUPERIOR conservador (ver tauUpperBoundS). */
+  tauUpperS: number;
+  /** Fração da variância COM memória (A do ajuste); 1−A = branca. */
+  correlatedFraction: number;
+};
+
+/**
+ * ENTRADA ÚNICA E HONESTA: o τ do processo FRESCO de uma série crua de snapshot.
+ * Remove a tendência (path-loss, ou só a média se `detrend:false` — âncora parada), monta a ACF
+ * EXCLUINDO os pares do mesmo degrau de retenção (`freshAcf`), ajusta o τ e devolve também o limite
+ * superior conservador. É o que os testes de campo consomem — `estimateTau` fica para o DIAGNÓSTICO
+ * (a série crua contaminada e a deduplicada).
+ */
+export function estimateFreshTau(samples: readonly RssiSample[], opts?: TauOpts): FreshTau | null {
+  const sorted = [...samples]
+    .filter((s) => Number.isFinite(s.ts) && Number.isFinite(s.dist) && Number.isFinite(s.rssi))
+    .sort((a, b) => a.ts - b.ts);
+  if (sorted.length < 4) return null;
+  let fit: PathLossFit | null;
+  if (opts?.detrend === false) {
+    fit = { beta: mean(sorted.map((s) => s.rssi)), theta: 0, r: 0, n: sorted.length };
+  } else {
+    fit = fitPathLoss(dedupeConsecutiveRssi(sorted));
+    if (!fit) return null;
+  }
+  const e = residualsOf(sorted, fit);
+  const acf = freshAcf(sorted, e, opts?.binS ?? DEFAULT_BIN_S, opts?.maxLagS ?? DEFAULT_MAX_LAG_S);
+  const f = fitTauToAcf(acf, { minPairs: opts?.minPairs, fitMinLagS: opts?.fitMinLagS });
+  return {
+    acf,
+    tauS: f.tauS,
+    tauUpperS: tauUpperBoundS(acf, {
+      maxLagS: opts?.maxLagS ?? DEFAULT_MAX_LAG_S,
+      minPairs: opts?.minPairs,
+    }),
+    correlatedFraction: f.correlatedFraction,
+  };
 }
 
 /** ρ AR(1) implicado por um τ e um Δt: ρ = e^(−Δt/τ). É o que `visit-metrics` passa a usar quando

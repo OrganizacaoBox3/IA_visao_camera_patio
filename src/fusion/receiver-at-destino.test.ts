@@ -130,9 +130,14 @@ function ticksAt(entry: ScenarioEntry, receiver?: Pt): VisitTick[] {
   return visitTicksFromScenario(simulateFusionScenario(opts, entry.seed));
 }
 
-/** Métrica de visita HONESTA (ρ=0,7 default) para um cenário com a estação em `receiver`. */
-function metricsAt(entry: ScenarioEntry, receiver?: Pt): VisitMetrics {
-  return computeVisitMetrics(ticksAt(entry, receiver));
+/** Métrica de visita para um cenário com a estação em `receiver`. `visitOpts` ausente ⇒ ρ=0,7 fixo
+ *  (o comportamento de sempre); com {tau,dtS} ⇒ ρ=e^(−dtS/tau); com {rho} ⇒ ρ cravado. */
+function metricsAt(
+  entry: ScenarioEntry,
+  receiver?: Pt,
+  visitOpts?: { tau?: number; dtS?: number; rho?: number },
+): VisitMetrics {
+  return computeVisitMetrics(ticksAt(entry, receiver), visitOpts);
 }
 
 /** Diagnóstico do GARGALO: por que a decisão não segue o span? Sobre os episódios COM tag de um
@@ -690,4 +695,179 @@ describe("receiver-at-destino — a significância HONESTA passa a decidir com o
     },
     120000,
   );
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  // O INTERVALO DE τ — fechar a incerteza que a varredura acima deixou aberta (2026-07-12).
+  //
+  // A medição de campo (residual-autocorr.test.ts) devolve DUAS coisas diferentes:
+  //   • ESTIMATIVA PONTUAL: o resíduo é BRANCO — ρ(Δ) indistinguível de 0 em TODO lag observável
+  //     (≥2,5 s, o intervalo de advertising). O ajuste devolve τ = 0.
+  //   • LIMITE SUPERIOR conservador: τ ≤ 1,68 s (o maior τ que algum bin ainda sustenta).
+  // A varredura acima usou o LIMITE SUPERIOR (1,68 s) — a ponta PESSIMISTA. Se a estimativa PONTUAL
+  // (τ→0) estiver certa, ρ→0, o n_eff NÃO sofre desconto nenhum (n_eff = nDistinct inteiro) e a barra
+  // |r| cai ainda mais. A verdade está em τ ∈ [0; 1,68] e o produto desta varredura é o INTERVALO,
+  // não um ponto — quem for decidir hardware precisa ver as duas pontas.
+  //
+  // NOTA sobre τ=0: `effectiveRho` guarda contra tau≤0 (defensivo). O limite da lei quando τ→0 é
+  // ρ→0, então o caso BRANCO é expresso como {rho: 0} — o mesmo número que a lei daria.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════════
+  it(
+    "INTERVALO DE τ ∈ [0; 1,68]: onde a cobertura por visita REALMENTE cai (1 Hz, baseline vs destino)",
+    () => {
+      const DT_1HZ = 2 * TICK_S; // cadência ATUAL: rssiPeriodTicks=2 ⇒ Δt = 1,0 s
+      // τ=0 (BRANCO — a estimativa PONTUAL) … τ=1,68 (o LIMITE SUPERIOR conservador).
+      const TAUS = [0, 0.25, 0.5, 1.0, TAU_MOVEL_S];
+
+      type TRow = {
+        tau: number;
+        rho: number;
+        base: { dec: number; cor: number; eps: number };
+        dest: { dec: number; cor: number; eps: number };
+        maxNeff: number;
+        medNeff: number;
+        reach: number;
+        withTag: number;
+        rBar: number;
+      };
+
+      const rows: TRow[] = [];
+      for (const tau of TAUS) {
+        // τ=0 ⇒ ρ=0 (o limite da lei: e^(−Δt/τ) → 0). Ver nota no cabeçalho do teste.
+        const vo = tau > 0 ? { tau, dtS: DT_1HZ } : { rho: 0 };
+        const rho = tau > 0 ? Math.exp(-DT_1HZ / tau) : 0;
+        const base = { dec: 0, cor: 0, eps: 0 };
+        const dest = { dec: 0, cor: 0, eps: 0 };
+        let maxNeff = 0;
+        let reach = 0;
+        let withTag = 0;
+        const neffs: number[] = [];
+
+        for (const entry of FUSION_SCENARIOS.filter(inOverrideScope)) {
+          const opts1Hz = { ...entry.opts, rssiPeriodTicks: 2 };
+          const traj = person0Trajectory(opts1Hz, entry.seed);
+          if (traj.length < 2) continue;
+          const destino = destinationOf(traj);
+
+          // BASELINE (estação no canto) e DESTINO — mesma cadência (1 Hz), só muda o receptor.
+          const b = computeVisitMetrics(
+            visitTicksFromScenario(simulateFusionScenario(opts1Hz, entry.seed)),
+            vo,
+          );
+          base.dec += b.decidedWithTag;
+          base.cor += b.decidedCorrect;
+          base.eps += b.episodesWithTag;
+
+          const scD = simulateFusionScenario(
+            { ...opts1Hz, stationWorldOverride: destino },
+            entry.seed,
+          );
+          const ticksD = visitTicksFromScenario(scD);
+          const d = computeVisitMetrics(ticksD, vo);
+          dest.dec += d.decidedWithTag;
+          dest.cor += d.decidedCorrect;
+          dest.eps += d.episodesWithTag;
+
+          for (const e of computeVisitEpisodes(ticksD, vo).filter((x) => x.truthTag !== null)) {
+            withTag++;
+            let best = 0;
+            for (const c of e.candidates) if (c.nEff > best) best = c.nEff;
+            if (best > 3) reach++;
+            if (best > maxNeff) maxNeff = best;
+            neffs.push(best);
+          }
+        }
+        rows.push({
+          tau,
+          rho,
+          base,
+          dest,
+          maxNeff,
+          medNeff: medianOf(neffs),
+          reach,
+          withTag,
+          rBar: maxNeff > 3 ? Math.tanh(1.96 * Math.sqrt(1 / (maxNeff - 3))) : 1,
+        });
+      }
+
+      const head =
+        "τ (s)".padEnd(14) +
+        "  ρ@1Hz   n_eff máx  n_eff med  eps n_eff>3   |r| exigido   BASE cob%   DEST cob%   DEST prec%";
+      const lines = [head, "-".repeat(head.length)];
+      for (const r of rows) {
+        lines.push(
+          `${r.tau === 0 ? "0 (BRANCO)" : r.tau.toFixed(2)}${r.tau === TAU_MOVEL_S ? " (bound)" : ""}`.padEnd(14) +
+            `  ${r.rho.toFixed(3).padStart(5)}   ` +
+            `${r.maxNeff.toFixed(2).padStart(9)}  ${r.medNeff.toFixed(2).padStart(9)}  ` +
+            `${`${r.reach}/${r.withTag}`.padStart(11)}   ` +
+            `${r.rBar.toFixed(2).padStart(11)}   ` +
+            `${pct(r.base.eps ? r.base.dec / r.base.eps : 0).padStart(9)}%   ` +
+            `${pct(r.dest.eps ? r.dest.dec / r.dest.eps : 0).padStart(9)}%   ` +
+            `${pct(r.dest.dec ? r.dest.cor / r.dest.dec : 1).padStart(9)}%`,
+        );
+      }
+      console.log(
+        `\n═══ INTERVALO DE τ — cobertura por visita na cadência ATUAL (1 Hz), pooled ═══\n` +
+          `(o gate H1/H2 rodou com ρ=0,7 FIXO, equivalente a τ≈2,8 s @1 Hz — FORA deste intervalo)\n` +
+          `${lines.join("\n")}`,
+      );
+
+      const white = rows[0];
+      const bound = rows[rows.length - 1];
+      const covW = white.dest.eps ? white.dest.dec / white.dest.eps : 0;
+      const covB = bound.dest.eps ? bound.dest.dec / bound.dest.eps : 0;
+      const covWbase = white.base.eps ? white.base.dec / white.base.eps : 0;
+
+      console.log(
+        `\nVEREDITO (o INTERVALO, não um ponto):\n` +
+          `  Na cadência ATUAL (1 Hz), com o receptor no DESTINO, a cobertura por visita fica em\n` +
+          `  [${pct(covB)}% ; ${pct(covW)}%] — ponta PESSIMISTA (τ=1,68 s, o bound) a ponta OTIMISTA (τ=0, o BRANCO,\n` +
+          `  que é a estimativa PONTUAL). O gate reportou 0,3%. Até no BASELINE (estação no canto, sem\n` +
+          `  mover nada) a ponta branca dá ${pct(covWbase)}%.\n` +
+          `  ⇒ Os 15,5% de "2 Hz" que reportamos ${covW > 0.155 ? "SÃO SUPERADOS" : "NÃO são superados"} pela ponta τ→0 a 1 Hz (${pct(covW)}%).\n` +
+          `\n  QUAL τ EU DEFENDO como estimativa central, e com que incerteza:\n` +
+          `  • A estimativa PONTUAL é τ ≈ 0 (branco): a ACF do resíduo, depois de tirada a tendência de\n` +
+          `    path-loss e o sample-and-hold, é indistinguível de zero em TODO lag ≥2,5 s. Nada no dado\n` +
+          `    sustenta memória. E a re-mineração das ÂNCORAS mostrou que até a tag PARADA é branca no\n` +
+          `    lag de 2 s — o ρ=0,7 era o hold. Não há mais nenhuma medição apoiando τ na casa dos segundos.\n` +
+          `  • MAS o dado NÃO PODE provar τ=0: só prova τ ABAIXO da resolução de amostragem (2,5 s, o\n` +
+          `    intervalo de advertising). Nada exclui memória em 100–500 ms, que a tag não deixa ver.\n` +
+          `  • Então: defendo τ ∈ [0; 1,68] s com a MASSA perto de 0, e RECOMENDO reportar o INTERVALO\n` +
+          `    de cobertura [${pct(covB)}%; ${pct(covW)}%], não um ponto. Cravar 4,6% (o bound) é tão desonesto\n` +
+          `    quanto cravar ${pct(covW)}% (o branco).\n` +
+          `  • O que FECHARIA o intervalo: uma tag que anuncie a ≥10 Hz por alguns minutos (resolve a ACF\n` +
+          `    abaixo de 500 ms), ou um receptor que separe os canais 37/38/39 (mede o τ POR canal, sem a\n` +
+          `    componente branca que o salto de canal injeta). Isso é medição, não compra de hardware.\n` +
+          `  ⚠ E o que NÃO muda em NENHUMA ponta do intervalo: a cadência continua SATURANDO (é a lei), e\n` +
+          `    a precisão se mantém alta. O que muda é QUANTO da visita se fecha — e é material.`,
+      );
+
+      // ── Assertivas ROBUSTAS ──
+      // 1) A física: ρ CRESCE com τ (mais memória = mais desconto) e o n_eff CAI.
+      for (let i = 1; i < rows.length; i++) {
+        expect(rows[i].rho).toBeGreaterThan(rows[i - 1].rho);
+        expect(rows[i].maxNeff).toBeLessThanOrEqual(rows[i - 1].maxNeff + 1e-9);
+      }
+      // 2) A ponta BRANCA (τ=0, a estimativa PONTUAL) não sofre desconto: ρ=0 ⇒ n_eff = nDistinct.
+      expect(white.rho).toBe(0);
+      expect(white.maxNeff).toBeGreaterThan(bound.maxNeff);
+      // 3) A COBERTURA é MONOTÔNICA em τ (mais memória ⇒ menos visita decidida) — o intervalo é bem
+      //    ordenado, então reportar [bound; branco] é reportar o intervalo INTEIRO.
+      expect(covW).toBeGreaterThan(covB);
+      // 4) O INTERVALO é MATERIAL (não é um detalhe): a ponta branca decide MUITO mais que o bound.
+      //    Se isto flipar, a incerteza em τ deixou de importar e a varredura pode ser aposentada.
+      expect(covW).toBeGreaterThan(covB * 2);
+      // 5) Em TODA ponta do intervalo a decisão segue HONESTA (não se compra cobertura com lixo).
+      for (const r of rows) {
+        if (r.dest.dec > 0) expect(r.dest.cor / r.dest.dec).toBeGreaterThan(0.75);
+      }
+      // 6) O gate (ρ=0,7 ≡ τ≈2,8 s @1 Hz) fica FORA do intervalo medido — por isso ele errou o número.
+      expect(rhoFromTauLocal(DT_1HZ, TAU_MOVEL_S)).toBeLessThan(0.7);
+    },
+    180000,
+  );
 });
+
+/** ρ = e^(−Δt/τ) — espelho local da lei (evita importar o módulo de medição só para uma assertiva). */
+function rhoFromTauLocal(dtS: number, tauS: number): number {
+  return tauS > 0 ? Math.exp(-dtS / tauS) : 0;
+}

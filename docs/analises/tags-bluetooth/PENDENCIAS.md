@@ -312,19 +312,63 @@ falsa). *Nuance honesta:* a cobertura ainda sobe 2,16× (4,6→10,0%) — não p
 do piso, mas porque os que já passavam ganham n_eff e a barra |r| cede. Cadência não é alavanca NULA; é
 **muito menor** do que vendemos.
 
-**🔄 A RECOMENDAÇÃO DE HARDWARE SE INVERTE: NÃO comprar tag de 2 Hz.** "Comprar tag rápida" era
-conclusão do número inflado. **O ganho de graça é outro: só CORRIGIR A MÉTRICA leva a cobertura de
-0,3% → 4,6% no hardware ATUAL (15×), sem comprar nada.** As alavancas que sobram são as que o
-especialista já ranqueou: **T (duração/geometria de câmera — grátis)** e **separação de canais (ESP32 —
-3 olhares quase-independentes)**. Ambas confirmadas empiricamente.
+### 🔴 RETRATAÇÕES (2026-07-12, após fechar o intervalo de τ) — três conclusões minhas CAÍRAM
 
-**MAS H1 SEGUE NÃO FECHANDO** (4,6–10% de cobertura por visita, mesmo no sim otimista e com a física
-certa). **O gate estava com o NÚMERO errado, não com a CONCLUSÃO errada**: identidade por UMA aproximação
-não fecha; as camadas de acúmulo (Onda 2: topologia + workflow) seguem sendo o caminho.
+Eu cravei 4,6% usando τ=1,68 s (o limite SUPERIOR conservador). A estimativa **PONTUAL** é τ→0 (branco),
+e lá o quadro é OUTRO. Varredura da cobertura por τ (cadência ATUAL 1 Hz, pooled/325):
 
-**Placar das previsões do especialista:** (a) τ_móvel ≪ τ_âncora → **CONFIRMADA** (e por baixo: é branco);
-(b) "cobertura salta bem acima de 15,5%" → **REFUTADA** (é 10,0% — os 15,5% é que eram falsos); (c) canal
-> dobrar cadência → **SUSTENTADA** (cadência satura em 1,18×; canal valeria ~3×).
+| τ (s) | ρ@1Hz | n_eff máx | \|r\| exigido | **BASE cob%** | **DESTINO cob%** | prec% |
+|---|---|---|---|---|---|---|
+| **0 (BRANCO)** ← estimativa pontual | 0,000 | **39,00** | 0,32 | **24,9%** | **45,2%** | 87,1% |
+| 0,25 | 0,018 | 37,60 | 0,32 | 23,1% | 42,8% | 88,5% |
+| 0,50 | 0,135 | 29,70 | 0,36 | 16,9% | 32,9% | 90,7% |
+| 1,00 | 0,368 | 18,02 | 0,47 | 4,6% | 11,1% | 91,7% |
+| **1,68 (bound)** ← o que eu usei | 0,551 | 11,28 | 0,59 | 0,6% | **4,6%** | 86,7% |
+| *(o gate original: ρ=0,7 ≡ τ≈2,8 s)* | *0,700* | *6,88* | *0,76* | *0%* | *0,3%* | *100%* |
+
+**RETRATAÇÃO 1 — "H1 não fecha": CAI.** Eu afirmei isso com o ρ ERRADO. Na estimativa pontual (τ→0), a
+cobertura por visita é **45,2% no destino / 24,9% no baseline**, a 87–92% de precisão. A resposta honesta
+é o **intervalo [4,6%; 45,2%]**, com massa perto de τ→0. **H1 volta a estar ABERTA.**
+
+**RETRATAÇÃO 2 — "o gargalo é o n_eff, não o span": CAI. Era ARTEFATO do ρ errado.** Com ρ=0,7 o n_eff era
+esmagado a 6,88 e NADA ajudava (por isso mover o receptor "não adiantava"). Com o ρ certo (n_eff máx
+**39**), **o span VOLTA a importar**: o receptor no destino quase DOBRA a cobertura (24,9% → 45,2%).
+**→ A #26 (ESP32 no destino) RESSUSCITA**, agora por DOIS motivos somados: span E separação de canal.
+
+**RETRATAÇÃO 3 — o placar das previsões.** (a) τ_móvel ≪ τ_âncora → **CONFIRMADA** (e por baixo: é branco).
+(b) "a cobertura salta bem acima de 15,5%" → **CONFIRMADA** (45,2%!) — eu a havia declarado refutada cedo
+demais, olhando só a ponta pessimista. Ele acertou o SALTO; errou só a VIA (é a correção do τ, não a
+cadência). (c) canal > dobrar cadência → **SUSTENTADA**.
+
+**O QUE SOBREVIVE:** a **cadência SATURA** (1→2 Hz rende 1,18× de n_eff, não 2,31×) → **NÃO comprar tag de
+2 Hz** segue de pé. E o ganho de graça é real: **só corrigir a métrica** (ρ) tira a cobertura de 0,3% para
+**24,9–45,2%** no hardware ATUAL, sem comprar nada.
+
+**⚠️ CAVEAT QUE ATRAVESSA TUDO:** a varredura de τ roda no **SIMULADOR** (que gera RSSI a partir da
+distância — CIRCULAR por construção). Os 45,2% são **INDICATIVOS, não campo**. O que É campo é o **τ**.
+**→ Validar exige verdade anotada: a caminhada do dono (#4) virou o GATE CRÍTICO** — sem ela medimos se a
+visita DECIDE, mas não se ela ACERTA.
+
+### 🔴 O ρ=0,7 NÃO TEM BASE FÍSICA DEMONSTRADA (re-mineração das 56 h — pendência #38 FECHADA)
+
+- ✅ **A inflação está PROVADA sem depender de estimador**: **44–86% dos pares** no lag de 2 s são do
+  **MESMO DEGRAU** — o snapshot correlacionando uma CÓPIA da mesma medição consigo mesma (dá 1 por
+  construção). Removido o hold, o ρ(2 s) máximo de QUALQUER âncora por QUALQUER estimador é **0,57 —
+  ABAIXO do 0,7 adotado**. Nenhuma leitura des-retida sustenta o 0,7.
+- ✅ **A assimetria prevista EXISTE**: a âncora PARADA tem memória lenta REAL (τ até **626 s ≈ 10 min** —
+  deriva ambiental); a tag MÓVEL não tem nem isso (branco). Fading estático vs. atravessar fades.
+- ❌ **NÃO provado: o ρ exato da âncora.** Os dois estimadores DIVERGEM (~0 vs ~0,5) e ambos são enviesados
+  nesta amostragem (a repetição de valor é irrecuperável por construção). Fica em [~0; ~0,5]. **NÃO se
+  afirma que a âncora é branca** — o dado não sustenta.
+- **Conclusão defensável**: a física é **BIMODAL** — deriva lenta de minutos (âncora) + branco em segundos
+  (tag móvel). **Nenhuma das duas é um AR(1) de τ=2,8–32 s.** E o ρ da âncora **não transfere** para a tag
+  móvel. **O ρ=0,7 na visita estava errado nas DUAS pontas: número inflado E população errada.**
+- **Nota de método (vale mais que o número)**: tentou-se uma correção analítica do hold
+  (ρ_crua = p·1 + (1−p)·ρ_fresca) e **a checagem de consistência embutida a REPROVOU** (erro até 0,48) →
+  descartada; o veredito só usa estimadores que não dependem dessa hipótese. O aparato funcionando.
+- **O que fecharia o intervalo de τ (medição, não compra)**: uma tag a ≥10 Hz por alguns minutos (resolve
+  a ACF sub-500 ms), ou um receptor que separe os canais 37/38/39 (mede τ por-canal sem a brancura do
+  salto de canal). Ambos → ESP32.
 
 **3. AS 4 ALAVANCAS SOBRE O n_eff, RANQUEADAS** (a nova ordem de prioridade):
 1. **T (duração observada)** — linear, GRÁTIS, e é GEOMETRIA. "Aproximação de 3-8 s" NÃO é constante
