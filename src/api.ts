@@ -357,6 +357,26 @@ export const createBtTag = (btName: string, rotulo: string) =>
 export const updateBtTag = (id: string, patch: { rotulo?: string; ativo?: boolean; btName?: string }) =>
   apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
 
+// ── REGISTRO de estações BLE (os celulares/coletores que varrem o BLE) ─────────────────────────
+// A estação NÃO se cadastra por formulário: ela NASCE no hub por AUTO-DESCOBERTA, no primeiro
+// POST /api/bt/reading (server/bt/stations.js → seen), como PENDENTE (nome = o próprio id técnico).
+// Por isso não existe `createBtStation`: aqui só se BATIZA (nome amigável), (des)ativa e remove.
+// `ultimaVezEm` é o carimbo do último POST — a UI deriva VIVA/SEM SINAL dele (mesma janela de
+// staleness das leituras). Validação (id/nome) mora no SERVIDOR; o client só transporta o erro.
+// GET: qualquer autenticado (a saúde/calibração precisam do nome); escrita: canConfigure.
+export type BtStation = {
+  id: string; // o stationId que o device manda ([a-zA-Z0-9_-]{1,32})
+  nome: string; // rótulo amigável; == id enquanto pendente de batismo
+  ativo: boolean;
+  primeiraVezEm: number;
+  ultimaVezEm: number;
+};
+export const getBtStations = () => apiGet<BtStation[]>("/api/bt-stations");
+export const updateBtStation = (id: string, patch: { nome?: string; ativo?: boolean }) =>
+  apiSend<BtStation>("PATCH", `/api/bt-stations/${encodeURIComponent(id)}`, patch);
+export const deleteBtStation = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/bt-stations/${encodeURIComponent(id)}`);
+
 // ── TURNOS de trabalho (cadastro GLOBAL — spec-turnos-por-zona F1) ────────────────────────────
 // Fonte única do "quando a área deveria estar trabalhando". A VALIDAÇÃO DE NEGÓCIO mora no
 // SERVIDOR (duração/dias/pausas — server/shifts.js): o client só transporta e a UI exibe o erro

@@ -20,6 +20,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
+  RadioTower,
   Ruler,
   Search,
   ShieldCheck,
@@ -255,6 +256,9 @@ export function AppShell() {
         // Turnos de trabalho (spec-turnos-por-zona F1): cadastro global, mesmo RBAC de
         // configuração (canConfigure) — a leitura pelo relatório/overlay não passa por aqui.
         ...(canConfigure ? [{ to: "/turnos", icon: CalendarClock, label: "Turnos" }] : []),
+        // Estações BLE (celulares coletores): registro do NOME amigável da estação — mesmo RBAC de
+        // configuração. A estação se auto-descobre ao postar; aqui ela ganha nome/ativo.
+        ...(canConfigure ? [{ to: "/estacoes", icon: RadioTower, label: "Estações BLE", short: "Estações" }] : []),
         // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia, mesmo
         // RBAC de Saúde alarmes (canConfigure: engenheiro/superadmin).
         ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Replay (sim)" }] : []),

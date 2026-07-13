@@ -10,6 +10,7 @@ const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
 const btTags = require("./bt/bt-tags");
+const btStations = require("./bt/stations");
 const btLocations = require("./bt/bt-locations");
 const shifts = require("./shifts");
 const camcfg = require("./camcfg");
@@ -28,7 +29,8 @@ const routeData = require("./routes/data");
 const routeAlarms = require("./routes/alarms");
 const routeNotif = require("./routes/notif");
 const routeBtTags = require("./routes/bt-tags");
-const routeBtStation = require("./routes/bt-station");
+const routeBtStations = require("./routes/bt-stations"); // registro das estações (CRUD do NOME/ativo)
+const routeBtStation = require("./routes/bt-station"); // ingest da estação (device-facing)
 const routeShifts = require("./routes/shifts");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
@@ -106,6 +108,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeAlarms.handle(req, res, ctx)) return;
     if (await routeNotif.handle(req, res, ctx)) return;
     if (await routeBtTags.handle(req, res, ctx)) return;
+    if (await routeBtStations.handle(req, res, ctx)) return;
     if (await routeBtStation.handle(req, res, ctx)) return;
     if (await routeShifts.handle(req, res, ctx)) return;
     if (await routeUsers.handle(req, res, ctx)) return;
@@ -248,6 +251,7 @@ io.on("connection", (socket) => {
     events.init(),
     camcfg.init(),
     btTags.init(),
+    btStations.init(), // registro das estações BLE (nome amigável); a estação se AUTO-DESCOBRE ao postar
     btLocations.init(), // última localização por tag (modelo AirTag) — persistida, sobrevive a restart
     shifts.init(), // turnos de trabalho (cadastro global — spec-turnos-por-zona F1)
   ]);

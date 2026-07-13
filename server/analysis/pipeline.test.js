@@ -184,7 +184,12 @@ describe("processRound — política LOST (anti-rastro na emissão)", () => {
     pipeline.processRound(st, [], 1000);
     pipeline.processRound(st, [], 1500); // LOST → payload vazio (sem rastro)
     expect(emittedTracks(3)).toEqual([]);
-    pipeline.processRound(st, [person(0.3, 0.8)], 2500); // volta aquém do previsto, dentro do raio
+    // Volta aquém do previsto (pred 0.45), dentro do raio (dist 0.10 ≤ 0.12 + |v|·gap) e SEM
+    // IoU com a predita nem com a congelada (0.25) — é o 2º estágio (por DISTÂNCIA) que
+    // recupera o id. F3: a det em cima da caixa CONGELADA passou a ser recuperada antes, pela
+    // hipótese de parada (mais barata) — por isso o salto aqui é 0.35, e não 0.30: o sensor
+    // desta métrica é o estágio por distância, e ele precisa ser o mecanismo exercitado.
+    pipeline.processRound(st, [person(0.35, 0.8)], 2500);
     expect(emittedTracks(4)).toHaveLength(1);
     expect(emittedTracks(4)[0].id).toBe(id); // identidade sobreviveu ao salto
     expect(st.detsLog[st.detsLog.length - 1].r).toBe(1); // delta de re-associação → reassoc1m

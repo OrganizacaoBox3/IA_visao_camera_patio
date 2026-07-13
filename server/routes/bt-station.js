@@ -4,6 +4,7 @@
 const btReadings = require("../bt/bt-readings");
 const btLocations = require("../bt/bt-locations");
 const btTags = require("../bt/bt-tags");
+const stations = require("../bt/stations");
 const recorder = require("../bt/recorder");
 const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 const users = require("../users");
@@ -52,6 +53,16 @@ async function handle(req, res, ctx) {
     } catch {
       json(res, 400, { error: "json inválido" });
       return true;
+    }
+    // AUTO-DESCOBERTA da estação (bt/stations.js): o cadastro não é manual — a estação NASCE aqui,
+    // no primeiro POST, como PENDENTE (nome = o próprio id) e o operador a batiza na tela /estacoes.
+    // Se já existe, só carimba `ultimaVezEm` (o nome/ativo dele nunca são sobrescritos).
+    // FAIL-SAFE: o registro é ACESSÓRIO — a LEITURA é o que importa. Falha no registry (Postgres
+    // fora, disco cheio, id fora do formato) NUNCA derruba o POST; loga e segue.
+    try {
+      await stations.seen(body.stationId);
+    } catch (e) {
+      console.error("[bt-stations] auto-descoberta falhou (leitura segue):", e && e.message);
     }
     const enriched = btReadings.ingest(body.stationId, body.readings);
     io.to("dashboards").volatile.emit("bt-readings", {

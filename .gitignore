@@ -79,6 +79,8 @@ eval/model-comparison.json
 archive.zip
 server/bt/bt-tags.json
 server/bt/bt-locations.json
+# Registro das estações BLE (fallback JSON de runtime quando o Postgres está off) — só metadados.
+server/bt/stations.json
 # Gravação event-sourcing OPT-IN das leituras BLE (BT_RECORD) — só metadados, matéria-prima do replay.
 server/bt/bt-recording.jsonl
 # Gravação OPT-IN da sessão de fusão indoor câmera+BLE (FUSION_RECORD) — só metadados (tracks/MAC/RSSI/H).

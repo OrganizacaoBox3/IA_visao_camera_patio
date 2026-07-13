@@ -102,6 +102,19 @@ create table if not exists bt_tags (
   criado_em bigint
 );
 
+-- ── ESTAÇÕES BLE (os coletores/celulares que varrem o BLE e postam as leituras) ──────────────
+-- A estação NASCE por AUTO-DESCOBERTA: o app posta em /api/bt/reading e o hub a registra como
+-- PENDENTE (nome = o próprio id) — não há cadastro manual. O operador só a BATIZA (nome amigável),
+-- (des)ativa e remove. `id` = o stationId que o device manda ([a-zA-Z0-9_-]{1,32}).
+-- LGPD: só config/metadado (nenhuma leitura de RSSI é persistida — bt-readings é efêmero, ADR-002).
+create table if not exists bt_stations (
+  id text primary key,            -- stationId enviado pelo device (chave natural)
+  nome text,                      -- rótulo amigável ("Doca 3"); default = o próprio id (pendente)
+  ativo boolean default true,
+  primeira_vez_em bigint,         -- epoch-ms do 1º POST visto (auto-descoberta)
+  ultima_vez_em bigint            -- epoch-ms do último POST (grava espaçado; memória é a fonte viva)
+);
+
 -- ── LOCALIZAÇÃO last-known por tag (modelo AirTag: TC22 móvel congela a última posição) ──
 -- UMA linha por tag (last-wins, sem trilha/histórico). Só metadado: lat/lon/acc/ts — nunca imagem (LGPD).
 create table if not exists bt_tag_locations (
