@@ -26,6 +26,7 @@ const sharp = require("sharp"); // decode do THUMBNAIL de luma p/ o gate de movi
 
 const camcfg = require("../camcfg");
 const motion = require("./motion");
+const zones = require("./zones"); // polygonOf/rasterizePolygonMask — o gate de movimento honra `points`
 const pgstore = require("../pgstore");
 const go2rtc = require("../go2rtc");
 const alarmPipeline = require("../alarm/pipeline"); // alarme server-side (presença em zona proibida)
@@ -163,13 +164,45 @@ function proibZonesOf(cameraId) {
 // Máscara de HOTSPOT do gate de movimento: reaproveita as MESMAS zonas de exclusão
 // como mapa de ignore do thumbnail (relógio/galho/timestamp queimado não disparam o
 // gate). Rebuild só quando as zonas mudam; null = sem exclusão (caminho rápido).
+//
+// POLÍGONO (spec-zona-unificada §5 — o risco nº 1): a zona de exclusão POLIGONAL é
+// RASTERIZADA na grade do thumbnail (MOTION_W×MOTION_H). Antes, esta função mapeava a zona
+// para {x,y,w,h} e DESCARTAVA `points` em silêncio: uma exclusão em "L" virava o RETÂNGULO
+// ENVOLVENTE e o gate passava a ignorar TAMBÉM o vão do L — área onde há gente de verdade.
+// A direção da falha é a perigosa: movimento no vão não conta ⇒ ratio abaixo do limiar ⇒
+// o motor NÃO ACORDA (só o piso de probe salvaria, segundos depois). Mesma classe do bug do
+// `stations`: consumidor descartando um campo calado. Zona sem `points` segue no retângulo
+// conservador de motion.buildIgnoreMask (CA-5, caminho intocado).
+// CUSTO (medido 2026-07-13, 500 iterações após warm-up, grade 64×48 = 3072 células): rasteriza só
+// no REBUILD (mudança de config de zona / createState), NUNCA por frame — 0,31 ms por zona de 4
+// vértices, 0,44 ms no L côncavo, 0,76 ms no teto de 20. Referência: um decodeThumb do gate custa
+// 8,28 ms de CPU e roda A CADA FRAME. Ou seja: o rebuild mais caro que existe custa MENOS que um
+// décimo de um único frame do gate, e acontece quando o operador salva uma zona. O medo de perf é
+// fantasma (spec §4). O assert de regressão (engine.test.js) usa teto FOLGADO de 10 ms: ele existe
+// p/ pegar ordem de grandeza (alguém rasterizando por FRAME), não p/ cronometrar a máquina do CI.
 function buildMotionIgnore(zonesExcl) {
   if (!MOTION_GATE_ON || !zonesExcl || !zonesExcl.length) return null;
-  return motion.buildIgnoreMask(
-    MOTION_W,
-    MOTION_H,
-    zonesExcl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h })),
-  );
+  const rects = [];
+  const polys = [];
+  for (const z of zonesExcl) {
+    if (!z) continue;
+    const pts = zones.polygonOf(z);
+    if (pts) polys.push(pts);
+    else rects.push({ x: z.x, y: z.y, w: z.w, h: z.h });
+  }
+  const base = motion.buildIgnoreMask(MOTION_W, MOTION_H, rects); // null quando não há retângulo
+  if (!polys.length) return base;
+  const m = base || new Uint8Array(MOTION_W * MOTION_H);
+  let any = !!base;
+  for (const pts of polys) {
+    const { bits } = zones.rasterizePolygonMask(MOTION_W, MOTION_H, pts); // mesma indexação (r*cols+c)
+    for (let i = 0; i < m.length; i++)
+      if (bits[i]) {
+        m[i] = 1;
+        any = true;
+      }
+  }
+  return any ? m : null; // nada marcado (polígono menor que uma célula) → caminho rápido, como o rect vazio
 }
 
 // Perfil "Longo alcance/Panorâmica" (CameraCfg.longRange — src/cameraConfig.ts).
@@ -705,4 +738,7 @@ module.exports = {
   // Puros re-exportados de focus.js (contrato de teste — focus.test.js; não são runtime):
   pickRoundMs,
   focusUnion,
+  // PURO (contrato de teste — engine.test.js): mapa de ignore do gate a partir das zonas de
+  // exclusão. Exposto porque é o ponto onde o hub honra (ou descarta) `points` — spec §5.
+  buildMotionIgnore,
 };

@@ -21,6 +21,7 @@ const {
   isSimplePolygon,
   sanitizeZonePoints,
   polygonBBox,
+  rasterizePolygonMask,
 } = require("./zones");
 
 // FIXTURES COMPARTILHADAS (spec zonas-poligonais CA-4): o MESMO arquivo é consumido por
@@ -262,6 +263,120 @@ describe("inExclusionZone — zona POLIGONAL (âncora segue no PÉ — CA-6)", (
   });
 });
 
+// ── A REGRA DA UNIFICAÇÃO (spec-zona-unificada) ───────────────────────────────
+// `points` é a FONTE DA VERDADE; `x/y/w/h` é CACHE da envolvente — DERIVADO, NUNCA AUTORADO.
+describe("O RETÂNGULO É UM POLÍGONO DE 4 VÉRTICES (o preset da migração — lado hub)", () => {
+  const RECT = { x: 0.2, y: 0.3, w: 0.4, h: 0.5 };
+  const asPoly = FIX.polygons.retangulo; // = [{x,y},{x+w,y},{x+w,y+h},{x,y+h}] do RECT acima
+
+  // A regra da migração (G2/cleanZone): rect → [{x,y},{x+w,y},{x+w,y+h},{x,y+h}].
+  const migrar = (r) => [
+    { x: r.x, y: r.y },
+    { x: r.x + r.w, y: r.y },
+    { x: r.x + r.w, y: r.y + r.h },
+    { x: r.x, y: r.y + r.h },
+  ];
+
+  it("a regra da migração reproduz a fixture — a MENOS DE 1 ULP (0.2+0.4 ≠ 0.6 em IEEE754)", () => {
+    const gerado = migrar(RECT);
+    gerado.forEach((p, i) => {
+      expect(p.x).toBeCloseTo(asPoly[i].x, 12);
+      expect(p.y).toBeCloseTo(asPoly[i].y, 12);
+    });
+    // O DETALHE QUE MORDE quem escrever `toEqual` na migração (mordeu aqui): a SOMA não é exata.
+    expect(RECT.x + RECT.w).not.toBe(0.6); // 0.6000000000000001 — erro de 5,55e-17 (1 ulp)
+    expect(RECT.y + RECT.h).toBe(0.8); // e esta É exata: o erro depende do par, não da regra
+  });
+
+  it("a envolvente volta ≤1 ulp (a migração não move a zona) e NÃO DERIVA ao re-migrar", () => {
+    const bb = polygonBBox(migrar(RECT));
+    expect(bb.x).toBe(RECT.x); // min/max não somam → x,y voltam EXATOS
+    expect(bb.y).toBe(RECT.y);
+    expect(bb.w).toBeCloseTo(RECT.w, 12); // w = (x+w)−x → carrega o ulp da soma
+    expect(bb.h).toBeCloseTo(RECT.h, 12);
+    expect(Math.abs(bb.w - RECT.w)).toBeLessThan(1e-15); // 5,55e-17: sub-nanopixel, inofensivo
+
+    // IDEMPOTÊNCIA (a premissa do cleanZone da G2: migrar no load/save, sem script): re-derivar a
+    // bbox a partir dos MESMOS points dá o MESMO resultado — o erro não se acumula a cada save.
+    const bb2 = polygonBBox(migrar(RECT));
+    expect(bb2).toEqual(bb);
+    // e uma zona JÁ migrada não é re-migrada (points vencem): a bbox segue vindo dos points.
+    expect(polygonBBox(asPoly).w).toBeCloseTo(RECT.w, 12);
+  });
+
+  it("mesma decisão do retângulo NO INTERIOR: a pessoa não troca de zona ao migrar", () => {
+    const antes = zone("Doca", RECT.x, RECT.y, RECT.w, RECT.h); // sem points (hoje)
+    const depois = polyZone("Doca", asPoly); // migrada (bbox derivada)
+    for (const p of [
+      { x: 0.4, y: 0.55 }, // centro
+      { x: 0.25, y: 0.35 }, // perto do canto de cima-esquerda
+      { x: 0.55, y: 0.75 }, // perto do canto de baixo-direita
+      { x: 0.1, y: 0.55 }, // fora
+      { x: 0.4, y: 0.95 }, // fora
+    ])
+      expect(attributeZone(p, [depois]), `(${p.x},${p.y})`).toBe(attributeZone(p, [antes]));
+  });
+});
+
+describe("A REGRA: points é FONTE DA VERDADE, x/y/w/h é CACHE derivado (NUNCA autorado)", () => {
+  const pts = FIX.polygons.retangulo; // vive em x 0.2..0.6, y 0.3..0.8
+
+  it("bbox MENTIROSA (autorada) faz a zona ENGOLIR a pessoa em silêncio — é por isso que a regra existe", () => {
+    // Zona cujo polígono está no meio do frame mas cuja bbox foi AUTORADA lá no canto (0.9,0.9).
+    // O pré-filtro retangular roda ANTES do teste fino em TODOS os call-sites (attributeZone,
+    // inExclusionZone, assignZone): a bbox mentirosa corta a pessoa antes de o polígono opinar.
+    // Falha CALADA — a zona simplesmente nunca atribui. Este é o modo de falha que a regra mata.
+    const mentirosa = { id: "m", label: "Mentirosa", x: 0.9, y: 0.9, w: 0.05, h: 0.05, points: pts };
+    expect(attributeZone({ x: 0.4, y: 0.55 }, [mentirosa])).toBeNull(); // dentro do POLÍGONO, e mesmo assim NULL
+
+    // Com a bbox RE-DERIVADA dos points (o que withDefaults/cleanZone fazem), a zona atribui.
+    const correta = polyZone("Mentirosa", pts);
+    expect(attributeZone({ x: 0.4, y: 0.55 }, [correta])).toBe("Mentirosa");
+  });
+
+  it("a mentira é ASSIMÉTRICA: bbox MENOR que a envolvente PERDE gente; MAIOR só custa CPU", () => {
+    const menor = { id: "a", label: "Menor", x: 0.3, y: 0.4, w: 0.1, h: 0.1, points: pts };
+    // (0.55,0.75) está DENTRO do polígono, mas fora da bbox encolhida → perdido, calado.
+    expect(attributeZone({ x: 0.55, y: 0.75 }, [menor])).toBeNull();
+
+    const maior = { id: "b", label: "Maior", x: 0, y: 0, w: 1, h: 1, points: pts };
+    // bbox inflada só deixa passar mais candidatos ao teste fino — o POLÍGONO segue decidindo.
+    expect(attributeZone({ x: 0.4, y: 0.55 }, [maior])).toBe("Maior"); // dentro do polígono
+    expect(attributeZone({ x: 0.05, y: 0.05 }, [maior])).toBeNull(); // dentro da bbox, FORA do polígono
+  });
+
+  it("inExclusionZone (âncora no PÉ) sofre a MESMA mentira — o pré-filtro é o mesmo", () => {
+    const mentirosa = { x: 0.9, y: 0.9, w: 0.05, h: 0.05, points: pts };
+    expect(inExclusionZone({ x: 0.4, y: 0.55 }, [mentirosa])).toBe(false); // pé no polígono, e não exclui
+    expect(inExclusionZone({ x: 0.4, y: 0.55 }, [polyZone("Ex", pts)])).toBe(true); // bbox derivada → exclui
+  });
+});
+
+describe("desempate com zonas 100% POLIGONAIS (o mundo pós-migração) — regra intacta", () => {
+  // O desempate (maior interseção bbox∩zona, depois MENOR área da bbox) roda sobre a bbox
+  // DERIVADA. Se ela deixar de ser derivada, o desempate decide sobre uma geometria fantasma.
+  const grande = polyZone("Espera", FIX.polygons["frame-cheio"]); // área 1.0
+  const especifica = polyZone("Doca 3", FIX.polygons.retangulo); // área 0.2
+
+  it("bbox contida nas duas → EMPATE de interseção → vence a de MENOR área (a específica)", () => {
+    expect(attributeZone(bboxAt(0.4, 0.55, 0.1, 0.1), [grande, especifica])).toBe("Doca 3");
+  });
+
+  it("só ponto (sem bbox) → overlap 0 p/ todas → vence a de MENOR área", () => {
+    expect(attributeZone({ x: 0.4, y: 0.55 }, [grande, especifica])).toBe("Doca 3");
+  });
+
+  it("fora da específica → cai na grande (o polígono, não a envolvente, decide)", () => {
+    expect(attributeZone({ x: 0.05, y: 0.05 }, [grande, especifica])).toBe("Espera");
+  });
+
+  it("côncava × convexa sobrepostas: o VÃO do L pertence à outra, não ao L", () => {
+    const elle = polyZone("Elle", FIX.polygons.elle);
+    expect(attributeZone({ x: 0.45, y: 0.3 }, [elle, grande])).toBe("Espera"); // vão do L
+    expect(attributeZone({ x: 0.2, y: 0.3 }, [elle, grande])).toBe("Elle"); // braço do L (menor área)
+  });
+});
+
 describe("polígono — sanitizeZonePoints/polygonBBox (espelho da validação do cleanZone)", () => {
   it("válido → clamp; malformado (curto/21+/NaN/auto-intersecção) → undefined, NUNCA []", () => {
     const tri = [
@@ -290,5 +405,36 @@ describe("polígono — sanitizeZonePoints/polygonBBox (espelho da validação d
     expect(bb.y).toBeCloseTo(0.1, 10);
     expect(bb.w).toBeCloseTo(0.5, 10);
     expect(bb.h).toBeCloseTo(0.7, 10);
+  });
+});
+
+// P6 — rasterização (espelho de rasterizePolygonMask em src/zones.ts). No hub o consumidor é o
+// GATE DE MOVIMENTO (engine.buildMotionIgnore); o teste de comportamento vive em engine.test.js.
+// Aqui pinamos a PARIDADE com o cliente: mesma grade, mesmo critério (centro da célula), mesmos bits.
+describe("polígono — rasterizePolygonMask (espelho do cliente; critério = CENTRO da célula)", () => {
+  it("o L côncavo vira células fiéis: o VÃO não é marcado (mesmos asserts do lado TS)", () => {
+    const m = rasterizePolygonMask(10, 10, FIX.polygons.elle);
+    expect(m.cols).toBe(10);
+    expect(m.rows).toBe(10);
+    expect(containsNorm(m, 0.2, 0.3)).toBe(true); // braço vertical
+    expect(containsNorm(m, 0.45, 0.7)).toBe(true); // pé horizontal
+    expect(containsNorm(m, 0.45, 0.3)).toBe(false); // VÃO do L — dentro da envolvente, fora da zona
+    expect(containsNorm(m, 0.95, 0.95)).toBe(false); // fora
+  });
+
+  it("retângulo-como-polígono rasteriza no retângulo (a migração não muda o mapa de pixels)", () => {
+    const m = rasterizePolygonMask(10, 10, FIX.polygons.retangulo); // x 0.2..0.6, y 0.3..0.8
+    expect(containsNorm(m, 0.45, 0.55)).toBe(true);
+    expect(containsNorm(m, 0.05, 0.55)).toBe(false);
+    expect(containsNorm(m, 0.45, 0.95)).toBe(false);
+  });
+
+  it("polígono degenerado (colinear) não marca célula nenhuma — nunca lança", () => {
+    const m = rasterizePolygonMask(8, 8, [
+      { x: 0.2, y: 0.5 },
+      { x: 0.5, y: 0.5 },
+      { x: 0.8, y: 0.5 },
+    ]);
+    expect(anySet(m)).toBe(false);
   });
 });

@@ -190,6 +190,26 @@ function polygonOf(z) {
   return Array.isArray(p) && p.length >= POLYGON_MIN_POINTS ? p : null;
 }
 
+/**
+ * P6 — RASTERIZAÇÃO do polígono numa grade (espelho byte-a-byte de rasterizePolygonMask em
+ * src/zones.ts). Quem consome POR PIXEL não chama pointInPolygon por pixel/frame: o polígono
+ * é rasterizado 1× e o laço consome a grade. Um mecanismo, dois consumos — EXATO por ponto
+ * (attributeZone/inExclusionZone), RASTERIZADO por pixel. Critério da célula: o CENTRO dela
+ * dentro do polígono (determinístico).
+ * No hub o consumidor é o GATE DE MOVIMENTO (engine.buildMotionIgnore, grade 64×48 do thumbnail):
+ * rasterizar é o que impede a exclusão poligonal de cegar o gate na ENVOLVENTE dela.
+ * @param {number} cols @param {number} rows @param {Array<{x:number,y:number}>} pts
+ * @returns {{cols:number, rows:number, bits:Uint8Array}}
+ */
+function rasterizePolygonMask(cols, rows, pts) {
+  const m = createMask(cols, rows);
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++)
+      if (pointInPolygon({ x: (c + 0.5) / cols, y: (r + 0.5) / rows }, pts))
+        m.bits[r * cols + c] = 1;
+  return m;
+}
+
 // Cache de máscaras decodificadas (config de zona muda raramente; o motor chama
 // attributeZone por track × rodada). Chave = string codificada. Cap defensivo.
 const maskCache = new Map();
@@ -307,9 +327,12 @@ module.exports = {
   encodeMask,
   decodeMask,
   // helpers de POLÍGONO (espelhos de src/zones.ts + fusion/floor-polygon.ts; consumidos por
-  // camcfg.js/cleanZone e pelos testes de paridade — fixtures compartilhadas, CA-4)
+  // camcfg.js/cleanZone, pelo gate de movimento (engine.buildMotionIgnore) e pelos testes de
+  // paridade — fixtures compartilhadas, CA-4)
   pointInPolygon,
   isSimplePolygon,
   sanitizeZonePoints,
   polygonBBox,
+  polygonOf,
+  rasterizePolygonMask,
 };

@@ -1,5 +1,5 @@
 {
-  "$comment": "FIXTURES COMPARTILHADAS das zonas poligonais (spec zonas-poligonais CA-4) — o 1º sensor de paridade TS↔JS da casa. Consumidas por src/zones.test.ts (cliente, pointInPolygon de fusion/floor-polygon.ts) E server/analysis/zones.test.js (hub, espelho byte-a-byte). Os casos de ARESTA/VÉRTICE registram o comportamento DETERMINÍSTICO do ray-casting (não há garantia dentro/fora na borda — floor-polygon.ts documenta); o que este arquivo pina é a PARIDADE: os dois lados têm que dar a MESMA resposta, senão a pessoa cairia em zonas diferentes no cliente e no hub (armadilha 9). Valores verificados por execução em 2026-07-12.",
+  "$comment": "FIXTURES COMPARTILHADAS das zonas poligonais (spec zonas-poligonais CA-4) — o 1º sensor de paridade TS↔JS da casa. Consumidas por src/zones.test.ts (cliente, pointInPolygon de fusion/floor-polygon.ts) E server/analysis/zones.test.js (hub, espelho byte-a-byte). Os casos de ARESTA/VÉRTICE registram o comportamento DETERMINÍSTICO do ray-casting (não há garantia dentro/fora na borda — floor-polygon.ts documenta); o que este arquivo pina é a PARIDADE: os dois lados têm que dar a MESMA resposta, senão a pessoa cairia em zonas diferentes no cliente e no hub (armadilha 9). Valores verificados por EXECUÇÃO (nunca por palpite): 2026-07-12 · retangulo/frame-cheio em 2026-07-13 (spec-zona-unificada: o retângulo é o PRESET do polígono, e a migração vai criar esses 4 vértices em massa — 21 das 22 zonas de produção).",
   "polygons": {
     "quadrado": [
       { "x": 0.25, "y": 0.25 },
@@ -19,6 +19,18 @@
       { "x": 0.5, "y": 0.1 },
       { "x": 0.9, "y": 0.9 },
       { "x": 0.1, "y": 0.9 }
+    ],
+    "retangulo": [
+      { "x": 0.2, "y": 0.3 },
+      { "x": 0.6, "y": 0.3 },
+      { "x": 0.6, "y": 0.8 },
+      { "x": 0.2, "y": 0.8 }
+    ],
+    "frame-cheio": [
+      { "x": 0, "y": 0 },
+      { "x": 1, "y": 0 },
+      { "x": 1, "y": 1 },
+      { "x": 0, "y": 1 }
     ]
   },
   "containment": [
@@ -39,7 +51,24 @@
     { "polygon": "elle", "point": { "x": 0.3, "y": 0.4 }, "inside": false, "why": "BORDA: aresta interna vertical do braço (paridade)" },
     { "polygon": "triangulo", "point": { "x": 0.5, "y": 0.5 }, "inside": true, "why": "dentro (arestas diagonais)" },
     { "polygon": "triangulo", "point": { "x": 0.15, "y": 0.2 }, "inside": false, "why": "fora (acima da diagonal esquerda)" },
-    { "polygon": "triangulo", "point": { "x": 0.5, "y": 0.1 }, "inside": false, "why": "BORDA: ápice exato (paridade)" }
+    { "polygon": "triangulo", "point": { "x": 0.5, "y": 0.1 }, "inside": false, "why": "BORDA: ápice exato (paridade)" },
+
+    { "polygon": "retangulo", "point": { "x": 0.4, "y": 0.55 }, "inside": true, "why": "RETÂNGULO-COMO-POLÍGONO (o preset da migração: rect 0.2,0.3,0.4,0.5 → 4 vértices) — interior" },
+    { "polygon": "retangulo", "point": { "x": 0.1, "y": 0.55 }, "inside": false, "why": "fora, à esquerda" },
+    { "polygon": "retangulo", "point": { "x": 0.7, "y": 0.55 }, "inside": false, "why": "fora, à direita" },
+    { "polygon": "retangulo", "point": { "x": 0.4, "y": 0.95 }, "inside": false, "why": "fora, abaixo" },
+    { "polygon": "retangulo", "point": { "x": 0.2, "y": 0.55 }, "inside": true, "why": "BORDA esquerda: ray-casting INCLUI (= o teste retangular). Paridade, não semântica" },
+    { "polygon": "retangulo", "point": { "x": 0.4, "y": 0.3 }, "inside": true, "why": "BORDA do topo: ray-casting INCLUI (= o teste retangular)" },
+    { "polygon": "retangulo", "point": { "x": 0.6, "y": 0.55 }, "inside": false, "why": "DELTA DA MIGRAÇÃO: borda DIREITA. O ray-casting é meio-aberto e EXCLUI; o teste retangular (pointInZone/pré-filtro) INCLUI. Conjunto de medida ZERO (o detector devolve cxcywh float sem clamp — igualdade exata com a borda é coincidência). ACEITO e pinado: o que importa é os dois lados concordarem" },
+    { "polygon": "retangulo", "point": { "x": 0.4, "y": 0.8 }, "inside": false, "why": "DELTA DA MIGRAÇÃO: borda de BAIXO — mesmo caso da direita (meio-aberto)" },
+    { "polygon": "retangulo", "point": { "x": 0.2, "y": 0.3 }, "inside": true, "why": "VÉRTICE superior-esquerdo (paridade)" },
+    { "polygon": "retangulo", "point": { "x": 0.6, "y": 0.8 }, "inside": false, "why": "VÉRTICE inferior-direito (paridade — canto meio-aberto)" },
+    { "polygon": "retangulo", "point": { "x": 0.4, "y": 0.799999 }, "inside": true, "why": "ε ACIMA da borda de baixo → dentro: o delta é SÓ na igualdade exata, não numa faixa" },
+
+    { "polygon": "frame-cheio", "point": { "x": 0.5, "y": 0.5 }, "inside": true, "why": "FRAME CHEIO migrado (zona 0,0,1,1 → 4 vértices): interior" },
+    { "polygon": "frame-cheio", "point": { "x": 0.5, "y": 0.999 }, "inside": true, "why": "pé da pessoa quase na base do frame → DENTRO (o caso real)" },
+    { "polygon": "frame-cheio", "point": { "x": 0.5, "y": 1 }, "inside": false, "why": "DELTA: pé EXATAMENTE em y=1.0 → fora (meio-aberto). Só ocorre se algum produtor CLAMPAR a coordenada em 1.0 — o worker do hub NÃO clampa (postprocess devolve cxcywh cru). Se um dia clampar, este é o pino que avisa" },
+    { "polygon": "frame-cheio", "point": { "x": 0, "y": 0.5 }, "inside": true, "why": "borda esquerda x=0 → dentro (meio-aberto inclui esquerda/topo)" }
   ],
   "simplicity": [
     {
@@ -65,6 +94,28 @@
       ],
       "simple": true,
       "why": "P3: côncavo PERMITIDO (só 'simples' é exigido)"
+    },
+    {
+      "name": "retangulo",
+      "points": [
+        { "x": 0.2, "y": 0.3 },
+        { "x": 0.6, "y": 0.3 },
+        { "x": 0.6, "y": 0.8 },
+        { "x": 0.2, "y": 0.8 }
+      ],
+      "simple": true,
+      "why": "O RETÂNGULO É UM POLÍGONO DE 4 VÉRTICES (spec-zona-unificada): o que a migração vai criar em MASSA (21 das 22 zonas de produção). Não auto-intersecta — tem de passar no gate dos DOIS lados"
+    },
+    {
+      "name": "frame-cheio",
+      "points": [
+        { "x": 0, "y": 0 },
+        { "x": 1, "y": 0 },
+        { "x": 1, "y": 1 },
+        { "x": 0, "y": 1 }
+      ],
+      "simple": true,
+      "why": "zona full-frame migrada: vértices NA borda do clamp 0..1 — o caso extremo do sanitizeZonePoints"
     },
     {
       "name": "gravata",

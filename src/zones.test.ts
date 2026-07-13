@@ -567,3 +567,117 @@ describe("polígono — precedência points>mask e consumo rasterizado (P5/P6, C
     expect(zonePolygon({ points: elle.slice(0, 2) })).toBeNull();
   });
 });
+
+// ── A REGRA DA UNIFICAÇÃO (spec-zona-unificada) — espelho do lado hub ─────────────────────────
+// `points` é a FONTE DA VERDADE; `x/y/w/h` é CACHE da envolvente — DERIVADO, NUNCA AUTORADO.
+describe("O RETÂNGULO É UM POLÍGONO DE 4 VÉRTICES (o preset da migração — lado cliente)", () => {
+  const RECT = { x: 0.2, y: 0.3, w: 0.4, h: 0.5 };
+  const asPoly = FIX.polygons.retangulo;
+
+  // A regra da migração (G2/cleanZone): rect → [{x,y},{x+w,y},{x+w,y+h},{x,y+h}].
+  const migrar = (r: { x: number; y: number; w: number; h: number }): ZonePoint[] => [
+    { x: r.x, y: r.y },
+    { x: r.x + r.w, y: r.y },
+    { x: r.x + r.w, y: r.y + r.h },
+    { x: r.x, y: r.y + r.h },
+  ];
+
+  it("a regra da migração reproduz a fixture — a MENOS DE 1 ULP (0.2+0.4 ≠ 0.6 em IEEE754)", () => {
+    migrar(RECT).forEach((p, i) => {
+      expect(p.x).toBeCloseTo(asPoly[i].x, 12);
+      expect(p.y).toBeCloseTo(asPoly[i].y, 12);
+    });
+    // O DETALHE QUE MORDE quem escrever `toEqual` na migração (mordeu aqui): a SOMA não é exata.
+    expect(RECT.x + RECT.w).not.toBe(0.6); // 0.6000000000000001 — erro de 5,55e-17 (1 ulp)
+    expect(RECT.y + RECT.h).toBe(0.8); // e esta É exata: o erro depende do par, não da regra
+  });
+
+  it("withDefaults: rect migrado → envolvente ≤1 ulp e SEM DERIVA ao re-salvar (idempotência)", () => {
+    const z = withDefaults({ label: "Doca", points: migrar(RECT) }, "cam-m");
+    expect(z.x).toBe(RECT.x); // min/max não somam → x,y voltam EXATOS
+    expect(z.y).toBe(RECT.y);
+    expect(z.w).toBeCloseTo(RECT.w, 12); // w = (x+w)−x → carrega o ulp da soma
+    expect(z.h).toBeCloseTo(RECT.h, 12);
+    expect(Math.abs(z.w - RECT.w)).toBeLessThan(1e-15); // 5,55e-17: sub-nanopixel, inofensivo
+
+    // IDEMPOTÊNCIA: re-passar a zona JÁ migrada por withDefaults não move nada (o erro não
+    // se acumula a cada save — a premissa do cleanZone da G2).
+    const z2 = withDefaults(z, "cam-m");
+    expect(z2.points).toEqual(z.points);
+    expect(z2.x).toBe(z.x);
+    expect(z2.y).toBe(z.y);
+    expect(z2.w).toBe(z.w);
+    expect(z2.h).toBe(z.h);
+  });
+
+  it("mesma decisão do retângulo NO INTERIOR: a pessoa não troca de zona ao migrar", () => {
+    const antes = { label: "Doca", ...RECT };
+    const depois = withDefaults({ label: "Doca", points: asPoly }, "c");
+    const fine = (z: { points?: ZonePoint[] }) => zoneContainsFn(z, null);
+    for (const p of [
+      { x: 0.4, y: 0.55 },
+      { x: 0.25, y: 0.35 },
+      { x: 0.55, y: 0.75 },
+      { x: 0.1, y: 0.55 },
+      { x: 0.4, y: 0.95 },
+    ]) {
+      const a = assignZone([antes], p.x, p.y)?.label ?? null;
+      const b = assignZone([depois], p.x, p.y, undefined, fine)?.label ?? null;
+      expect(b, `(${p.x},${p.y}) — migração mudou a atribuição`).toBe(a);
+    }
+  });
+});
+
+describe("A REGRA: points é FONTE DA VERDADE, x/y/w/h é CACHE derivado (NUNCA autorado)", () => {
+  const pts = FIX.polygons.retangulo; // vive em x 0.2..0.6, y 0.3..0.8
+
+  it("withDefaults RE-DERIVA a bbox e IGNORA a autorada, por mais mentirosa que seja", () => {
+    const z = withDefaults({ label: "M", points: pts, x: 0.9, y: 0.9, w: 0.05, h: 0.05 }, "c");
+    expect(z.x).toBeCloseTo(0.2, 12);
+    expect(z.y).toBeCloseTo(0.3, 12);
+    expect(z.w).toBeCloseTo(0.4, 12);
+    expect(z.h).toBeCloseTo(0.5, 12);
+  });
+
+  it("se a bbox FOSSE autorada, a zona engoliria a pessoa em SILÊNCIO (o modo de falha que a regra mata)", () => {
+    // O pré-filtro retangular do assignZone roda ANTES do teste fino: uma bbox mentirosa corta a
+    // pessoa antes de o polígono opinar. A zona simplesmente nunca atribui — falha calada.
+    const mentirosa = { label: "M", x: 0.9, y: 0.9, w: 0.05, h: 0.05, points: pts };
+    const fine = (z: { points?: ZonePoint[] }) => zoneContainsFn(z, null);
+    expect(assignZone([mentirosa], 0.4, 0.55, undefined, fine)).toBeNull(); // dentro do POLÍGONO, e null
+
+    // Passando pelo withDefaults (bbox derivada), a mesma zona atribui.
+    const correta = withDefaults(mentirosa, "c");
+    expect(assignZone([correta], 0.4, 0.55, undefined, fine)?.label).toBe("M");
+  });
+
+  it("pointInZone tem o MESMO pré-filtro: bbox mentirosa mata o teste fino do polígono", () => {
+    const mentirosa = { x: 0.9, y: 0.9, w: 0.05, h: 0.05 };
+    const contains = zoneContainsFn({ points: pts }, null);
+    expect(pointInZone(mentirosa, 0.4, 0.55, contains)).toBe(false); // pé no polígono, e não exclui
+    expect(pointInZone(polygonBBox(pts), 0.4, 0.55, contains)).toBe(true); // bbox derivada → exclui
+  });
+});
+
+describe("desempate com zonas 100% POLIGONAIS (o mundo pós-migração) — regra intacta", () => {
+  // O desempate (maior interseção bbox∩zona, depois MENOR área da bbox — pinado acima p/ o mundo
+  // retangular) roda sobre a bbox DERIVADA. Sem derivação, ele decidiria sobre geometria fantasma.
+  const grande = withDefaults({ label: "Espera", points: FIX.polygons["frame-cheio"] }, "c");
+  const especifica = withDefaults({ label: "Doca 3", points: FIX.polygons.retangulo }, "c");
+  const fine = (z: { points?: ZonePoint[] }) => zoneContainsFn(z, null);
+
+  it("bbox contida nas duas → EMPATE de interseção → vence a de MENOR área (a específica)", () => {
+    const bbox = [0.35, 0.5, 0.1, 0.1] as const;
+    expect(assignZone([grande, especifica], 0.4, 0.55, bbox, fine)?.label).toBe("Doca 3");
+  });
+
+  it("só ponto → overlap 0 p/ todas → vence a de MENOR área", () => {
+    expect(assignZone([grande, especifica], 0.4, 0.55, undefined, fine)?.label).toBe("Doca 3");
+  });
+
+  it("o VÃO do L côncavo pertence à zona de baixo, não ao L (o polígono decide, não a envolvente)", () => {
+    const elleZ = withDefaults({ label: "Elle", points: FIX.polygons.elle }, "c");
+    expect(assignZone([elleZ, grande], 0.45, 0.3, undefined, fine)?.label).toBe("Espera"); // vão
+    expect(assignZone([elleZ, grande], 0.2, 0.3, undefined, fine)?.label).toBe("Elle"); // braço
+  });
+});
