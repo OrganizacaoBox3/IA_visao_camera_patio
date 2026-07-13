@@ -1,5 +1,5 @@
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { DashboardPage } from "./routes/DashboardPage";
 import { CamerasPage } from "./routes/CamerasPage";
@@ -7,12 +7,9 @@ import { CameraPage } from "./routes/CameraPage";
 import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
 import { ProfilePage } from "./routes/ProfilePage";
-import { AlarmHealthPage } from "./routes/AlarmHealthPage";
 import { TurnosPage } from "./routes/TurnosPage";
-import { BtTagsPage } from "./routes/BtTagsPage";
-import { EstacoesPage } from "./routes/EstacoesPage";
+import { BlePage } from "./routes/ble/BlePage";
 import { TagsMapPage } from "./routes/TagsMapPage";
-import { CalibrationPage } from "./routes/CalibrationPage";
 import { ReplayPlayerPage } from "./routes/ReplayPlayerPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
@@ -41,20 +38,25 @@ const router = createBrowserRouter([
       { path: "/monitoramento", element: <DashboardPage /> },
       // Gestão de câmeras (IP + nó local) — ação única de "adicionar câmera" da Central.
       { path: "/cameras", element: <CamerasPage /> },
+      // Relatório: o histórico E a saúde do sistema de alarme (a faixa do topo). A rota
+      // /alarmes-saude morreu na unificação — spec-arquitetura-informacao §2.
       { path: "/relatorio", element: <ReportPage /> },
-      // Tags BLE (identidade aumentada): tela crua das leituras ao vivo da estação.
-      { path: "/tags-ble", element: <BtTagsPage /> },
+      // BLE: uma tela, duas abas (Tags | Estações — esta sob canConfigure para escrever).
+      // A tag e a estação são os dois lados da mesma pergunta ("por que a tag sumiu?"): viviam
+      // em grupos de menu diferentes e agora vivem juntas. spec-arquitetura-informacao §3.
+      { path: "/tags-ble", element: <BlePage /> },
       // Alias histórico do mapa (agora a home "/"): mantém deep-links antigos funcionando.
       { path: "/mapa", element: <TagsMapPage /> },
-      // Calibração por câmera (homografia → metros no chão; base da posição por tag BLE).
-      { path: "/calibracao", element: <CalibrationPage /> },
-      { path: "/alarmes-saude", element: <AlarmHealthPage /> },
       // Turnos de trabalho (cadastro global — spec-turnos-por-zona F1): o contexto operacional
-      // "quando a área deveria estar trabalhando"; atribuição às zonas vem na F2.
+      // "quando a área deveria estar trabalhando".
       { path: "/turnos", element: <TurnosPage /> },
-      // Estações BLE (os celulares coletores): registro com nome amigável. A estação se AUTO-DESCOBRE
-      // ao postar a 1ª leitura (server/bt/stations.js) — aqui ela é batizada, (des)ativada e removida.
-      { path: "/estacoes", element: <EstacoesPage /> },
+      // ── Redirects de cortesia (rotas que MORRERAM; o favorito antigo não leva a 404) ──────────
+      // A calibração virou MODO do palco da câmera (não tem mais tela): manda para a Central, que
+      // é de onde se abre a câmera e se calibra. A Saúde de alarmes virou a faixa do topo do
+      // Relatório. As Estações viraram aba da tela BLE.
+      { path: "/calibracao", element: <Navigate to="/monitoramento" replace /> },
+      { path: "/alarmes-saude", element: <Navigate to="/relatorio" replace /> },
+      { path: "/estacoes", element: <Navigate to="/tags-ble?aba=estacoes" replace /> },
       // Bancada de simulação (docs/cientifica/simulador.md) — player de replay, Fase 0/Trilha P.
       { path: "/replay", element: <ReplayPlayerPage /> },
       { path: "/usuarios", element: <UsersPage /> },

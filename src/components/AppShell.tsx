@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   BarChart3,
-  BellRing,
   Bluetooth,
   CalendarClock,
   Cctv,
@@ -20,8 +19,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
-  RadioTower,
-  Ruler,
   Search,
   ShieldCheck,
   Users,
@@ -240,28 +237,29 @@ export function AppShell() {
         // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
         // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
         { to: "/cameras", icon: Video, label: "Câmeras" },
+        // BLE: Tags e Estações numa tela só (abas). Eram DOIS itens em DOIS grupos com DOIS gates —
+        // mesmo domínio, partido ao meio. "A estação está viva?" é a resposta de "por que a tag
+        // sumiu?": é diagnóstico, não configuração. spec-arquitetura-informacao §3.
+        { to: "/tags-ble", icon: Bluetooth, label: "BLE" },
+        // Relatório: o histórico E a saúde do alarme (a faixa do topo, que precede a leitura — se o
+        // alarme está inundando, todo número abaixo é suspeito). Absorveu a /alarmes-saude (§2).
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
-        // Tags BLE (identidade aumentada) + Calibração de câmera — Fase 1/1.5 do plano de tags.
-        { to: "/tags-ble", icon: Bluetooth, label: "Tags BLE" },
-        { to: "/calibracao", icon: Ruler, label: "Calibração" },
+        // CALIBRAÇÃO não está aqui: virou MODO do palco da câmera (§1). A página existia só para
+        // reconstruir o contexto que a câmera já tem — e servia um JPEG parado, enquanto o palco
+        // tem o vídeo real. Um item de menu que dizia "não" ao operador (a tela o recusava).
       ],
     },
     {
       id: "adm",
       title: "Administração",
       items: [
-        ...(canConfigure
-          ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes", short: "Saúde" }]
-          : []),
         // Turnos de trabalho (spec-turnos-por-zona F1): cadastro global, mesmo RBAC de
         // configuração (canConfigure) — a leitura pelo relatório/overlay não passa por aqui.
         ...(canConfigure ? [{ to: "/turnos", icon: CalendarClock, label: "Turnos" }] : []),
-        // Estações BLE (celulares coletores): registro do NOME amigável da estação — mesmo RBAC de
-        // configuração. A estação se auto-descobre ao postar; aqui ela ganha nome/ativo.
-        ...(canConfigure ? [{ to: "/estacoes", icon: RadioTower, label: "Estações BLE", short: "Estações" }] : []),
-        // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia, mesmo
-        // RBAC de Saúde alarmes (canConfigure: engenheiro/superadmin).
-        ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Replay (sim)" }] : []),
+        // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia.
+        // Rótulo "Simulação": o antigo "Replay (sim)" não tinha interseção lexical nenhuma com o
+        // h1 da página ("Bancada de simulação") — o operador não achava pelo nome.
+        ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Simulação" }] : []),
         ...(user.papel === "superadmin"
           ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
           : []),

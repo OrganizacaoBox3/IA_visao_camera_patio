@@ -50,9 +50,6 @@ const BASELINE = {
   // nenhum `text-[`). Restou 1 hex no Replay: o FALLBACK único do cssVar() p/ o canvas 2D
   // (exceção G8 documentada, mesma do TrackOverlay — canvas não entende var()).
   "src/routes/ReplayPlayerPage.tsx": { "#hex": 1 },
-  // Telas da varredura F1 (Dashboard/NotFound zeradas na C1; ReportPage/AlarmesPanel/
-  // AtividadePanel zeradas na C2 — ratchet apertado: text-[11px] → papel text-label)
-  "src/routes/AlarmHealthPage.tsx": { "text-[": 3 },
   // Fallback literal do cssVar() p/ canvas (exceção documentada G8 — contraste de canvas);
   // entra na baseline mesmo assim: se a exceção crescer, a revisão precisa ver.
   "src/routes/dashboard/TrackOverlay.tsx": { "#hex": 2 },
@@ -61,11 +58,12 @@ const BASELINE = {
   // fallback do cssVar() p/ o canvas 2D (MESMA exceção G8 do TrackOverlay/Replay: o canvas não
   // entende var()). Zero `text-[`.
   "src/CameraWorkspace.tsx": { "#hex": 1 },
-  // CalibrationPanel/TagPicker: dívida de TIPOGRAFIA (text-[12px] etc.) da tela de calibração —
-  // é a F2 da spec ("CalibrationPanel, DEPOIS da multi-antena F3"), ainda em frente de produto.
-  // Catalogada aqui p/ NÃO CRESCER enquanto a varredura não chega: quando chegar, zera.
-  "src/camera/CalibrationPanel.tsx": { "text-[": 16 },
   "src/camera/TagPicker.tsx": { "text-[": 1 },
+  // ── Zeradas na Onda F (arquivo DELETADO, dívida foi junto — não foi "limpa", foi extinta) ──
+  // "src/routes/AlarmHealthPage.tsx": 3 text-[ — a tela virou a faixa do topo do Relatório.
+  // "src/camera/CalibrationPanel.tsx": 16 text-[ — o painel virou aba do palco (zero text-[).
+  // Ficam aqui como LÁPIDE: a dívida sumiu porque o arquivo sumiu. Se alguém recriar a tela,
+  // ela estreia sob o gate, sem baseline herdada.
 };
 
 // ——— varredura: src/**/*.tsx MENOS src/ui/** (os átomos SÃO a implementação dos tokens) ———
