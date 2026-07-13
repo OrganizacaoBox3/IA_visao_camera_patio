@@ -16,10 +16,12 @@ import {
   PRESENCA_ALERT_PRESETS_MS,
   ZONE_ARMINGS,
   ZONE_ARMING_LABEL,
+  polygonBBox,
   type Zone,
   type ZoneArming,
   type ZoneMode,
 } from "../zones";
+import { VertexTable } from "./VertexTable";
 import { getShifts, type Shift } from "../api";
 import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
 
@@ -303,11 +305,14 @@ export function ConfigZonaDialog({
                 </p>
               )}
 
+              {/* A PODA (F5): o pincel morreu, então o texto que mandava "Pintar área" virou
+                  mentira — mandava o operador procurar um botão que não existe mais. A exclusão
+                  se desenha como qualquer zona: polígono no palco (ou vértice a vértice abaixo). */}
               {z.modo === "exclusao" && (
                 <p className="empty-note">
-                  Área de máscara: toda pessoa cujo pé cair aqui é ignorada (não conta, não rastreia,
-                  não aparece). Sem parâmetros — use “Pintar área” sobre a fonte fixa de falso
-                  positivo.
+                  Área de exclusão: toda pessoa cujo pé cair aqui é ignorada (não conta, não
+                  rastreia, não aparece). Sem parâmetros — desenhe a área sobre a fonte fixa de falso
+                  positivo (grade, placa, janela de van, TV).
                 </p>
               )}
 
@@ -360,6 +365,16 @@ export function ConfigZonaDialog({
                   </p>
                 </>
               )}
+
+              {/* VÉRTICES (F4) — o caminho de TECLADO do polígono e a precisão fina sem zoom.
+                  Vale para TODO modo (a geometria não é do modo). `points` é a FONTE DA VERDADE;
+                  a bbox x/y/w/h é CACHE da envolvente e é RE-DERIVADA aqui no patch (polygonBBox),
+                  exatamente como o arraste de vértice no palco faz — nunca autorada à mão. */}
+              <VertexTable
+                key={z.id} // troca de zona ⇒ tabela nova (a seleção não vaza de uma zona p/ outra)
+                points={z.points}
+                onChange={(pts) => patchZone(z.id, { points: pts, ...polygonBBox(pts) })}
+              />
             </div>
           );
         })()}

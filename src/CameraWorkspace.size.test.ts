@@ -41,6 +41,16 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1762 → 1722 — a fiação da
 // calibração ENTROU e o arquivo ainda ENCOLHEU 40 linhas. NÃO medir com `Measure-Object -Line`.
 //
+// APERTADO de novo na ZONA UNIFICADA (jul/13), 1725 → 1690: a 3ª vez, e a mais barata — não foi
+// extração, foi PODA. A spec-zona-unificada mostrou que o palco carregava TRÊS primitivas de zona
+// (retângulo · pincel · polígono) quando sempre houve UMA (`points` — um retângulo é um polígono de
+// 4 vértices). Saíram do god-file o estado do PINCEL (paintZoneId/startPaint/clearActive/paintZone),
+// o toggleDrawMode e a grade de pintura; ENTROU o editor de verdade (mover a forma · inserir vértice
+// pelo midpoint · remover por Delete/Alt+clique · aviso de auto-interseção), todo ele em
+// ./camera/usePolygonEditor + ./camera/draw. Contabilidade REAL (método deste teste, que conta
+// linhas vazias): 1722 → 1687 — o EDITOR que faltava entrou e o arquivo ainda ENCOLHEU 35 linhas.
+// NÃO medir com `Measure-Object -Line`.
+//
 // Teto ATUAL (não-ideal). BAIXE ao extrair uma responsabilidade; SUBIR exige justificativa.
 // 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
 // (carga da homografia + fusão tag↔pessoa) foi EXTRAÍDO p/ src/fusion/useCameraTagLabels.ts — aqui
@@ -58,7 +68,7 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
 // a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
 // vazias e já induziu um falso "coube em 1930" numa revisão).
-const MAX_LINES = 1725;
+const MAX_LINES = 1690;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

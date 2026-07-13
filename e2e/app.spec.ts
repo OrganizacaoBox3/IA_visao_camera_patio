@@ -114,6 +114,68 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
   await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
 });
 
+// ── spec-zona-unificada F3: a zona É um polígono — e agora se EDITA ───────────────────────────
+// O pedido do dono, literal: "quero poder EDITAR OS PONTOS depois". Até esta onda, a primitiva que
+// 21 das 22 zonas de produção usavam — o retângulo — não tinha edição NENHUMA: nascia por arraste e
+// morria no X. Este teste percorre o ciclo inteiro pelo PALCO (é lá que a geometria vive):
+//   desenhar (o preset retângulo, mesma gestualidade de sempre) → SELECIONAR → INSERIR um vértice
+//   pelo midpoint → REMOVER com Delete → MOVER a forma inteira.
+// A prova de que a forma REALMENTE se moveu não é um print: depois de arrastar o interior em +5% do
+// palco, o teste CLICA onde o canto DEVE ter ido parar e exige que haja um vértice ali (o alvo é de
+// 14 px; o deslocamento é de 35-60 px — se a forma não tivesse andado, o clique cairia no vazio).
+// A barra do palco carrega o estado em TEXTO ("Zona selecionada · N vértices" / "Vértice i de N") —
+// going-gray: informação nunca só-por-cor —, e é esse texto que serve de oráculo aqui.
+test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértice, remove e move a forma", async ({
+  page,
+  context,
+}) => {
+  test.slow(); // paga conexão do nó + 1º frame no palco (mesmo orçamento do teste do polígono)
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await drawZone(page); // "Zona" + arraste 35%→65% ⇒ zona de 4 vértices (o PRESET)
+
+  const stage = page.locator(".cam-stage");
+  const tip = page.locator(".cam-head-tip"); // a dica do editor (role=status)
+  const box = (await stage.boundingBox())!;
+  const px = (fx: number, fy: number) =>
+    [box.x + box.width * fx, box.y + box.height * fy] as const;
+
+  // O modo "Zona" continua armado depois do desenho (arraste = nova zona). Desarma p/ EDITAR.
+  await page.getByRole("button", { name: /Desenhando/ }).click();
+
+  // 1) SELECIONAR: clicar dentro da zona (o `simple_select` do Mapbox) — 4 vértices, em texto.
+  await page.mouse.click(...px(0.5, 0.5));
+  await expect(tip).toContainText(/Zona selecionada · 4 vértices/);
+
+  // 2) INSERIR: arrastar o MIDPOINT da aresta de cima (meio de (35%,35%)→(65%,35%) = (50%,35%)).
+  //    É o que o Frigate literalmente não implementa e a Axis não documenta.
+  await page.mouse.move(...px(0.5, 0.35));
+  await page.mouse.down();
+  await page.mouse.move(...px(0.5, 0.25), { steps: 10 });
+  await page.mouse.up();
+  await expect(tip).toContainText(/Vértice 2 de 5/); // o vértice NOVO nasce selecionado
+
+  // 3) REMOVER pelo TECLADO (nunca só clique-direito — P7: o operador usa TABLET).
+  await page.keyboard.press("Delete");
+  await expect(tip).toContainText(/Zona selecionada · 4 vértices/); // voltou aos 4 cantos
+
+  // 4) MOVER A FORMA: arrastar o interior +5% do palco (antes, mover uma zona exigia REDESENHAR).
+  await page.mouse.move(...px(0.5, 0.5));
+  await page.mouse.down();
+  await page.mouse.move(...px(0.55, 0.55), { steps: 10 });
+  await page.mouse.up();
+
+  // …e a PROVA geométrica: o canto que estava em (35%,35%) tem de estar agora em (40%,40%).
+  await page.mouse.click(...px(0.4, 0.4));
+  await expect(tip).toContainText(/Vértice \d+ de 4/); // há um VÉRTICE exatamente ali ⇒ a forma andou
+
+  // Limpa o que este teste criou (as zonas são PERSISTIDAS por câmera no hub e o e2e reusa a
+  // mesma câmera): o estado-vazio que os testes seguintes exigem volta a valer.
+  await page.getByRole("button", { name: "Remover zona" }).first().click();
+  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+});
+
 // GATE DE A11Y do console que o operador mais vive (a a11y.spec.ts varre só as rotas — a câmera
 // ABERTA exige um nó de câmera conectado, então o axe dela mora aqui, junto dos helpers).
 // Mesma régua do a11y.spec.ts: falha em violação critical/serious; `color-contrast` segue como a

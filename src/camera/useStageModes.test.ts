@@ -6,6 +6,11 @@
 // operador ("A calibração requer perfil de engenharia. Você pode usar o modo Medir.") — passaria a
 // ser engolido pelo corte. O bug não faria barulho: o operador clicaria no chão e NADA aconteceria.
 // Aqui ele faz barulho.
+//
+// PODA (spec-zona-unificada F5): "paint" e "rect" saíram do enum. O pincel não existe mais (a
+// máscara vive como rasterização interna do polígono) e o retângulo virou o PRESET do polígono —
+// o arraste do botão "Zona" agora é do MESMO editor da zona ("polygon"), que também seleciona,
+// insere e move. Um alvo a menos = uma ordem a menos para errar.
 import { describe, it, expect } from "vitest";
 import { stageTarget, type StageState } from "./useStageModes";
 
@@ -14,9 +19,7 @@ const base: StageState = {
   review: false,
   canConfigure: true,
   calActive: false,
-  paintZoneId: null,
   tripwireMode: false,
-  drawMode: false,
 };
 
 describe("stageTarget — precedência dos modos do palco", () => {
@@ -24,7 +27,7 @@ describe("stageTarget — precedência dos modos do palco", () => {
     expect(stageTarget({ ...base, mode: "tile" })).toBe("none");
     expect(stageTarget({ ...base, review: true })).toBe("none");
     // nem mesmo com um modo armado: em revisão o palco mostra o BUFFER, não o vivo
-    expect(stageTarget({ ...base, review: true, drawMode: true })).toBe("none");
+    expect(stageTarget({ ...base, review: true, tripwireMode: true })).toBe("none");
     expect(stageTarget({ ...base, review: true, calActive: true })).toBe("none");
   });
 
@@ -35,26 +38,19 @@ describe("stageTarget — precedência dos modos do palco", () => {
     expect(stageTarget({ ...base, canConfigure: false, calActive: true })).toBe("calibration");
   });
 
-  it("OPERADOR sem calibração ligada não edita nada (RBAC intacto: nem zona, nem linha, nem pincel)", () => {
+  it("OPERADOR sem calibração ligada não edita nada (RBAC intacto: nem zona, nem linha)", () => {
     expect(stageTarget({ ...base, canConfigure: false })).toBe("none");
-    expect(stageTarget({ ...base, canConfigure: false, drawMode: true })).toBe("none");
     expect(stageTarget({ ...base, canConfigure: false, tripwireMode: true })).toBe("none");
-    expect(stageTarget({ ...base, canConfigure: false, paintZoneId: "z1" })).toBe("none");
   });
 
   it("engenharia: a calibração VENCE os demais modos (exclusão mútua — nunca desenha zona por baixo)", () => {
-    expect(
-      stageTarget({ ...base, calActive: true, drawMode: true, tripwireMode: true, paintZoneId: "z1" }),
-    ).toBe("calibration");
+    expect(stageTarget({ ...base, calActive: true, tripwireMode: true })).toBe("calibration");
   });
 
-  it("sem calibração, a precedência de sempre: pincel > linha > retângulo > polígono", () => {
-    expect(stageTarget({ ...base, paintZoneId: "z1", tripwireMode: true, drawMode: true })).toBe(
-      "paint",
-    );
-    expect(stageTarget({ ...base, tripwireMode: true, drawMode: true })).toBe("tripwire");
-    expect(stageTarget({ ...base, drawMode: true })).toBe("rect");
-    // sem modo armado o polígono ainda recebe o down (é ele quem pega o ARRASTE de um vértice)
+  it("sem calibração: linha > zona; e SEM modo armado o palco é do editor da ZONA", () => {
+    expect(stageTarget({ ...base, tripwireMode: true })).toBe("tripwire");
+    // sem modo armado o editor da zona ainda recebe o down: é ele quem SELECIONA a zona, agarra um
+    // VÉRTICE, insere pelo MIDPOINT e move a FORMA (spec-zona-unificada F3).
     expect(stageTarget(base)).toBe("polygon");
   });
 });

@@ -13,9 +13,21 @@ import { type FadigaScene } from "../fadiga/draw";
 import { type ObjDetection } from "../objects/detector";
 import { objClass } from "../objects/catalog";
 import { anySet, type Mask } from "../zoneMask";
-import { ZONE_MODE_LABEL, zonePolygon, type Zone, type ZonePoint } from "../zones";
+import {
+  isSimplePolygon,
+  polygonBBox,
+  ZONE_MODE_LABEL,
+  zonePolygon,
+  type Zone,
+  type ZonePoint,
+} from "../zones";
 import { type CineFrame } from "./cineBuffer";
-import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
+import {
+  type Occupancy,
+  type Tripwire,
+  type TripwireCounts,
+  inwardNormal,
+} from "../vision/counting";
 import { coveredByAny } from "../vision/nms";
 import { worldToPixel, type Matrix3, type Vec2 } from "../vision/homography";
 import type { FloorTagsView } from "../fusion/useFloorTags"; // type-only: sem ciclo (o hook não importa daqui)
@@ -410,10 +422,7 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
     [`pipe ${s.pipeline}`, false],
   ];
   if (s.overlayAgeMs != null)
-    lines.push([
-      `overlay ${Math.round(s.overlayAgeMs)}ms`,
-      s.overlayAgeMs > HUD_OVERLAY_STALE_MS,
-    ]);
+    lines.push([`overlay ${Math.round(s.overlayAgeMs)}ms`, s.overlayAgeMs > HUD_OVERLAY_STALE_MS]);
   if (s.recvFps != null) lines.push([`recv ${Math.round(s.recvFps)} fps`, s.recvFps < HUD_FPS_LOW]);
   if (s.dropped != null) lines.push([`drop ${s.dropped}`, s.dropped > 0]);
   // Estágios dos processadores + fila (neutros: régua de medição, não anormalidade — going-gray).
@@ -673,36 +682,8 @@ export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorT
   ctx.restore();
 }
 
-// Grade de pintura (ao editar a máscara de uma zona).
-export function drawPaintGrid(ctx: CanvasRenderingContext2D, cr: Rect, cols: number, rows: number) {
-  const cw = cr.w / cols,
-    ch = cr.h / rows;
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(148,163,184,0.28)";
-  ctx.beginPath();
-  for (let c = 0; c <= cols; c++) {
-    ctx.moveTo(cr.x + c * cw, cr.y);
-    ctx.lineTo(cr.x + c * cw, cr.y + cr.h);
-  }
-  for (let rr = 0; rr <= rows; rr++) {
-    ctx.moveTo(cr.x, cr.y + rr * ch);
-    ctx.lineTo(cr.x + cr.w, cr.y + rr * ch);
-  }
-  ctx.stroke();
-}
-
-// Rascunho de arraste (viewport px): retângulo de uma nova zona OU traçado de uma tripwire.
+// Rascunho de arraste (viewport px): traçado de uma tripwire.
 export type DragBox = { active: boolean; sx: number; sy: number; cx: number; cy: number };
-export function drawZoneDraft(ctx: CanvasRenderingContext2D, d: DragBox | null) {
-  if (!d?.active) return;
-  const x = Math.min(d.sx, d.cx),
-    y = Math.min(d.sy, d.cy);
-  ctx.setLineDash([6, 4]);
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "#38bdf8";
-  ctx.strokeRect(x, y, Math.abs(d.cx - d.sx), Math.abs(d.cy - d.sy));
-  ctx.setLineDash([]);
-}
 export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | null) {
   if (!td?.active) return;
   ctx.setLineDash([6, 4]);
@@ -749,7 +730,7 @@ function drawVertexHandles(
 // Rascunho do POLÍGONO em desenho (P1): arestas tracejadas + linha até o cursor + vértices;
 // o 1º vértice ganha um ANEL (alvo de fecho generoso) quando o polígono já pode fechar (≥3).
 export type PolygonDraft = { points: ZonePoint[]; cursor: ZonePoint | null };
-export function drawPolygonDraft(ctx: CanvasRenderingContext2D, cr: Rect, d: PolygonDraft | null) {
+function drawPolygonDraft(ctx: CanvasRenderingContext2D, cr: Rect, d: PolygonDraft | null) {
   if (!d || d.points.length === 0) return;
   const info = cssVar("--state-info", "#38bdf8");
   const px = (p: ZonePoint) => ({ x: cr.x + p.x * cr.w, y: cr.y + p.y * cr.h });
@@ -785,6 +766,132 @@ export function drawPolygonDraft(ctx: CanvasRenderingContext2D, cr: Rect, d: Pol
   ctx.restore();
 }
 
+// ── O EDITOR DA ZONA no palco (spec-zona-unificada F3) ────────────────────────
+// Uma primitiva só: `points`. O que este overlay acrescenta ao desenho normal da zona
+// (drawZoneOverlays, que já pinta as alças de vértice de TODA zona no modo cheio):
+//   • o PRESET RETÂNGULO em arraste (já com os 4 vértices à mostra — é um polígono, não um "tipo");
+//   • os MIDPOINTS FANTASMA da zona SELECIONADA (arrastar/clicar = INSERIR vértice ali — Mapbox/
+//     Geoman). Só a selecionada: alvo invisível não pode ser clicável;
+//   • o vértice SELECIONADO (anel cheio — FORMA, não só cor) e a dica de remoção;
+//   • o AVISO DE AUTO-INTERSEÇÃO ao vivo: aresta vermelha ANTES de soltar (Geoman bloqueia na
+//     colocação; avisar é mais barato que desfazer) + TEXTO (going-gray: nunca só-por-cor).
+// Tudo é lido de REFS pelo rAF; a geometria vem das zonas (sempre ao vivo, o arraste já patcha).
+export type RectDraft = { a: ZonePoint; b: ZonePoint };
+export type EditorOverlay = {
+  rect: RectDraft | null; // preset retângulo em arraste
+  editId: string | null; // zona SELECIONADA (alças + midpoints + aviso)
+  selected: number | null; // vértice selecionado (Delete/Backspace remove)
+};
+
+// Rascunho do PRESET RETÂNGULO: mesmo tracejado do retângulo de sempre + os 4 VÉRTICES já
+// visíveis — o operador vê, desde o arraste, que está criando um polígono editável.
+function drawRectDraft(ctx: CanvasRenderingContext2D, cr: Rect, r: RectDraft | null) {
+  if (!r) return;
+  const info = cssVar("--state-info", "#38bdf8");
+  const x0 = Math.min(r.a.x, r.b.x) * cr.w + cr.x,
+    y0 = Math.min(r.a.y, r.b.y) * cr.h + cr.y;
+  const w = Math.abs(r.b.x - r.a.x) * cr.w,
+    h = Math.abs(r.b.y - r.a.y) * cr.h;
+  ctx.save();
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = info;
+  ctx.strokeRect(x0, y0, w, h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = info;
+  for (const [vx, vy] of [
+    [x0, y0],
+    [x0 + w, y0],
+    [x0 + w, y0 + h],
+    [x0, y0 + h],
+  ]) {
+    ctx.beginPath();
+    ctx.arc(vx, vy, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Etiqueta sobre scrim (mesma linguagem dos rótulos de zona) — texto SEMPRE acompanha a cor.
+function drawTag(ctx: CanvasRenderingContext2D, x: number, y: number, txt: string, color: string) {
+  ctx.font = "bold 10px ui-sans-serif, system-ui";
+  const tw = ctx.measureText(txt).width + 8;
+  ctx.fillStyle = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  ctx.fillRect(x, y, tw, 14);
+  ctx.fillStyle = color;
+  ctx.fillText(txt, x + 4, y + 10);
+}
+
+// AUTO-INTERSEÇÃO ao vivo: o polígono inteiro em VERMELHO tracejado + texto. Por que o polígono
+// inteiro e não "a aresta culpada": a autoridade da validação é `isSimplePolygon` (espelhada no
+// hub) e ela não expõe QUAIS arestas cruzam — reimplementar a geometria aqui criaria uma SEGUNDA
+// fonte de verdade que pode divergir da que de fato bloqueia o commit. A forma é inválida como um
+// todo; é isso que o desenho diz. (Exportar `crossingEdges` de zones.ts é o próximo passo barato.)
+function drawSelfIntersection(ctx: CanvasRenderingContext2D, cr: Rect, pts: ZonePoint[]) {
+  if (pts.length < 3 || isSimplePolygon(pts)) return;
+  const crit = cssVar("--state-critical", "#ef4444");
+  ctx.save();
+  ctx.setLineDash([5, 3]);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = crit;
+  tracePolygon(ctx, cr, pts);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const bb = polygonBBox(pts);
+  drawTag(ctx, cr.x + bb.x * cr.w, cr.y + bb.y * cr.h - 17, "arestas se cruzam", crit);
+  ctx.restore();
+}
+
+export function drawPolygonEditor(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  zones: ReadonlyArray<Zone>,
+  draft: PolygonDraft | null,
+  ov: EditorOverlay,
+) {
+  drawRectDraft(ctx, cr, ov.rect);
+  drawPolygonDraft(ctx, cr, draft);
+  if (draft) drawSelfIntersection(ctx, cr, draft.points); // avisa JÁ no rascunho (não só no fecho)
+  const z = ov.editId ? zones.find((zz) => zz.id === ov.editId) : undefined;
+  const pts = z ? zonePolygon(z) : null;
+  if (!pts) return;
+  const info = cssVar("--state-info", "#38bdf8");
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  ctx.save();
+  // MIDPOINTS fantasma (semitransparentes — "ainda não existem"; arrastar/clicar cria o vértice).
+  ctx.globalAlpha = 0.5;
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = info;
+  ctx.fillStyle = scrim;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i],
+      b = pts[(i + 1) % pts.length];
+    const mx = cr.x + ((a.x + b.x) / 2) * cr.w,
+      my = cr.y + ((a.y + b.y) / 2) * cr.h;
+    ctx.beginPath();
+    ctx.arc(mx, my, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Vértice SELECIONADO: anel CHEIO + maior (forma, não só cor) e a dica de remoção em TEXTO.
+  const si = ov.selected;
+  if (si !== null && si < pts.length) {
+    const sx = cr.x + pts[si].x * cr.w,
+      sy = cr.y + pts[si].y * cr.h;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = info;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = scrim;
+    ctx.stroke();
+    drawTag(ctx, sx + 9, sy - 7, "Delete remove", info);
+  }
+  ctx.restore();
+  drawSelfIntersection(ctx, cr, pts); // arraste em curso: vermelho ANTES de soltar
+}
+
 // ── Laço por-zona do palco (retângulo/máscara + rótulo + detecções de objeto + overlay de fadiga) ──
 // Extraído de `drawScene` (R3) SEM mudança de comportamento. Função FOLHA: recebe o ctx 2D já
 // transformado (dpr), o retângulo de conteúdo (letterbox) e os dados por-zona (zonas/resultados/
@@ -804,7 +911,12 @@ const TRACK_COVER_CONTAIN = 0.7;
 // emite `presenca: boolean` (true = VIOLADA); o hook antigo aceitava a string "VIOLADA" —
 // o desenho aceita AMBOS (aditivo). Estrutural de propósito: este módulo não é dono do
 // contrato do payload; só declara o que o desenho precisa.
-export type HubZoneState = { id: string; label: string; people: number; presenca?: boolean | string };
+export type HubZoneState = {
+  id: string;
+  label: string;
+  people: number;
+  presenca?: boolean | string;
+};
 
 // Hachura diagonal SUTIL da zona proibida quieta — identidade visual própria sem croma (E6:
 // "armada" ≠ "em alarme"; o traço/hachura distingue o modo, a cor só entra na violação).

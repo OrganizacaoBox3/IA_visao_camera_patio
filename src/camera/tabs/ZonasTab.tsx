@@ -1,6 +1,11 @@
 // Aba "Zonas" do drawer da câmera — lista de zonas (cada uma com seu modo de IA + telemetria)
 // e a legenda do overlay. Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace.
-import { Brush, Settings2, Smartphone, X } from "lucide-react";
+//
+// A PODA (spec-zona-unificada F5): o botão "Pintar área" saiu. A GEOMETRIA da zona se edita onde
+// ela vive — NO PALCO, sobre o vídeo (selecionar → arrastar a forma/vértice · midpoint insere ·
+// Delete remove) — e não numa grade de pincel de 32×18 que só sabia aproximar um polígono em
+// escada. A máscara das zonas legadas continua sendo LIDA e desenhada; só não se autora mais.
+import { Settings2, Smartphone, X } from "lucide-react";
 import { APP_CONFIG } from "../../config";
 import { fmtDuration } from "../../format";
 import { sensitivityFactor } from "../../processors/atividade";
@@ -28,12 +33,9 @@ type Props = {
   zones: Zone[];
   canConfigure: boolean;
   panel: Map<string, ZoneResult>;
-  paintZoneId: string | null;
   hist: (zoneId: string, key: string) => number[];
   legend: { color: string; label: string }[];
   setCfgZoneId: (id: string) => void;
-  startPaint: (z: Zone) => void;
-  setPaintZoneId: (id: string | null) => void;
   removeZone: (id: string) => void;
 };
 
@@ -42,12 +44,9 @@ export function ZonasTab({
   zones,
   canConfigure,
   panel,
-  paintZoneId,
   hist,
   legend,
   setCfgZoneId,
-  startPaint,
-  setPaintZoneId,
   removeZone,
 }: Props) {
   return (
@@ -111,24 +110,8 @@ export function ZonasTab({
                   </button>
                 </Tooltip>
                 <Tooltip
-                  content={
-                    canConfigure
-                      ? "Pintar a área (blueprint em grade)"
-                      : "Edição requer perfil de engenharia"
-                  }
+                  content={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"}
                 >
-                  <button
-                    className={`del ${paintZoneId === z.id ? "on" : ""}`}
-                    disabled={!canConfigure}
-                    aria-label="Pintar área"
-                    onClick={() =>
-                      canConfigure && (paintZoneId === z.id ? setPaintZoneId(null) : startPaint(z))
-                    }
-                  >
-                    <Brush size={14} strokeWidth={1.75} aria-hidden />
-                  </button>
-                </Tooltip>
-                <Tooltip content={canConfigure ? "Remover zona" : "Remover requer perfil de engenharia"}>
                   <button
                     className="del"
                     disabled={!canConfigure}
@@ -325,8 +308,8 @@ export function ZonasTab({
               <p className="empty-note zone-note">
                 Pessoas nesta área são ignoradas.{" "}
                 <HelpTip label="Ajuda da exclusão">
-                  Máscara de supressão: quem está com o pé na área não conta nem é rastreado. A
-                  zona não gera indicador.
+                  Máscara de supressão: quem está com o pé na área não conta nem é rastreado. A zona
+                  não gera indicador.
                 </HelpTip>
               </p>
             )}

@@ -25,7 +25,6 @@ import {
   persistZones,
   withDefaults,
   assignZone,
-  DEFAULT_GRID,
   ZONE_MODE_LABEL,
   type Zone,
   type ZoneMode,
@@ -64,10 +63,8 @@ import {
   drawOccupancyHeatmap,
   drawTracks,
   drawTripwires,
-  drawPaintGrid,
-  drawZoneDraft,
   drawTripwireDraft,
-  drawPolygonDraft,
+  drawPolygonEditor,
   drawZoneOverlays,
   drawTelemetryHud,
   drawCalibrationOverlay,
@@ -280,11 +277,10 @@ export function CameraWorkspace({
   const [zones, setZones] = useState<Zone[]>([]);
   const [zonesLoading, setZonesLoading] = useState(true); // carga assíncrona do backend (leve)
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
-  const [drawMode, setDrawMode] = useState(false);
-  const [paintZoneId, setPaintZoneId] = useState<string | null>(null);
-  // Máscara efetiva por zona (cache + pintura + fábricas de `contains`) — ./camera/useZoneMasks.
-  // É a casa da precedência points>mask (P5) e do consumo rasterizado do polígono (P6).
-  const zm = useZoneMasks(paintZoneId);
+  // Máscara efetiva por zona (cache + fábricas de `contains`) — ./camera/useZoneMasks. É a casa da
+  // precedência points>mask (P5) e do consumo rasterizado do polígono (P6). O PINCEL saiu (F5): a
+  // máscara é rasterização INTERNA do polígono + leitura das zonas legadas já pintadas.
+  const zm = useZoneMasks();
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
   // HUD: toggle no estado (UI); o rAF lê o REF (a régua não pode custar re-render por frame).
@@ -341,7 +337,11 @@ export function CameraWorkspace({
   // useCameraTagLabels/Go2rtcVideoTile, então o custo por tile já era pago ali sem problema).
   // Ref lido no rAF/draw. Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points)
   // e as tags já associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
-  const { labelForRef, calibration: tagCalibration, assignedTags } = useCameraTagLabels({
+  const {
+    labelForRef,
+    calibration: tagCalibration,
+    assignedTags,
+  } = useCameraTagLabels({
     cameraId,
     getHubAnalysis,
     getReadings,
@@ -417,53 +417,45 @@ export function CameraWorkspace({
     viewportRef,
     onAlertRef,
     onEnterEditMode: () => {
-      setDrawMode(false);
-      setPaintZoneId(null);
-      poly.cancel(); // editor de linha derruba o rascunho de polígono (modos exclusivos)
+      poly.cancel(); // editor de linha derruba o editor de zona (modos exclusivos)
       cal.stop(); // …e a calibração (5º modo — exclusão mútua)
     },
   });
 
-  // Editor de POLÍGONO (spec zonas-poligonais F2) — rascunho/arraste em ./camera/usePolygonEditor;
-  // aqui só a fiação: handlers delegam (onDown/onMove/onUp) e criação/patch reusam persist/patchZone.
+  // EDITOR DA ZONA (spec-zona-unificada F3) — a zona É um polígono: preset retângulo (arraste),
+  // rascunho livre (clique a clique) e EDIÇÃO (mover a forma · arrastar/inserir/remover vértice).
+  // Tudo em ./camera/usePolygonEditor; aqui só a fiação: os handlers delegam (onDown/onMove/onUp)
+  // e criação/patch reusam persist/patchZone.
   const poly = usePolygonEditor({
     viewportRef,
     currentFrame,
     zonesRef,
     onStart: () => {
-      setDrawMode(false);
       setTripwireMode(false);
-      setPaintZoneId(null);
       cal.stop();
     },
     onCreate: (points) =>
-      setZones((p) => persist([...p, withDefaults({ label: `Área ${p.length + 1}`, points }, cameraId)])),
+      setZones((p) =>
+        persist([...p, withDefaults({ label: `Área ${p.length + 1}`, points }, cameraId)]),
+      ),
     onLive: (id, patch) => setZones((p) => p.map((z) => (z.id === id ? { ...z, ...patch } : z))),
     onPatch: (id, patch) => patchZone(id, patch),
     onAlert: (m) => onAlertRef.current?.(`⚠ ${label}: ${m}`),
   });
 
-  // PONTEIRO do palco (./camera/useStageModes): o multiplexador dos 5 modos + o rascunho do
-  // retângulo + o pincel. A ORDEM é pura e testada (stageTarget) — é lá que a calibração fica
-  // ACIMA do corte de `!canConfigure`, para o operador não perder o MEDIR (spec §1, risco 2).
+  // PONTEIRO do palco (./camera/useStageModes): o multiplexador dos modos. A ORDEM é pura e testada
+  // (stageTarget) — é lá que a calibração fica ACIMA do corte de `!canConfigure`, para o operador
+  // não perder o MEDIR (spec §1, risco 2).
   const stage = useStageModes({
-    cameraId,
     mode,
     canConfigure,
     viewportRef,
-    currentFrame,
     reviewRef,
-    zonesRef,
-    zm,
     poly,
     cal,
-    paintZoneId,
-    drawMode,
     tripwireMode,
     twDrawRef,
     commitTripwire,
-    onCreateZone: (z) => setZones((p) => persist([...p, z])),
-    patchZone: (id, patch) => patchZone(id, patch),
   });
 
   // Espelhos do transporte WebRTC e do motor do hub vivem em useWebrtcTransport/useHubAnalysis
@@ -977,7 +969,17 @@ export function CameraWorkspace({
           });
         } else if (h.modo === "objetos") {
           const r = h.proc.process(
-            [{ id: z.id, label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, contains: zm.containsFn(z) }],
+            [
+              {
+                id: z.id,
+                label: z.label,
+                x: z.x,
+                y: z.y,
+                w: z.w,
+                h: z.h,
+                contains: zm.containsFn(z),
+              },
+            ],
             z.selectedClasses,
             { frame: f, now },
           );
@@ -1232,8 +1234,7 @@ export function CameraWorkspace({
     if (hubEngine) {
       const nowMs = performance.now();
       const hd = (getHubAnalysisRef.current?.() ?? null) as
-        | (HubAnalysis & { zonesProibidas?: HubZoneState[] })
-        | null;
+        (HubAnalysis & { zonesProibidas?: HubZoneState[] }) | null;
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
         hubInterpRef.current.ingest(hd, nowMs);
         hubProibidas = hd.zonesProibidas ?? null;
@@ -1247,7 +1248,14 @@ export function CameraWorkspace({
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
     if (layersRef.current.boxes)
-      drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed, labelForRef.current);
+      drawTracks(
+        ctx,
+        cr,
+        displayTracks,
+        confRef.current,
+        pausedRef.current && detailed,
+        labelForRef.current,
+      );
 
     // Laço por-zona (retângulo/máscara + rótulo + dets + fadiga) → ./camera/draw. Último arg
     // (1 pessoa = 1 caixa): a camada de dets omite a det de pessoa já coberta por um track.
@@ -1283,10 +1291,10 @@ export function CameraWorkspace({
       hubEngine ? hubFlowRef.current : flowBaseRef.current,
     );
 
-    if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows); // grade de pintura
-    drawZoneDraft(ctx, stage.drawRef.current); // retângulo de zona em arraste
     drawTripwireDraft(ctx, twDrawRef.current); // linha em traçado
-    drawPolygonDraft(ctx, cr, poly.draftRef.current); // polígono em desenho (vértices + fecho)
+    // EDITOR DA ZONA (F3): preset retângulo em arraste · rascunho do polígono · midpoints fantasma
+    // e vértice selecionado da zona em edição · aresta VERMELHA da auto-interseção (antes de soltar).
+    drawPolygonEditor(ctx, cr, zonesRef.current, poly.draftRef.current, poly.overlayRef.current);
 
     // HUD de telemetria (toggleável; só na câmera aberta), desenhado por último. overlayAge só
     // faz sentido no modo hub; dropped/recvFps são opcionais do FrameSource (lidos defensivos);
@@ -1314,20 +1322,8 @@ export function CameraWorkspace({
     }
   }
 
-  // ── editores do palco ── (ponteiro → ./camera/useStageModes · máscara/pintura → ./camera/useZoneMasks)
-  // Modos de edição mutuamente exclusivos (zona × polígono × linha × pintura × CALIBRAÇÃO).
-  function toggleDrawMode() {
-    setDrawMode((v) => {
-      const nv = !v;
-      if (nv) {
-        setTripwireMode(false);
-        setPaintZoneId(null);
-        poly.cancel();
-        cal.stop();
-      }
-      return nv;
-    });
-  }
+  // ── editores do palco ── (ponteiro → ./camera/useStageModes · zona → ./camera/usePolygonEditor)
+  // Modos de edição mutuamente exclusivos (zona × linha × CALIBRAÇÃO).
   // CALIBRAR (spec §1): liga o modo no palco e traz a aba junto — o painel é o chrome do editor.
   // Desligar NÃO descarta o trabalho (o hook segue montado: cantos/L×C sobrevivem).
   function toggleCalibration() {
@@ -1335,9 +1331,7 @@ export function CameraWorkspace({
       cal.stop();
       return;
     }
-    setDrawMode(false);
     setTripwireMode(false);
-    setPaintZoneId(null);
     poly.cancel();
     cal.start();
     setDrawerTab("calibracao");
@@ -1390,24 +1384,9 @@ export function CameraWorkspace({
     resultsRef.current.delete(id);
     zm.drop(id);
     clearZone(id);
-    if (paintZoneId === id) setPaintZoneId(null);
+    poly.deselect(); // a seleção do editor não pode apontar p/ uma zona que não existe mais
     setZones((p) => persist(p.filter((z) => z.id !== id)));
   }
-  function startPaint(z: Zone) {
-    setDrawMode(false);
-    setTripwireMode(false);
-    poly.cancel();
-    cal.stop();
-    zm.ensurePaint(z);
-    setPaintZoneId(z.id);
-  }
-  function clearActive() {
-    const z = zonesRef.current.find((zz) => zz.id === paintZoneId);
-    if (!z) return;
-    zm.clearPaint(z);
-    stage.commitPaint();
-  }
-  const paintZone = paintZoneId ? (zones.find((z) => z.id === paintZoneId) ?? null) : null;
 
   const summary = zones
     .map((z) => {
@@ -1512,20 +1491,11 @@ export function CameraWorkspace({
         activePreset={activePreset}
         activePresetDef={activePresetDef}
         presetDirty={presetDirty}
-        paintZone={paintZone}
-        erase={stage.erase}
-        setErase={stage.setErase}
-        brush={stage.brush}
-        setBrush={stage.setBrush}
-        clearActive={clearActive}
-        endPaint={() => setPaintZoneId(null)}
         review={review}
         enterReview={enterReview}
         exitReview={exitReview}
         paused={paused}
         setPaused={setPaused}
-        drawMode={drawMode}
-        toggleDrawMode={toggleDrawMode}
         tripwireMode={tripwireMode}
         toggleTripwireMode={toggleTripwireMode}
         poly={poly}
@@ -1533,6 +1503,7 @@ export function CameraWorkspace({
         calMode={cal.mode}
         toggleCalibration={toggleCalibration}
         reviewTip={reviewTip}
+        editTip={poly.hint}
         onClose={onClose}
       />
 
@@ -1540,15 +1511,12 @@ export function CameraWorkspace({
           drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
       <div className="cam-body">
         <div
-          className={`cam-stage ${drawMode || tripwireMode || paintZone || poly.active || cal.active ? "draw-cursor" : ""}`}
+          className={`cam-stage ${poly.rectMode || poly.active || tripwireMode || cal.active ? "draw-cursor" : ""}`}
           ref={viewportRef}
           onMouseDown={stage.onDown}
           onMouseMove={stage.onMove}
           onMouseUp={stage.onUp}
           onMouseLeave={stage.onUp}
-          onContextMenu={(e) => {
-            if (paintZone) e.preventDefault();
-          }}
         >
           {/* Vídeo WebRTC ATRÁS do canvas (decode por HW); câmera mjpeg nem monta o elemento. */}
           {webrtc && <video-stream ref={videoStreamRef} />}
@@ -1630,12 +1598,9 @@ export function CameraWorkspace({
                   zones={zones}
                   canConfigure={canConfigure}
                   panel={panel}
-                  paintZoneId={paintZoneId}
                   hist={hist}
                   legend={legend}
                   setCfgZoneId={setCfgZoneId}
-                  startPaint={startPaint}
-                  setPaintZoneId={setPaintZoneId}
                   removeZone={removeZone}
                 />
               </TabsContent>

@@ -1,15 +1,27 @@
-// Editor de ZONA POLIGONAL do palco (spec zonas-poligonais F2 — P1/P7): clique adiciona
-// vértice; FECHA clicando no 1º vértice, no botão Concluir (ZonasTab) ou Enter; ESC cancela;
-// "voltar" remove o último vértice. Pós-criação: ARRASTE de vértices com alvo generoso (CA-7).
-// Pointer events (mouse+touch unificados) — nenhuma função exclusiva de clique-direito (P7).
-// Extraído do CameraWorkspace (ratchet anti-reengorda): aqui vivem o estado do rascunho/arraste
-// e as validações interativas (CA-2); o CW só delega onDown/onMove/onUp e fornece criação/patch.
+// ── EDITOR DA ZONA do palco: a zona É um polígono (spec-zona-unificada F3/F5) ──────────────────
+// Antes eram TRÊS primitivas (retângulo · pincel · polígono) e a mais usada — o retângulo — não
+// tinha edição NENHUMA: nascia por arraste e morria no X. Aqui só existe UMA: `points`.
+//   • PRESET RETÂNGULO (`startRect`): a MESMA gestualidade de sempre (arraste), semeando 4
+//     vértices — exatamente como a Axis ("the default rectangle can be changed to a polygon").
+//   • RASCUNHO livre (`start`): clique a clique; fecha no 1º vértice, em Concluir ou com Enter.
+//   • EDIÇÃO (o pedido do dono, "quero poder EDITAR OS PONTOS depois") — modelo de MAPAS
+//     (Mapbox GL Draw / Leaflet-Geoman), não de VMS (o Frigate nem implementa inserção):
+//       – clicar a zona SELECIONA; arrastar o INTERIOR move a forma inteira (translação);
+//       – arrastar um VÉRTICE move (já existia);
+//       – arrastar/clicar um MIDPOINT (o ponto claro no meio da aresta) INSERE um vértice ali;
+//       – Delete/Backspace com o vértice selecionado — ou Alt+clique nele — REMOVE.
+//     NUNCA por clique-direito (P7: o operador usa TABLET). Alvo de toque generoso (HIT_RADIUS_PX).
+// Auto-interseção: bloqueada na COLOCAÇÃO (Geoman) — a aresta fica VERMELHA no palco antes de
+// soltar (draw.ts) e o commit reverte. Avisar é mais barato que desfazer.
+//
+// O rAF lê REFS, nunca estado (draftRef/overlayRef) — estado no rAF é o bug clássico deste arquivo.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { type FrameSource } from "../frame";
-import { getContentRect, type PolygonDraft } from "./draw";
+import { getContentRect, type EditorOverlay, type PolygonDraft } from "./draw";
 import {
   isSimplePolygon,
   polygonBBox,
+  polygonContainsFn,
   POLYGON_MAX_POINTS,
   POLYGON_MIN_POINTS,
   zonePolygon,
@@ -17,19 +29,35 @@ import {
   type ZonePoint,
 } from "../zones";
 
-// Alvo de toque GENEROSO (px do viewport): raio p/ fechar no 1º vértice e p/ agarrar um vértice
-// no arraste (P7: operador pode usar tablet — o alvo visual de 4px seria hostil ao dedo).
+// Alvo de toque GENEROSO (px do viewport): raio p/ fechar no 1º vértice, p/ agarrar um vértice e
+// p/ pegar um midpoint (P7: operador pode usar tablet — o alvo visual de 4px seria hostil ao dedo).
 const HIT_RADIUS_PX = 14;
+// Piso do PRESET RETÂNGULO: clique sem arraste não vira zona (o mesmo piso do retângulo de sempre).
+const MIN_RECT_PX = 16;
 
-type PointerLike = { clientX: number; clientY: number };
+type PointerLike = { clientX: number; clientY: number; altKey?: boolean };
 type ZonePatch = { points: ZonePoint[]; x: number; y: number; w: number; h: number };
+
+/** Seleção corrente. `n` (nº de vértices) vem de quem MEXEU nos pontos — não de zonesRef, que só
+ *  atualiza no efeito seguinte ao setState (a dica textual ficaria 1 render atrás do dado).
+ *  (O que o rAF DESENHA — rascunho, preset e seleção — mora em ./draw: PolygonDraft/EditorOverlay.) */
+export type Selection = { id: string; index: number | null; n: number };
+
+// `dirty` = a geometria JÁ difere da persistida. Sem ele, SELECIONAR uma zona (clicar e soltar, sem
+// mover nada) dispararia um onPatch → um PUT no backend com pontos IDÊNTICOS. Nasce true só na
+// INSERÇÃO por midpoint (aí o vértice já entrou no down). Bug pré-existente do arraste de vértice
+// (agarrar e soltar já persistia) — pego pelo teste do editor novo.
+type Drag = { id: string; pts: ZonePoint[]; orig: ZonePoint[]; dirty: boolean } & (
+  | { kind: "vertex"; index: number }
+  | { kind: "shape"; from: ZonePoint }
+);
 
 type Opts = {
   viewportRef: RefObject<HTMLDivElement | null>;
   /** fonte da GEOMETRIA do palco (WebRTC × MJPEG) — o mesmo currentFrame do editor de zonas */
   currentFrame: () => FrameSource | null;
   zonesRef: RefObject<Zone[]>;
-  /** desliga os demais editores (retângulo/linha/pintura) ao entrar no modo polígono */
+  /** desliga os demais editores (linha/calibração) ao entrar num modo de zona */
   onStart: () => void;
   onCreate: (points: ZonePoint[]) => void;
   /** arraste AO VIVO (estado local, sem persistir; o commit é onPatch no pointer-up) */
@@ -40,11 +68,27 @@ type Opts = {
 
 export function usePolygonEditor(o: Opts) {
   const [active, setActive] = useState(false); // rascunho aberto (governa UI/cursor)
-  const [count, setCount] = useState(0); // nº de vértices (habilita Concluir na UI)
-  const draftRef = useRef<PolygonDraft | null>(null); // lido pelo rAF (drawPolygonDraft)
-  const dragRef = useRef<{ id: string; index: number; pts: ZonePoint[]; orig: ZonePoint[] } | null>(
-    null,
-  );
+  const [rectMode, setRectModeState] = useState(false); // preset retângulo armado ("Zona")
+  const [count, setCount] = useState(0); // nº de vértices do rascunho (habilita Concluir na UI)
+  const [sel, setSelState] = useState<Selection | null>(null); // seleção (teclado + dica textual)
+  const draftRef = useRef<PolygonDraft | null>(null); // lido pelo rAF (drawPolygonEditor)
+  const overlayRef = useRef<EditorOverlay>({ rect: null, editId: null, selected: null }); // idem
+  const dragRef = useRef<Drag | null>(null);
+  const rectModeRef = useRef(false); // espelho do modo p/ os handlers (sem depender do closure)
+  const selRef = useRef<Selection | null>(null);
+
+  // Setter ÚNICO da SELEÇÃO (idioma da casa): ref (handlers) + overlay (rAF) + estado (UI/teclado)
+  // mudam numa só unidade — nenhum caminho escreve um sem o outro.
+  function select(s: Selection | null) {
+    selRef.current = s;
+    overlayRef.current.editId = s?.id ?? null;
+    overlayRef.current.selected = s?.index ?? null;
+    setSelState(s);
+  }
+  function setRectMode(v: boolean) {
+    rectModeRef.current = v;
+    setRectModeState(v);
+  }
 
   const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
   // pointer → coords NORMALIZADAS do frame (mesmo letterbox do palco); null fora/sem frame.
@@ -65,21 +109,59 @@ export function usePolygonEditor(o: Opts) {
     if (!f || !vp) return Infinity;
     const r = vp.getBoundingClientRect();
     const cr = getContentRect(vp.clientWidth, vp.clientHeight, f.w, f.h);
-    return Math.hypot(r.left + cr.x + p.x * cr.w - e.clientX, r.top + cr.y + p.y * cr.h - e.clientY);
+    return Math.hypot(
+      r.left + cr.x + p.x * cr.w - e.clientX,
+      r.top + cr.y + p.y * cr.h - e.clientY,
+    );
   }
+  /** tamanho do retângulo de conteúdo em PX (piso do preset retângulo); null sem frame/palco. */
+  function contentSize(): { w: number; h: number } | null {
+    const f = o.currentFrame();
+    const vp = o.viewportRef.current;
+    if (!f || !vp) return null;
+    const cr = getContentRect(vp.clientWidth, vp.clientHeight, f.w, f.h);
+    return { w: cr.w, h: cr.h };
+  }
+  const midpoint = (a: ZonePoint, b: ZonePoint): ZonePoint => ({
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  });
 
+  // ── modos ──
   function start() {
+    // RASCUNHO livre (clique a clique)
     o.onStart();
     draftRef.current = { points: [], cursor: null };
     dragRef.current = null;
+    overlayRef.current.rect = null;
+    setRectMode(false);
+    select(null);
     setActive(true);
     setCount(0);
+  }
+  function startRect() {
+    // PRESET RETÂNGULO: arraste → 4 vértices (o "Zona" de sempre, agora editável)
+    o.onStart();
+    draftRef.current = null;
+    dragRef.current = null;
+    overlayRef.current.rect = null;
+    setActive(false);
+    setCount(0);
+    select(null);
+    setRectMode(true);
   }
   function cancel() {
     draftRef.current = null;
     dragRef.current = null;
+    overlayRef.current.rect = null;
+    setRectMode(false);
+    select(null);
     setActive(false);
     setCount(0);
+  }
+  /** limpa só a SELEÇÃO (o modo segue); usado pelo ESC e ao remover a zona no painel. */
+  function deselect() {
+    if (selRef.current) select(null);
   }
   function undo() {
     const d = draftRef.current;
@@ -96,6 +178,31 @@ export function usePolygonEditor(o: Opts) {
     }
     o.onCreate(d.points.slice());
     cancel();
+  }
+
+  // ── edição de vértice (mouse E teclado — P7: nada exclusivo de clique-direito) ──
+  /** REMOVE o vértice `i` de `pts`: barra o mínimo de 3 e a auto-interseção (a remoção PODE cruzar). */
+  function removeVertex(id: string, pts: ZonePoint[], i: number) {
+    if (pts.length <= POLYGON_MIN_POINTS) {
+      o.onAlert(`Mínimo de ${POLYGON_MIN_POINTS} vértices por zona — remova a zona inteira.`);
+      return;
+    }
+    const next = pts.filter((_, k) => k !== i);
+    if (!isSimplePolygon(next)) {
+      o.onAlert("Remoção desfeita: sem esse vértice as arestas se cruzariam.");
+      return;
+    }
+    o.onPatch(id, { points: next, ...polygonBBox(next) });
+    select({ id, index: null, n: next.length });
+  }
+  /** Delete/Backspace: remove o vértice SELECIONADO (o mesmo caminho do Alt+clique). */
+  function removeSelected() {
+    const s = selRef.current;
+    if (!s || s.index === null) return;
+    const z = o.zonesRef.current?.find((zz) => zz.id === s.id);
+    const pts = z ? zonePolygon(z) : null;
+    if (!pts || s.index >= pts.length) return;
+    removeVertex(s.id, pts, s.index);
   }
 
   // ── handlers do palco — devolvem true quando CONSUMIRAM o evento ──
@@ -117,65 +224,226 @@ export function usePolygonEditor(o: Opts) {
       setCount(d.points.length);
       return true;
     }
-    // Sem rascunho: agarrar um VÉRTICE de zona poligonal existente (CA-7) — só quando nenhum
-    // outro editor está ativo (o CW nos chama por último, depois de pintura/linha/retângulo).
-    for (const z of o.zonesRef.current ?? []) {
+    if (rectModeRef.current) {
+      const p = toNorm(e); // PRESET RETÂNGULO: começa o arraste (4 vértices no soltar)
+      if (!p) return true;
+      overlayRef.current.rect = { a: p, b: p };
+      return true;
+    }
+    const zones = o.zonesRef.current ?? [];
+    // 1) VÉRTICE de qualquer zona (é o que está DESENHADO — alvo visível = alvo clicável).
+    //    Alt+clique REMOVE (Mapbox/CVAT); clique normal agarra p/ arrastar.
+    for (const z of zones) {
       const pts = zonePolygon(z);
       if (!pts) continue;
       for (let i = 0; i < pts.length; i++)
         if (distPx(e, pts[i]) <= HIT_RADIUS_PX) {
-          dragRef.current = { id: z.id, index: i, pts: pts.map((p) => ({ ...p })), orig: pts };
+          if (e.altKey) {
+            removeVertex(z.id, pts, i);
+            return true;
+          }
+          select({ id: z.id, index: i, n: pts.length });
+          dragRef.current = {
+            kind: "vertex",
+            id: z.id,
+            index: i,
+            pts: pts.map((p) => ({ ...p })),
+            orig: pts,
+            dirty: false, // agarrar e soltar sem mover NÃO persiste (não há o que salvar)
+          };
           return true;
         }
     }
+    // 2) MIDPOINT — só da zona SELECIONADA (é a única cujos midpoints estão VISÍVEIS): insere um
+    //    vértice ali e já sai arrastando (o padrão dominante: Mapbox/Geoman/Leaflet).
+    const s = selRef.current;
+    const selZone = s ? zones.find((z) => z.id === s.id) : undefined;
+    const selPts = selZone ? zonePolygon(selZone) : null;
+    if (s && selPts)
+      for (let i = 0; i < selPts.length; i++) {
+        const m = midpoint(selPts[i], selPts[(i + 1) % selPts.length]);
+        if (distPx(e, m) > HIT_RADIUS_PX) continue;
+        if (selPts.length >= POLYGON_MAX_POINTS) {
+          o.onAlert(`Máximo de ${POLYGON_MAX_POINTS} vértices por zona.`);
+          return true;
+        }
+        const next = selPts.slice(0, i + 1).concat([m], selPts.slice(i + 1));
+        select({ id: s.id, index: i + 1, n: next.length });
+        // dirty JÁ nasce true: o vértice ENTROU no down — clicar o midpoint e soltar sem arrastar
+        // é uma inserção legítima (e tem de persistir).
+        dragRef.current = {
+          kind: "vertex",
+          id: s.id,
+          index: i + 1,
+          pts: next,
+          orig: selPts,
+          dirty: true,
+        };
+        o.onLive(s.id, { points: next, ...polygonBBox(next) }); // o vértice novo aparece já
+        return true;
+      }
+    // 3) INTERIOR de um polígono: seleciona e MOVE a forma inteira (o `simple_select` do Mapbox —
+    //    hoje, mover uma zona 2 m para a esquerda exigia REDESENHAR). Sobreposição: vence a de
+    //    MENOR área (a mais específica — o mesmo desempate do assignZone).
+    const p = toNorm(e);
+    if (p) {
+      let hit: { z: Zone; pts: ZonePoint[]; area: number } | null = null;
+      for (const z of zones) {
+        const pts = zonePolygon(z);
+        if (!pts || !polygonContainsFn(pts)(p.x, p.y)) continue;
+        const bb = polygonBBox(pts);
+        const area = bb.w * bb.h;
+        if (!hit || area < hit.area) hit = { z, pts, area };
+      }
+      if (hit) {
+        select({ id: hit.z.id, index: null, n: hit.pts.length });
+        dragRef.current = {
+          kind: "shape",
+          id: hit.z.id,
+          pts: hit.pts.map((q) => ({ ...q })),
+          orig: hit.pts,
+          from: p,
+          dirty: false, // SELECIONAR (clicar e soltar) não pode virar um PUT de geometria idêntica
+        };
+        return true;
+      }
+    }
+    deselect(); // clique no vazio: larga a seleção (e NÃO consome o evento)
     return false;
   }
+
   function onMove(e: PointerLike): boolean {
     const d = draftRef.current;
     if (d) {
       d.cursor = toNorm(e); // pré-visualização tracejada até o cursor
       return true;
     }
+    const r = overlayRef.current.rect;
+    if (r) {
+      const p = toNorm(e);
+      if (p) r.b = p; // fora do vídeo: mantém o último canto válido (nunca "escapa" o retângulo)
+      return true;
+    }
     const g = dragRef.current;
     if (!g) return false;
     const p = toNorm(e);
-    if (p) {
-      g.pts[g.index] = { x: clamp01(p.x), y: clamp01(p.y) };
-      o.onLive(g.id, { points: g.pts, ...polygonBBox(g.pts) }); // bbox re-derivada junto (CA-7)
+    if (!p) return true;
+    if (g.kind === "vertex") {
+      const v = { x: clamp01(p.x), y: clamp01(p.y) };
+      const cur = g.pts[g.index];
+      if (cur.x === v.x && cur.y === v.y) return true; // não mexeu: nada a redesenhar/persistir
+      g.pts[g.index] = v;
+    } else {
+      // TRANSLAÇÃO: o clamp é da FORMA (bbox), não de cada ponto — clampar ponto a ponto
+      // DEFORMARIA o polígono ao encostar na borda. Translação preserva a simplicidade.
+      const bb = polygonBBox(g.orig);
+      const dx = Math.min(Math.max(p.x - g.from.x, -bb.x), 1 - (bb.x + bb.w));
+      const dy = Math.min(Math.max(p.y - g.from.y, -bb.y), 1 - (bb.y + bb.h));
+      if (dx === 0 && dy === 0) return true; // idem: clique parado no interior é SELEÇÃO, não move
+      for (let i = 0; i < g.orig.length; i++)
+        g.pts[i] = { x: g.orig[i].x + dx, y: g.orig[i].y + dy };
     }
+    g.dirty = true;
+    o.onLive(g.id, { points: g.pts, ...polygonBBox(g.pts) }); // bbox re-derivada junto (CA-7)
     return true;
   }
+
   function onUp(): boolean {
+    const r = overlayRef.current.rect;
+    if (r) {
+      overlayRef.current.rect = null;
+      const cs = contentSize();
+      if (!cs) return true;
+      const w = Math.abs(r.b.x - r.a.x) * cs.w,
+        h = Math.abs(r.b.y - r.a.y) * cs.h;
+      if (w < MIN_RECT_PX || h < MIN_RECT_PX) return true; // clique sem arraste: não vira zona
+      // O PRESET: 4 vértices no sentido horário — daqui em diante é polígono como qualquer outro.
+      const x0 = Math.min(r.a.x, r.b.x),
+        y0 = Math.min(r.a.y, r.b.y),
+        x1 = Math.max(r.a.x, r.b.x),
+        y1 = Math.max(r.a.y, r.b.y);
+      o.onCreate([
+        { x: x0, y: y0 },
+        { x: x1, y: y0 },
+        { x: x1, y: y1 },
+        { x: x0, y: y1 },
+      ]);
+      return true;
+    }
     const g = dragRef.current;
     if (!g) return false;
     dragRef.current = null;
+    if (!g.dirty) return true; // só SELECIONOU (ou agarrou e soltou): não há geometria nova p/ salvar
     if (isSimplePolygon(g.pts)) {
       o.onPatch(g.id, { points: g.pts, ...polygonBBox(g.pts) }); // persiste (CA-7)
     } else {
       o.onLive(g.id, { points: g.orig, ...polygonBBox(g.orig) }); // reverte: arraste cruzou arestas
       o.onAlert("Arraste desfeito: as arestas se cruzariam (CA-2).");
+      if (selRef.current) select({ ...selRef.current, n: g.orig.length });
     }
     return true;
   }
 
-  // Teclado do rascunho: Enter conclui, ESC cancela. CAPTURE no document p/ correr ANTES do
-  // trap de foco da casca (useFocusTrap ignora ESC já consumido — checa e.defaultPrevented).
-  const keysRef = useRef({ close, cancel });
-  keysRef.current = { close, cancel };
+  // Teclado: Enter conclui o rascunho, ESC cancela, Delete/Backspace remove o vértice selecionado.
+  // CAPTURE no document p/ correr ANTES do trap de foco da casca (useFocusTrap ignora ESC já
+  // consumido — checa e.defaultPrevented). ⚠ ESC só é CONSUMIDO com rascunho aberto: com apenas
+  // uma seleção ele a limpa e SEGUE (a casca fecha a câmera, como sempre).
+  const keysRef = useRef({ close, cancel, deselect, removeSelected });
+  keysRef.current = { close, cancel, deselect, removeSelected };
+  const keysOn = active || !!sel;
   useEffect(() => {
-    if (!active) return;
+    if (!keysOn) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.preventDefault();
-        keysRef.current.cancel(); // CA-2: ESC descarta o rascunho (a câmera fica aberta)
-      } else if (e.key === "Enter") {
+        if (draftRef.current) {
+          e.preventDefault();
+          keysRef.current.cancel(); // CA-2: ESC descarta o rascunho (a câmera fica aberta)
+        } else keysRef.current.deselect();
+        return;
+      }
+      if (e.key === "Enter") {
+        if (!draftRef.current) return;
         e.preventDefault();
         keysRef.current.close();
+        return;
       }
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      // O listener é do DOCUMENT em capture: sem esta guarda, apagar um caractere no campo de um
+      // diálogo (config da zona) removeria um VÉRTICE e engoliria a tecla.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (draftRef.current || !selRef.current || selRef.current.index === null) return;
+      e.preventDefault();
+      keysRef.current.removeSelected();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [active]);
+  }, [keysOn]);
 
-  return { active, count, draftRef, start, cancel, undo, close, onDown, onMove, onUp };
+  // DICA da barra (nunca só-por-cor: a interação é ENSINADA em texto — nenhum VMS do mercado o faz).
+  // O nº de vértices vem da SELEÇÃO (fresco por construção), não de zonesRef (1 render atrás).
+  const hint =
+    sel === null
+      ? null
+      : sel.index !== null
+        ? `Vértice ${sel.index + 1} de ${sel.n} — arraste para mover · Delete (ou Alt+clique) remove`
+        : `Zona selecionada · ${sel.n} vértices — arraste dentro para mover · o ponto claro na aresta insere um vértice`;
+
+  return {
+    active,
+    rectMode,
+    count,
+    hint,
+    draftRef,
+    overlayRef,
+    start,
+    startRect,
+    cancel,
+    deselect,
+    undo,
+    close,
+    onDown,
+    onMove,
+    onUp,
+  };
 }
