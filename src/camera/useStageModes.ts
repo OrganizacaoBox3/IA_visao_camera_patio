@@ -8,7 +8,7 @@
 // Este arquivo era dono de duas coisas que DEIXARAM DE EXISTIR:
 //   • o rascunho do RETÂNGULO (drawRef) — o retângulo não é um TIPO, é o PRESET de 4 vértices do
 //     polígono (a zona É um polígono). O arraste continua idêntico para o operador; quem o
-//     recebe agora é o usePolygonEditor (startRect), e o que ele cria JÁ NASCE EDITÁVEL.
+//     recebe agora é o usePolygonEditor (modo Área, o gesto decide), e o que ele cria JÁ NASCE EDITÁVEL.
 //   • o estado do PINCEL (pintando/apagando) — o pincel era um workaround do polígono que faltava
 //     (o dado de produção provou: a única máscara pintada à mão era uma faixa diagonal em escada).
 //     A MÁSCARA sobrevive só como RASTERIZAÇÃO INTERNA do polígono (zones.rasterizePolygonMask).
@@ -48,8 +48,8 @@ export function stageTarget(s: StageState): StageTarget {
   if (s.calActive) return "calibration"; // ← ACIMA do RBAC de propósito (medir é de todos)
   if (!s.canConfigure) return "none"; // operador em SÓ-LEITURA: não cria/edita zona nem linha
   if (s.tripwireMode) return "tripwire";
-  // O editor da ZONA é o default do palco: com "Zona" armado ele recebe o arraste do PRESET
-  // retângulo; com "Polígono", o clique do rascunho; sem modo armado, ele ainda seleciona/arrasta
+  // O editor da ZONA é o default do palco: com o modo "Área" armado ele recebe o 1º gesto (arraste
+  // → retângulo · clique → polígono ponto a ponto); sem modo armado, ele ainda seleciona/arrasta
   // vértice, insere pelo midpoint e move a forma (o `simple_select` do Mapbox).
   return "polygon";
 }
@@ -78,23 +78,23 @@ export type StageLayers = {
 // A onda anterior fez Calibrar virar MODO: ao entrar, o painel deixa de ser as abas e vira SÓ o
 // passo-a-passo daquele modo (não misturar dois vocabulários — NN/g). Aqui esse padrão vira UM
 // mecanismo, não três casos especiais espalhados: dado o modo de edição ARMADO, diz que painel o
-// drawer deve mostrar — Calibrar → passo-a-passo · Linha → linhas · Zona → zonas — e, sem modo
+// drawer deve mostrar — Calibrar → passo-a-passo · Linha → linhas · Área → zonas — e, sem modo
 // armado, `null` (→ as abas de OBSERVAÇÃO). A PRECEDÊNCIA é a MESMA do stageTarget (cal > linha >
-// zona), agora projetada para o CHROME do painel: os modos já são mutuamente exclusivos na lógica
+// área), agora projetada para o CHROME do painel: os modos já são mutuamente exclusivos na lógica
 // (stageTarget + onStart), então a ordem aqui é a rede de segurança, PURA e testada.
-// `zonaMode` = o editor da zona ARMADO pelo toggle (preset retângulo OU rascunho polígono); é o
-// análogo de `calActive`/`tripwireMode`. Editar uma zona já existente (selecionar/mover no palco)
-// roda sem toggle — é o default do palco, não "estar no modo Zona" para efeito de painel.
-export type StageMode = "calibrar" | "linha" | "zona" | null;
+// `areaMode` = o editor da zona ARMADO pelo toggle "Área" (o gesto decide retângulo × polígono); é
+// o análogo de `calActive`/`tripwireMode`. Editar uma zona já existente (selecionar/mover no palco)
+// roda sem toggle — é o default do palco, não "estar no modo Área" para efeito de painel.
+export type StageMode = "calibrar" | "linha" | "area" | null;
 
 export function activeStageMode(s: {
   calActive: boolean;
   tripwireMode: boolean;
-  zonaMode: boolean;
+  areaMode: boolean;
 }): StageMode {
   if (s.calActive) return "calibrar";
   if (s.tripwireMode) return "linha";
-  if (s.zonaMode) return "zona";
+  if (s.areaMode) return "area";
   return null;
 }
 

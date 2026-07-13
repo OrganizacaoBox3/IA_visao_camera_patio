@@ -1531,7 +1531,7 @@ export function CameraWorkspace({
           drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
       <div className="cam-body">
         <div
-          className={`cam-stage ${poly.rectMode || poly.active || tripwireMode || cal.active ? "draw-cursor" : ""}`}
+          className={`cam-stage ${poly.active || tripwireMode || cal.active ? "draw-cursor" : ""}`}
           ref={viewportRef}
           onMouseDown={stage.onDown}
           onMouseMove={stage.onMove}
@@ -1579,12 +1579,12 @@ export function CameraWorkspace({
         {/* Painel lateral (abas) → ./camera/CamDrawer: JSX puro, nenhum canvas/rAF lá. */}
         <CamDrawer
           // Qual painel contextual: o modo de edição ARMADO (activeStageMode, pura+testada) —
-          // Calibrar/Linha/Zona → o painel daquele modo; nenhum → as abas de observação. `zonaMode`
-          // = o editor da zona armado pelo toggle (preset retângulo OU rascunho polígono).
+          // Calibrar/Linha/Área → o painel daquele modo; nenhum → as abas de observação. `areaMode`
+          // = o editor da zona armado pelo toggle "Área" (o gesto decide retângulo × polígono).
           mode={activeStageMode({
             calActive: cal.active,
             tripwireMode,
-            zonaMode: poly.rectMode || poly.active,
+            areaMode: poly.active,
           })}
           tab={drawerTab}
           onTab={setDrawerTab}

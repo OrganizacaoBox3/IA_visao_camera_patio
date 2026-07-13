@@ -175,6 +175,8 @@ beforeEach(() => {
     removeEventListener: (t: string) => {
       if (t === "keydown") keyHandler = null;
     },
+    // Guarda do ESC no hook: sem layer modal do Radix aberto neste palco falso, sempre null.
+    querySelector: () => null,
   });
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -188,13 +190,28 @@ const press = (key: string, target?: { tagName?: string; isContentEditable?: boo
 // O import vem DEPOIS do vi.mock (hoistado) — o hook enxerga o micro-runtime.
 const { usePolygonEditor } = await import("./usePolygonEditor");
 
+// ── gestos do modo ÁREA (área-um-botão) ──────────────────────────────────────
+// UM CLIQUE = down + up SEM movimento: com o rascunho VAZIO ele semeia o 1º vértice (decide
+// "polígono"); com o rascunho já aberto, adiciona um vértice. O ARRASTE (down + move ≥ limiar + up)
+// decide "retângulo" — testado à parte no bloco do gesto.
+type Ptr = { clientX: number; clientY: number; altKey?: boolean };
+type Ed = ReturnType<typeof usePolygonEditor>;
+const click = (h: { current: Ed }, e: Ptr) => {
+  h.current.onDown(e);
+  h.current.onUp();
+};
+/** abre o modo Área e desenha um POLÍGONO clicando cada ponto (o 1º clique decide a forma). */
+const drawPoly = (h: { current: Ed }, pts: Ptr[]) => {
+  h.current.startArea();
+  for (const p of pts) click(h, p);
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe("usePolygonEditor — RASCUNHO livre (criação vértice a vértice)", () => {
+describe("usePolygonEditor — RASCUNHO polígono (clique a clique, depois do 1º clique decidir)", () => {
   it("nasce inerte: sem modo e sem zona, o palco NÃO é sequestrado (onDown devolve o evento)", () => {
     const { hook } = setup();
     expect(hook.current.active).toBe(false);
-    expect(hook.current.rectMode).toBe(false);
     expect(hook.current.count).toBe(0);
     expect(hook.current.hint).toBeNull();
     expect(hook.current.onDown(at(0.5, 0.5))).toBe(false);
@@ -202,22 +219,23 @@ describe("usePolygonEditor — RASCUNHO livre (criação vértice a vértice)", 
     expect(hook.current.onUp()).toBe(false);
   });
 
-  it("start() desliga os outros editores e abre o rascunho; cada clique acrescenta um vértice", () => {
+  it("startArea() desliga os outros editores e arma o modo; cada CLIQUE acrescenta um vértice", () => {
     const { hook, spies } = setup();
-    hook.current.start();
+    hook.current.startArea();
     expect(spies.start).toHaveBeenCalledTimes(1); // exclusividade do palco
     expect(hook.current.active).toBe(true);
-    for (const [i, p] of [at(0.2, 0.2), at(0.6, 0.2), at(0.6, 0.6)].entries()) {
-      expect(hook.current.onDown(p)).toBe(true); // com rascunho, o editor CONSOME o evento
+    expect(hook.current.count).toBe(0); // ainda INDECISO (o gesto é que decide)
+    [at(0.2, 0.2), at(0.6, 0.2), at(0.6, 0.6)].forEach((p, i) => {
+      click(hook, p); // clique = down+up sem mover: o 1º decide "polígono", os demais adicionam
       expect(hook.current.count).toBe(i + 1);
-    }
+    });
     expect(spies.create).not.toHaveBeenCalled(); // ainda não fechou
   });
 
   it("clique FORA do vídeo é ignorado sem matar o rascunho (o dedo escorrega na borda do tablet)", () => {
     const { hook } = setup();
-    hook.current.start();
-    hook.current.onDown(at(0.2, 0.2));
+    hook.current.startArea();
+    click(hook, at(0.2, 0.2)); // 1º vértice
     expect(hook.current.onDown({ clientX: -50, clientY: 500 })).toBe(true); // consome, mas não cria
     expect(hook.current.onDown({ clientX: 1500, clientY: 500 })).toBe(true);
     expect(hook.current.count).toBe(1);
@@ -226,9 +244,9 @@ describe("usePolygonEditor — RASCUNHO livre (criação vértice a vértice)", 
 
   it("Voltar (undo) remove o ÚLTIMO vértice; em rascunho vazio é no-op (não vira -1)", () => {
     const { hook } = setup();
-    hook.current.start();
-    hook.current.onDown(at(0.2, 0.2));
-    hook.current.onDown(at(0.6, 0.2));
+    hook.current.startArea();
+    click(hook, at(0.2, 0.2));
+    click(hook, at(0.6, 0.2));
     hook.current.undo();
     expect(hook.current.count).toBe(1);
     hook.current.undo();
@@ -238,23 +256,18 @@ describe("usePolygonEditor — RASCUNHO livre (criação vértice a vértice)", 
 
   it("TETO de 20 vértices: o 21º é RECUSADO com aviso (e o rascunho segue fechável)", () => {
     const { hook, spies } = setup();
-    hook.current.start();
-    for (let i = 0; i < 20; i++) hook.current.onDown(at(0.05 + i * 0.045, 0.1 + (i % 2) * 0.02));
+    hook.current.startArea();
+    for (let i = 0; i < 20; i++) click(hook, at(0.05 + i * 0.045, 0.1 + (i % 2) * 0.02));
     expect(hook.current.count).toBe(20);
-    hook.current.onDown(at(0.9, 0.9)); // 21º
+    click(hook, at(0.9, 0.9)); // 21º
     expect(hook.current.count).toBe(20); // NÃO entrou
     expect(spies.alert.mock.calls[0][0]).toContain("20");
   });
 });
 
 describe("usePolygonEditor — FECHAMENTO (1º vértice · Enter · ESC) e o mínimo de 3", () => {
-  const desenhaTres = (hook: { current: { start: () => void; onDown: (e: PointerLike) => boolean } }) => {
-    hook.current.start();
-    hook.current.onDown(at(0.2, 0.2));
-    hook.current.onDown(at(0.6, 0.2));
-    hook.current.onDown(at(0.6, 0.6));
-  };
-  type PointerLike = { clientX: number; clientY: number };
+  const desenhaTres = (hook: { current: Ed }) =>
+    drawPoly(hook, [at(0.2, 0.2), at(0.6, 0.2), at(0.6, 0.6)]);
 
   it("fecha clicando NO 1º VÉRTICE (alvo de 14 px — o dedo, não o pixel)", () => {
     const { hook, spies } = setup();
@@ -280,9 +293,7 @@ describe("usePolygonEditor — FECHAMENTO (1º vértice · Enter · ESC) e o mí
 
   it("MÍNIMO de 3: com 2 vértices nem Concluir nem Enter fecham (e o rascunho é preservado)", () => {
     const { hook, spies } = setup();
-    hook.current.start();
-    hook.current.onDown(at(0.2, 0.2));
-    hook.current.onDown(at(0.6, 0.2));
+    drawPoly(hook, [at(0.2, 0.2), at(0.6, 0.2)]);
     hook.current.close();
     press("Enter");
     expect(spies.create).not.toHaveBeenCalled();
@@ -308,19 +319,30 @@ describe("usePolygonEditor — FECHAMENTO (1º vértice · Enter · ESC) e o mí
     expect(hook.current.count).toBe(0);
   });
 
-  it("sem rascunho E sem seleção, o listener de teclado nem está instalado (ESC é da casca)", () => {
+  // Regressão: com o modo Área armado mas INDECISO (nenhum vértice ainda — draftRef null), o ESC
+  // TEM de sair do modo E ser consumido. Sem isto, o ESC vaza p/ a casca fullscreen e FECHA a câmera
+  // (é o que quebrou o e2e do clique: o retry armava o modo, o frame não vinha, e o ESC fechava tudo).
+  it("ESC no modo Área armado e VAZIO sai do modo e é CONSUMIDO (a casca não fecha a câmera)", () => {
+    const { hook } = setup();
+    hook.current.startArea();
+    expect(hook.current.active).toBe(true);
+    const e = press("Escape");
+    expect(e.preventDefault).toHaveBeenCalled(); // consumido → ESC não vaza p/ a casca
+    expect(hook.current.active).toBe(false); // saiu do modo (câmera segue aberta)
+  });
+
+  it("modo Área armado sem seleção instala o teclado; cancel() faz o cleanup (ESC volta à casca)", () => {
     const { hook } = setup();
     expect(keyHandler).toBeNull();
-    hook.current.start();
-    expect(keyHandler).not.toBeNull();
+    hook.current.startArea();
+    expect(keyHandler).not.toBeNull(); // armado (mesmo indeciso): Enter/ESC do rascunho já valem
     hook.current.cancel();
     expect(keyHandler).toBeNull(); // cleanup rodou → ESC volta a fechar a câmera (ADR-007)
   });
 
   it("AUTO-INTERSECÇÃO no fechamento: avisa e PRESERVA o rascunho (não joga o trabalho fora)", () => {
     const { hook, spies } = setup();
-    hook.current.start();
-    for (const p of [at(0.1, 0.1), at(0.9, 0.9), at(0.9, 0.1), at(0.1, 0.9)]) hook.current.onDown(p); // gravata
+    drawPoly(hook, [at(0.1, 0.1), at(0.9, 0.9), at(0.9, 0.1), at(0.1, 0.9)]); // gravata
     press("Enter");
     expect(spies.create).not.toHaveBeenCalled();
     expect(spies.alert.mock.calls[0][0]).toMatch(/cruzam/i);
@@ -329,47 +351,103 @@ describe("usePolygonEditor — FECHAMENTO (1º vértice · Enter · ESC) e o mí
   });
 });
 
-describe("usePolygonEditor — PRESET RETÂNGULO (a mesma gestualidade de sempre, agora editável)", () => {
-  it("arraste vira 4 VÉRTICES no sentido horário — o retângulo É um polígono", () => {
+describe("usePolygonEditor — modo ÁREA: o GESTO decide (arraste→retângulo · clique→polígono)", () => {
+  const RETANGULO = [
+    { x: 0.2, y: 0.3 },
+    { x: 0.6, y: 0.3 },
+    { x: 0.6, y: 0.8 },
+    { x: 0.2, y: 0.8 },
+  ];
+
+  it("ARRASTE (≥ limiar) cria um RETÂNGULO de 4 vértices — o caso comum (mesas)", () => {
     const { hook, spies } = setup();
-    hook.current.startRect();
-    expect(hook.current.rectMode).toBe(true);
-    expect(hook.current.active).toBe(false); // não é rascunho livre
+    hook.current.startArea();
+    expect(hook.current.active).toBe(true);
+    expect(hook.current.count).toBe(0); // indeciso até o gesto
 
     hook.current.onDown(at(0.2, 0.3));
-    hook.current.onMove(at(0.6, 0.8));
+    hook.current.onMove(at(0.6, 0.8)); // arraste largo → cruza o limiar
     expect(hook.current.onUp()).toBe(true);
 
     expect(spies.create).toHaveBeenCalledTimes(1);
-    expect(spies.create.mock.calls[0][0]).toEqual([
-      { x: 0.2, y: 0.3 },
-      { x: 0.6, y: 0.3 },
-      { x: 0.6, y: 0.8 },
-      { x: 0.2, y: 0.8 },
-    ]); // exatamente a regra da migração: rect → [{x,y},{x+w,y},{x+w,y+h},{x,y+h}]
+    expect(spies.create.mock.calls[0][0]).toEqual(RETANGULO); // rect → [{x,y},{x+w,y},{x+w,y+h},{x,y+h}]
+    expect(hook.current.count).toBe(0); // retângulo NÃO abre rascunho polígono
   });
 
-  it("arraste em QUALQUER sentido normaliza os cantos (arrastar de baixo-direita p/ cima-esquerda)", () => {
+  it("arraste em QUALQUER sentido normaliza os cantos (de baixo-direita p/ cima-esquerda)", () => {
     const { hook, spies } = setup();
-    hook.current.startRect();
+    hook.current.startArea();
     hook.current.onDown(at(0.6, 0.8)); // começa no canto oposto
     hook.current.onMove(at(0.2, 0.3));
     hook.current.onUp();
-    expect(spies.create.mock.calls[0][0]).toEqual([
-      { x: 0.2, y: 0.3 },
-      { x: 0.6, y: 0.3 },
-      { x: 0.6, y: 0.8 },
-      { x: 0.2, y: 0.8 },
-    ]);
+    expect(spies.create.mock.calls[0][0]).toEqual(RETANGULO);
   });
 
-  it("CLIQUE SEM ARRASTE (< 16 px) não vira zona — o piso do retângulo de sempre", () => {
+  it("CLIQUE (soltou no lugar) semeia o 1º VÉRTICE de um polígono — NÃO cria retângulo", () => {
     const { hook, spies } = setup();
-    hook.current.startRect();
+    hook.current.startArea();
     hook.current.onDown(at(0.5, 0.5));
-    hook.current.onMove({ clientX: 0.5 * VP + 10, clientY: 0.5 * VP + 10 }); // 10 px < 16
+    expect(hook.current.onUp()).toBe(true); // soltou sem mover → clique
+    expect(spies.create).not.toHaveBeenCalled();
+    expect(hook.current.count).toBe(1); // é o 1º vértice do polígono
+    expect(hook.current.draftRef.current?.points).toEqual([{ x: 0.5, y: 0.5 }]);
+  });
+
+  it("micro-movimento (< limiar, wobble do dedo/mouse) ainda é CLIQUE → 1º vértice", () => {
+    const { hook, spies } = setup();
+    hook.current.startArea();
+    hook.current.onDown(at(0.5, 0.5));
+    hook.current.onMove({ clientX: 0.5 * VP + 4, clientY: 0.5 * VP }); // 4 px < 5 → não vira arraste
     hook.current.onUp();
-    expect(spies.create).not.toHaveBeenCalled(); // nenhuma zona-fantasma de 1 px
+    expect(spies.create).not.toHaveBeenCalled(); // não virou retângulo
+    expect(hook.current.count).toBe(1); // o clique venceu
+  });
+
+  it("cruzar o limiar (≥ 5 px) durante o arraste compromete com o RETÂNGULO", () => {
+    const { hook, spies } = setup();
+    hook.current.startArea();
+    hook.current.onDown(at(0.5, 0.5));
+    hook.current.onMove({ clientX: 0.5 * VP + 6, clientY: 0.5 * VP }); // 6 px ≥ 5 → decidiu arraste
+    hook.current.onMove(at(0.8, 0.8)); // segue até um retângulo acima do piso
+    hook.current.onUp();
+    expect(spies.create).toHaveBeenCalledTimes(1);
+    expect(hook.current.count).toBe(0); // é retângulo, não polígono
+  });
+
+  it("arraste que cruza o limiar mas fica ABAIXO do piso (16 px) não cria zona-fantasma", () => {
+    const { hook, spies } = setup();
+    hook.current.startArea();
+    hook.current.onDown(at(0.5, 0.5));
+    hook.current.onMove({ clientX: 0.5 * VP + 10, clientY: 0.5 * VP + 10 }); // ~14 px: >5 (arraste) mas <16 (piso)
+    hook.current.onUp();
+    expect(spies.create).not.toHaveBeenCalled(); // comprometeu com rect, mas pequeno demais → nada
+    expect(hook.current.count).toBe(0); // e NÃO recai para polígono
+  });
+
+  it("count>0 (polígono já iniciado): arraste NÃO vira retângulo — a forma já se comprometeu", () => {
+    const { hook, spies } = setup();
+    hook.current.startArea();
+    click(hook, at(0.3, 0.3)); // 1º clique → polígono (count 1)
+    expect(hook.current.count).toBe(1);
+    // agora um "arraste": onDown adiciona vértice; onMove só move o cursor; onUp não cria retângulo
+    hook.current.onDown(at(0.7, 0.3));
+    hook.current.onMove(at(0.7, 0.7));
+    hook.current.onUp();
+    expect(spies.create).not.toHaveBeenCalled(); // nenhum retângulo
+    expect(hook.current.count).toBe(2); // virou o 2º vértice do polígono
+  });
+
+  it("cancel() (toggle 'Área' desligado) para de criar zona no gesto seguinte", () => {
+    const { hook, spies } = setup();
+    hook.current.startArea();
+    expect(hook.current.active).toBe(true);
+    hook.current.cancel();
+    expect(hook.current.active).toBe(false);
+
+    hook.current.onDown(at(0.2, 0.2)); // arraste completo, já sem o modo armado
+    hook.current.onMove(at(0.6, 0.6));
+    hook.current.onUp();
+    expect(spies.create).not.toHaveBeenCalled();
   });
 });
 
@@ -531,10 +609,12 @@ describe("usePolygonEditor — SELEÇÃO e edição de VÉRTICE (arrastar / inse
 
   it("com RASCUNHO aberto, a edição de zona existente não roda (um editor por vez)", () => {
     const { hook, spies } = setup([zona("z1", QUADRADO)]);
-    hook.current.start();
-    hook.current.onDown(at(0.25, 0.25)); // cai no rascunho, não agarra o vértice
+    hook.current.startArea();
+    click(hook, at(0.25, 0.25)); // 1º vértice do rascunho — NÃO agarra o vértice da zona existente
     expect(hook.current.count).toBe(1);
-    hook.current.onMove(at(0.3, 0.3));
+    hook.current.onDown(at(0.75, 0.25)); // clique sobre outro vértice da zona → vira vértice do rascunho
+    expect(hook.current.count).toBe(2);
+    hook.current.onMove(at(0.8, 0.3));
     expect(spies.live).not.toHaveBeenCalled();
     expect(spies.patch).not.toHaveBeenCalled();
   });

@@ -62,12 +62,12 @@ export function ZonasTab({
           </HelpTip>
         </p>
       )}
-      {/* Texto load-bearing do e2e (drawZone, app.spec.ts): /Use “Zona” para desenhar/. */}
+      {/* Texto load-bearing do e2e (drawZone, app.spec.ts): /Use “Área” para desenhar/. */}
       {!zonesLoading && zones.length === 0 && (
         <p className="empty-note">
           {canConfigure ? (
             <>
-              Use “Zona” para desenhar uma área sobre o vídeo.{" "}
+              Use “Área” para desenhar uma zona sobre o vídeo.{" "}
               <HelpTip label="Ajuda das zonas">
                 Depois, em cada zona, “Configurar zona” → Modo define a IA (Atividade, Leitura,
                 Objetos ou Fadiga).

@@ -61,7 +61,7 @@ export function CamDrawer({
   diag,
 }: Props) {
   // MODO ATIVO → o painel INTEIRO se reconfigura (spec §3-A, o molde do Calibrar GENERALIZADO): UM
-  // mecanismo escolhe o painel contextual do modo armado — Calibrar → passo-a-passo · Zona → zonas
+  // mecanismo escolhe o painel contextual do modo armado — Calibrar → passo-a-passo · Área → zonas
   // · Linha → linhas —, não três `if` especiais. Sair do modo (ESC/toggle) volta às abas. É o
   // padrão do mercado (Figma Dev Mode troca o painel inteiro, Milestone Setup substitui a operação):
   // não misturar os vocabulários de dois modos ao mesmo tempo (NN/g).
@@ -69,7 +69,7 @@ export function CamDrawer({
     const ctx =
       mode === "calibrar"
         ? { aria: "calibração", body: <CalibracaoTab cal={cal} onActivate={onCalibrate} /> }
-        : mode === "zona"
+        : mode === "area"
           ? { aria: "zonas", body: <ZonasTab {...zonas} /> }
           : { aria: "linhas", body: <LinhasTab {...linhas} /> };
     return (

@@ -23,17 +23,16 @@ async function connectCamera(context: BrowserContext, dashboard: Page) {
 }
 
 // MUDANÇA DE PRODUTO (2026-07): a câmera nova abre LIMPA — sem zonas-semente. Os testes de
-// config de zona agora DESENHAM a própria zona primeiro: botão "Zona" (PenLine + label desde a
-// Onda B da simplificação; o glifo "✎" saiu) + drag real no .cam-stage (mesmo padrão dos specs
-// de diagnóstico). Espera o estado vazio da aba Zonas (garante que a carga assíncrona terminou
-// E prova o novo comportamento) e retry no drag (o onUp descarta o traço se o 1º frame ainda
-// não chegou ao palco).
+// config de zona agora DESENHAM a própria zona primeiro: UM toggle "Área" (área-um-botão) + drag
+// real no .cam-stage. O ARRASTE (cruza o limiar) decide RETÂNGULO de 4 vértices — o mesmo caso comum
+// de sempre. Espera o estado vazio da aba Zonas (garante que a carga assíncrona terminou E prova o
+// novo comportamento) e retry no drag (o onUp descarta o traço se o 1º frame ainda não chegou ao palco).
 async function drawZone(page: Page) {
-  // "Zona" ENTRA no modo do palco (spec-tela-camera-arquitetura §3-A): Zona/Linha saíram das abas do
+  // "Área" ENTRA no modo do palco (spec-tela-camera-arquitetura §3-A): Zona/Linha saíram das abas do
   // drawer e viram o painel CONTEXTUAL do modo. Só depois de armar o modo o painel de zonas (e seu
   // estado-vazio) aparece — por isso a espera do estado-vazio vem AGORA, não antes do toggle.
-  await page.getByRole("button", { name: "Zona", exact: true }).click();
-  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+  await page.getByRole("button", { name: "Área", exact: true }).click();
+  await expect(page.getByText(/Use “Área” para desenhar/)).toBeVisible();
   const stage = page.locator(".cam-stage");
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
   // 8 tentativas (era 5): sob carga (probe WHIP do nó + fetch /go2rtc/api/streams) o 1º frame
@@ -55,17 +54,16 @@ async function drawZone(page: Page) {
   await expect(cfgBtn).toBeVisible(); // falha com mensagem clara se nenhum drag pegou
 }
 
-// ── Varredura F3 (consoles): o palco da câmera ABERTA ─────────────────────────────────────────
-// O modo POLÍGONO (spec-zonas-poligonais P1/P7) tinha o editor pronto (usePolygonEditor) e
-// NENHUM ponto de entrada na UI — start/undo/close sem consumidor, inalcançável por mouse OU
-// teclado. A F3 pôs os controles na barra do palco; este teste é o critério de aceite deles
-// (CA-1: clico N vértices + Concluir ⇒ zona criada).
+// ── Varredura F3 / área-um-botão: o CLIQUE ponto a ponto do modo Área ──────────────────────────
+// UM toggle "Área" e o GESTO decide: CLIQUE (soltar no lugar) desenha um POLÍGONO vértice a vértice.
+// Este teste é o critério de aceite do gesto-clique (CA-1: clico N vértices + Concluir ⇒ zona criada)
+// e o controle negativo do arraste-vs-clique (o gesto-arraste tem seu próprio teste, "Área: arraste").
 //
 // O palco só aceita vértice quando JÁ HÁ FRAME (toNorm precisa do content-rect do vídeo) — mesma
-// corrida do drawZone acima. Aqui o rascunho dá um sinal MELHOR que o retry cego: "Concluir
-// polígono" só habilita com ≥3 vértices. Se os cliques não pegaram (sem frame), ESC descarta o
-// rascunho e a tentativa recomeça limpa — sem acumular vértices de tentativas anteriores.
-test("Polígono: a barra do palco cria uma zona de N vértices (botão → vértices → Concluir)", async ({
+// corrida do drawZone acima. O rascunho dá um sinal MELHOR que o retry cego: "Concluir polígono" só
+// habilita com ≥3 vértices. Se os cliques não pegaram (sem frame), ESC descarta o rascunho e a
+// tentativa recomeça limpa — sem acumular vértices de tentativas anteriores.
+test("Área (clique): a barra do palco cria uma zona de N vértices (arma → cliques → Concluir)", async ({
   page,
   context,
 }) => {
@@ -77,11 +75,11 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
   await connectCamera(context, page);
   await page.locator(".tile[title='Abrir câmera']").first().click();
   // Guard de carga: a barra do palco montou (a câmera abre em OBSERVAÇÃO — Zona/Linha viram modos,
-  // então o estado-vazio da zona só aparece DENTRO do modo, exercido pelo laço abaixo ao clicar
-  // "Polígono", que arma o rascunho e faz o painel de zonas subir).
+  // então o estado-vazio da zona só aparece DENTRO do modo, exercido pelo laço abaixo ao armar
+  // "Área" e clicar os vértices, o que faz o painel de zonas subir).
   const stage = page.locator(".cam-stage");
-  const polyBtn = page.getByRole("button", { name: "Polígono" });
-  await expect(polyBtn).toBeVisible();
+  const areaBtn = page.getByRole("button", { name: "Área", exact: true });
+  await expect(areaBtn).toBeVisible();
   const concluir = page.getByRole("button", { name: "Concluir polígono" });
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
   const VERTICES = [
@@ -92,9 +90,10 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
   ] as const;
 
   for (let attempt = 0; attempt < 8; attempt++) {
-    await polyBtn.click(); // abre o rascunho (o Toggle vira "N vértices")
+    await areaBtn.click(); // arma o modo Área (indeciso); o 1º CLIQUE decide "polígono"
     const box = await stage.boundingBox();
     if (!box) throw new Error(".cam-stage sem boundingBox");
+    // mouse.click = down+up SEM movimento = CLIQUE: o 1º semeia o vértice, os demais adicionam.
     for (const [fx, fy] of VERTICES)
       await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
     try {
@@ -111,16 +110,16 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
   await concluir.click();
   await expect(concluir).toHaveCount(0); // rascunho fechou → controles do rascunho somem
 
-  // Fechar o polígono SAI do modo Zona (o rascunho fecha) → o drawer volta às abas de observação.
-  // Re-arma o modo Zona (toggle "Zona") p/ ver o card da zona criada — o painel CONTEXTUAL do modo.
-  await page.getByRole("button", { name: "Zona", exact: true }).click();
+  // Fechar o polígono SAI do modo Área (o rascunho fecha) → o drawer volta às abas de observação.
+  // Re-arma o modo Área (toggle "Área") p/ ver o card da zona criada — o painel CONTEXTUAL do modo.
+  await page.getByRole("button", { name: "Área", exact: true }).click();
   await expect(cfgBtn).toBeVisible(); // a zona poligonal existe (card no painel de zonas do modo)
 
   // Limpa o que este teste criou: as zonas são PERSISTIDAS por câmera no hub, e o e2e reusa a
   // mesma câmera (key=e2e-cam) — deixar a zona aqui quebraria o estado-vazio que os testes
   // seguintes (drawZone) exigem. Também exerce o caminho de remoção.
   await page.getByRole("button", { name: "Remover zona" }).first().click();
-  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+  await expect(page.getByText(/Use “Área” para desenhar/)).toBeVisible();
 });
 
 // ── spec-zona-unificada F3: a zona É um polígono — e agora se EDITA ───────────────────────────
@@ -134,23 +133,24 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
 // 14 px; o deslocamento é de 35-60 px — se a forma não tivesse andado, o clique cairia no vazio).
 // A barra do palco carrega o estado em TEXTO ("Zona selecionada · N vértices" / "Vértice i de N") —
 // going-gray: informação nunca só-por-cor —, e é esse texto que serve de oráculo aqui.
-test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértice, remove e move a forma", async ({
+test("Área (arraste): o retângulo nasce POLÍGONO editável — seleciona, insere vértice, remove e move", async ({
   page,
   context,
 }) => {
-  test.slow(); // paga conexão do nó + 1º frame no palco (mesmo orçamento do teste do polígono)
+  test.slow(); // paga conexão do nó + 1º frame no palco (mesmo orçamento do teste do clique)
   await login(page);
   await connectCamera(context, page);
   await page.locator(".tile[title='Abrir câmera']").first().click();
-  await drawZone(page); // "Zona" + arraste 35%→65% ⇒ zona de 4 vértices (o PRESET)
+  await drawZone(page); // "Área" + ARRASTE 35%→65% ⇒ zona de 4 vértices (o gesto decide RETÂNGULO)
 
   const stage = page.locator(".cam-stage");
   const tip = page.locator(".cam-head-tip"); // a dica do editor (role=status)
   const box = (await stage.boundingBox())!;
   const px = (fx: number, fy: number) => [box.x + box.width * fx, box.y + box.height * fy] as const;
 
-  // O modo "Zona" continua armado depois do desenho (arraste = nova zona). Desarma p/ EDITAR.
-  await page.getByRole("button", { name: /Desenhando/ }).click();
+  // O modo "Área" continua armado depois do arraste (arraste = nova zona). Desarma p/ EDITAR
+  // (com count 0 o toggle segue mostrando "Área", não "N vértices").
+  await page.getByRole("button", { name: "Área", exact: true }).click();
 
   // 1) SELECIONAR: clicar dentro da zona (o `simple_select` do Mapbox) — 4 vértices, em texto.
   await page.mouse.click(...px(0.5, 0.5));
@@ -179,12 +179,12 @@ test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértic
   await expect(tip).toContainText(/Vértice \d+ de 4/); // há um VÉRTICE exatamente ali ⇒ a forma andou
 
   // Limpa o que este teste criou (as zonas são PERSISTIDAS por câmera no hub e o e2e reusa a
-  // mesma câmera): o estado-vazio que os testes seguintes exigem volta a valer. O modo Zona foi
+  // mesma câmera): o estado-vazio que os testes seguintes exigem volta a valer. O modo Área foi
   // DESARMADO acima (p/ editar) → o painel voltou às abas de observação; re-arma o modo p/ acessar
   // o painel de zonas e remover.
-  await page.getByRole("button", { name: "Zona", exact: true }).click();
+  await page.getByRole("button", { name: "Área", exact: true }).click();
   await page.getByRole("button", { name: "Remover zona" }).first().click();
-  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+  await expect(page.getByText(/Use “Área” para desenhar/)).toBeVisible();
 });
 
 // GATE DE A11Y do console que o operador mais vive (a a11y.spec.ts varre só as rotas — a câmera
@@ -221,7 +221,7 @@ test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunc
 // CALIBRAR É UM MODO, não uma camada empilhada (spec-tela-camera-modos §3): a queixa do dono era
 // "com a junção calibração+câmera os elementos estão TOTALMENTE SOBREPOSTOS". O conserto reconfigura
 // o CHROME ao entrar no modo (padrão Figma Dev Mode / NN/g "não misturar os vocabulários de dois
-// modos"): os toggles de OPERAÇÃO (Zona/Polígono/Linha) somem, o painel vira SÓ o passo-a-passo da
+// modos"): os toggles de OPERAÇÃO (Área/Linha) somem, o painel vira SÓ o passo-a-passo da
 // calibração (não a 7ª aba espremida), e ESC sai do MODO sem fechar a câmera.
 test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; ESC volta à operação", async ({
   page,
@@ -233,11 +233,10 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
   await page.locator(".tile[title='Abrir câmera']").first().click();
   await expect(page.locator(".cam-stage")).toBeVisible();
 
-  const zona = page.getByRole("button", { name: "Zona", exact: true });
+  const area = page.getByRole("button", { name: "Área", exact: true });
   const linha = page.getByRole("button", { name: "Linha" });
-  const poligono = page.getByRole("button", { name: "Polígono" });
   const tablist = page.getByRole("tablist", { name: "Aba do painel" });
-  await expect(zona).toBeVisible(); // operação: os toggles de edição vivem na barra do palco
+  await expect(area).toBeVisible(); // operação: os toggles de edição vivem na barra do palco
   await expect(tablist).toBeVisible(); // e o painel tem as abas de OBSERVAÇÃO
   // F1 (spec-tela-camera-arquitetura §3-A): Zona e Linha DEIXARAM de ser abas — viram MODOS do palco
   // (entram pelo toggle do header e ocupam o painel contextual). O strip de abas guarda só
@@ -247,10 +246,9 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
   // Entra no 5º modo do palco (o toggle "Calibrar"; antes da ativação há UM só botão com esse nome).
   await page.getByRole("button", { name: "Calibrar" }).click();
 
-  // Os toggles de OPERAÇÃO somem da barra — não se misturam os dois vocabulários.
-  await expect(zona).toHaveCount(0);
+  // Os toggles de OPERAÇÃO (Área/Linha) somem da barra — não se misturam os dois vocabulários.
+  await expect(area).toHaveCount(0);
   await expect(linha).toHaveCount(0);
-  await expect(poligono).toHaveCount(0);
   // O painel vira SÓ o passo-a-passo da calibração (as abas de operação somem).
   await expect(page.getByText("Calibração de distância")).toBeVisible();
   await expect(tablist).toHaveCount(0);
@@ -258,7 +256,7 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
   // ESC sai do MODO — NÃO fecha a câmera — e a operação volta com os toggles e as abas normais.
   await page.keyboard.press("Escape");
   await expect(page.locator(".cam")).toBeVisible(); // a câmera continua aberta (ESC saiu só do modo)
-  await expect(zona).toBeVisible();
+  await expect(area).toBeVisible();
   await expect(linha).toBeVisible();
   await expect(tablist).toBeVisible();
 });
@@ -421,12 +419,18 @@ test("ESC com o Dialog de config de zona aberto fecha SÓ o Dialog; 2º ESC fech
   await page.getByRole("button", { name: "Configurar zona" }).first().click();
   await expect(page.locator(".ui-dialog")).toBeVisible();
 
-  // 1º ESC: fecha só o Dialog — a câmera fullscreen permanece aberta
+  // 1º ESC: fecha só o Dialog — a câmera fullscreen permanece aberta (o Dialog do Radix tem
+  // precedência; o editor de área NÃO rouba o ESC quando há `.ui-dialog` aberto — guard do hook).
   await page.keyboard.press("Escape");
   await expect(page.locator(".ui-dialog")).toHaveCount(0); // dialog fechou
   await expect(page.locator(".cam")).toBeVisible(); // câmera continua aberta
 
-  // 2º ESC: agora sim fecha a câmera (volta à Central)
+  // O modo Área seguiu ARMADO desde o drawZone (arraste = nova zona). Como no Calibrar, o próximo
+  // ESC SAI DO MODO — não fecha a câmera (o mesmo que o antigo modo Polígono já fazia).
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cam")).toBeVisible(); // ainda aberta: ESC saiu do modo Área
+
+  // Agora, sem modo armado nem Dialog, o ESC fecha a câmera (volta à Central).
   await page.keyboard.press("Escape");
   await expect(page.locator(".cam")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();

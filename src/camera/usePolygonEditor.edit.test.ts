@@ -10,7 +10,7 @@
 //      de 3) persistiria um polígono cruzado — e o cruzado passa a valer para o pointInPolygon do
 //      HUB (o motor herda a geometria). É o buraco que nenhum e2e veria.
 //   2. O TETO de 20 vértices tem DUAS portas: o rascunho (coberto lá) e o MIDPOINT (só aqui).
-//   3. Desarmar o preset ("Zona" desligado) tem de parar de criar zona.
+//   3. Desarmar o modo (toggle "Área" desligado) tem de parar de criar zona no gesto seguinte.
 //
 // ⚠ REVISÃO SERIALIZADA: fundir este arquivo no irmão (um micro-runtime só). A duplicação do
 // runtime é o preço declarado do paralelismo — não é padrão da casa.
@@ -129,7 +129,11 @@ function setup(zones: Zone[] = []) {
 // SELECIONAR arma o listener de teclado (Delete remove o vértice) → o hook toca `document` mesmo
 // quando o teste não aperta tecla nenhuma. Sem este stub, o ambiente node quebra em ReferenceError.
 beforeEach(() => {
-  vi.stubGlobal("document", { addEventListener: () => {}, removeEventListener: () => {} });
+  vi.stubGlobal("document", {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    querySelector: () => null, // guarda do ESC no hook (sem layer modal do Radix no palco falso)
+  });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -188,13 +192,13 @@ describe("TETO de 20 vértices — a SEGUNDA porta (o midpoint, não só o rascu
   });
 });
 
-describe("PRESET RETÂNGULO — desarmar o modo desarma o arraste", () => {
-  it("cancel() (o botão 'Zona' desligado) para de criar zona no arraste seguinte", () => {
+describe("modo ÁREA — desarmar o modo desarma o gesto", () => {
+  it("cancel() (o toggle 'Área' desligado) para de criar zona no gesto seguinte", () => {
     const { hook, spies } = setup();
-    hook.current.startRect();
-    expect(hook.current.rectMode).toBe(true);
+    hook.current.startArea();
+    expect(hook.current.active).toBe(true);
     hook.current.cancel();
-    expect(hook.current.rectMode).toBe(false);
+    expect(hook.current.active).toBe(false);
 
     hook.current.onDown(at(0.2, 0.2)); // arraste completo, já sem o modo armado
     hook.current.onMove(at(0.6, 0.6));

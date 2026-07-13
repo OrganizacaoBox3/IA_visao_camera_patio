@@ -129,16 +129,16 @@ test("Calibrar × os outros modos: a camada SVG monta no modo e some ao SAIR (ES
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(1);
 
   // Calibrar é um MODO EXCLUSIVO: enquanto ele está ativo os outros editores nem aparecem na barra
-  // (não se misturam dois vocabulários — app.spec.ts "Calibrar é um MODO"). Para chegar a Zona é
+  // (não se misturam dois vocabulários — app.spec.ts "Calibrar é um MODO"). Para chegar a Área é
   // preciso SAIR do modo. ESC sai da calibração (não fecha a câmera): a camada some e a operação volta.
   await page.keyboard.press("Escape");
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(0);
-  const zona = page.getByRole("button", { name: "Zona", exact: true });
-  await expect(zona).toBeVisible();
+  const area = page.getByRole("button", { name: "Área", exact: true });
+  await expect(area).toBeVisible();
 
-  // Entrar em Zona arma o editor de zona — a camada de calibração NÃO volta (o palco tem um dono só,
+  // Entrar em Área arma o editor de zona — a camada de calibração NÃO volta (o palco tem um dono só,
   // senão um clique criaria um canto E uma zona).
-  await zona.click();
+  await area.click();
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(0);
 });
 

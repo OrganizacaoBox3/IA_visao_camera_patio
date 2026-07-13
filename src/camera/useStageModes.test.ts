@@ -78,8 +78,8 @@ describe("sceneLayers — quais camadas de operação o palco desenha por modo",
 // isso, e a ordem é REGRA (mesma precedência do stageTarget). Controle negativo: troque a ordem dos
 // `if` (RBAC/precedência) e um caso abaixo fica vermelho — o painel errado subiria para o operador.
 describe("activeStageMode — qual painel contextual o drawer mostra por modo armado", () => {
-  const m = (p: Partial<{ calActive: boolean; tripwireMode: boolean; zonaMode: boolean }> = {}) =>
-    activeStageMode({ calActive: false, tripwireMode: false, zonaMode: false, ...p });
+  const m = (p: Partial<{ calActive: boolean; tripwireMode: boolean; areaMode: boolean }> = {}) =>
+    activeStageMode({ calActive: false, tripwireMode: false, areaMode: false, ...p });
 
   it("nenhum modo armado → null (o drawer mostra as abas de OBSERVAÇÃO)", () => {
     expect(m()).toBe(null);
@@ -88,14 +88,14 @@ describe("activeStageMode — qual painel contextual o drawer mostra por modo ar
   it("cada modo isolado mapeia para o SEU painel", () => {
     expect(m({ calActive: true })).toBe("calibrar");
     expect(m({ tripwireMode: true })).toBe("linha");
-    expect(m({ zonaMode: true })).toBe("zona");
+    expect(m({ areaMode: true })).toBe("area");
   });
 
   // A ordem é a rede de segurança (os modos já são exclusivos por construção). Injete a falha
-  // (mova o `if (s.zonaMode)` para o topo) e ESTES casos ficam vermelhos: o painel de zona subiria
+  // (mova o `if (s.areaMode)` para o topo) e ESTES casos ficam vermelhos: o painel de área subiria
   // por cima do de calibração/linha — dois vocabulários misturados, o que a spec proíbe (NN/g).
-  it("precedência (rede de segurança): calibrar > linha > zona", () => {
-    expect(m({ calActive: true, tripwireMode: true, zonaMode: true })).toBe("calibrar");
-    expect(m({ tripwireMode: true, zonaMode: true })).toBe("linha");
+  it("precedência (rede de segurança): calibrar > linha > area", () => {
+    expect(m({ calActive: true, tripwireMode: true, areaMode: true })).toBe("calibrar");
+    expect(m({ tripwireMode: true, areaMode: true })).toBe("linha");
   });
 });

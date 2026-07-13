@@ -7,21 +7,21 @@
 // Lucide único (size 18/16 · stroke 1.75 · currentColor), ícone-só SEMPRE com Tooltip +
 // aria-label estável, nenhum controle fora de src/ui (Radix), zero px/hex cru.
 //
-// NOME ACESSÍVEL LOAD-BEARING (e2e/app.spec.ts): "Zona" (exact), "Polígono", "Concluir polígono",
-// "Fechar". Mudou o rótulo? Atualize o spec no MESMO diff (regra A18).
+// NOME ACESSÍVEL LOAD-BEARING (e2e/app.spec.ts): "Área" (exact), "Concluir polígono", "Fechar".
+// Mudou o rótulo? Atualize o spec no MESMO diff (regra A18).
 //
-// A PODA (spec-zona-unificada F5): as ferramentas do PINCEL saíram desta barra. Não é remoção de
-// capacidade — é unificação: a zona É um polígono, e "Zona" agora semeia 4 vértices EDITÁVEIS pelo
-// mesmo arraste de sempre (o preset da Axis). O pincel era o workaround do polígono que faltava.
+// UM BOTÃO SÓ (área-um-botão): "Zona" (arraste→retângulo) e "Polígono" (clique a clique) eram DUAS
+// portas para a MESMA tarefa — criar uma área. Viraram UM toggle "Área"; o GESTO decide a forma
+// (arraste→retângulo · clique→polígono ponto a ponto), ensinado em TEXTO na dica. Enquanto o
+// rascunho é um polígono aberto, "Voltar"/"Concluir polígono" aparecem (o retângulo fecha no soltar).
 import {
   ArrowLeftRight,
   Check,
   Lock,
   Pause,
-  PenLine,
-  Pentagon,
   Play,
   Ruler,
+  Shapes,
   Snowflake,
   Undo2,
   X,
@@ -33,11 +33,9 @@ import { MODE_TONE } from "./tabs/tone";
 
 /** Subconjunto do usePolygonEditor consumido pela barra (o editor em si vive no hook). */
 export type PolyControls = {
-  active: boolean; // rascunho livre (clique a clique) aberto
-  rectMode: boolean; // preset RETÂNGULO armado (arraste → 4 vértices)
-  count: number;
-  start: () => void;
-  startRect: () => void;
+  active: boolean; // modo ÁREA armado (o gesto decide: arraste→retângulo · clique→polígono)
+  count: number; // vértices do rascunho polígono (0 = indeciso / retângulo em arraste)
+  startArea: () => void;
   cancel: () => void;
   undo: () => void;
   close: () => void;
@@ -151,64 +149,44 @@ export function CamHeader({
         </Toggle>
       </Tooltip>
       {/* CALIBRAR reconfigura o chrome (spec §3.2 — o padrão Figma Dev Mode / NN/g "não misturar os
-          vocabulários de dois modos"): os toggles de OPERAÇÃO (Zona/Polígono/Linha) SOMEM no modo
-          calibrar. Já são mutuamente exclusivos na lógica (stageTarget) — aqui só somem da UI, para
-          o operador não ver ferramentas que o palco ignora. O toggle "Calibrar" (abaixo) fica como
-          a chave de saída do modo, com estado ATIVO claro. */}
+          vocabulários de dois modos"): os toggles de OPERAÇÃO (Área/Linha) SOMEM no modo calibrar.
+          Já são mutuamente exclusivos na lógica (stageTarget) — aqui só somem da UI, para o operador
+          não ver ferramentas que o palco ignora. O toggle "Calibrar" (abaixo) fica como a chave de
+          saída do modo, com estado ATIVO claro. */}
       {!calActive && (
         <>
-      {/* ZONA = arraste (o PRESET retângulo do polígono — 4 vértices). Mesma gestualidade de
-              sempre; o que muda é que o que nasce daqui é EDITÁVEL: clique na zona para selecionar,
-              arraste o interior para movê-la, um vértice para ajustá-lo, o ponto claro da aresta
-              para inserir, Delete/Alt+clique para remover. */}
+      {/* ÁREA (área-um-botão): UM toggle no lugar de "Zona"+"Polígono" — o GESTO decide a forma.
+              Rascunho VAZIO: arraste → retângulo de 4 vértices (o caso comum, mesas); clique →
+              polígono ponto a ponto. O que nasce é EDITÁVEL: clique na área para selecionar, arraste
+              o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir,
+              Delete/Alt+clique para remover. Estado nunca só-por-cor: o rótulo carrega o progresso
+              ("N vértices" no polígono) e a dica ensina o gesto em TEXTO. */}
       <Tooltip
         content={
           editHint ??
-          "Desenhar uma zona por arraste (retângulo de 4 vértices). Depois: clique nela para selecionar — arraste o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir; Delete (ou Alt+clique) remove o vértice."
+          "Arraste um retângulo, ou clique para desenhar ponto a ponto. Depois: clique na área para selecionar — arraste o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir; Delete (ou Alt+clique) remove o vértice."
         }
       >
-        {/* Nome acessível "Zona" (o e2e clica getByRole button name "Zona", exact). */}
-        <Toggle
-          pressed={poly.rectMode}
-          disabled={editDisabled}
-          onPressedChange={(v) => (v ? poly.startRect() : poly.cancel())}
-        >
-          {poly.rectMode ? (
-            "Desenhando…"
-          ) : (
-            <>
-              <PenLine size={16} strokeWidth={1.75} aria-hidden /> Zona
-            </>
-          )}
-        </Toggle>
-      </Tooltip>
-      {/* POLÍGONO (spec-zonas-poligonais P1/P7): o editor (usePolygonEditor) existia sem
-              NENHUM ponto de entrada na UI — o modo era inalcançável por mouse ou teclado. Aqui
-              está o botão que a spec F2 pedia ("botão no palco"), com as duas ações do rascunho
-              (Voltar/Concluir) visíveis enquanto ele existe. Teclado: Enter conclui, ESC cancela
-              (atalhos do hook); os 3 controles são botões Radix — foco visível e operáveis sem
-              mouse. Estado nunca só-por-cor: o contador de vértices é TEXTO. */}
-      <Tooltip
-        content={
-          editHint ??
-          "Desenhar uma zona poligonal: clique para cada vértice; feche no 1º vértice, em “Concluir polígono” ou com Enter (ESC cancela)"
-        }
-      >
+        {/* Nome acessível "Área" (o e2e clica getByRole button name "Área", exact) — vira
+                "N vértices" só quando o polígono está em curso. */}
         <Toggle
           pressed={poly.active}
           disabled={editDisabled}
-          onPressedChange={(v) => (v ? poly.start() : poly.cancel())}
+          onPressedChange={(v) => (v ? poly.startArea() : poly.cancel())}
         >
-          {poly.active ? (
+          {poly.active && poly.count > 0 ? (
             `${poly.count} ${poly.count === 1 ? "vértice" : "vértices"}`
           ) : (
             <>
-              <Pentagon size={16} strokeWidth={1.75} aria-hidden /> Polígono
+              <Shapes size={16} strokeWidth={1.75} aria-hidden /> Área
             </>
           )}
         </Toggle>
       </Tooltip>
-      {poly.active && (
+      {/* Rascunho POLÍGONO em curso (count>0): Voltar/Concluir. O retângulo fecha no soltar do
+              arraste, então não tem esses controles. Enter conclui, ESC cancela (atalhos do hook);
+              botões Radix — foco visível e operáveis sem mouse. */}
+      {poly.active && poly.count > 0 && (
         <>
           <IconButton
             label="Voltar (remover último vértice)"

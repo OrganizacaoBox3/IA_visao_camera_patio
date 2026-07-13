@@ -1,9 +1,14 @@
-// ── EDITOR DA ZONA do palco: a zona É um polígono (spec-zona-unificada F3/F5) ──────────────────
+// ── EDITOR DA ZONA do palco: a zona É um polígono (spec-zona-unificada F3/F5 · área-um-botão) ───
 // Antes eram TRÊS primitivas (retângulo · pincel · polígono) e a mais usada — o retângulo — não
 // tinha edição NENHUMA: nascia por arraste e morria no X. Aqui só existe UMA: `points`.
-//   • PRESET RETÂNGULO (`startRect`): a MESMA gestualidade de sempre (arraste), semeando 4
-//     vértices — exatamente como a Axis ("the default rectangle can be changed to a polygon").
-//   • RASCUNHO livre (`start`): clique a clique; fecha no 1º vértice, em Concluir ou com Enter.
+//   • UM só ponto de entrada (`startArea`): arma o modo ÁREA. Com o rascunho VAZIO (count===0) o
+//     PRIMEIRO gesto decide a forma (o dono: "são duas portas para a MESMA tarefa"):
+//       – ARRASTE (deslocamento ≥ DRAG_THRESHOLD_PX) → RETÂNGULO de 4 vértices (o caso comum,
+//         mesas — a MESMA gestualidade de sempre, "the default rectangle can be changed to a polygon");
+//       – CLIQUE (pointerup sem passar o limiar) → 1º vértice de um POLÍGONO ponto a ponto; os
+//         cliques seguintes adicionam vértices; fecha no 1º vértice, em Concluir ou com Enter.
+//     Com o rascunho JÁ iniciado como polígono (count>0) é SEMPRE polígono: arraste não vira mais
+//     retângulo (a forma já se comprometeu). O que NASCE daqui — retângulo ou polígono — é EDITÁVEL.
 //   • EDIÇÃO (o pedido do dono, "quero poder EDITAR OS PONTOS depois") — modelo de MAPAS
 //     (Mapbox GL Draw / Leaflet-Geoman), não de VMS (o Frigate nem implementa inserção):
 //       – clicar a zona SELECIONA; arrastar o INTERIOR move a forma inteira (translação);
@@ -32,8 +37,12 @@ import {
 // Alvo de toque GENEROSO (px do viewport): raio p/ fechar no 1º vértice, p/ agarrar um vértice e
 // p/ pegar um midpoint (P7: operador pode usar tablet — o alvo visual de 4px seria hostil ao dedo).
 const HIT_RADIUS_PX = 14;
-// Piso do PRESET RETÂNGULO: clique sem arraste não vira zona (o mesmo piso do retângulo de sempre).
+// Piso do RETÂNGULO: um arraste que resulte em zona menor que isto não vira zona (o piso de sempre).
 const MIN_RECT_PX = 16;
+// Limiar do GESTO (px do container): o 1º gesto do modo Área decide a forma. Abaixo dele o pointerup
+// é um CLIQUE (→ 1º vértice do polígono); ao cruzá-lo durante o arraste, compromete-se com o
+// RETÂNGULO (o preview passa a desenhar). ~5px: o wobble do dedo/mouse não conta como arraste.
+const DRAG_THRESHOLD_PX = 5;
 
 type PointerLike = { clientX: number; clientY: number; altKey?: boolean };
 type ZonePatch = { points: ZonePoint[]; x: number; y: number; w: number; h: number };
@@ -67,14 +76,16 @@ type Opts = {
 };
 
 export function usePolygonEditor(o: Opts) {
-  const [active, setActive] = useState(false); // rascunho aberto (governa UI/cursor)
-  const [rectMode, setRectModeState] = useState(false); // preset retângulo armado ("Zona")
-  const [count, setCount] = useState(0); // nº de vértices do rascunho (habilita Concluir na UI)
+  const [active, setActiveState] = useState(false); // modo ÁREA armado (governa UI/cursor/toggle)
+  const [count, setCount] = useState(0); // nº de vértices do rascunho polígono (0 = retângulo/indeciso)
   const [sel, setSelState] = useState<Selection | null>(null); // seleção (teclado + dica textual)
-  const draftRef = useRef<PolygonDraft | null>(null); // lido pelo rAF (drawPolygonEditor)
+  const draftRef = useRef<PolygonDraft | null>(null); // rascunho POLÍGONO (null até o clique decidir); rAF
   const overlayRef = useRef<EditorOverlay>({ rect: null, editId: null, selected: null }); // idem
   const dragRef = useRef<Drag | null>(null);
-  const rectModeRef = useRef(false); // espelho do modo p/ os handlers (sem depender do closure)
+  // 1º gesto do modo Área ainda INDECISO: o ponto de início (normalizado). onMove decide arraste
+  // (→ rect) vs clique (→ 1º vértice no onUp). Ref, não estado: o rAF/handlers leem sem re-render.
+  const pendingRef = useRef<ZonePoint | null>(null);
+  const activeRef = useRef(false); // espelho do modo p/ os handlers (sem depender do closure)
   const selRef = useRef<Selection | null>(null);
 
   // Setter ÚNICO da SELEÇÃO (idioma da casa): ref (handlers) + overlay (rAF) + estado (UI/teclado)
@@ -85,9 +96,9 @@ export function usePolygonEditor(o: Opts) {
     overlayRef.current.selected = s?.index ?? null;
     setSelState(s);
   }
-  function setRectMode(v: boolean) {
-    rectModeRef.current = v;
-    setRectModeState(v);
+  function setActive(v: boolean) {
+    activeRef.current = v;
+    setActiveState(v);
   }
 
   const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -128,33 +139,22 @@ export function usePolygonEditor(o: Opts) {
   });
 
   // ── modos ──
-  function start() {
-    // RASCUNHO livre (clique a clique)
+  function startArea() {
+    // Arma o modo ÁREA com o rascunho VAZIO: o 1º gesto (arraste × clique) é que decide a forma.
     o.onStart();
-    draftRef.current = { points: [], cursor: null };
+    draftRef.current = null; // ainda não é polígono (só vira no 1º CLIQUE)
     dragRef.current = null;
-    overlayRef.current.rect = null;
-    setRectMode(false);
+    overlayRef.current.rect = null; // nem retângulo (só vira ao cruzar o limiar de ARRASTE)
+    pendingRef.current = null;
     select(null);
     setActive(true);
     setCount(0);
-  }
-  function startRect() {
-    // PRESET RETÂNGULO: arraste → 4 vértices (o "Zona" de sempre, agora editável)
-    o.onStart();
-    draftRef.current = null;
-    dragRef.current = null;
-    overlayRef.current.rect = null;
-    setActive(false);
-    setCount(0);
-    select(null);
-    setRectMode(true);
   }
   function cancel() {
     draftRef.current = null;
     dragRef.current = null;
     overlayRef.current.rect = null;
-    setRectMode(false);
+    pendingRef.current = null;
     select(null);
     setActive(false);
     setCount(0);
@@ -167,6 +167,8 @@ export function usePolygonEditor(o: Opts) {
     const d = draftRef.current;
     if (!d) return;
     d.points.pop();
+    // Esvaziou o rascunho: volta ao INDECISO (o 1º gesto decide de novo — arraste × clique).
+    if (d.points.length === 0) draftRef.current = null;
     setCount(d.points.length);
   }
   function close() {
@@ -224,10 +226,12 @@ export function usePolygonEditor(o: Opts) {
       setCount(d.points.length);
       return true;
     }
-    if (rectModeRef.current) {
-      const p = toNorm(e); // PRESET RETÂNGULO: começa o arraste (4 vértices no soltar)
-      if (!p) return true;
-      overlayRef.current.rect = { a: p, b: p };
+    if (activeRef.current) {
+      // Modo ÁREA armado e rascunho VAZIO (draftRef null ⇒ o clique ainda não decidiu polígono):
+      // registra o início; o GESTO decide no onMove/onUp (arraste→rect · clique→1º vértice).
+      const p = toNorm(e);
+      if (!p) return true; // fora do vídeo: consome, o modo segue armado (o dedo escorrega na borda)
+      pendingRef.current = p;
       return true;
     }
     const zones = o.zonesRef.current ?? [];
@@ -318,6 +322,17 @@ export function usePolygonEditor(o: Opts) {
       d.cursor = toNorm(e); // pré-visualização tracejada até o cursor
       return true;
     }
+    const pend = pendingRef.current;
+    if (pend) {
+      // 1º gesto INDECISO: cruzou o limiar de arraste? → compromete-se com o RETÂNGULO (o preview
+      // passa a desenhar). Até lá nada é desenhado (a decisão do gesto é o que a spec pede).
+      if (distPx(e, pend) >= DRAG_THRESHOLD_PX) {
+        const p = toNorm(e);
+        overlayRef.current.rect = { a: pend, b: p ?? pend };
+        pendingRef.current = null;
+      }
+      return true;
+    }
     const r = overlayRef.current.rect;
     if (r) {
       const p = toNorm(e);
@@ -368,6 +383,15 @@ export function usePolygonEditor(o: Opts) {
         { x: x1, y: y1 },
         { x: x0, y: y1 },
       ]);
+      return true; // o modo Área SEGUE armado (arraste = nova zona) — sair é desligar o toggle
+    }
+    const pend = pendingRef.current;
+    if (pend) {
+      // CLIQUE sem arraste (não cruzou o limiar): vira o 1º VÉRTICE de um polígono ponto a ponto.
+      // Daqui em diante draftRef guia o onDown (cliques adicionam vértice; arraste NÃO vira rect).
+      pendingRef.current = null;
+      draftRef.current = { points: [{ x: clamp01(pend.x), y: clamp01(pend.y) }], cursor: pend };
+      setCount(1);
       return true;
     }
     const g = dragRef.current;
@@ -386,8 +410,9 @@ export function usePolygonEditor(o: Opts) {
 
   // Teclado: Enter conclui o rascunho, ESC cancela, Delete/Backspace remove o vértice selecionado.
   // CAPTURE no document p/ correr ANTES do trap de foco da casca (useFocusTrap ignora ESC já
-  // consumido — checa e.defaultPrevented). ⚠ ESC só é CONSUMIDO com rascunho aberto: com apenas
-  // uma seleção ele a limpa e SEGUE (a casca fecha a câmera, como sempre).
+  // consumido — checa e.defaultPrevented). ⚠ ESC é CONSUMIDO com o modo ÁREA armado (rascunho aberto
+  // OU só o toggle ligado, ainda indeciso): ESC SAI do modo e a câmera fica aberta — como o Calibrar.
+  // Com apenas uma SELEÇÃO (sem modo armado) ele a limpa e SEGUE (a casca fecha a câmera, ADR-007).
   const keysRef = useRef({ close, cancel, deselect, removeSelected });
   keysRef.current = { close, cancel, deselect, removeSelected };
   const keysOn = active || !!sel;
@@ -395,9 +420,18 @@ export function usePolygonEditor(o: Opts) {
     if (!keysOn) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (draftRef.current) {
+        // Um layer MODAL do Radix (Select/Menu aberto, ou o Dialog de config `.ui-dialog`) tem
+        // precedência no ESC: o Radix dismissa no CAPTURE do document e ABORTA se o evento já veio
+        // com preventDefault (o mesmo mecanismo do trap da casca). Se o poly consumisse aqui, o
+        // Dialog/Select NÃO fecharia. Então, com um layer aberto, o poly NÃO toca o ESC — só larga a
+        // seleção (sem preventDefault) e deixa o evento seguir. (Mesmo seletor do Dialog.tsx.)
+        if (document.querySelector('.ui-dialog, [role="listbox"], [role="menu"]')) {
+          keysRef.current.deselect();
+          return;
+        }
+        if (draftRef.current || activeRef.current) {
           e.preventDefault();
-          keysRef.current.cancel(); // CA-2: ESC descarta o rascunho (a câmera fica aberta)
+          keysRef.current.cancel(); // CA-2: ESC descarta o rascunho / sai do modo Área (câmera aberta)
         } else keysRef.current.deselect();
         return;
       }
@@ -421,23 +455,24 @@ export function usePolygonEditor(o: Opts) {
   }, [keysOn]);
 
   // DICA da barra (nunca só-por-cor: a interação é ENSINADA em texto — nenhum VMS do mercado o faz).
-  // O nº de vértices vem da SELEÇÃO (fresco por construção), não de zonesRef (1 render atrás).
+  // Modo Área ARMADO e ainda VAZIO: ensina o gesto que decide a forma (going-gray: texto, não ícone).
+  // Do contrário, o nº de vértices vem da SELEÇÃO (fresco por construção), não de zonesRef (1 atrás).
   const hint =
-    sel === null
-      ? null
-      : sel.index !== null
-        ? `Vértice ${sel.index + 1} de ${sel.n} — arraste para mover · Delete (ou Alt+clique) remove`
-        : `Zona selecionada · ${sel.n} vértices — arraste dentro para mover · o ponto claro na aresta insere um vértice`;
+    active && count === 0
+      ? "Arraste um retângulo, ou clique para desenhar ponto a ponto."
+      : sel === null
+        ? null
+        : sel.index !== null
+          ? `Vértice ${sel.index + 1} de ${sel.n} — arraste para mover · Delete (ou Alt+clique) remove`
+          : `Zona selecionada · ${sel.n} vértices — arraste dentro para mover · o ponto claro na aresta insere um vértice`;
 
   return {
     active,
-    rectMode,
     count,
     hint,
     draftRef,
     overlayRef,
-    start,
-    startRect,
+    startArea,
     cancel,
     deselect,
     undo,
