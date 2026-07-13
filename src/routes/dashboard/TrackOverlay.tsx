@@ -1,7 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import type { HubAnalysis } from "../../CameraWorkspace";
-import { getContentRect, cssVar, drawFloorTags } from "../../camera/draw";
+import { getContentRect, cssVar, drawFloorTags, personLabel } from "../../camera/draw";
 import { TrackInterpolator } from "../../camera/interpolate";
 import type { FloorTagsView } from "../../fusion/useFloorTags";
 
@@ -23,7 +23,7 @@ type TrackOverlayProps = {
   // Getter estável do último `analysis-tracks` da câmera (mesmo da central). Ausente → overlay vazio.
   getHubAnalysis?: () => HubAnalysis | null;
   // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o rótulo quando a associação
-  // tem confiança; null = "não sei" → cai no "Pessoa <id>" de sempre. Ausente = feature desligada.
+  // tem confiança; null = "não sei" → cai no genérico "Pessoa". Ausente = feature desligada.
   labelFor?: (trackId: number) => string | null;
   // TAGS NO CHÃO (fusion/useFloorTags): âncoras/estação/anéis de distância, desenhados SOB as
   // caixas de pessoa. Getter estável lendo o ref do hook; null/ausente → camada não desenha.
@@ -52,7 +52,7 @@ export function TrackOverlay({ videoRef, getHubAnalysis, labelFor, getFloorTags 
     const stroke = cssVar("--state-info", "#38bdf8");
     const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
     const fg = cssVar("--state-info-fg", "#bae6fd");
-    // Hot-path: measureText por track TODO frame é evitável — o rótulo "Pessoa <id>" é estável
+    // Hot-path: measureText por track TODO frame é evitável — o rótulo (personLabel) é estável
     // por track e a fonte é fixa; cacheia a largura por rótulo (limpa se crescer demais: ids de
     // track crescem indefinidamente ao longo de horas).
     const labelWidth = new Map<string, number>();
@@ -105,9 +105,10 @@ export function TrackOverlay({ videoRef, getHubAnalysis, labelFor, getFloorTags 
           h = t.bbox[3] * cr.h;
         ctx.strokeStyle = stroke;
         ctx.strokeRect(x, y, w, h);
-        // Rótulo: a TAG BLE associada (fusão) quando há; senão "Pessoa <id>". A associação é "não sei"-
-        // honesta (associate.ts) → só rotula quem o RSSI×distância casou com confiança.
-        const tag = labelFor?.(t.id) || `Pessoa ${t.id}`;
+        // Rótulo: a TAG BLE associada (fusão) quando há; senão o genérico "Pessoa" (personLabel — a
+        // MESMA fonte do drawTracks/MJPEG; a caixa NUNCA exibe número, ver draw.ts). A associação é
+        // "não sei"-honesta (associate.ts) → só rotula quem o RSSI×distância casou com confiança.
+        const tag = personLabel(labelFor, t.id);
         let tw = labelWidth.get(tag);
         if (tw === undefined) {
           if (labelWidth.size > 512) labelWidth.clear();

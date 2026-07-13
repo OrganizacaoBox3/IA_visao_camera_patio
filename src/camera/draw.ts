@@ -258,6 +258,21 @@ export type TrackBox = {
   // ausente → 1 (opaca). Só a câmera focada (interpolador) a passa; os demais chamadores omitem.
   opacity?: number;
 };
+// INVARIANTE DE RENDERIZAÇÃO (decisão do dono, 2026-07-12) — FONTE ÚNICA dos DOIS caminhos de render
+// da caixa de pessoa: drawTracks (câmera aberta / MJPEG) E TrackOverlay (tile WebRTC da grade). Os
+// dois DIVERGIRAM uma vez: o MJPEG foi consertado e o WebRTC ficou em `Pessoa ${id}` — o dono via
+// "Pessoa 1" no tile. A regra: a caixa NUNCA exibe NÚMERO (nem id de track, nem contagem). Sem tag
+// associada, o rótulo é o genérico "Pessoa". O id é detalhe interno do tracker (muda a cada
+// re-associação) e não significa nada para o operador; contagem vive no PAINEL, não sobre a imagem
+// ("a imagem é soberana", ADR-003). Gate: personLabel.test.ts trava um dígito, e ambos os caminhos
+// consomem ESTA função — não há como um deles regredir sozinho.
+export function personLabel(
+  labelFor: ((trackId: number) => string | null) | undefined,
+  id: number,
+): string {
+  return labelFor?.(id) || "Pessoa";
+}
+
 export function drawTracks(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
@@ -265,7 +280,7 @@ export function drawTracks(
   conf: number,
   inspecting: boolean,
   // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o nome quando há confiança;
-  // null = "não sei" → cai no genérico "Pessoa". Ausente = feature desligada (comportamento de sempre).
+  // null = "não sei" → cai no genérico "Pessoa" (via personLabel). Ausente = feature desligada.
   labelFor?: (trackId: number) => string | null,
 ) {
   ctx.lineWidth = 1.5;
@@ -282,11 +297,7 @@ export function drawTracks(
       h = t.bbox[3] * cr.h;
     ctx.strokeStyle = personStroke;
     ctx.strokeRect(x, y, w, h);
-    // INVARIANTE DE RENDERIZAÇÃO (decisão do dono, 2026-07-12): a caixa da pessoa NUNCA exibe
-    // NÚMERO — nem id de track, nem contagem. Sem tag associada, o rótulo é o genérico "Pessoa".
-    // O id é detalhe interno do tracker (muda a cada re-associação) e não significa nada para o
-    // operador; contagem de pessoas vive no PAINEL, não sobre a imagem ("a imagem é soberana").
-    const who = labelFor?.(t.id) || "Pessoa";
+    const who = personLabel(labelFor, t.id);
     const tag = inspecting
       ? `${who} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
       : who;

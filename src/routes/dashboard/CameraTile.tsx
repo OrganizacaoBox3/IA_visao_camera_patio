@@ -58,7 +58,7 @@ function Go2rtcVideoTile({
   // Getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
   // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
   getHubAnalysis?: () => HubAnalysis | null;
-  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Ausente → sem rótulo de tag (só "Pessoa <id>").
+  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Ausente → sem rótulo de tag (só o genérico "Pessoa").
   getReadings?: () => BtReading[];
   // Sync ao vivo da CALIBRAÇÃO (idioma tripwiresRev/ADR-006): incremento → re-busca H/station.
   calibrationRev?: number;
@@ -338,7 +338,7 @@ export const CameraTile = memo(function CameraTile({
       getHubAnalysis={getHubAnalysis}
       // Fusão tag↔pessoa (caminho C) — mesma simetria que o tile WebRTC já tinha (Go2rtcVideoTile
       // acima): antes só a câmera aberta em tela cheia recebia isto; o tile MJPEG da grade ficava
-      // preso em "Pessoa <id>" mesmo com a estação BLE configurada.
+      // preso em "Pessoa" sem tag mesmo com a estação BLE configurada.
       getReadings={getReadings}
       calibrationRev={calibrationRev}
       onOpen={openSelf}
