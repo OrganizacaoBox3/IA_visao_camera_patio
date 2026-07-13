@@ -12,16 +12,21 @@ export type DrawTrack = { id: number; bbox: readonly [number, number, number, nu
  *  calibrado pelas âncoras (floor-plot.ts) — repassada intacta ao associador como 2ª evidência.
  *  `sourceId` (OPCIONAL, ADR-013 item 3): id da FONTE que mediu (a estação BLE — o `stationId` do
  *  ingest/gravação). AUSENTE = fonte única implícita — a semântica de todo o código de hoje
- *  (simulador `sim.ts`, produção com 1 estação): leituras sem sourceId são tratadas como vindas da
- *  mesma e única fonte, exatamente como antes do campo existir. Só o loader de gravação o preenche
- *  por ora (session-loader.ts); nenhum consumidor o exige — vocabulário aditivo p/ multi-fonte
- *  (2ª antena/AoA/UWB), ver evidence.ts (arquivado na tag research-fusion-arc-2026-07-12). */
+ *  (simulador `sim.ts`, leituras sem fonte declarada): tratadas como vindas da mesma e única
+ *  fonte, exatamente como antes do campo existir. Preenchido pelo loader de gravação
+ *  (session-loader.ts) OU derivado de `stationId` aqui (o elo do caminho vivo — ver abaixo);
+ *  nenhum consumidor o exige — vocabulário aditivo p/ multi-fonte (2ª antena/AoA/UWB), ver
+ *  evidence.ts (arquivado na tag research-fusion-arc-2026-07-12).
+ *  `stationId` (OPCIONAL, spec multi-antena F4): o shape das leituras AO VIVO (BtReading do
+ *  bt-readings) carrega o id da estação NESTE campo — buildFusionFrame o mapeia p/ `sourceId`
+ *  (o ELO que faltava: sem ele a partição por fonte do motor via sempre 1 grupo ao vivo). */
 export type RawReading = {
   mac: string;
   rotulo: string | null;
   rssi: number;
   distM?: number;
   sourceId?: string;
+  stationId?: string;
 };
 
 // Padrão da estação: base-centro da imagem (0.5, 1.0) = ponto do chão MAIS PERTO da câmera. Assume a
@@ -80,7 +85,12 @@ export function buildFusionFrame(
     if (excludeTags && excludeTags.has(r.mac.toUpperCase())) continue;
     const out: TagReading = { tag: r.rotulo || r.mac, rssi: r.rssi };
     if (r.distM !== undefined) out.distM = r.distM;
+    // O ELO stationId→sourceId (spec multi-antena F4): as leituras AO VIVO carregam a fonte em
+    // `stationId` e ninguém a mapeava — RssiSample.sourceId chegava vazio e partitionBySource via
+    // sempre 1 grupo. sourceId EXPLÍCITO (replay/session-loader) tem precedência; ambos ausentes
+    // (ou stationId vazio) → chave ausente (retrocompat dura: fonte única implícita — CA-3).
     if (r.sourceId !== undefined) out.sourceId = r.sourceId; // fonte → fusão multi-fonte (ADR-013)
+    else if (typeof r.stationId === "string" && r.stationId.length > 0) out.sourceId = r.stationId;
     outReadings.push(out);
   }
   return { ts: now, readings: outReadings, tracks: outTracks };

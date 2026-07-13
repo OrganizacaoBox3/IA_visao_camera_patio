@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildFusionFrame } from "./frame";
+import { TagTrackAssociator } from "./associate";
 import type { Matrix3 } from "../vision/homography";
 
 const ID: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]; // identidade: pixelToWorld devolve as próprias coords
@@ -47,5 +48,79 @@ describe("buildFusionFrame — fallback sem calibração", () => {
   it("reading sem rótulo cai no MAC", () => {
     const f = buildFusionFrame([], [{ mac: "48:87:2D:9D:CE:8D", rotulo: null, rssi: -60 }], null, 0);
     expect(f.readings[0].tag).toBe("48:87:2D:9D:CE:8D");
+  });
+});
+
+describe("buildFusionFrame — o elo stationId→sourceId (spec multi-antena F4, CA-2)", () => {
+  it("leituras ao vivo com stationId → TagReading.sourceId preenchido (uma fonte por estação)", () => {
+    const f = buildFusionFrame(
+      [],
+      [
+        { mac: "AA", rotulo: null, rssi: -50, stationId: "est-a" },
+        { mac: "AA", rotulo: null, rssi: -70, stationId: "est-b" },
+      ],
+      null,
+      0,
+    );
+    expect(f.readings).toEqual([
+      { tag: "AA", rssi: -50, sourceId: "est-a" },
+      { tag: "AA", rssi: -70, sourceId: "est-b" },
+    ]);
+  });
+
+  it("sourceId EXPLÍCITO (replay/session-loader) tem precedência sobre stationId", () => {
+    const f = buildFusionFrame(
+      [],
+      [{ mac: "AA", rotulo: null, rssi: -50, sourceId: "gravado", stationId: "vivo" }],
+      null,
+      0,
+    );
+    expect(f.readings[0].sourceId).toBe("gravado");
+  });
+
+  it("sem sourceId nem stationId (ou stationId vazio) → chave AUSENTE (retrocompat dura, CA-3)", () => {
+    const f = buildFusionFrame(
+      [],
+      [
+        { mac: "AA", rotulo: null, rssi: -50 },
+        { mac: "BB", rotulo: null, rssi: -60, stationId: "" },
+      ],
+      null,
+      0,
+    );
+    expect("sourceId" in f.readings[0]).toBe(false);
+    expect("sourceId" in f.readings[1]).toBe(false);
+  });
+
+  it("CA-2 fim-a-fim: com o elo, o motor (multiSourceFisher ON) VÊ 2 grupos — partição por fonte", () => {
+    // Cenário construído p/ DISCRIMINAR "2 grupos" de "pool único": a fonte A é anti-correlacionada
+    // com a distância (o casamento físico) e a fonte B é o ESPELHO exato dela (rssiB = −120 − rssiA
+    // ⇒ r_B = −r_A bit-a-bit ⇒ z_B = −z_A). Com a partição, a soma de Fisher-z se cancela em 0 →
+    // score 0 → abstenção honesta. SEM o elo (sourceId ausente), o knob ON veria 1 grupo e cairia
+    // no pool único — que fala com confiança ~1 (no empate de ts o align() pega a amostra inserida
+    // primeiro, a da fonte A). Falar × abster É a prova de que partitionBySource viu 2 grupos.
+    const H4: Matrix3 = [4, 0, 0, 0, 4, 0, 0, 0, 1]; // px→mundo ×4: movimento em "metros" (passa o minMovement)
+    const run = (stationA?: string, stationB?: string) => {
+      const assoc = new TagTrackAssociator({ multiSourceFisher: true });
+      for (let k = 0; k < 8; k++) {
+        const y = 0.9 - k * 0.1; // pé se afastando da estação (base-centro): dist 0,4 → 3,2
+        const rssiA = -40 - 3 * k; // cai enquanto a distância cresce (corr −1)
+        const readings = [
+          { mac: "AA", rotulo: null, rssi: rssiA, ...(stationA ? { stationId: stationA } : {}) },
+          { mac: "AA", rotulo: null, rssi: -120 - rssiA, ...(stationB ? { stationId: stationB } : {}) },
+        ];
+        assoc.push(
+          buildFusionFrame([{ id: 1, bbox: [0.45, y - 0.3, 0.1, 0.3] }], readings, H4, k * 500),
+        );
+      }
+      return assoc.assign(3500);
+    };
+    // COM o elo: 2 fontes que se contradizem se cancelam → "não sei" (a partição aconteceu).
+    const [withLink] = run("est-a", "est-b");
+    expect(withLink).toMatchObject({ trackId: 1, tag: null });
+    // SEM stationId (o mundo do bug): 1 grupo implícito → pool único fala com confiança alta.
+    const [withoutLink] = run();
+    expect(withoutLink.tag).toBe("AA");
+    expect(withoutLink.confidence).toBeGreaterThan(0.9);
   });
 });

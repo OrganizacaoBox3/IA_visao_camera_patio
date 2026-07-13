@@ -1,7 +1,8 @@
 // Testes do loader da gravação de campo (session-loader.ts): JSONL construído à mão vira o
 // SimFusionScenario que o replayFusion de produção consome. Cobre: filtro por câmera, cal→H/stationPx
-// (último vence), resample FIEL à produção (snapshot vale até o próximo evento — sem staleness;
-// batch BLE substitui o snapshot inteiro; nenhum tick antes do 1º "trk"), verdade GLOBAL por tick,
+// (último vence), resample FIEL à produção (snapshot vale até o próximo evento — sem staleness de
+// "trk"; varredura BLE substitui POR FONTE e o tick une as fontes vivas — gravação antiga = fonte
+// única implícita, substituição intacta (CA-3); nenhum tick antes do 1º "trk"), verdade GLOBAL por tick,
 // linha suja + diag, saneamento de ts (outlier ±24h, teto de ticks) e o replay ponta a ponta sem NaN.
 // Determinístico — nenhuma linha depende de relógio ou sorteio. console.warn é espionado (o loader
 // sinaliza descarte/anomalia por warn — os testes de diag ASSERTAM isso; os demais só o silenciam).
@@ -150,7 +151,7 @@ describe("parseFusionSession (loader da gravação de campo)", () => {
     expect(sc.ticks[10].tracks).toHaveLength(0);
   });
 
-  it("readings: cada evento 'ble' SUBSTITUI o snapshot inteiro (sem merge por MAC, sem staleness)", () => {
+  it("readings (formato antigo = fonte única implícita — CA-3): cada evento 'ble' SUBSTITUI o snapshot inteiro (sem merge por MAC, sem staleness)", () => {
     const lines = [
       trkLine(0, "camA", [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] }]),
       bleLine(0, [{ mac: "aa", rotulo: null, rssi: -40 }]),
@@ -511,6 +512,88 @@ describe("sourceId/sourceKind na linha 'ble' (ADR-013 item 3 — ADITIVO)", () =
     const { metrics, scenario } = replayFusionSession(lines, { 1: "AA:AA" }, undefined, { warmupMs: 0 });
     expect(scenario.ticks[0].readings[0].sourceId).toBe("est-1"); // preservado até o tick…
     expectMetricsHonest(metrics); // …e o associador roda idêntico (campo é carona, não gatilho)
+    expect(metrics.ticksEvaluated).toBeGreaterThan(0);
+  });
+});
+
+describe("multi-fonte no replay (spec multi-antena F4 — CA-6: o resample UNE as fontes por tick)", () => {
+  // Formato NOVO do recorder (mesmo shape do bleLineV2 acima — helper local deste describe).
+  function bleV2(ts: number, readings: { mac: string; rssi: number }[], stationId = "est-1"): string {
+    return JSON.stringify({ t: "ble", ts, stationId, sourceKind: "ble-rssi", readings });
+  }
+  const TRK = [{ id: 1, bbox: [0.4, 0.3, 0.1, 0.3] as [number, number, number, number] }];
+
+  it("duas estações intercaladas → o tick carrega a UNIÃO das fontes vivas (não o último envelope)", () => {
+    const lines = [
+      trkLine(0, "camA", TRK),
+      bleV2(0, [{ mac: "aa", rssi: -40 }], "est-a"),
+      bleV2(100, [{ mac: "aa", rssi: -60 }], "est-b"),
+      bleV2(600, [{ mac: "aa", rssi: -42 }], "est-a"), // varredura nova substitui SÓ a fatia da est-a
+      trkLine(1000, "camA", TRK),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    const at = (ts: number) => sc.ticks.find((t) => t.ts === ts);
+    // Tick 0: só a est-a chegou até aqui.
+    expect(at(0)?.readings).toEqual([{ mac: "AA", rotulo: null, rssi: -40, sourceId: "est-a" }]);
+    // Tick 500: as DUAS fontes vivas — antes do fix o pool seria só o último envelope (est-b).
+    expect(at(500)?.readings).toEqual([
+      { mac: "AA", rotulo: null, rssi: -40, sourceId: "est-a" },
+      { mac: "AA", rotulo: null, rssi: -60, sourceId: "est-b" },
+    ]);
+    // Tick 1000: est-a substituída pela varredura nova; est-b PRESERVADA (não some entre posts).
+    expect(at(1000)?.readings).toEqual([
+      { mac: "AA", rotulo: null, rssi: -42, sourceId: "est-a" },
+      { mac: "AA", rotulo: null, rssi: -60, sourceId: "est-b" },
+    ]);
+  });
+
+  it("fonte calada > 15 s é podada NO EVENTO seguinte (M6); entre eventos o pool não é reavaliado", () => {
+    const lines = [
+      trkLine(0, "camA", TRK),
+      bleV2(0, [{ mac: "bb", rssi: -70 }], "est-b"),
+      bleV2(100, [{ mac: "aa", rssi: -50 }], "est-a"),
+      bleV2(16_000, [{ mac: "aa", rssi: -52 }], "est-a"), // est-b calada há 15,9 s → podada AQUI
+      trkLine(16_000, "camA", TRK),
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    const at = (ts: number) => sc.ticks.find((t) => t.ts === ts);
+    // Tick 15500: o pool ainda é o da última recomposição (evento de ts 100) — fiel ao cliente,
+    // que só recompõe o pool quando chega envelope (a fatia velha vale até lá).
+    expect(at(15_500)?.readings).toEqual([
+      { mac: "BB", rotulo: null, rssi: -70, sourceId: "est-b" },
+      { mac: "AA", rotulo: null, rssi: -50, sourceId: "est-a" },
+    ]);
+    // Tick 16000: no evento da est-a a est-b foi podada → o motor degrada p/ 1 fonte (M6).
+    expect(at(16_000)?.readings).toEqual([{ mac: "AA", rotulo: null, rssi: -52, sourceId: "est-a" }]);
+  });
+
+  it("CA-3 (formato novo, UMA estação): cada varredura substitui a anterior — sem merge por MAC", () => {
+    const lines = [
+      trkLine(0, "camA", TRK),
+      bleV2(0, [{ mac: "aa", rssi: -40 }]),
+      bleV2(500, [{ mac: "bb", rssi: -50 }]), // mesma fonte: a varredura INTEIRA é substituída
+    ];
+    const sc = parseFusionSession(lines, NO_TRUTH);
+    expect(sc.ticks.find((t) => t.ts === 500)?.readings).toEqual([
+      { mac: "BB", rotulo: null, rssi: -50, sourceId: "est-1" },
+    ]);
+  });
+
+  it("CA-6 ponta a ponta: replayFusionSession entrega ao motor ticks com as 2 fontes simultâneas", () => {
+    const lines: string[] = [calLine(0, "cam1", null, null)];
+    for (let k = 0; k <= 30; k++) {
+      const ts = k * 500;
+      const bh = 0.12 + k * 0.006;
+      lines.push(trkLine(ts, "cam1", [{ id: 1, bbox: [0.45, 0.8 - bh, 0.4 * bh, bh] }]));
+      lines.push(bleV2(ts, [{ mac: "aa:aa", rssi: Math.round(-75 + k) }], "est-a"));
+      lines.push(bleV2(ts + 100, [{ mac: "aa:aa", rssi: Math.round(-80 + k) }], "est-b"));
+    }
+    const { metrics, scenario } = replayFusionSession(lines, { 1: "AA:AA" }, undefined, { warmupMs: 0 });
+    // A partir do 2º tick, todo tick carrega as DUAS fontes (a partição do motor vê 2 grupos)…
+    const srcs = scenario.ticks[10].readings.map((r) => r.sourceId);
+    expect(new Set(srcs)).toEqual(new Set(["est-a", "est-b"]));
+    // …e o replay de produção roda sem NaN (o motor default segue no pool único — knob OFF).
+    expectMetricsHonest(metrics);
     expect(metrics.ticksEvaluated).toBeGreaterThan(0);
   });
 });

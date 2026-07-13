@@ -10,7 +10,10 @@ import type { HubAnalysis } from "../types/analysis";
 
 type Params = {
   getHubAnalysis?: () => HubAnalysis | null; // tracks (caixas) desta câmera
-  getReadings?: () => RawReading[] | null; // leituras BLE da estação (global)
+  // Leituras BLE (globais) — POOL multi-fonte: todas as estações vivas simultaneamente (merge por
+  // fonte em useDashboardSocket/source-pool.ts, F4); com 1 estação é a varredura corrente, como
+  // sempre. O elo fonte→motor (stationId→sourceId) é feito por buildFusionFrame (frame.ts).
+  getReadings?: () => RawReading[] | null;
   H: Matrix3 | null; // homografia da câmera (null = fallback por tamanho de caixa)
   stationPx?: Vec2; // ponto do chão da estação (0..1); undefined = default do frame.ts
   /** MACs (MAIÚSCULOS) das tags-âncora CADASTRADAS — excluídas das leituras antes da fusão

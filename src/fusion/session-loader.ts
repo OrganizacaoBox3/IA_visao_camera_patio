@@ -11,10 +11,14 @@
 //     cru, SEM gate de idade; rodadas VAZIAS são gravadas pelo recorder e já representam "sem
 //     detecção"). NENHUM tick é emitido antes do primeiro "trk" da câmera — antes disso a produção
 //     nem teria `hd` (useTagFusion retorna cedo sem o getHubAnalysis).
-//   • readings: cada evento "ble" SUBSTITUI o snapshot INTEIRO (useDashboardSocket:152-154 faz
-//     `btReadingsRef.current = p.readings` — sem merge por MAC, sem staleness); o último batch vale
-//     até o próximo. Batch vazio → tick com readings [] → replayFusion PULA o tick, espelhando o
-//     `!readings.length` do useTagFusion.
+//   • readings: MERGE POR FONTE, espelho do cliente corrigido (useDashboardSocket + o MESMO
+//     source-pool.ts, F4 da spec multi-antena): cada evento "ble" SUBSTITUI a varredura DA SUA
+//     fonte (o stationId da linha nova com sourceKind; gravação ANTIGA sem sourceKind = fonte
+//     única implícita → o evento substitui o snapshot inteiro, byte-idêntico ao de sempre — CA-3)
+//     e o tick carrega a UNIÃO das fontes vivas (CA-6); fonte calada > 15 s é podada NO EVENTO
+//     seguinte — entre eventos o pool NÃO é reavaliado (o cliente também só o recompõe quando
+//     chega envelope). Pool vazio → tick com readings [] → replayFusion PULA o tick, espelhando
+//     o `!readings.length` do useTagFusion.
 // - VERDADE GLOBAL em todo tick: o assign() de produção decide também em ticks de rodada vazia
 //   (currentTrackIds cai no último frame NÃO-vazio da janela — associate.ts); filtrar a verdade
 //   pelos tracks presentes no tick deixaria essas decisões escaparem da métrica. Anexar a anotação
@@ -34,9 +38,9 @@
 //   ex.: 0 misturado a epoch); e a grade tem teto duro de 500 000 posições (trunca com
 //   console.warn). Sem isso, um outlier geraria bilhões de ticks (OOM) — "nunca trava" inclui isso.
 // - Sem cameraId explícito, vale a PRIMEIRA câmera vista no arquivo; "trk"/"cal" de outras câmeras
-//   são ignorados (inclusive na grade de ticks). "ble" não filtra por stationId (MVP = 1 estação;
-//   com várias, cada evento substitui o snapshot inteiro — exatamente o que o cliente vê do
-//   bt-readings do hub).
+//   são ignorados (inclusive na grade de ticks). "ble" não filtra por stationId: com VÁRIAS
+//   estações, cada evento atualiza a varredura da SUA fonte e o tick une as vivas (bullet dos
+//   readings acima) — exatamente o que o cliente corrigido vê do bt-readings do hub.
 // - Vários "cal" da câmera: o ÚLTIMO vence (recalibração sobrescreve, como a config de produção).
 //   station null/ausente → stationPx default (0.5, 1.0), o MESMO default do frame.ts ("estação
 //   junto da câmera") — replayFusion só o consome com H não-null; H null → proxy de caixa.
@@ -54,13 +58,15 @@
 //   `sourceId` de cada RawReading (antes era descartado). Gate deliberado pela PRESENÇA de
 //   `sourceKind`: gravação ANTIGA (sem sourceKind) parseia BYTE-IDÊNTICA ao que sempre parseou
 //   (retrocompat dura, provada por teste — nem a chave `sourceId` existe), e é a linha que DECLARA
-//   seu sourceKind que opta pelo vocabulário multi-fonte. Nenhum consumidor exige o campo hoje
-//   (fonte única implícita — ver frame.ts); ele existe p/ a 2ª antena/AoA/UWB entrarem pela mesma
-//   porta (evidence.ts, arquivado na tag research-fusion-arc-2026-07-12).
+//   seu sourceKind que opta pelo vocabulário multi-fonte. Além de estampar cada reading, o
+//   sourceId é a CHAVE do merge por fonte do resample (bullet dos readings acima); ao vivo o
+//   mesmo elo existe via `stationId` (frame.ts). A 2ª antena/AoA/UWB entram pela mesma porta
+//   (evidence.ts, arquivado na tag research-fusion-arc-2026-07-12).
 import { replayFusion } from "./replay-fusion";
 import { TagTrackAssociator } from "./associate";
 import type { FusionConfig, PairFunnel } from "./associate";
 import { buildFusionFrame } from "./frame";
+import { mergeSourceBatch, type SourceBatch } from "./source-pool";
 import type { SimFusionScenario, SimTick } from "./sim";
 import type { DrawTrack, RawReading } from "./frame";
 import type { IdentityMetrics } from "./identity-metrics";
@@ -109,7 +115,9 @@ const MAX_TICKS = 500_000; // teto duro da grade (nunca OOM por ts ruim/tickMs m
 
 type CalEvent = { t: "cal"; ts: number; cameraId: string; H: Matrix3 | null; station: Vec2 | null };
 type TrkEvent = { t: "trk"; ts: number; cameraId: string; tracks: DrawTrack[] };
-type BleEvent = { t: "ble"; ts: number; readings: RawReading[] };
+/** `sourceId` (linha nova com sourceKind — ver cabeçalho) é a CHAVE do merge por fonte do
+ *  resample; ausente (gravação antiga) = fonte única implícita, mesma chave "" do cliente. */
+type BleEvent = { t: "ble"; ts: number; sourceId?: string; readings: RawReading[] };
 /** Linha "meta" — sem cameraId (não participa do filtro por câmera nem da grade de ticks). */
 type MetaEvent = { t: "meta"; ts: number; gitRev: string | null; fusionConfig: Record<string, unknown> };
 type SessionEvent = CalEvent | TrkEvent | BleEvent | MetaEvent;
@@ -204,7 +212,9 @@ function parseLine(line: string): SessionEvent | null {
       const r = parseReading(item, sourceId);
       if (r) readings.push(r);
     }
-    return { t: "ble", ts: o.ts, readings };
+    const ev: BleEvent = { t: "ble", ts: o.ts, readings };
+    if (sourceId !== undefined) ev.sourceId = sourceId; // chave do merge por fonte (resample)
+    return ev;
   }
   if (o.t === "meta") {
     const fc = asRecord(o.fusionConfig);
@@ -225,8 +235,9 @@ function medianTs(events: SessionEvent[]): number {
  * Converte a gravação de campo (linhas do JSONL) no SimFusionScenario que replayFusion consome
  * (+ `diag` aditivo do parse). Resample fiel à produção: grade de tickMs a partir do primeiro
  * evento saneado; cada tick carrega o último "trk" da câmera (vale até o próximo; nada é emitido
- * antes do primeiro "trk") e o último batch "ble" INTEIRO (cada evento substitui o snapshot —
- * batch vazio → replayFusion pula o tick). `truth` é a anotação manual pós-coleta
+ * antes do primeiro "trk") e o pool BLE unido POR FONTE (cada evento "ble" substitui a varredura
+ * da SUA fonte; fonte única implícita = substituição de sempre — ver cabeçalho; pool vazio →
+ * replayFusion pula o tick). `truth` é a anotação manual pós-coleta
  * (trackId → MAC | null), anexada GLOBALMENTE a todo tick (ver cabeçalho); MACs normalizados a
  * MAIÚSCULO dos dois lados. Nunca lança por dado ruim; ts fora de ±24 h do mediano é descartado
  * e a grade tem teto de 500 000 ticks.
@@ -324,7 +335,11 @@ export function parseFusionSession(
     const tEnd = events[events.length - 1].ts;
     let i = 0; // ponteiro de consumo dos eventos (cada um é aplicado UMA vez, em ordem)
     let lastTrk: DrawTrack[] | null = null; // null até o 1º "trk" — antes disso a produção nem teria hd
-    let lastBle: RawReading[] = []; // último batch INTEIRO (cada evento substitui o snapshot)
+    // Pool BLE por fonte (source-pool.ts — o MESMO merge do cliente): cada evento "ble" substitui
+    // a varredura da SUA fonte e recompõe o pool (poda de fonte calada > 15 s acontece AÍ, nunca
+    // entre eventos). Gravação antiga (sem sourceKind) → chave única "" → substituição de sempre.
+    const bleBySource = new Map<string, SourceBatch<RawReading>>();
+    let lastBle: RawReading[] = []; // pool corrente (união das fontes vivas na última recomposição)
     let slots = 0; // posições de grade consumidas (teto duro — nunca OOM)
 
     for (let tickTs = t0; tickTs <= tEnd; tickTs += tickMs) {
@@ -340,7 +355,8 @@ export function parseFusionSession(
       while (i < events.length && events[i].ts <= tickTs) {
         const ev = events[i];
         if (ev.t === "trk") lastTrk = ev.tracks;
-        else if (ev.t === "ble") lastBle = ev.readings;
+        else if (ev.t === "ble")
+          lastBle = mergeSourceBatch(bleBySource, ev.sourceId ?? "", ev.readings, ev.ts);
         i++;
       }
 

@@ -65,6 +65,10 @@ const macSuffix = (mac: string): string =>
  * Ingesta UMA leva de leituras no mapa de sinais (toda mutação do mapa vive AQUI): EMA por MAC
  * com alpha = 1 − e^(−dt/tau) (dt real desde a leitura anterior daquela tag; 1ª leitura = valor
  * cru) + poda das tags caladas há PRUNE_MS. Determinística dado (map, readings, now) — testável.
+ * POOL MULTI-FONTE (spec multi-antena F4): o mesmo MAC pode vir de 2+ estações no MESMO array
+ * (merge por fonte de useDashboardSocket/source-pool.ts). A 2ª ocorrência no mesmo `now` tem
+ * alpha = 0 (dt = 0) e NÃO move o EMA: o anel segue a fonte de 1ª aparição no pool — estável,
+ * nunca pisca entre rádios (o anel multi-estação honesto — RSSI×posição POR fonte — é F5).
  */
 export function ingestReadings(
   tags: Map<string, TagSignal>,

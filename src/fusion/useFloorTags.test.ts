@@ -49,6 +49,16 @@ describe("ingestReadings — EMA por MAC (tau real entre leituras)", () => {
     expect(tags.has("AA:03")).toBe(false); // NaN nunca entra
   });
 
+  it("pool multi-fonte (F4): o MESMO MAC vindo de 2 estações no mesmo ingest NÃO faz o EMA piscar", () => {
+    const tags = new Map<string, TagSignal>();
+    // Pool unido (source-pool.ts): a fatia da fonte de 1ª aparição vem primeiro no array.
+    ingestReadings(tags, [reading("AA:01", -50), reading("AA:01", -80)], 0);
+    expect(tags.get("AA:01")?.ema).toBe(-50); // 1ª ocorrência semeia; a 2ª (mesmo now) tem alpha=0
+    ingestReadings(tags, [reading("AA:01", -50), reading("AA:01", -80)], 1000);
+    // O EMA fica ancorado na fonte de 1ª aparição (estável) — nunca oscila entre os dois rádios.
+    expect(tags.get("AA:01")?.ema).toBe(-50);
+  });
+
   it("rotulo chega depois (tag cadastrada no meio da sessão) → atualiza sem perder o EMA", () => {
     const tags = new Map<string, TagSignal>();
     ingestReadings(tags, [reading("AA:01", -50)], 0);
