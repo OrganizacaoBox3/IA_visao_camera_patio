@@ -18,6 +18,8 @@
 // espectador (deps.hasViewers()=false) o payload nem é montado. Campo ADITIVO
 // `coasting:true` só nas re-emissões de rodada pulada pelo gate (emitCoasting —
 // C1 da spec-tracking-pessoa-parada); a rodada de inferência nunca o carrega.
+// Campo ADITIVO `zonesProibidas` (Onda B): estado da máquina de presença por
+// zona proibida (presence-alert.stateOf) — o canvas acende VIOLADA por ele.
 //
 // DEPS injetadas (createPipeline): highScore (nascimento de track — precision.js),
 // ingest (pgstore), hasViewers/emitTracks (socket — o engine é o dono do io),
@@ -28,7 +30,7 @@
 
 const { attributeZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
-const { createPresenceAlert } = require("./presence-alert");
+const { createPresenceAlert, stateOf } = require("./presence-alert");
 const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 
 // Turno da fábrica. DUPLICAÇÃO DECLARADA de src/report/calc/common.ts:8 (front):
@@ -162,6 +164,9 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // Overlay servido: roda TODA rodada com espectador (inclusive 0 tracks — o
     // dashboard precisa da rodada vazia p/ apagar caixas), mesmo sem zona/linha.
     if (hasViewers()) {
+      // Estado por zona proibida DESTA rodada (o observe acima já rodou) — o
+      // getter é puro; a máquina não é tocada pela montagem do payload.
+      const proibState = stateOf(st);
       const payload = {
         cameraId: st.id,
         ts: now,
@@ -188,6 +193,16 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
         zones: st.zonesAtiv.map((z) => {
           const people = perLabel.get(z.label) || 0;
           return { id: z.id, label: z.label, people, occupied: people > 0 };
+        }),
+        // Zonas PROIBIDAS (campo ADITIVO — contrato da Onda B): uma entrada POR
+        // zona proibida da câmera; `presenca` é o estado VIOLADA da MÁQUINA do
+        // presence-alert (não people>0 cru — quem saiu dentro da histerese ainda
+        // acende; quem chegou aquém do dwell ainda não), `people` a contagem da
+        // observação. Vai junto no snapshot lastTracks → o coasting re-emite o
+        // estado da ÚLTIMA inferência, coerente com a semântica do skip (C1).
+        zonesProibidas: (st.zonesProib || []).map((z) => {
+          const s = proibState.get(z.id);
+          return { id: z.id, label: z.label, presenca: s.violada, people: s.people };
         }),
       };
       emitTracks(payload);

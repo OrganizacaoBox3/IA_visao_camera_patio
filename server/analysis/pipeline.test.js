@@ -100,13 +100,14 @@ describe("processRound — filtro de entrada", () => {
     const st = makeSt({ zonesAtiv: [{ id: "z1", label: "Doca", x: 0, y: 0, w: 1, h: 1 }] });
     pipeline.processRound(st, [person(0.5, 0.8)], 1000);
     const payload = deps.emitTracks.mock.calls[0][0];
-    expect(Object.keys(payload).sort()).toEqual(["cameraId", "latencyMs", "tracks", "ts", "zones"]);
+    expect(Object.keys(payload).sort()).toEqual(["cameraId", "latencyMs", "tracks", "ts", "zones", "zonesProibidas"]);
     expect(payload.cameraId).toBe("cam1");
     expect(payload.ts).toBe(1000);
     expect(payload.latencyMs).toBe(0); // sem 4º arg (latencyMs) → default 0
     expect(Object.keys(payload.tracks[0]).sort()).toEqual(["bbox", "cx", "cy", "id", "score", "vx", "vy", "zone"]);
     expect(payload.tracks[0]).not.toHaveProperty("firstSeen"); // interno do tracker não vaza
     expect(payload.zones).toEqual([{ id: "z1", label: "Doca", people: 1, occupied: true }]);
+    expect(payload.zonesProibidas).toEqual([]); // câmera sem zona proibida → campo presente, vazio
   });
 
   it("latencyMs vem do 4º parâmetro (medido no worker-host: Date.now − ts de captura) — vai no payload", () => {
@@ -267,6 +268,48 @@ describe("processRound — zona proibida (produtor server-side de presença — 
     pipeline.processRound(st, [], 7000); // 2ª sem det: LOST → 0 pessoas → contador RESETA
     pipeline.processRound(st, [person(0.5, 0.8)], 8000); // voltou — dwell recomeça do zero
     expect(deps.raiseAlarm).not.toHaveBeenCalled();
+  });
+});
+
+describe("processRound — zonesProibidas no payload (contrato ADITIVO — o canvas acende VIOLADA)", () => {
+  const proib = { id: "p1", label: "Área Restrita", modo: "proibida", presencaAlertMs: 10_000, x: 0, y: 0, w: 1, h: 1 };
+  const lastPayload = () => deps.emitTracks.mock.calls.at(-1)[0];
+
+  it("ARMADA (permanência aquém do dwell) projeta presenca:false COM a contagem — não é people>0 cru", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 0); // 0s < 10s — máquina segue armada
+    expect(lastPayload().zonesProibidas).toEqual([{ id: "p1", label: "Área Restrita", presenca: false, people: 1 }]);
+    expect(deps.raiseAlarm).not.toHaveBeenCalled();
+  });
+
+  it("VIOLADA (≥ dwell) projeta presenca:true; saída dentro da histerese SEGUE acesa com people:0", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 0);
+    pipeline.processRound(st, [person(0.5, 0.8)], 12_000); // 12s ≥ 10s → VIOLADA
+    expect(lastPayload().zonesProibidas).toEqual([{ id: "p1", label: "Área Restrita", presenca: true, people: 1 }]);
+    pipeline.processRound(st, [], 13_000); // 1ª sem det: graça LOST — track ainda emitido (people 1)
+    pipeline.processRound(st, [], 14_000); // 2ª: LOST → 0 pessoas, 2s < off-delay 5s → segue VIOLADA
+    expect(lastPayload().zonesProibidas).toEqual([{ id: "p1", label: "Área Restrita", presenca: true, people: 0 }]);
+  });
+
+  it("coasting re-emite zonesProibidas com o estado da ÚLTIMA inferência (semântica C1)", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 0);
+    pipeline.processRound(st, [person(0.5, 0.8)], 12_000); // VIOLADA na última inferência
+    pipeline.emitCoasting(st, 15_000); // rodada pulada pelo gate → snapshot congelado
+    const coasted = lastPayload();
+    expect(coasted.coasting).toBe(true);
+    expect(coasted.zonesProibidas).toEqual([{ id: "p1", label: "Área Restrita", presenca: true, people: 1 }]);
+  });
+
+  it("zona removida (camcfg-updated kind:'zones') some do payload na inferência seguinte", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 0);
+    expect(lastPayload().zonesProibidas).toHaveLength(1);
+    st.zonesProib = []; // recarga: a zona saiu da config…
+    st.lastTracks = null; // …e o engine invalida o snapshot (coasting não vaza a geometria antiga)
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    expect(lastPayload().zonesProibidas).toEqual([]);
   });
 });
 

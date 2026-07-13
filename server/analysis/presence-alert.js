@@ -27,6 +27,10 @@
 // pina arming default "sempre"); o gate por turno (F3 da spec) mora em
 // alarm/shift.js na POLÍTICA, não aqui — o produtor sempre produz, a política
 // suprime. LGPD: só metadados (labels/timestamps) — nenhum frame passa por aqui.
+//
+// PROJEÇÃO (Onda B): stateOf(st) é o getter PURO do estado por zona — o
+// pipeline o usa p/ montar o campo aditivo `zonesProibidas` do analysis-tracks
+// (o fio que acende VIOLADA no canvas). Só leitura; a máquina não muda.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
@@ -57,7 +61,8 @@ function createPresenceAlert({ raiseAlarm, cameraLabelOf }) {
   /**
    * Uma OBSERVAÇÃO (rodada de inferência) de uma câmera: conta pessoas por zona
    * proibida e avança a máquina de estados. MUTA st.presence (Map zoneId → estado
-   * { state:"armada"|"violada", presentSince, absentSince, violatedAt, durationMs }).
+   * { state:"armada"|"violada", presentSince, absentSince, violatedAt, durationMs,
+   *   people }).
    * @param {{id:string, zonesProib?:Array, presence?:Map}} st  estado por câmera (engine.createState)
    * @param {Array<{bbox:number[]}>} tracks  tracks EMITÍVEIS da rodada (pós-política LOST)
    * @param {number} now  timestamp da rodada
@@ -80,9 +85,10 @@ function createPresenceAlert({ raiseAlarm, cameraLabelOf }) {
       for (const t of tracks) if (attributeZone(t.bbox, [z]) !== null) people += 1;
       let m = st.presence.get(z.id);
       if (!m) {
-        m = { state: "armada", presentSince: null, absentSince: null, violatedAt: 0, durationMs: 0 };
+        m = { state: "armada", presentSince: null, absentSince: null, violatedAt: 0, durationMs: 0, people: 0 };
         st.presence.set(z.id, m);
       }
+      m.people = people; // contagem OBSERVADA da rodada — só projeção (stateOf), não decide transição
       const dwellMs = dwellMsOf(z);
       if (m.state === "armada") {
         if (people >= 1) {
@@ -126,4 +132,27 @@ function createPresenceAlert({ raiseAlarm, cameraLabelOf }) {
   return { observe };
 }
 
-module.exports = { createPresenceAlert, offDelayMs, dwellMsOf, DWELL_DEFAULT_MS };
+/**
+ * Getter PURO do estado por zona proibida — a projeção que o pipeline monta no
+ * campo aditivo `zonesProibidas` do analysis-tracks. Só LÊ st.zonesProib (config
+ * atual) + st.presence (máquina); não muta nada (nem cria st.presence).
+ * `violada` é o ESTADO da máquina, não people>0 cru: pessoa que saiu dentro da
+ * histerese ainda projeta violada; permanência aquém do dwell ainda projeta
+ * armada. Zona recém-adicionada (ainda não observada) nasce armada com 0.
+ * @param {{zonesProib?:Array, presence?:Map}} st  estado por câmera (engine.createState)
+ * @returns {Map<string, {violada:boolean, people:number, dwellMs:number}>}
+ */
+function stateOf(st) {
+  const out = new Map();
+  for (const z of st.zonesProib || []) {
+    const m = st.presence && st.presence.get(z.id);
+    out.set(z.id, {
+      violada: !!m && m.state === "violada",
+      people: (m && m.people) || 0,
+      dwellMs: dwellMsOf(z),
+    });
+  }
+  return out;
+}
+
+module.exports = { createPresenceAlert, stateOf, offDelayMs, dwellMsOf, DWELL_DEFAULT_MS };

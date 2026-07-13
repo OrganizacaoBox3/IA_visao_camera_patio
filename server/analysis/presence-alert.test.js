@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { createPresenceAlert, offDelayMs, dwellMsOf, DWELL_DEFAULT_MS } = require("./presence-alert");
+const { createPresenceAlert, stateOf, offDelayMs, dwellMsOf, DWELL_DEFAULT_MS } = require("./presence-alert");
 
 // Zona proibida ocupando a metade ESQUERDA do frame (centro do bbox decide).
 const zone = (over = {}) => ({
@@ -181,6 +181,45 @@ describe("zonas múltiplas e independência", () => {
     expect(raiseAlarm).toHaveBeenCalledTimes(2); // uma violação POR zona
     const zonas = raiseAlarm.mock.calls.map((c) => c[0].zona).sort();
     expect(zonas).toEqual(["Sobreposta", "Área Restrita"].sort());
+  });
+});
+
+describe("stateOf — getter puro (projeção p/ o payload zonesProibidas)", () => {
+  it("zona nunca observada nasce armada com 0 pessoas e o dwell do config (default incluso)", () => {
+    const st = makeSt([zone(), zone({ id: "p2", label: "Sem dwell", presencaAlertMs: undefined })]);
+    const s = stateOf(st);
+    expect(s.get("p1")).toEqual({ violada: false, people: 0, dwellMs: 10_000 });
+    expect(s.get("p2")).toEqual({ violada: false, people: 0, dwellMs: DWELL_DEFAULT_MS });
+  });
+
+  it("é PURO: não cria st.presence nem avança a máquina; sem zonas → mapa vazio", () => {
+    const st = { id: "cam1", zonesProib: [zone()] }; // sem st.presence (estado legado)
+    stateOf(st);
+    expect(st.presence).toBeUndefined(); // leitura não materializa estado
+    expect(stateOf({ id: "cam1" }).size).toBe(0); // zonesProib ausente → vazio
+  });
+
+  it("permanência aquém do dwell projeta armada COM gente (presenca ≠ people>0 cru)", () => {
+    const st = makeSt([zone()]);
+    presence.observe(st, inside(), 0);
+    presence.observe(st, inside(), 4000); // 4s < 10s — máquina ainda armada
+    expect(stateOf(st).get("p1")).toMatchObject({ violada: false, people: 1 });
+  });
+
+  it("reflete a máquina após o dwell: violada com a contagem observada (2 pessoas)", () => {
+    const st = makeSt([zone()]);
+    const two = [track(0.25, 0.5), { id: 2, bbox: [0.3, 0.3, 0.1, 0.4] }]; // ambas na zona
+    presence.observe(st, two, 0);
+    presence.observe(st, two, 12_000); // ≥ dwell → VIOLADA
+    expect(stateOf(st).get("p1")).toMatchObject({ violada: true, people: 2 });
+  });
+
+  it("violada com zona vazia dentro da histerese: presenca true e people 0 (o estado manda)", () => {
+    const st = makeSt([zone()]);
+    presence.observe(st, inside(), 0);
+    presence.observe(st, inside(), 12_000); // violada
+    presence.observe(st, outside(), 14_000); // esvaziou há 2s < off-delay 5s → segue violada
+    expect(stateOf(st).get("p1")).toMatchObject({ violada: true, people: 0 });
   });
 });
 
