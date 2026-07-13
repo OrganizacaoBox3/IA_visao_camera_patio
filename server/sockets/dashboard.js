@@ -34,7 +34,13 @@ function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
   // A partir do 1º `watch`, este dashboard só recebe `frame` das câmeras assistidas; os demais
   // eventos (cameras/camera-status/alarm-*/camcfg-updated) seguem pela room "dashboards".
   socket.on("watch", (p) => {
-    const ids = p && Array.isArray(p.ids) ? p.ids.map(String) : [];
+    const requested = p && Array.isArray(p.ids) ? p.ids.map(String) : [];
+    // S4/§4 spec-multitenancy — NÃO confiar no cliente: só entram em `cam:<id>` os ids que o hub
+    // REALMENTE conhece (câmeras conectadas/cadastradas = o MESMO estado do evento `cameras`,
+    // que inclui webcam, RTSP e dinâmicas). Single-tenant: todas as câmeras são do mesmo dono, e
+    // o front só assiste o que veio no `cameras` (pageCameras) — nenhum id legítimo é filtrado.
+    // Um id inexistente/forjado é IGNORADO (não faz join) — fecha a porta do join arbitrário.
+    const ids = requested.filter((id) => cameras.has(id));
     socket.data.usesWatch = true;
     socket.leave("dash-legacy");
     const want = new Set(ids.map((id) => `cam:${id}`));

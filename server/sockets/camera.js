@@ -12,6 +12,28 @@
 function attach(socket, { io, cameras, cameraList, socketById, shed }) {
   const id = String(socket.handshake.query.id || socket.id);
   const label = String(socket.handshake.query.label || `Câmera ${id.slice(0, 4)}`);
+
+  // S4/§4 spec-multitenancy — anti-sequestro de id. O nó DECLARA o próprio id no handshake e o
+  // CAMERA_TOKEN é GLOBAL: sem isto, qualquer nó autenticado sobrescreve o registro de OUTRA
+  // câmera (`cameras.set(id,...)`). Se um OUTRO socket AINDA VIVO já ocupa este id, recusa o
+  // intruso — o incumbente permanece. Reconexão legítima passa: quando o socket anterior CAIU,
+  // seu `disconnect` já removeu o registro (socketById.delete), OU ele está `connected:false`
+  // (corrida antes do disconnect chegar) — só bloqueamos enquanto o incumbente segue conectado.
+  // S4/§4 spec-multitenancy — anti-sequestro de id. O nó DECLARA o próprio id no handshake e o
+  // CAMERA_TOKEN é GLOBAL: sem isto, qualquer nó autenticado sobrescreve o registro de OUTRA
+  // câmera (`cameras.set(id,...)`). Se um OUTRO socket AINDA VIVO já ocupa este id, recusa o
+  // intruso — o incumbente permanece. Reconexão legítima passa: quando o socket anterior CAIU,
+  // seu `disconnect` já removeu o registro (socketById.delete), OU ele está `connected:false`
+  // (corrida antes do disconnect chegar) — só bloqueamos enquanto o incumbente segue conectado.
+  const incumbent = socketById.get(id);
+  if (incumbent && incumbent !== socket && incumbent.connected) {
+    console.warn(
+      `[camera!] id "${id}" já conectado por ${incumbent.id} — recusando intruso ${socket.id}`,
+    );
+    socket.disconnect(true);
+    return; // NÃO registra frame/disconnect: o disconnect do intruso NÃO pode apagar o incumbente
+  }
+
   cameras.set(id, { id, label });
   socketById.set(id, socket);
   socket.data.cameraId = id;
