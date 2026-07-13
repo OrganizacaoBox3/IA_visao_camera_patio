@@ -8,8 +8,10 @@ import AxeBuilder from "@axe-core/playwright";
 // F1 fecha: consertou a tela → remove a entrada no MESMO PR (o teste avisa quando sobra folga).
 // Mesmo padrão-ratchet do gate estacionário do eval e do scripts/lint-tokens.mjs.
 //
-// FORA por ora (telas em fluxo — frentes de produto editando AGORA; entram quando pousarem,
-// F2 da spec): "/" (Mapa de tags), /turnos, /tags-ble, /replay, /calibracao.
+// APERTADO na F2 (varredura B): "/" (Mapa de tags), /turnos, /tags-ble e /replay ENTRARAM no gate
+// — as 4 telas novas foram varridas (tokens, semântica, estados, Lucide, canvas/mapa com
+// alternativa textual). FORA ainda: /calibracao (frente de produto editando AGORA — entra quando
+// pousar, é o último item da F2).
 
 // ── Allowlist de dívida conhecida ─────────────────────────────────────────────────────────────
 // Cada entrada: regra do axe + POR QUE está aqui + item da spec que a fecha. Só pode DIMINUIR.
@@ -34,6 +36,12 @@ const ALLOW: Record<string, AllowEntry[]> = {
   perfil: [CONTRASTE_MUTED],
   "alarmes-saude": [CONTRASTE_MUTED],
   cameras: [CONTRASTE_MUTED],
+  // F2 (varredura B) — mesma dívida de TOKEN das demais (rail-group-h + textos muted da página);
+  // zero violação própria de tela.
+  mapa: [CONTRASTE_MUTED],
+  turnos: [CONTRASTE_MUTED],
+  "tags-ble": [CONTRASTE_MUTED],
+  replay: [CONTRASTE_MUTED],
 };
 
 // Mesmo login real do app.spec.ts (hub isolado do global-setup, bootstrap admin).
@@ -123,4 +131,36 @@ test("axe: /cameras", async ({ page }) => {
   await page.goto("/cameras");
   await expect(page.getByRole("heading", { name: "Câmeras", exact: true })).toBeVisible();
   await checkA11y(page, "cameras");
+});
+
+// ── F2 (varredura B): as 4 telas novas — as que MAIS violavam a constituição ───────────────────
+// O login já pousa na home ("/" = Mapa de tags). A lista de tags é a ALTERNATIVA TEXTUAL do mapa
+// Leaflet (e existe no mobile agora — antes era `hidden md:flex`).
+test("axe: / (Mapa de tags — home)", async ({ page }) => {
+  await login(page);
+  await expect(page.getByRole("region", { name: "Mapa das tags" })).toBeVisible();
+  await checkA11y(page, "mapa");
+});
+
+test("axe: /turnos", async ({ page }) => {
+  await login(page);
+  await page.goto("/turnos");
+  await expect(page.getByRole("heading", { name: /Turnos/i })).toBeVisible();
+  await checkA11y(page, "turnos");
+});
+
+test("axe: /tags-ble", async ({ page }) => {
+  await login(page);
+  await page.goto("/tags-ble");
+  await expect(page.getByRole("heading", { name: /Tags BLE/i })).toBeVisible();
+  await checkA11y(page, "tags-ble");
+});
+
+// Replay: canvases com role=img + descrição textual do tick; controles ◀▶✕ agora são Lucide.
+test("axe: /replay", async ({ page }) => {
+  await login(page);
+  await page.goto("/replay");
+  await expect(page.getByRole("heading", { name: /player de replay/i })).toBeVisible();
+  await expect(page.getByRole("img", { name: /Planta \(top-down\)/i })).toBeVisible();
+  await checkA11y(page, "replay");
 });

@@ -13,6 +13,7 @@ import {
   ToggleGroup,
   Switch,
   useConfirm,
+  useToast,
 } from "../ui";
 import {
   getShifts,
@@ -72,6 +73,8 @@ function pausasLabel(pausas: ShiftPausa[]): string {
 export function TurnosPage() {
   const { canConfigure } = useAuth();
   const confirm = useConfirm();
+  // Feedback em UM padrão só (DoD §3): TOAST no sucesso da ação, Alert no erro de página.
+  const { toast } = useToast();
   const [rows, setRows] = useState<Shift[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -120,10 +123,12 @@ export function TurnosPage() {
       fim: form.fim,
       pausas: form.pausas.map((p) => ({ inicio: p.inicio, duracaoMin: Number(p.duracaoMin) })),
     };
+    const editando = !!form.id;
     try {
       if (form.id) await updateShift(form.id, body);
       else await createShift(body);
       setForm(null);
+      toast(editando ? "Turno salvo." : `Turno "${body.nome}" criado.`, "ok");
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "falha ao salvar turno");
@@ -136,6 +141,7 @@ export function TurnosPage() {
     setErr(null);
     try {
       await updateShift(s.id, { ativo });
+      toast(`Turno "${s.nome}" ${ativo ? "ativado" : "desativado"}.`, "ok");
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "falha ao atualizar turno");
@@ -153,6 +159,7 @@ export function TurnosPage() {
     setErr(null);
     try {
       await deleteShift(s.id);
+      toast(`Turno "${s.nome}" removido.`, "ok");
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "falha ao remover turno");
@@ -254,7 +261,7 @@ export function TurnosPage() {
                       value={p.duracaoMin}
                       onChange={(e) => setPausa(i, { duracaoMin: e.target.value })}
                     />
-                    <span className="text-[12px] text-text-muted">min</span>
+                    <span className="text-sec text-text-muted">min</span>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -294,7 +301,11 @@ export function TurnosPage() {
 
         {/* ── Lista ─────────────────────────────────────────────────────── */}
         {loading ? (
-          <div className="flex items-center gap-2 text-[13px] text-text-muted">
+          <div
+            className="flex items-center gap-2 text-body text-text-muted"
+            aria-busy="true"
+            aria-label="Carregando turnos"
+          >
             <Spinner /> Carregando turnos…
           </div>
         ) : rows.length === 0 && !form ? (
@@ -323,11 +334,11 @@ export function TurnosPage() {
                   <CalendarClock size={15} strokeWidth={1.75} />
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="flex items-center gap-2 text-[14px] font-medium text-text">
+                  <span className="flex items-center gap-2 text-title font-medium text-text">
                     <span className="truncate">{s.nome}</span>
                     {!s.ativo && <Badge>inativo</Badge>}
                   </span>
-                  <span className="text-[11px] text-text-muted">
+                  <span className="text-label text-text-muted">
                     {s.dias.map((d) => DIA_CURTO[d]).join(" · ")} · {horarioLabel(s)}
                     {s.pausas.length > 0 && <> · pausas: {pausasLabel(s.pausas)}</>}
                   </span>

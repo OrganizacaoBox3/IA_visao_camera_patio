@@ -39,11 +39,11 @@ const PATTERNS = [
 // G8). Formato: caminho posix relativo → { "text-[": n, "#hex": n }. SÓ PODE DIMINUIR.
 // Snapshot de 2026-07-12 (contado por este próprio script).
 const BASELINE = {
-  // Telas novas em fluxo (F2 da spec — limpam depois das frentes de produto pousarem)
-  "src/routes/BtTagsPage.tsx": { "text-[": 6 },
-  "src/routes/TurnosPage.tsx": { "text-[": 4 },
-  "src/routes/TagsMapPage.tsx": { "text-[": 4 },
-  "src/routes/ReplayPlayerPage.tsx": { "text-[": 11, "#hex": 13 }, // hex em canvas 2D (G8: migrar p/ tokens via getComputedStyle)
+  // Telas novas em fluxo (F2 da spec): BtTags/Turnos/TagsMap/Replay ZERADAS na varredura F2 —
+  // 25 ocorrências a menos (os 4 arquivos que LIDERAVAM a dívida da spec §0 agora não têm
+  // nenhum `text-[`). Restou 1 hex no Replay: o FALLBACK único do cssVar() p/ o canvas 2D
+  // (exceção G8 documentada, mesma do TrackOverlay — canvas não entende var()).
+  "src/routes/ReplayPlayerPage.tsx": { "#hex": 1 },
   // Telas da varredura F1 (Dashboard/NotFound zeradas na C1; ReportPage/AlarmesPanel/
   // AtividadePanel zeradas na C2 — ratchet apertado: text-[11px] → papel text-label)
   "src/routes/AlarmHealthPage.tsx": { "text-[": 3 },

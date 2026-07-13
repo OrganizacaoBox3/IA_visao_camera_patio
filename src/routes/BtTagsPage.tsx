@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { BluetoothSearching, Tag } from "lucide-react";
 import { useAuth } from "../auth";
 import { APP_CONFIG } from "../config";
-import { PageHeader, Badge, EmptyState, Spinner, Button, Input } from "../ui";
+import {
+  PageHeader,
+  Badge,
+  EmptyState,
+  Spinner,
+  Button,
+  Input,
+  Alert,
+  SectionTitle,
+  useToast,
+} from "../ui";
 import {
   apiGet,
   getBtReadings,
@@ -38,10 +48,14 @@ function rssiPct(rssi: number): number {
 
 export function BtTagsPage() {
   const { token, canConfigure } = useAuth();
+  const { toast } = useToast();
   // Chave composta `${stationId}|${MAC}` — cada FONTE mantém sua série (o merge por MAC colidia).
   const [byKey, setByKey] = useState<Record<string, Live>>({});
   const [connected, setConnected] = useState(false);
   const [seeded, setSeeded] = useState(false);
+  // ERRO de página (DoD §3 "Estados"): a semente falhou nas DUAS rotas (hub fora do ar) — antes isso
+  // era engolido em silêncio e a tela ficava eternamente "vazia" sem dizer por quê.
+  const [err, setErr] = useState<string | null>(null);
   // Tick só para re-renderizar e recalcular o "stale" localmente quando nada chega pelo socket.
   const [, setNowTick] = useState(0);
   // Registro (QUEM é a tag): nome↔MAC. Só carregado p/ quem configura (a rota exige engenharia). Editar
@@ -69,6 +83,7 @@ export function BtTagsPage() {
     loadTags();
   }, [loadTags]);
 
+  // Salvar o nome: sucesso → TOAST; falha → Alert de página (um padrão de feedback só, DoD §3).
   async function saveName(mac: string) {
     const name = editName.trim();
     if (!name) return;
@@ -78,9 +93,12 @@ export function BtTagsPage() {
       if (existing) await updateBtTag(existing.id, { rotulo: name });
       else await createBtTag(mac, name);
       setEditKey(null);
+      setErr(null);
+      toast(`Tag ${mac} agora é "${name}".`, "ok");
       loadTags();
-    } catch {
-      /* mantém a edição aberta em caso de erro */
+    } catch (e) {
+      // mantém a edição aberta em caso de erro — e agora DIZ o que houve
+      setErr(e instanceof Error ? e.message : "falha ao salvar o nome da tag");
     } finally {
       setSavingMac(null);
     }
@@ -88,7 +106,7 @@ export function BtTagsPage() {
 
   // Mescla um lote de leituras no mapa por FONTE×MAC, carimbando o TS de recepção local. A fonte vem
   // da própria leitura (rec.stationId, enriquecido no hub) ou do envelope do socket (fallback).
-  function mergeReadings(rows: BtReading[], envelopeStation = "") {
+  const mergeReadings = useCallback((rows: BtReading[], envelopeStation = "") => {
     const now = Date.now();
     setByKey((prev) => {
       const next = { ...prev };
@@ -101,24 +119,41 @@ export function BtTagsPage() {
       }
       return next;
     });
-  }
+  }, []);
 
+  const aliveRef = useRef(true);
   useEffect(() => {
-    let dead = false;
-    // Semente: snapshot COMPLETO (todas as fontes — ?all=1, F2). Hub antigo não conhece o parâmetro
-    // (404) → cai no GET colapsado de sempre (1 rec/MAC — 1 estação implícita).
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  // Semente: snapshot COMPLETO (todas as fontes — ?all=1, F2). Hub antigo não conhece o parâmetro
+  // (404) → cai no GET colapsado de sempre (1 rec/MAC — 1 estação implícita). Falhar as DUAS =
+  // hub fora do ar → Alert com retry (o botão chama `seed` de novo).
+  const seed = useCallback(() => {
+    setSeeded(false);
     apiGet<BtReading[]>("/api/bt/readings?all=1")
       .catch(() => getBtReadings())
       .then((rows) => {
-        if (!dead && Array.isArray(rows)) mergeReadings(rows);
+        if (!aliveRef.current) return;
+        if (Array.isArray(rows)) mergeReadings(rows);
+        setErr(null);
       })
-      .catch(() => {
-        /* hub antigo / sem estação — segue vazio, o socket povoa quando chegar leitura */
+      .catch((e) => {
+        if (aliveRef.current)
+          setErr(e instanceof Error ? e.message : "falha ao carregar as leituras do hub");
       })
       .finally(() => {
-        if (!dead) setSeeded(true);
+        if (aliveRef.current) setSeeded(true);
       });
+  }, [mergeReadings]);
+  useEffect(() => {
+    seed();
+  }, [seed]);
 
+  useEffect(() => {
     // Vivo: mesmo padrão da Central/Saúde de alarmes — socket só-para-eventos. `watch({ids:[]})`
     // deixa a room legada (zero frames de vídeo nesta tela); `bt-readings` chega pela room
     // "dashboards" (o hub relaya para lá), independente do watch.
@@ -137,10 +172,9 @@ export function BtTagsPage() {
       if (p && Array.isArray(p.readings)) mergeReadings(p.readings, String(p.stationId ?? ""));
     });
     return () => {
-      dead = true;
       socket.disconnect();
     };
-  }, [token]);
+  }, [token, mergeReadings]);
 
   // Re-render periódico só para atualizar o esmaecimento das linhas paradas (local, sem rede).
   useEffect(() => {
@@ -181,8 +215,21 @@ export function BtTagsPage() {
       </PageHeader>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+        {err && (
+          <Alert tone="alert">
+            <span className="flex-1">{err}</span>
+            <Button size="sm" onClick={seed}>
+              Tentar novamente
+            </Button>
+          </Alert>
+        )}
+
         {!seeded ? (
-          <div className="flex items-center gap-2 text-[13px] text-text-muted">
+          <div
+            className="flex items-center gap-2 text-body text-text-muted"
+            aria-busy="true"
+            aria-label="Carregando leituras"
+          >
             <Spinner /> Carregando leituras…
           </div>
         ) : entries.length === 0 ? (
@@ -192,7 +239,7 @@ export function BtTagsPage() {
           </EmptyState>
         ) : (
           <>
-            <div className="flex items-center gap-3 text-[12px] text-text-muted">
+            <div className="flex items-center gap-3 text-sec text-text-muted">
               <span>
                 {macCount} tag{macCount === 1 ? "" : "s"} visível
                 {macCount === 1 ? "" : "eis"}
@@ -206,13 +253,14 @@ export function BtTagsPage() {
             </div>
             {groups.map((g) => (
               <div key={g.stationId || "estacao"} className="flex flex-col gap-2">
-                {/* Cabeçalho da fonte SÓ com 2+ estações — com uma, o layout de sempre (CA-3). */}
+                {/* Cabeçalho da fonte SÓ com 2+ estações — com uma, o layout de sempre (CA-3).
+                    <h2> via SectionTitle (doutrina regra 7: seção com título é heading). */}
                 {groups.length > 1 && (
-                  <div className="flex items-center gap-1.5 text-[12px] font-medium text-text-dim">
+                  <SectionTitle flush className="flex items-center gap-1.5">
                     <BluetoothSearching size={12} strokeWidth={1.75} aria-hidden />
                     Estação {g.stationId || "sem id"} · {g.rows.length} leitura
                     {g.rows.length === 1 ? "" : "s"}
-                  </div>
+                  </SectionTitle>
                 )}
                 <ul
                   className="flex flex-col gap-2"
@@ -248,6 +296,7 @@ export function BtTagsPage() {
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
                             placeholder="Nome da pessoa"
+                            aria-label={`Nome da pessoa da tag ${r.mac}`}
                             className="w-48"
                             autoFocus
                             onKeyDown={(e) => {
@@ -269,8 +318,10 @@ export function BtTagsPage() {
                         </div>
                       ) : (
                         <>
-                          <span className="truncate text-[14px] font-medium text-text">{name ?? r.mac}</span>
-                          <span className="text-[11px] text-text-muted">
+                          <span className="truncate text-title font-medium text-text">
+                            {name ?? r.mac}
+                          </span>
+                          <span className="text-label text-text-muted">
                             {name ? r.mac : "sem nome"}
                             {stale && " · sem sinal recente"}
                           </span>
@@ -292,7 +343,7 @@ export function BtTagsPage() {
                           }}
                         />
                       </span>
-                      <span className="w-16 text-right text-[12px] tabular-nums text-text-dim">
+                      <span className="w-16 text-right text-sec tabular-nums text-text-dim">
                         {r.rssi} dBm
                       </span>
                     </div>

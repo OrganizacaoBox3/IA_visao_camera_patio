@@ -2,7 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { MapPin, Radar, Search, Wifi, X } from "lucide-react";
-import { PageHeader, Badge, EmptyState, ScrollArea, Input } from "../ui";
+import {
+  PageHeader,
+  Badge,
+  EmptyState,
+  ScrollArea,
+  Input,
+  Alert,
+  Button,
+  Skeleton,
+  SectionTitle,
+} from "../ui";
 import { getBtLocations, getBtReadings, type TagLocation, type BtReading } from "../api";
 import { fromTagLocations } from "../localizacao/adapters";
 import type { LocatedEntity } from "../localizacao/entity";
@@ -111,27 +121,32 @@ export function TagsMapPage() {
   }, []);
 
   // ── Poll a cada ~4s: localizações + leituras ao vivo (allSettled → uma fonte falhar não derruba a outra). ──
+  // `refresh` é exposto ao botão "Tentar novamente" do Alert de erro (estado de ERRO da DoD — o
+  // operador não fica esperando o próximo tick de 4 s).
+  const aliveRef = useRef(true);
   useEffect(() => {
-    let dead = false;
-    const tick = () => {
-      Promise.allSettled([getBtLocations(), getBtReadings()]).then(([locR, readR]) => {
-        if (dead) return;
-        if (locR.status === "fulfilled") {
-          setTags(Array.isArray(locR.value) ? locR.value : []);
-          setError(false);
-        } else setError(true);
-        if (readR.status === "fulfilled") setReadings(Array.isArray(readR.value) ? readR.value : []);
-        setNow(Date.now());
-        setLoaded(true);
-      });
-    };
-    tick();
-    const id = window.setInterval(tick, POLL_MS);
+    aliveRef.current = true;
     return () => {
-      dead = true;
-      window.clearInterval(id);
+      aliveRef.current = false;
     };
   }, []);
+  const refresh = useCallback(() => {
+    Promise.allSettled([getBtLocations(), getBtReadings()]).then(([locR, readR]) => {
+      if (!aliveRef.current) return;
+      if (locR.status === "fulfilled") {
+        setTags(Array.isArray(locR.value) ? locR.value : []);
+        setError(false);
+      } else setError(true);
+      if (readR.status === "fulfilled") setReadings(Array.isArray(readR.value) ? readR.value : []);
+      setNow(Date.now());
+      setLoaded(true);
+    });
+  }, []);
+  useEffect(() => {
+    refresh();
+    const id = window.setInterval(refresh, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refresh]);
 
   // ── A COSTURA: as fontes brutas viram LocatedEntity[] pelo adapter. A página consome só isto. ──
   const entities = useMemo<LocatedEntity[]>(() => fromTagLocations(tags, readings, now), [tags, readings, now]);
@@ -287,22 +302,59 @@ export function TagsMapPage() {
           <Wifi size={12} strokeWidth={1.75} aria-hidden />
           {visibleCount} visíve{visibleCount === 1 ? "l" : "is"}
         </Badge>
-        <Badge tone={error ? "warn" : undefined}>
+        <Badge>
           <Radar size={12} strokeWidth={1.75} aria-hidden />
-          {error ? "sem conexão" : `${entities.length} tag${entities.length === 1 ? "" : "s"}`}
+          {entities.length} tag{entities.length === 1 ? "" : "s"}
         </Badge>
       </PageHeader>
 
-      <div className="flex min-h-0 flex-1">
-        <div ref={containerRef} className="min-h-0 flex-1" style={{ height: "100%" }} />
+      {/* ERRO de página (DoD §3 "Estados"): um Alert com retry — não um badge mudo. */}
+      {error && (
+        <div className="px-3 pt-3">
+          <Alert tone="alert">
+            <span className="flex-1">
+              Sem conexão com o hub — mostrando a última posição conhecida.
+            </span>
+            <Button size="sm" onClick={refresh}>
+              Tentar novamente
+            </Button>
+          </Alert>
+        </div>
+      )}
 
-        <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-panel-2 md:flex">
-          <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            Tags {matchIds ? `· ${visibleRows.length}/${entities.length}` : ""}
+      {/* Mapa + lista. MOBILE: empilha (mapa em cima, lista embaixo) — a lista é a ALTERNATIVA
+          TEXTUAL do mapa (Leaflet é <div> de tiles: sem ela, no celular o operador ficava sem
+          nada legível por leitor de tela). Desktop: lado a lado, como antes. */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <div
+          ref={containerRef}
+          className="min-h-0 flex-1"
+          role="region"
+          aria-label="Mapa das tags"
+          aria-describedby="mapa-alt"
+        />
+        <p id="mapa-alt" className="sr-only">
+          Mapa interativo com um pino por tag localizada. A lista de tags, ao lado (abaixo, no
+          celular), traz a mesma informação em texto: nome da tag, se está visível agora e há quanto
+          tempo foi vista.
+        </p>
+
+        <aside
+          className="flex min-h-0 shrink-0 basis-2/5 flex-col border-t border-border bg-panel-2 md:w-64 md:basis-auto md:border-l md:border-t-0"
+          aria-label="Tags"
+        >
+          <div className="border-b border-border px-3 py-2">
+            <SectionTitle flush>
+              Tags {matchIds ? `· ${visibleRows.length}/${entities.length}` : ""}
+            </SectionTitle>
           </div>
           <ScrollArea className="min-h-0 flex-1">
             {!loaded ? (
-              <div className="p-3 text-[13px] text-text-muted">Carregando…</div>
+              <div className="flex flex-col gap-2 p-3" aria-busy="true" aria-label="Carregando tags">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} w="100%" h={30} />
+                ))}
+              </div>
             ) : entities.length === 0 ? (
               <div className="p-3">
                 <EmptyState>
@@ -335,8 +387,8 @@ export function TagsMapPage() {
                           )}
                         </span>
                         <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-[13px] text-text">{e.label}</span>
-                          <span className="text-[11px] text-text-muted">
+                          <span className="truncate text-body text-text">{e.label}</span>
+                          <span className="text-label text-text-muted">
                             {statusLabel(e, now, rssiByMac.get(e.id) ?? null)}
                           </span>
                         </span>

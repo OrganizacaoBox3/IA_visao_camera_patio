@@ -6,7 +6,21 @@
 // atribuir tag (MAC) ou "sem tag" → exportar SessionTruth (download local manual, mesmo padrão
 // LGPD do cine-loop); importar retoma uma anotação salva.
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { PageHeader, Button, Select, Slider, Input, Tooltip, ScrollArea } from "../ui";
+import { ChevronLeft, ChevronRight, Pause, Play, X } from "lucide-react";
+import {
+  PageHeader,
+  Button,
+  IconButton,
+  Select,
+  Slider,
+  Input,
+  Tooltip,
+  ScrollArea,
+  Alert,
+  EmptyState,
+  SectionTitle,
+} from "../ui";
+import { cssVar } from "../camera/draw";
 import { FUSION_SCENARIOS } from "../fusion/replay-fusion";
 import { simulateFusionScenario } from "../fusion/sim";
 import type { SimFusionScenario } from "../fusion/sim";
@@ -54,9 +68,41 @@ function worldToCanvas(x: number, y: number, d: WorldDomain, w: number, h: numbe
   return [((x - d.minX) / (d.maxX - d.minX)) * w, h - ((y - d.minY) / (d.maxY - d.minY)) * h];
 }
 
-function clearCanvas(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+// ── Cores do canvas por TOKEN (going-gray; doutrina regras 2 e 5) ────────────────────────────────
+// Canvas 2D não entende `var(--x)`: lemos o token COMPUTADO via cssVar (o mesmo helper/cache do
+// TrackOverlay — exceção G8 "contraste de canvas"). Antes eram 13 hexes crus espalhados; agora a
+// cor vem da fonte única (index.css) e um único FALLBACK neutro cobre o caso patológico de CSS não
+// carregado (impossível no app — index.css é importado no main.tsx; existe só p/ não quebrar em
+// ambiente sem folha de estilo).
+const FALLBACK = "#94a3b8";
+type Palette = {
+  surface: string;
+  border: string;
+  station: string;
+  stationFg: string;
+  anchor: string;
+  tagged: string; // com tag (verde)
+  annotated: string; // "sem tag" EXPLÍCITO (âmbar)
+  plain: string; // não anotado (cinza)
+  label: string; // texto do rótulo
+};
+function palette(): Palette {
+  return {
+    surface: cssVar("--bg", FALLBACK),
+    border: cssVar("--border", FALLBACK),
+    station: cssVar("--state-info", FALLBACK),
+    stationFg: cssVar("--state-info-fg", FALLBACK),
+    anchor: cssVar("--state-warn-fg", FALLBACK),
+    tagged: cssVar("--state-ok-fg", FALLBACK),
+    annotated: cssVar("--state-warn", FALLBACK),
+    plain: cssVar("--text-dim", FALLBACK),
+    label: cssVar("--text", FALLBACK),
+  };
+}
+
+function clearCanvas(ctx: CanvasRenderingContext2D, w: number, h: number, p: Palette): void {
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#0b0f14";
+  ctx.fillStyle = p.surface;
   ctx.fillRect(0, 0, w, h);
 }
 
@@ -69,23 +115,24 @@ function drawPlanta(
   if (!canvas || !ctx) return;
   const w = canvas.width;
   const h = canvas.height;
-  clearCanvas(ctx, w, h);
-  ctx.strokeStyle = "#233";
+  const p = palette();
+  clearCanvas(ctx, w, h, p);
+  ctx.strokeStyle = p.border;
   ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
   if (!frame) return;
 
   if (frame.stationWorld) {
     const [x, y] = worldToCanvas(frame.stationWorld.x, frame.stationWorld.y, domain, w, h);
-    ctx.fillStyle = "#38bdf8";
+    ctx.fillStyle = p.station;
     ctx.beginPath();
     ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#bae6fd";
+    ctx.fillStyle = p.stationFg;
     ctx.font = "10px monospace";
     ctx.fillText("estação", x + 8, y + 3);
   }
 
-  ctx.fillStyle = "#facc15";
+  ctx.fillStyle = p.anchor;
   for (const a of frame.anchorsWorld) {
     const [x, y] = worldToCanvas(a.world.x, a.world.y, domain, w, h);
     ctx.beginPath();
@@ -106,11 +153,11 @@ function drawPlanta(
     // pegou); chave ausente = não anotado.
     const annotated = t.id in frame.truthTagByTrack;
     const truth = frame.truthTagByTrack[t.id];
-    ctx.fillStyle = truth ? "#4ade80" : annotated ? "#f59e0b" : "#94a3b8"; // verde | âmbar | cinza
+    ctx.fillStyle = truth ? p.tagged : annotated ? p.annotated : p.plain; // verde | âmbar | cinza
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#e2e8f0";
+    ctx.fillStyle = p.label;
     ctx.fillText(truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`, x + 8, y - 8);
   }
 }
@@ -120,10 +167,11 @@ function drawCamera(canvas: HTMLCanvasElement | null, frame: PlayerFrame | null)
   if (!canvas || !ctx) return;
   const w = canvas.width;
   const h = canvas.height;
-  clearCanvas(ctx, w, h);
+  const p = palette();
+  clearCanvas(ctx, w, h, p);
   if (!frame) return;
 
-  ctx.strokeStyle = "#38bdf8";
+  ctx.strokeStyle = p.station;
   ctx.lineWidth = 1.5;
   ctx.font = "10px monospace";
   for (const t of frame.camera) {
@@ -134,13 +182,41 @@ function drawCamera(canvas: HTMLCanvasElement | null, frame: PlayerFrame | null)
     // Mesmos TRÊS estados da planta: com tag (verde), "sem tag" explícito (âmbar), não anotado.
     const annotated = t.id in frame.truthTagByTrack;
     const truth = frame.truthTagByTrack[t.id];
-    ctx.fillStyle = truth ? "#4ade80" : annotated ? "#f59e0b" : "#bae6fd";
+    ctx.fillStyle = truth ? p.tagged : annotated ? p.annotated : p.stationFg;
     ctx.fillText(
       truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`,
       px + 2,
       Math.max(10, py - 4),
     );
   }
+}
+
+// ── Alternativa TEXTUAL dos canvases (a11y: canvas é opaco pro leitor de tela) ────────────────────
+// Cada canvas vira role="img" + aria-label com o RESUMO do que está desenhado NAQUELE tick — o
+// leitor de tela ouve a mesma informação que o olho vê (contagem, estação, âncoras, anotação).
+function describePlanta(frame: PlayerFrame | null, idx: number, total: number): string {
+  if (!frame || total === 0) return "Planta (top-down): nada a mostrar — sem tick reproduzível.";
+  const comPos = frame.planta.filter((t) => t.worldPos).length;
+  const semPos = frame.planta.length - comPos;
+  const partes = [
+    `${comPos} pessoa(s) posicionada(s) no chão`,
+    frame.stationWorld ? "estação visível" : "estação sem posição (sem calibração)",
+    `${frame.anchorsWorld.length} âncora(s)`,
+  ];
+  if (semPos > 0) partes.push(`${semPos} pista(s) sem posição`);
+  return `Planta (top-down), tick ${idx + 1} de ${total}: ${partes.join(", ")}.`;
+}
+function describeCamera(frame: PlayerFrame | null, idx: number, total: number): string {
+  if (!frame || total === 0) return "Vista-câmera: nada a mostrar — sem tick reproduzível.";
+  const comTag = frame.camera.filter((t) => frame.truthTagByTrack[t.id]).length;
+  const semTag = frame.camera.filter(
+    (t) => t.id in frame.truthTagByTrack && !frame.truthTagByTrack[t.id],
+  ).length;
+  return (
+    `Vista-câmera, tick ${idx + 1} de ${total}: ${frame.camera.length} caixa(s) de pessoa — ` +
+    `${comTag} com tag, ${semTag} marcada(s) como "sem tag", ` +
+    `${frame.camera.length - comTag - semTag} não anotada(s).`
+  );
 }
 
 /** Download local manual de um JSON (Blob + a.download) — mesmo padrão LGPD do cine-loop. */
@@ -207,17 +283,24 @@ export function ReplayPlayerPage() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [totalTicks]);
 
-  useEffect(() => {
+  // Frame do tick atual — PURO (derivePlayerFrame). Memoizado (e não escondido dentro do efeito de
+  // desenho) porque agora ele alimenta DUAS saídas: o canvas e a descrição textual do canvas (aria).
+  const frame = useMemo<PlayerFrame | null>(() => {
     const tick = scenario.ticks[playback.currentIdx];
-    let frame = tick
-      ? derivePlayerFrame(tick, scenario.H, scenario.stationPx, scenario.anchors)
-      : null;
+    if (!tick) return null;
+    const f = derivePlayerFrame(tick, scenario.H, scenario.stationPx, scenario.anchors);
     // Gravação real não tem verdade nos ticks (truth vazia no parse) — a anotação EM PROGRESSO
     // vira a "verdade" desenhada, então atribuir tag pinta o track na hora (feedback do anotador).
-    if (frame && session) frame = { ...frame, truthTagByTrack: exportSessionTruth(annotation) };
+    return session ? { ...f, truthTagByTrack: exportSessionTruth(annotation) } : f;
+  }, [scenario, playback.currentIdx, session, annotation]);
+
+  useEffect(() => {
     drawPlanta(plantaRef.current, frame, domain);
     drawCamera(cameraRef.current, frame);
-  }, [scenario, playback.currentIdx, session, annotation, domain]);
+  }, [frame, domain]);
+
+  const plantaAlt = describePlanta(frame, playback.currentIdx, totalTicks);
+  const cameraAlt = describeCamera(frame, playback.currentIdx, totalTicks);
 
   const selectScenario = (name: string) => {
     setScenarioName(name);
@@ -307,55 +390,53 @@ export function ReplayPlayerPage() {
           aria-label="Arquivo de gravação (.jsonl)"
         />
         {session && (
-          <span className="text-[12px] text-text">
+          <span className="inline-flex items-center gap-1 text-sec text-text">
             {session.fileName}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-1"
-              onClick={() => selectScenario(scenarioName)}
-              aria-label="Fechar gravação"
-            >
-              ✕
-            </Button>
+            <IconButton label="Fechar gravação" onClick={() => selectScenario(scenarioName)}>
+              <X size={16} strokeWidth={1.75} aria-hidden />
+            </IconButton>
           </span>
         )}
         <Button onClick={() => setPlayback((s) => (s.playing ? pause(s) : play(s)))}>
+          {playback.playing ? (
+            <Pause size={16} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Play size={16} strokeWidth={1.75} aria-hidden />
+          )}
           {playback.playing ? "Pausar" : "Tocar"}
         </Button>
-        <Button
-          variant="ghost"
+        {/* Ícones Lucide (regra 11) no lugar dos glyphs ◀▶ — o nome acessível é o mesmo de antes. */}
+        <IconButton
+          label="Passo anterior"
           onClick={() => setPlayback((s) => stepBy(s, -1, totalTicks))}
-          aria-label="Passo anterior"
         >
-          ◀
-        </Button>
-        <Button
-          variant="ghost"
+          <ChevronLeft size={16} strokeWidth={1.75} aria-hidden />
+        </IconButton>
+        <IconButton
+          label="Próximo passo"
           onClick={() => setPlayback((s) => stepBy(s, 1, totalTicks))}
-          aria-label="Próximo passo"
         >
-          ▶
-        </Button>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden />
+        </IconButton>
         <Select
           value={String(playback.speed)}
           onChange={(v) => setPlayback((s) => setSpeed(s, Number(v)))}
           options={SPEEDS.map((sp) => ({ value: String(sp), label: `${sp}×` }))}
           ariaLabel="Velocidade"
         />
-        <span className="text-[12px] text-text-muted">
+        <span className="text-sec text-text-muted" aria-live="polite">
           tick {totalTicks ? playback.currentIdx + 1 : 0}/{totalTicks} · ts {currentTick?.ts ?? 0} ms
         </span>
       </div>
       {diag && (
-        <span className="text-[12px] text-text-muted">
+        <span className="text-sec text-text-muted">
           diagnóstico do parse: {diag.linesTotal} linha(s) · {diag.linesDropped} descartada(s) ·
           câmeras: {Object.keys(diag.cameras).join(", ") || "nenhuma"} · {totalTicks} tick(s)
-          {totalTicks === 0 && " — nada reproduzível neste arquivo"}
           {session?.data.H === null && " · sem calibração (H) — planta sem posições"}
         </span>
       )}
-      {notice && <span className="text-[12px] text-critical">{notice}</span>}
+      {/* ERRO de página no padrão único (DoD §3): Alert com role=alert — não um span vermelho. */}
+      {notice && <Alert tone="alert">{notice}</Alert>}
       <Slider
         value={playback.currentIdx}
         onChange={(v) => setPlayback((s) => scrubTo(s, v, totalTicks))}
@@ -365,33 +446,48 @@ export function ReplayPlayerPage() {
         ariaLabel="Posição na gravação"
       />
       <div className="flex flex-wrap gap-4">
-        <div>
-          <div className="mb-1 text-[12px] text-text-muted">Planta (top-down)</div>
-          <canvas
-            ref={plantaRef}
-            width={480}
-            height={360}
-            className="rounded border border-border"
-          />
-        </div>
-        <div>
-          <div className="mb-1 text-[12px] text-text-muted">Vista-câmera</div>
-          <canvas
-            ref={cameraRef}
-            width={480}
-            height={360}
-            className="rounded border border-border"
-          />
-        </div>
+        {/* VAZIO (DoD §3): gravação sem nenhum tick reproduzível — canvas preto não explica nada. */}
+        {totalTicks === 0 ? (
+          <EmptyState>
+            Nada reproduzível neste arquivo: nenhum tick com pistas de câmera. Abra outra gravação
+            (.jsonl) ou escolha um cenário sintético no seletor acima.
+          </EmptyState>
+        ) : (
+          <>
+            <div>
+              <SectionTitle className="mb-1">Planta (top-down)</SectionTitle>
+              {/* Canvas é OPACO p/ leitor de tela → role=img + descrição textual do tick (a11y). */}
+              <canvas
+                ref={plantaRef}
+                width={480}
+                height={360}
+                role="img"
+                aria-label={plantaAlt}
+                className="max-w-full rounded border border-border"
+              />
+            </div>
+            <div>
+              <SectionTitle className="mb-1">Vista-câmera</SectionTitle>
+              <canvas
+                ref={cameraRef}
+                width={480}
+                height={360}
+                role="img"
+                aria-label={cameraAlt}
+                className="max-w-full rounded border border-border"
+              />
+            </div>
+          </>
+        )}
         {session ? (
-          <div className="flex w-[420px] flex-col gap-2">
-            <div className="text-[12px] text-text-muted">Anotação (verdade-terreno, §6)</div>
-            <span className="text-[12px] text-text-muted">
+          <div className="flex w-[420px] max-w-full flex-col gap-2">
+            <SectionTitle flush>Anotação (verdade-terreno, §6)</SectionTitle>
+            <span className="text-sec text-text-muted" aria-live="polite">
               {summary.withTag} com tag · {summary.withoutTag} sem tag · {summary.total}/
               {trackIds.length} track(s) anotado(s)
             </span>
             {trackIds.length === 0 ? (
-              <span className="text-[12px] text-text-muted">
+              <span className="text-sec text-text-muted">
                 Nenhum track visto na gravação — nada a anotar.
               </span>
             ) : (
@@ -401,7 +497,7 @@ export function ReplayPlayerPage() {
                     const val = annotation.assignments[id]; // string | null | undefined
                     return (
                       <div key={id} className="flex items-center gap-2">
-                        <span className="w-10 shrink-0 font-mono text-[12px] text-text">{id}</span>
+                        <span className="w-10 shrink-0 font-mono text-sec text-text">{id}</span>
                         <Input
                           value={val ?? ""}
                           placeholder={val === null ? "sem tag" : "MAC da tag"}
@@ -452,7 +548,7 @@ export function ReplayPlayerPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <div className="text-[12px] text-text-muted">Anotação</div>
+            <SectionTitle flush>Anotação</SectionTitle>
             <Tooltip content="A verdade-terreno sintética já nasce pronta no cenário (truthTagByTrack) — o modo anotação só faz sentido com uma gravação real aberta.">
               <span className="inline-flex" tabIndex={0}>
                 <Button disabled>Modo anotação</Button>
