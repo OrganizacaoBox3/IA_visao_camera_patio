@@ -34,7 +34,8 @@ const ALLOW: Record<string, AllowEntry[]> = {
   relatorio: [CONTRASTE_MUTED],
   usuarios: [CONTRASTE_MUTED],
   perfil: [CONTRASTE_MUTED],
-  "alarmes-saude": [CONTRASTE_MUTED],
+  // ("alarmes-saude" saiu: a rota morreu — a Saúde virou a faixa N1 + as ferramentas N5 DENTRO
+  //  de /relatorio, e é lá que o axe a varre agora. A cobertura MUDOU DE LUGAR, não sumiu.)
   cameras: [CONTRASTE_MUTED],
   // F2 (varredura B) — mesma dívida de TOKEN das demais (rail-group-h + textos muted da página);
   // zero violação própria de tela.
@@ -98,10 +99,17 @@ test("axe: /monitoramento (Central)", async ({ page }) => {
   await checkA11y(page, "monitoramento");
 });
 
-test("axe: /relatorio", async ({ page }) => {
+// /relatorio ABSORVEU a Saúde de alarmes (spec-arquitetura-informacao §2): a faixa N1 ("o detector
+// está confiável?") e as ferramentas N5 (silenciamentos · limpar histórico · fonte) vivem AQUI.
+// As duas são asseridas antes do axe: se a fusão regredir e a seção sumir, o teste falha ANTES de
+// varrer — em vez de dar "verde" varrendo uma página que perdeu o conteúdo (o axe não sabe o que
+// FALTA). É o mesmo motivo de o antigo teste /alarmes-saude ter sido removido, e não só deletado.
+test("axe: /relatorio (com a Saúde de alarmes absorvida: N1 + ferramentas N5)", async ({ page }) => {
   await login(page);
   await page.goto("/relatorio");
   await expect(page.getByRole("heading", { name: /Relatório Operacional/i })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Saúde do sistema de alarmes" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Ferramentas" })).toBeVisible(); // admin = canConfigure
   await checkA11y(page, "relatorio");
 });
 
@@ -119,12 +127,8 @@ test("axe: /perfil", async ({ page }) => {
   await checkA11y(page, "perfil");
 });
 
-test("axe: /alarmes-saude", async ({ page }) => {
-  await login(page);
-  await page.goto("/alarmes-saude");
-  await expect(page.getByRole("heading", { name: /Saúde de alarmes/i })).toBeVisible();
-  await checkA11y(page, "alarmes-saude");
-});
+// (O teste "axe: /alarmes-saude" MORREU com a rota — o conteúdo dele é varrido no /relatorio,
+//  onde as duas seções agora vivem e são asseridas explicitamente.)
 
 test("axe: /cameras", async ({ page }) => {
   await login(page);
@@ -149,10 +153,18 @@ test("axe: /turnos", async ({ page }) => {
   await checkA11y(page, "turnos");
 });
 
-test("axe: /tags-ble", async ({ page }) => {
+// /tags-ble = a tela BLE unificada (Tags | Estações — spec-arquitetura-informacao §3). O h1 virou
+// "BLE" (o menu diz "BLE": mesma palavra na navegação e no título — o achado nº 3 da spec). As DUAS
+// abas passam pelo axe: a de Estações é conteúdo novo NESTA rota (veio da /estacoes, que morreu) e
+// ficaria fora do gate se o teste só varresse a aba padrão.
+test("axe: /tags-ble (abas Tags e Estações)", async ({ page }) => {
   await login(page);
   await page.goto("/tags-ble");
-  await expect(page.getByRole("heading", { name: /Tags BLE/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "BLE", exact: true })).toBeVisible();
+  await checkA11y(page, "tags-ble");
+
+  await page.getByRole("tab", { name: "Estações" }).click();
+  await expect(page.getByRole("tabpanel")).toBeVisible();
   await checkA11y(page, "tags-ble");
 });
 
