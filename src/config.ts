@@ -134,8 +134,10 @@ export const APP_CONFIG = {
       // (que mataria a pessoa parada em ~3s no front) e morrendo por EVIDÊNCIA (rodadas
       // ANALISADAS sem match). A POLÍTICA é a mesma dos dois lados; os KNOBS diferem por
       // cadência (aqui a rodada é ~350ms; no hub, sob o gate, o probe é 6s).
-      // ⚠ WIRING: CameraWorkspace.updateTracks ainda NÃO passa estes 4 no createByteTracker —
-      // o front herda hoje os MESMOS valores pelos DEFAULTS internos de vision/bytetrack.ts.
+      // WIRING (fechado em #F4-w): CameraWorkspace.updateTracks PASSA estes 4 ao createByteTracker
+      // — config.people.track é a fonte única de verdade (o mesmo que eval/front-tournament.mjs lê).
+      // Antes, o front herdava os defaults internos de vision/bytetrack.ts, que só COINCIDIAM: mudar
+      // o config aqui não movia o comportamento. Agora move.
       stationaryTolerance: 0.01, // jitter de bbox tolerado (norm.) — mesma noção do counterMinMove
       stationaryEnterRounds: 3, // observações estáveis p/ entrar no estado (~1s a 3fps). Nunca 1.
       // Morte do parado = EVIDÊNCIA (estas rodadas ANALISADAS sem match) E o ttlMs como PISO —

@@ -625,6 +625,13 @@ export function CameraWorkspace({
         reassocDist: T.reassocDist,
         reassocMaxGapMs: T.reassocMaxGapMs,
         lostAfterMisses: T.lostAfterMisses,
+        // ESTADO ESTACIONÁRIO: os 4 knobs agora VÊM do config (antes o tracker herdava os defaults
+        // internos, que só COINCIDIAM — mudar o config não movia nada; #F4-w). config.people.track
+        // é a fonte única (o mesmo que eval/front-tournament.mjs lê).
+        stationaryTolerance: T.stationaryTolerance,
+        stationaryEnterRounds: T.stationaryEnterRounds,
+        stationaryMaxMisses: T.stationaryMaxMisses,
+        stationaryMaxMs: T.stationaryMaxMs,
       }));
     // Longo alcance: limiar de "person" mais baixo (alvos distantes pontuam menos) — vira o
     // corte da 1ª passada/nascimento; abaixo dele a detecção ainda entra na 2ª passada.

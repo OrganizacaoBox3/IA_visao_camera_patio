@@ -91,30 +91,19 @@ function checkWiring() {
     fails.push(
       `cadência do mosaico mudou: TILE_OBJECT_INTERVAL_MS = ${tile}ms (o torneio modela ${TILE_MS}ms)`,
     );
-  // Os 4 knobs ESTACIONÁRIOS não são passados por updateTracks (o front herda os DEFAULTS
-  // internos do bytetrack.ts). Enquanto for assim, o config só DOCUMENTA esses 4 — e o
-  // torneio tem de rodar com os defaults, não com o config. As duas metades desta verdade
-  // são checadas: (a) o wiring segue ausente; (b) os valores ainda COINCIDEM (paridade por
-  // VALOR). Ligar os 4 em updateTracks é a pendência #F4-w (ver PENDENCIAS).
+  // Os 4 knobs ESTACIONÁRIOS agora VÊM do config (wiring #F4-w fechado): updateTracks os passa ao
+  // createByteTracker, e este torneio (makeTracker) também. A verdade a proteger INVERTEU: antes era
+  // "o wiring está ausente e os valores coincidem"; agora é "o wiring EXISTE". Se alguém remover o
+  // wiring de updateTracks, o config volta a mentir (o front herdaria os defaults internos) e o
+  // torneio mediria um front que não é o de produção — por isso a AUSÊNCIA do wiring agora FALHA.
   const call = /createByteTracker\(\{[\s\S]*?\}\)/.exec(cw)?.[0] ?? "";
   const wired = /stationary(Tolerance|EnterRounds|MaxMisses|MaxMs)/.test(call);
-  if (wired)
+  if (!wired)
     fails.push(
-      `updateTracks agora PASSA os knobs estacionários — o torneio precisa passá-los também (pendência #F4-w resolvida)`,
+      `updateTracks NÃO passa mais os knobs estacionários — o config voltou a só DOCUMENTAR (regressão do #F4-w). ` +
+        `Sem o wiring, quem manda é o default de bytetrack.ts e o config mente.`,
     );
-  for (const [k, v] of Object.entries({
-    stationaryTolerance: T.stationaryTolerance,
-    stationaryEnterRounds: T.stationaryEnterRounds,
-    stationaryMaxMisses: T.stationaryMaxMisses,
-    stationaryMaxMs: T.stationaryMaxMs,
-  })) {
-    const def = Number(new RegExp(`opts\\.${k} \\?\\? ([0-9.]+)`).exec(bt)?.[1]);
-    if (def !== v)
-      fails.push(
-        `paridade por VALOR quebrada: config.${k}=${v} × default do bytetrack.ts=${def} — ` +
-          `sem o wiring, quem MANDA é o default (o config estaria mentindo)`,
-      );
-  }
+  void bt; // (a paridade por valor deixou de importar: com o wiring, o config MANDA)
   return fails;
 }
 
@@ -135,7 +124,12 @@ function makeTracker(ttlMs) {
     reassocDist: T.reassocDist,
     reassocMaxGapMs: T.reassocMaxGapMs,
     lostAfterMisses: T.lostAfterMisses,
-    // os 4 estacionários NÃO vão — updateTracks também não os passa (defaults; ver checkWiring)
+    // os 4 estacionários VÊM do config (wiring #F4-w fechado): o torneio mede o tracker EXATAMENTE
+    // como updateTracks o monta — os mesmos 11 knobs, todos da fonte única src/config.ts.
+    stationaryTolerance: T.stationaryTolerance,
+    stationaryEnterRounds: T.stationaryEnterRounds,
+    stationaryMaxMisses: T.stationaryMaxMisses,
+    stationaryMaxMs: T.stationaryMaxMs,
   });
 }
 
