@@ -35,8 +35,10 @@ import android.widget.TextView;
 
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.provider.Settings;
 import android.text.InputType;
 import android.widget.EditText;
+import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -52,6 +54,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Random;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -69,19 +72,26 @@ import org.json.JSONObject;
  * feliz de "se o hub está no ar, conecta"). Por USB, `adb reverse tcp:4000 tcp:4000` mantém 127.0.0.1
  * funcionando. O endereço também é editável à mão (toque no subtítulo) e persistido — fallback se o
  * broadcast for bloqueado na rede.
+ *
+ * Multi-antena (spec-multi-antena-ble §F1): o id da estação é PREF persistida (toque no TÍTULO p/
+ * editar), com default anti-colisão derivado do ANDROID_ID ("tc22-xxxx") — dois celulares recém-
+ * instalados nunca postam o mesmo id. Token opcional do hub (x-station-token) vive no dialog do hub;
+ * vazio = LAN aberta (dev). Id vai em todo payload; token em todo request quando presente.
  */
 public class MainActivity extends Activity {
     static final String TAG = "BTSCAN";
     static final String OUI = "48:87:2D"; // fabricante das tags do projeto
-    static final String STATION_ID = "tc22";
     static final String DEFAULT_HUB_URL = "http://127.0.0.1:4000/api/bt/reading";
     static final String PREFS = "btscan";        // SharedPreferences do app
     static final String KEY_HUB = "hub_url";      // chave do endereço do hub (editável em runtime)
+    static final String KEY_STATION = "station_id";   // id DESTA estação (multi-antena; default anti-colisão derivado do device)
+    static final String KEY_TOKEN = "station_token";  // token de auth do hub (vazio = LAN aberta, sem header)
     static final String KEY_NAMES = "tag_names";  // blob de nomes customizados (linhas "mac=nome")
     static final String KEY_LOCS = "tag_locs";    // blob da última localização por tag (linhas "mac=lat,lon,ts")
     static final String SUFFIX_READING = "/api/bt/reading";  // sufixo do ingest — trocado p/ tag-name
     static final String SUFFIX_TAGNAME = "/api/bt/tag-name"; // endpoint de nomeação (contrato com o hub)
     static final String SUFFIX_TAGS = "/api/bt/tags";        // endpoint de listagem de nomes (pull do hub)
+    static final String HDR_TOKEN = "x-station-token";       // header de auth do ingest (contrato com o hub)
     static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
     static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
     // 2000→500ms (2026-07-11, diagnóstico do funil de campo): o scanner já roda LOW_LATENCY
@@ -195,6 +205,11 @@ public class MainActivity extends Activity {
     private volatile int hubState = 0;             // 0=aguardando 1=ok 2=falha
     private volatile String hubDetail = "aguardando primeiro envio ao hub";
 
+    // Identidade desta estação (multi-antena): id vai no payload de TODO POST; token (opcional) vai
+    // em x-station-token. Volatile: editados na main (dialogs), lidos nas threads de rede.
+    private volatile String stationId = "tc22";    // sobrescrito no onCreate (pref ou default derivado)
+    private volatile String stationToken = "";     // vazio = sem header (dev/LAN aberta)
+
     // Dados das tags (compartilhados: callback do scan escreve, main lê)
     private final Object lock = new Object();
     private final HashMap<String, Tag> tags = new HashMap<String, Tag>();
@@ -212,7 +227,7 @@ public class MainActivity extends Activity {
 
     // UI
     private LinearLayout listContainer;
-    private TextView btChip, hubChip, tagChip, detailLine, subLine;
+    private TextView btChip, hubChip, tagChip, detailLine, subLine, titleLine;
     private WebView map;                             // mapa "você está aqui" (satélite Esri via Leaflet)
     private volatile boolean mapReady = false;       // HTML do mapa carregado (onPageFinished)
     private float density = 1f;
@@ -409,9 +424,10 @@ public class MainActivity extends Activity {
 
     // ---------- Hub ----------
 
-    /** Monta o JSON das leituras atuais (contrato: {stationId, readings:[{mac,name,rssi}]}). */
+    /** Monta o JSON das leituras atuais (contrato: {stationId, readings:[{mac,name,rssi}]}).
+     *  stationId é validado a [a-zA-Z0-9_-] na entrada (isValidStationId) — vai cru, sem escapar. */
     private String buildJson() {
-        StringBuilder j = new StringBuilder("{\"stationId\":\"").append(STATION_ID).append('"');
+        StringBuilder j = new StringBuilder("{\"stationId\":\"").append(stationId).append('"');
         // Modelo AirTag: com fix, a posição do aparelho vai no objeto raiz (Double/Float.toString = ponto decimal, sem locale).
         if (hasFix) {
             j.append(",\"lat\":").append(Double.toString(lastLat))
@@ -433,6 +449,12 @@ public class MainActivity extends Activity {
         return j.append("]}").toString();
     }
 
+    /** Aplica o token da estação (se houver) na conexão — header x-station-token do hub. Vazio = nada. */
+    private void applyStationToken(HttpURLConnection c) {
+        String tok = stationToken;
+        if (tok != null && tok.length() > 0) c.setRequestProperty(HDR_TOKEN, tok);
+    }
+
     private void postOnce() {
         HttpURLConnection c = null;
         int n;
@@ -443,6 +465,7 @@ public class MainActivity extends Activity {
             c = (HttpURLConnection) new URL(hubUrl).openConnection();
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");
+            applyStationToken(c);
             c.setConnectTimeout(3000);
             c.setReadTimeout(3000);
             c.setDoOutput(true);
@@ -492,13 +515,109 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Subtítulo = endereço atual do hub, tocável p/ editar à mão. */
+    /** Título = id desta estação (tocável p/ editar); subtítulo = id + endereço do hub (tocável p/ editar). */
     private void updateSubtitle() {
+        if (titleLine != null) {
+            titleLine.setText(new StringBuilder("Estação BLE · ").append(stationId).toString());
+        }
         if (subLine == null) return;
-        subLine.setText(new StringBuilder("hub · ").append(hubUrl).append("  ·  toque p/ editar").toString());
+        subLine.setText(new StringBuilder("estação ").append(stationId)
+                .append("  ·  hub ").append(hubUrl).append("  ·  toque p/ editar").toString());
     }
 
-    /** Dialog p/ fixar o endereço do hub à mão (persistido) — fallback quando o broadcast não passa. */
+    /** Valida o id da estação: 1–32 chars em [a-zA-Z0-9_-] (vai cru no JSON/logs — nada de escapar). */
+    private static boolean isValidStationId(String v) {
+        if (v == null || v.length() == 0 || v.length() > 32) return false;
+        for (int i = 0; i < v.length(); i++) {
+            char ch = v.charAt(i);
+            boolean ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Id default anti-colisão: "tc22-" + 4 últimos chars do ANDROID_ID (hex; estável por
+     * device+assinatura+usuário desde a API 26 — o minSdk do app). Build.SERIAL foi descartado:
+     * na API 26+ exige READ_PHONE_STATE (Build.getSerial idem) — permissão que o app não pede.
+     * Sem ANDROID_ID (raro: ROM capada), sorteia 4 chars — a persistência em prefs (onCreate)
+     * é quem garante a estabilidade entre restarts nesse caso.
+     */
+    private String defaultStationId() {
+        String suffix = null;
+        try {
+            String aid = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+            if (aid != null && aid.length() >= 4) suffix = aid.substring(aid.length() - 4);
+        } catch (Exception ignored) {
+            // provider indisponível — cai no sorteio abaixo
+        }
+        if (suffix == null || !isValidStationId(suffix)) {
+            String alpha = "abcdefghijklmnopqrstuvwxyz0123456789";
+            Random rnd = new Random();
+            StringBuilder r = new StringBuilder();
+            for (int i = 0; i < 4; i++) r.append(alpha.charAt(rnd.nextInt(alpha.length())));
+            suffix = r.toString();
+        }
+        return new StringBuilder("tc22-").append(suffix).toString();
+    }
+
+    /** Dialog p/ editar o id DESTA estação (persistido) — molde do promptHubUrl. Multi-antena: cada celular = um id. */
+    private void promptStationId() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setText(stationId);
+        input.setPadding(dp(16), dp(12), dp(16), dp(12));
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("Id da estação");
+        b.setMessage("Identifica ESTA antena no hub. 1–32 chars: letras, números, _ ou -. Dois celulares nunca podem usar o mesmo id.");
+        b.setView(input);
+        b.setPositiveButton("Salvar", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface d, int w) {
+                String v = input.getText().toString().trim();
+                if (!isValidStationId(v)) {
+                    Toast.makeText(MainActivity.this,
+                            "Id inválido — 1–32 chars: letras, números, _ ou -", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                stationId = v;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_STATION, v).apply();
+                updateSubtitle();
+            }
+        });
+        b.setNeutralButton("Padrão", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface d, int w) {
+                String v = defaultStationId();
+                stationId = v;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_STATION, v).apply();
+                updateSubtitle();
+            }
+        });
+        b.setNegativeButton("Cancelar", null);
+        b.show();
+    }
+
+    /** Persiste hub URL + token de uma vez (os dois campos do dialog aplicam juntos) e força reenvio. */
+    private void saveHubAndToken(String url, String token) {
+        hubUrl = url;
+        stationToken = token;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_HUB, url).putString(KEY_TOKEN, token).apply();
+        hubState = 0;
+        hubDetail = "endereço atualizado — reenviando…";
+        updateSubtitle();
+    }
+
+    /**
+     * Dialog p/ fixar o endereço do hub à mão (persistido) — fallback quando o broadcast não passa.
+     * Traz também o token da estação (opcional, mesmo dialog): vazio = LAN aberta (dev); preenchido
+     * vai em x-station-token em TODO request ao hub (produção pós-faxina). Texto visível de propósito
+     * — o engenheiro precisa conferir o que digitou no chão de fábrica.
+     */
     private void promptHubUrl() {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
@@ -506,29 +625,32 @@ public class MainActivity extends Activity {
         input.setSelectAllOnFocus(true);
         input.setText(hubUrl);
         input.setPadding(dp(16), dp(12), dp(16), dp(12));
+        final EditText tokenInput = new EditText(this);
+        tokenInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        tokenInput.setSingleLine(true);
+        tokenInput.setHint("token da estação (opcional — vazio = sem auth)");
+        tokenInput.setText(stationToken);
+        tokenInput.setPadding(dp(16), dp(12), dp(16), dp(12));
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(input);
+        box.addView(tokenInput);
         AlertDialog.Builder b = new AlertDialog.Builder(this);
         b.setTitle("Endereço do hub");
         b.setMessage("URL do ingest — mesmo caminho/porta do hub. Ex.: http://192.168.0.10:4000/api/bt/reading");
-        b.setView(input);
+        b.setView(box);
         b.setPositiveButton("Salvar", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface d, int w) {
                 String v = input.getText().toString().trim();
                 if (v.length() == 0) return;
-                hubUrl = v;
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_HUB, v).apply();
-                hubState = 0;
-                hubDetail = "endereço atualizado — reenviando…";
-                updateSubtitle();
+                saveHubAndToken(v, tokenInput.getText().toString().trim());
             }
         });
         b.setNeutralButton("Padrão", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface d, int w) {
-                hubUrl = DEFAULT_HUB_URL;
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_HUB, DEFAULT_HUB_URL).apply();
-                hubState = 0;
-                updateSubtitle();
+                saveHubAndToken(DEFAULT_HUB_URL, tokenInput.getText().toString().trim());
             }
         });
         b.setNegativeButton("Cancelar", null);
@@ -661,6 +783,7 @@ public class MainActivity extends Activity {
         try {
             c = (HttpURLConnection) new URL(tagsUrl()).openConnection();
             c.setRequestMethod("GET");
+            applyStationToken(c);
             c.setConnectTimeout(3000);
             c.setReadTimeout(3000);
             int code = c.getResponseCode();
@@ -729,6 +852,7 @@ public class MainActivity extends Activity {
                     c = (HttpURLConnection) new URL(url).openConnection();
                     c.setRequestMethod("POST");
                     c.setRequestProperty("Content-Type", "application/json");
+                    applyStationToken(c);
                     c.setConnectTimeout(3000);
                     c.setReadTimeout(3000);
                     c.setDoOutput(true);
@@ -795,6 +919,16 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         density = getResources().getDisplayMetrics().density;
         hubUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HUB, DEFAULT_HUB_URL);
+        // Identidade da estação: pref válida vale; senão (1º boot ou pref corrompida) deriva o default
+        // anti-colisão do device e PERSISTE já — o id nunca muda sozinho entre restarts (CA-4).
+        String sid = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_STATION, "");
+        if (!isValidStationId(sid)) {
+            sid = defaultStationId();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_STATION, sid).apply();
+        }
+        stationId = sid;
+        String tok = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_TOKEN, "");
+        stationToken = tok != null ? tok : "";
         loadTagNames();
         loadTagLocs();
         buildUi();
@@ -991,11 +1125,17 @@ public class MainActivity extends Activity {
         header.setBackgroundColor(C_HEADER);
         header.setPadding(dp(16), dp(16), dp(16), dp(14));
 
-        TextView title = new TextView(this);
-        title.setText("Estação BLE · TC22");
-        title.setTextColor(C_TXT);
-        title.setTextSize(19);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        // Título = identidade da estação (o operador precisa VER qual id este device usa). Toque edita.
+        titleLine = new TextView(this);
+        titleLine.setTextColor(C_TXT);
+        titleLine.setTextSize(19);
+        titleLine.setTypeface(Typeface.DEFAULT_BOLD);
+        titleLine.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                promptStationId();
+            }
+        });
 
         subLine = new TextView(this);
         subLine.setTextColor(C_MUTED);
@@ -1024,7 +1164,7 @@ public class MainActivity extends Activity {
         detailLine.setTextSize(11);
         detailLine.setPadding(0, dp(10), 0, 0);
 
-        header.addView(title);
+        header.addView(titleLine);
         header.addView(subLine);
         header.addView(chips);
         header.addView(detailLine);

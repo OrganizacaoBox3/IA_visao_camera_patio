@@ -19,6 +19,14 @@ permissões (Android 14: `BLUETOOTH_SCAN neverForLocation`) → abre o app.
 adb logcat -s BTSCAN     # linhas "TAG <mac> <nome> <rssi>"
 ```
 
+## Multi-estação: id + token (spec-multi-antena-ble §F1)
+- **Id da estação**: pref persistida; **toque no TÍTULO** p/ editar (1–32 chars `[a-zA-Z0-9_-]`).
+  Default de 1º boot: `tc22-` + 4 últimos chars do **ANDROID_ID** — dois celulares recém-instalados
+  não colidem (CA-4). `Build.SERIAL` foi descartado: na API 26+ (o minSdk) exige `READ_PHONE_STATE`.
+- **Token do hub**: campo opcional no dialog do hub (**toque no SUBTÍTULO**); quando preenchido vai
+  em `x-station-token` em todo request (ingest, tag-name, sync de nomes). Vazio = LAN aberta (dev).
+- O id atual aparece no título E no subtítulo — o operador vê qual id o device usa.
+
 ## Lições do build manual (pra não repetir)
 - **StringConcatFactory**: o Android não tem — `"a"+b` via invokedynamic CRASHA. Use StringBuilder
   explícito (ou `-XDstringConcat=inline`, que no JDK 21 aqui NÃO bastou; StringBuilder é à prova de bala).
