@@ -16,6 +16,8 @@ export { ToastProvider, useToast, type ToastTone } from "./Toast";
 export { Badge, Spinner, Skeleton, SkeletonText, Alert, EmptyState, type Tone } from "./misc";
 export { SectionTitle } from "./SectionTitle";
 export { PageHeader } from "./PageHeader";
+export { Panel } from "./Panel";
+export { Table, Th, TableEmpty, type TableColumn } from "./Table";
 export { Tabs, TabsContent, type TabItem } from "./Tabs";
 export { ScrollArea, type ScrollAreaProps } from "./ScrollArea";
 export { DropdownMenu, type DropdownItem } from "./DropdownMenu";

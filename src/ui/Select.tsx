@@ -17,8 +17,24 @@ export const Select = forwardRef<
     ariaLabel?: string;
     className?: string;
     disabled?: boolean;
+    /** Encaminhados ao Trigger — o Field injeta estes p/ ligar dica/erro ao controle. */
+    "aria-describedby"?: string;
+    "aria-invalid"?: boolean;
   }
->(function Select({ value, onChange, options, placeholder, ariaLabel, className, disabled }, ref) {
+>(function Select(
+  {
+    value,
+    onChange,
+    options,
+    placeholder,
+    ariaLabel,
+    className,
+    disabled,
+    "aria-describedby": ariaDescribedBy,
+    "aria-invalid": ariaInvalid,
+  },
+  ref,
+) {
   return (
     <RSelect.Root value={value} onValueChange={onChange} disabled={disabled}>
       <RSelect.Trigger
@@ -27,10 +43,13 @@ export const Select = forwardRef<
           "inline-flex h-[var(--ui-ctrl-h)] min-w-[120px] cursor-pointer items-center justify-between gap-2",
           "rounded-sm border border-border bg-panel-2 pl-3 pr-2 text-body text-text [font-family:var(--sans)]",
           "data-[placeholder]:text-text-muted",
+          "aria-[invalid=true]:border-critical",
           "focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--bg),0_0_0_4px_var(--accent)]",
           className,
         )}
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
       >
         <RSelect.Value placeholder={placeholder} />
         <RSelect.Icon className="text-text-muted">▾</RSelect.Icon>
