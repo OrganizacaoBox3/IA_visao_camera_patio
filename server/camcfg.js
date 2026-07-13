@@ -8,6 +8,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const db = require("./db");
+// Validação de zona POLIGONAL (spec zonas-poligonais): espelho JS de src/zones.ts vive em
+// analysis/zones.js (mesmo lugar do pointInPolygon que a consome) — fonte única no hub.
+const { sanitizeZonePoints, polygonBBox } = require("./analysis/zones");
 
 const FILE = path.join(__dirname, "camcfg.json");
 let tripwires = new Map(); // cameraId -> Tripwire[]
@@ -87,6 +90,21 @@ function cleanZone(z) {
     arming: ARMING_MODES.has(z.arming) ? z.arming : "sempre",
   };
   if (typeof z.mask === "string" && z.mask) out.mask = z.mask;
+  // points (zona POLIGONAL, spec zonas-poligonais P2/P4 — armadilha 1: campo NOVO tem que estar
+  // NESTA allowlist, senão o save o descarta MUDO): ≥3 e ≤20 vértices {x,y} clampados 0..1,
+  // polígono SIMPLES. Malformado → campo OMITIDO (a zona segue valendo como retângulo/máscara),
+  // NUNCA []. Com points válidos, a bbox x,y,w,h é RE-DERIVADA deles no save (padrão
+  // maskBBoxNorm): o pré-filtro retangular dos call-sites nunca fica velho (armadilha 3).
+  // NÃO confundir com calibration.points (homografia) — objetos distintos (armadilha 10).
+  const pts = sanitizeZonePoints(z.points);
+  if (pts) {
+    out.points = pts;
+    const bb = polygonBBox(pts);
+    out.x = bb.x;
+    out.y = bb.y;
+    out.w = bb.w;
+    out.h = bb.h;
+  }
   return out;
 }
 function cleanZones(arr) {

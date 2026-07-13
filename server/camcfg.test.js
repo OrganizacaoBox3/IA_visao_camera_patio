@@ -91,3 +91,68 @@ describe("camcfg — round-trip da zona PROIBIDA (CA-7)", () => {
     expect(roundTrip(uma)).toEqual(uma);
   });
 });
+
+// ZONA POLIGONAL (spec zonas-poligonais, CA-1 round-trip + armadilha 1): `points` na allowlist —
+// salvar e reler preserva o polígono; a bbox é RE-DERIVADA dos points no save (armadilha 3);
+// malformado é descartado como CAMPO AUSENTE (nunca []) e a zona segue como retângulo.
+describe("camcfg — round-trip da zona POLIGONAL (points na allowlist)", () => {
+  const elle = [
+    { x: 0.1, y: 0.1 },
+    { x: 0.3, y: 0.1 },
+    { x: 0.3, y: 0.6 },
+    { x: 0.6, y: 0.6 },
+    { x: 0.6, y: 0.8 },
+    { x: 0.1, y: 0.8 },
+  ];
+
+  it("preserva os points (côncavo em L) e RE-DERIVA a bbox — mesmo com bbox velha do cliente", () => {
+    const [z] = roundTrip([
+      { id: "z-poly", label: "Rack", modo: "atividade", points: elle, x: 0.9, y: 0.9, w: 0.05, h: 0.05 },
+    ]);
+    expect(z.points).toEqual(elle); // CA-1: salvar → reler → polígono igual
+    // envolvente do L, não a bbox velha (w/h por subtração de floats → tolerância)
+    expect(z.x).toBeCloseTo(0.1, 10);
+    expect(z.y).toBeCloseTo(0.1, 10);
+    expect(z.w).toBeCloseTo(0.5, 10);
+    expect(z.h).toBeCloseTo(0.7, 10);
+  });
+
+  it("vértices fora do frame são CLAMPADOS 0..1 (P2)", () => {
+    const [z] = roundTrip([
+      { id: "z-c", points: [{ x: -0.2, y: 0.1 }, { x: 1.5, y: 0.1 }, { x: 0.5, y: 0.9 }] },
+    ]);
+    expect(z.points).toEqual([
+      { x: 0, y: 0.1 },
+      { x: 1, y: 0.1 },
+      { x: 0.5, y: 0.9 },
+    ]);
+  });
+
+  it("malformado → campo OMITIDO (nunca []): <3, >20, NaN, auto-intersecção", () => {
+    const casos = [
+      [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }], // <3
+      Array.from({ length: 21 }, (_, i) => ({ x: i / 30, y: 0.5 })), // 21 vértices
+      [{ x: 0.1, y: 0.1 }, { x: NaN, y: 0.2 }, { x: 0.5, y: 0.7 }], // coordenada inválida
+      [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.9, y: 0.1 }, { x: 0.1, y: 0.9 }], // gravata
+      "não-é-array",
+    ];
+    for (const points of casos) {
+      const [z] = roundTrip([{ id: "z-bad", points, x: 0.2, y: 0.2, w: 0.3, h: 0.3 }]);
+      expect(z.points, JSON.stringify(points).slice(0, 40)).toBeUndefined();
+      expect(z).toMatchObject({ x: 0.2, y: 0.2, w: 0.3, h: 0.3 }); // zona segue como retângulo
+    }
+  });
+
+  it("retrocompat (CA-5): zona sem points não ganha o campo nem muda de bbox/máscara", () => {
+    const [z] = roundTrip([
+      { id: "z-r", modo: "exclusao", x: 0.1, y: 0.2, w: 0.3, h: 0.4, mask: "8x8:AAAA" },
+    ]);
+    expect("points" in z).toBe(false);
+    expect(z).toMatchObject({ modo: "exclusao", x: 0.1, y: 0.2, w: 0.3, h: 0.4, mask: "8x8:AAAA" });
+  });
+
+  it("round-trip poligonal é idempotente", () => {
+    const uma = cleanZones([{ id: "z", modo: "proibida", points: elle }]);
+    expect(roundTrip(uma)).toEqual(uma);
+  });
+});

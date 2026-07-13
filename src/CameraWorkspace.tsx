@@ -41,11 +41,10 @@ import {
   type ZoneSample,
 } from "./report/store";
 import { type Dataset } from "./report/mock";
-import { OBJECT_CATALOG } from "./objects/catalog";
 import {
   loadZonesForCamera,
   persistZones,
-  newZoneId,
+  withDefaults,
   assignZone,
   DEFAULT_GRID,
   ZONE_MODE_LABEL,
@@ -57,18 +56,8 @@ import { ApiError, type BtReading } from "./api";
 import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
 import { useFloorTags } from "./fusion/useFloorTags";
 import { useCalibrationOverlay } from "./camera/useCalibrationOverlay";
-import {
-  decodeMask,
-  encodeMask,
-  maskFromRect,
-  paintBrush,
-  cellAtNorm,
-  maskBBoxNorm,
-  anySet,
-  clearMask,
-  containsNorm,
-  type Mask,
-} from "./zoneMask";
+import { useZoneMasks } from "./camera/useZoneMasks";
+import { usePolygonEditor } from "./camera/usePolygonEditor";
 import {
   createCounter,
   createOccupancy,
@@ -107,11 +96,13 @@ import {
   drawPaintGrid,
   drawZoneDraft,
   drawTripwireDraft,
+  drawPolygonDraft,
   drawZoneOverlays,
   drawTelemetryHud,
   drawCalibrationOverlay,
   drawFloorTags,
   RISK_LABEL,
+  type HubZoneState,
   type ZoneResult,
   type TrackBox,
 } from "./camera/draw";
@@ -281,7 +272,6 @@ export function CameraWorkspace({
     cx: number;
     cy: number;
   } | null>(null);
-  const maskCacheRef = useRef<Map<string, { enc?: string; mask: Mask }>>(new Map()); // máscaras decodificadas
   const paintingRef = useRef(false);
   const eraseRef = useRef(false);
   const tracksRef = useRef<Track[]>([]); // presença (IDs anônimos + permanência)
@@ -327,6 +317,9 @@ export function CameraWorkspace({
   const [panel, setPanel] = useState<Map<string, ZoneResult>>(new Map());
   const [drawMode, setDrawMode] = useState(false);
   const [paintZoneId, setPaintZoneId] = useState<string | null>(null);
+  // Máscara efetiva por zona (cache + pintura + fábricas de `contains`) — ./camera/useZoneMasks.
+  // É a casa da precedência points>mask (P5) e do consumo rasterizado do polígono (P6).
+  const zm = useZoneMasks(paintZoneId);
   const [brush, setBrush] = useState(2);
   const [erase, setErase] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -447,7 +440,26 @@ export function CameraWorkspace({
     onEnterEditMode: () => {
       setDrawMode(false);
       setPaintZoneId(null);
+      poly.cancel(); // editor de linha derruba o rascunho de polígono (modos exclusivos)
     },
+  });
+
+  // Editor de POLÍGONO (spec zonas-poligonais F2) — rascunho/arraste em ./camera/usePolygonEditor;
+  // aqui só a fiação: handlers delegam (onDown/onMove/onUp) e criação/patch reusam persist/patchZone.
+  const poly = usePolygonEditor({
+    viewportRef,
+    currentFrame,
+    zonesRef,
+    onStart: () => {
+      setDrawMode(false);
+      setTripwireMode(false);
+      setPaintZoneId(null);
+    },
+    onCreate: (points) =>
+      setZones((p) => persist([...p, withDefaults({ label: `Área ${p.length + 1}`, points }, cameraId)])),
+    onLive: (id, patch) => setZones((p) => p.map((z) => (z.id === id ? { ...z, ...patch } : z))),
+    onPatch: (id, patch) => patchZone(id, patch),
+    onAlert: (m) => onAlertRef.current?.(`⚠ ${label}: ${m}`),
   });
 
   // Espelhos do transporte WebRTC e do motor do hub vivem em useWebrtcTransport/useHubAnalysis
@@ -574,11 +586,6 @@ export function CameraWorkspace({
     return { el: cv, w: cw, h: ch };
   }
 
-  function containsFn(z: Zone): ((nx: number, ny: number) => boolean) | undefined {
-    const m = getMask(z);
-    return m && anySet(m) ? (nx: number, ny: number) => containsNorm(m, nx, ny) : undefined;
-  }
-
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
   // ByteTrack-lite (vision/bytetrack.ts): 2 passadas por IoU — score alto associa/nasce; score
   // baixo só SUSTENTA tracks; predição linear dt-aware mantém o id vivo em rodadas lentas;
@@ -626,7 +633,7 @@ export function CameraWorkspace({
       lastSeen: t.lastSeen,
       // Zona pela regra ÚNICA do front (zones.assignZone): desempate por maior interseção
       // bbox∩zona, depois menor área — nunca por ordem da lista.
-      zone: assignZone(ativ, t.cx, t.cy, t.bbox, containsFn)?.label ?? null,
+      zone: assignZone(ativ, t.cx, t.cy, t.bbox, zm.containsFn)?.label ?? null,
       score: t.score,
     }));
   }
@@ -907,7 +914,8 @@ export function CameraWorkspace({
             idleAlertMs: z.idleAlertMs,
             sensitivity: z.sensitivity,
             atividade: z.atividade,
-            contains: containsFn(z),
+            // P6: o laço POR PIXEL (e a ocupação) consomem a máscara — rasterizada p/ polígono.
+            contains: zm.pixelContainsFn(z),
           };
           const r = h.proc.process(az, ctx);
           // Pessoas EXIBIDAS por zona vêm do zones[] do hub quando disponível — a atribuição do
@@ -965,7 +973,7 @@ export function CameraWorkspace({
           });
         } else if (h.modo === "objetos") {
           const r = h.proc.process(
-            [{ id: z.id, label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) }],
+            [{ id: z.id, label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, contains: zm.containsFn(z) }],
             z.selectedClasses,
             { frame: f, now },
           );
@@ -1108,7 +1116,7 @@ export function CameraWorkspace({
       // lista (só pessoa; veículos seguem contando). Modo hub: dets já vêm filtrados → no-op.
       const dets = filterExcludedPersons(
         detsRef.current,
-        excl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h, contains: containsFn(z) })),
+        excl.map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h, contains: zm.containsFn(z) })),
         f.w,
         f.h,
       );
@@ -1213,10 +1221,19 @@ export function CameraWorkspace({
     // Ingere só payload FRESCO (mesmo limiar do applyHubAnalysis); modo local não interpola.
     const hubEngine = analysisEngineRef.current === "hub";
     let displayTracks: ReadonlyArray<TrackBox> = tracksRef.current;
+    // Estado da zona PROIBIDA vindo do MOTOR (contrato ADITIVO `zonesProibidas` do payload
+    // `analysis-tracks`): só de payload FRESCO; hub antigo (sem o campo) → null e o desenho
+    // mantém o fallback ARMADA quieta. VIOLADA acende --state-critical ao vivo.
+    let hubProibidas: ReadonlyArray<HubZoneState> | null = null;
     if (hubEngine) {
       const nowMs = performance.now();
-      const hd = getHubAnalysisRef.current?.() ?? null;
-      if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) hubInterpRef.current.ingest(hd, nowMs);
+      const hd = (getHubAnalysisRef.current?.() ?? null) as
+        | (HubAnalysis & { zonesProibidas?: HubZoneState[] })
+        | null;
+      if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
+        hubInterpRef.current.ingest(hd, nowMs);
+        hubProibidas = hd.zonesProibidas ?? null;
+      }
       displayTracks = toDisplayTracks(
         hubInterpRef.current.sample(nowMs),
         hubFirstSeenRef.current,
@@ -1238,8 +1255,9 @@ export function CameraWorkspace({
       layersRef.current,
       confRef.current,
       detailed,
-      getMask,
+      zm.getMask,
       layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
+      hubProibidas, // fio VIOLADA (zonesProibidas do motor); null → ARMADA quieta (aditivo)
     );
 
     // Malha da calibração (toggle opt-in): grade do chão via homografia + pontos cadastrados —
@@ -1264,6 +1282,7 @@ export function CameraWorkspace({
     if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows); // grade de pintura
     drawZoneDraft(ctx, drawRef.current); // retângulo de zona em arraste
     drawTripwireDraft(ctx, twDrawRef.current); // linha em traçado
+    drawPolygonDraft(ctx, cr, poly.draftRef.current); // polígono em desenho (vértices + fecho)
 
     // HUD de telemetria (toggleável; só na câmera aberta), desenhado por último. overlayAge só
     // faz sentido no modo hub; dropped/recvFps são opcionais do FrameSource (lidos defensivos);
@@ -1291,26 +1310,7 @@ export function CameraWorkspace({
     }
   }
 
-  // ── máscara (blueprint em grade) ──
-  function getMask(z: Zone): Mask | null {
-    const c = maskCacheRef.current.get(z.id);
-    if (paintZoneId === z.id && c) return c.mask; // ao vivo durante a pintura
-    if (!z.mask) return null;
-    if (c && c.enc === z.mask) return c.mask;
-    const m = decodeMask(z.mask);
-    if (m) maskCacheRef.current.set(z.id, { enc: z.mask, mask: m });
-    return m;
-  }
-  function ensureMaskForPaint(z: Zone): Mask {
-    const c = maskCacheRef.current.get(z.id);
-    if (c && paintZoneId === z.id) return c.mask;
-    const m =
-      decodeMask(z.mask) ?? maskFromRect(DEFAULT_GRID.cols, DEFAULT_GRID.rows, z.x, z.y, z.w, z.h);
-    maskCacheRef.current.set(z.id, { enc: z.mask, mask: m });
-    return m;
-  }
-
-  // ── editor de zonas ──
+  // ── editor de zonas ── (máscara/pintura/contains vivem em ./camera/useZoneMasks — `zm`)
   // `currentFrame` (fonte da GEOMETRIA do editor, WebRTC × MJPEG) vem de useWebrtcTransport.
   function vpPoint(e: ReactMouseEvent) {
     const r = viewportRef.current!.getBoundingClientRect();
@@ -1328,22 +1328,13 @@ export function CameraWorkspace({
   }
   function paintAt(e: ReactMouseEvent) {
     const z = zonesRef.current.find((z) => z.id === paintZoneId);
-    if (!z) return;
-    const m = ensureMaskForPaint(z);
-    const p = normPoint(e);
-    if (!p) return;
-    const { col, row } = cellAtNorm(m, p.nx, p.ny);
-    paintBrush(m, col, row, brush - 1, !eraseRef.current);
+    const p = z ? normPoint(e) : null;
+    if (z && p) zm.paintAt(z, p.nx, p.ny, brush - 1, eraseRef.current);
   }
   function commitPaint() {
     const z = zonesRef.current.find((zz) => zz.id === paintZoneId);
-    if (!z) return;
-    const c = maskCacheRef.current.get(z.id);
-    if (!c) return;
-    const enc = encodeMask(c.mask);
-    maskCacheRef.current.set(z.id, { enc, mask: c.mask });
-    const bb = maskBBoxNorm(c.mask);
-    patchZone(z.id, bb ? { mask: enc, x: bb.x, y: bb.y, w: bb.w, h: bb.h } : { mask: enc });
+    const patch = z ? zm.commitPaint(z) : null;
+    if (z && patch) patchZone(z.id, patch);
   }
   function onDown(e: ReactMouseEvent) {
     if (mode !== "full" || reviewRef.current) return; // em revisão o palco mostra o buffer — sem edição de zona
@@ -1363,7 +1354,9 @@ export function CameraWorkspace({
     if (drawMode) {
       const p = vpPoint(e);
       drawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y };
+      return;
     }
+    poly.onDown(e); // polígono: vértice do rascunho OU início do arraste de vértice (CA-7)
   }
   function onMove(e: ReactMouseEvent) {
     if (paintingRef.current) {
@@ -1380,7 +1373,9 @@ export function CameraWorkspace({
       const p = vpPoint(e);
       drawRef.current.cx = p.x;
       drawRef.current.cy = p.y;
+      return;
     }
+    poly.onMove(e); // cursor do rascunho / arraste de vértice ao vivo
   }
   function onUp() {
     if (paintingRef.current) {
@@ -1392,6 +1387,7 @@ export function CameraWorkspace({
       commitTripwire();
       return;
     }
+    if (poly.onUp()) return; // fim do arraste de vértice (persiste points + bbox derivada)
     const d = drawRef.current;
     if (!d?.active) return;
     drawRef.current = null;
@@ -1404,30 +1400,27 @@ export function CameraWorkspace({
       w = Math.abs(d.cx - d.sx),
       h = Math.abs(d.cy - d.sy);
     if (w < 16 || h < 16) return;
-    const id = newZoneId(cameraId);
-    const nz: Zone = {
-      id,
-      label: `Área ${zonesRef.current.length + 1}`,
-      x: Math.max(0, (x0 - cr.x) / cr.w),
-      y: Math.max(0, (y0 - cr.y) / cr.h),
-      w: Math.min(1, w / cr.w),
-      h: Math.min(1, h / cr.h),
-      modo: "atividade" as ZoneMode,
-      idleAlertMs: APP_CONFIG.zones.defaultIdleAlertMs,
-      sensitivity: 5,
-      atividade: "Indefinida",
-      ponto: APP_CONFIG.reading.defaultPonto,
-      selectedClasses: OBJECT_CATALOG.map((o) => o.key),
-    };
+    // Defaults do modelo via withDefaults (fonte única) — mesmos valores do literal antigo.
+    const nz = withDefaults(
+      {
+        label: `Área ${zonesRef.current.length + 1}`,
+        x: Math.max(0, (x0 - cr.x) / cr.w),
+        y: Math.max(0, (y0 - cr.y) / cr.h),
+        w: Math.min(1, w / cr.w),
+        h: Math.min(1, h / cr.h),
+      },
+      cameraId,
+    );
     setZones((p) => persist([...p, nz]));
   }
-  // Modos de edição mutuamente exclusivos (tripwire × zona × pintura não conflitam).
+  // Modos de edição mutuamente exclusivos (tripwire × zona × polígono × pintura não conflitam).
   function toggleDrawMode() {
     setDrawMode((v) => {
       const nv = !v;
       if (nv) {
         setTripwireMode(false);
         setPaintZoneId(null);
+        poly.cancel();
       }
       return nv;
     });
@@ -1472,7 +1465,7 @@ export function CameraWorkspace({
     holdersRef.current.delete(id);
     cropsRef.current.delete(id);
     resultsRef.current.delete(id);
-    maskCacheRef.current.delete(id);
+    zm.drop(id);
     clearZone(id);
     if (paintZoneId === id) setPaintZoneId(null);
     setZones((p) => persist(p.filter((z) => z.id !== id)));
@@ -1480,13 +1473,14 @@ export function CameraWorkspace({
   function startPaint(z: Zone) {
     setDrawMode(false);
     setTripwireMode(false);
-    ensureMaskForPaint(z);
+    poly.cancel();
+    zm.ensurePaint(z);
     setPaintZoneId(z.id);
   }
   function clearActive() {
     const z = zonesRef.current.find((zz) => zz.id === paintZoneId);
     if (!z) return;
-    clearMask(ensureMaskForPaint(z));
+    zm.clearPaint(z);
     commitPaint();
   }
   const paintZone = paintZoneId ? (zones.find((z) => z.id === paintZoneId) ?? null) : null;

@@ -13,7 +13,7 @@ import { type FadigaScene } from "../fadiga/draw";
 import { type ObjDetection } from "../objects/detector";
 import { objClass } from "../objects/catalog";
 import { anySet, type Mask } from "../zoneMask";
-import { ZONE_MODE_LABEL, type Zone } from "../zones";
+import { ZONE_MODE_LABEL, zonePolygon, type Zone, type ZonePoint } from "../zones";
 import { type CineFrame } from "./cineBuffer";
 import { type Occupancy, type Tripwire, type TripwireCounts, inwardNormal } from "../vision/counting";
 import { coveredByAny } from "../vision/nms";
@@ -711,6 +711,76 @@ export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | n
   ctx.setLineDash([]);
 }
 
+// ── ZONA POLIGONAL (spec zonas-poligonais F2) ────────────────────────────────
+
+// Traça o path FECHADO do polígono no ctx (coords normalizadas → letterbox). Folha reusada
+// pelo fill/stroke/clip — quem chama decide o que fazer com o path corrente.
+function tracePolygon(ctx: CanvasRenderingContext2D, cr: Rect, pts: ReadonlyArray<ZonePoint>) {
+  ctx.beginPath();
+  ctx.moveTo(cr.x + pts[0].x * cr.w, cr.y + pts[0].y * cr.h);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(cr.x + pts[i].x * cr.w, cr.y + pts[i].y * cr.h);
+  ctx.closePath();
+}
+
+// Alças de VÉRTICE (CA-7): alvos visíveis p/ o arraste na câmera aberta (o hit-test generoso
+// vive no usePolygonEditor). Só no modo cheio (detailed) — o tile não edita.
+function drawVertexHandles(
+  ctx: CanvasRenderingContext2D,
+  cr: Rect,
+  pts: ReadonlyArray<ZonePoint>,
+  color: string,
+) {
+  const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+  for (const p of pts) {
+    ctx.beginPath();
+    ctx.arc(cr.x + p.x * cr.w, cr.y + p.y * cr.h, 4, 0, Math.PI * 2);
+    ctx.fillStyle = scrim;
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+// Rascunho do POLÍGONO em desenho (P1): arestas tracejadas + linha até o cursor + vértices;
+// o 1º vértice ganha um ANEL (alvo de fecho generoso) quando o polígono já pode fechar (≥3).
+export type PolygonDraft = { points: ZonePoint[]; cursor: ZonePoint | null };
+export function drawPolygonDraft(ctx: CanvasRenderingContext2D, cr: Rect, d: PolygonDraft | null) {
+  if (!d || d.points.length === 0) return;
+  const info = cssVar("--state-info", "#38bdf8");
+  const px = (p: ZonePoint) => ({ x: cr.x + p.x * cr.w, y: cr.y + p.y * cr.h });
+  const p0 = px(d.points[0]);
+  ctx.save();
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = info;
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y);
+  for (let i = 1; i < d.points.length; i++) {
+    const p = px(d.points[i]);
+    ctx.lineTo(p.x, p.y);
+  }
+  if (d.cursor) {
+    const c = px(d.cursor);
+    ctx.lineTo(c.x, c.y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = info;
+  for (const pt of d.points) {
+    const p = px(pt);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (d.points.length >= 3) {
+    ctx.beginPath(); // anel do fecho: clicar aqui fecha o polígono (alvo generoso — P7)
+    ctx.arc(p0.x, p0.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // ── Laço por-zona do palco (retângulo/máscara + rótulo + detecções de objeto + overlay de fadiga) ──
 // Extraído de `drawScene` (R3) SEM mudança de comportamento. Função FOLHA: recebe o ctx 2D já
 // transformado (dpr), o retângulo de conteúdo (letterbox) e os dados por-zona (zonas/resultados/
@@ -725,14 +795,16 @@ const TRACK_COVER_IOU = 0.45;
 const TRACK_COVER_CONTAIN = 0.7;
 
 // ── ZONA PROIBIDA (spec alerta-por-atividade E6) ─────────────────────────────
-// Subset ESTRUTURAL da HubZone do payload `analysis-tracks` (types/analysis.ts) + o campo
-// `presenca` — HOOK aditivo p/ o estado do ciclo de vida calculado pelo MOTOR DO HUB
-// ("ARMADA" | "VIOLADA"; a frente do produtor o emite quando fechar). Estrutural de propósito:
-// este módulo não é dono do contrato do payload; só declara o que o desenho precisa.
-export type HubZoneState = { id: string; label: string; people: number; presenca?: string };
+// Subset ESTRUTURAL do payload `analysis-tracks` + o campo `presenca` — estado do ciclo de
+// vida calculado pelo MOTOR DO HUB. O produtor (zonesProibidas, contrato pinado da Onda B)
+// emite `presenca: boolean` (true = VIOLADA); o hook antigo aceitava a string "VIOLADA" —
+// o desenho aceita AMBOS (aditivo). Estrutural de propósito: este módulo não é dono do
+// contrato do payload; só declara o que o desenho precisa.
+export type HubZoneState = { id: string; label: string; people: number; presenca?: boolean | string };
 
 // Hachura diagonal SUTIL da zona proibida quieta — identidade visual própria sem croma (E6:
 // "armada" ≠ "em alarme"; o traço/hachura distingue o modo, a cor só entra na violação).
+// `trace` (opcional) troca o clip retangular pelo PATH do polígono (mesma hachura — F2).
 function drawProibidaHatch(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -740,10 +812,14 @@ function drawProibidaHatch(
   w: number,
   h: number,
   color: string,
+  trace?: () => void,
 ) {
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
+  if (trace) trace();
+  else {
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+  }
   ctx.clip();
   ctx.strokeStyle = color;
   ctx.globalAlpha = 0.22;
@@ -791,13 +867,15 @@ export function drawZoneOverlays(
       const hz = hubZones?.find((zz) => zz.id === z.id || zz.label === z.label);
       const violada = hz
         ? hz.presenca != null
-          ? hz.presenca === "VIOLADA"
+          ? hz.presenca === true || hz.presenca === "VIOLADA"
           : hz.people > 0
         : false;
       const cor = violada
         ? cssVar("--state-critical", "#ef4444")
         : cssVar("--state-neutral", "#64748b");
-      const mask = maskOf(z);
+      // Polígono (F2): desenha por PATH — a máscara vira legado quando há points (P5).
+      const pts = zonePolygon(z);
+      const mask = pts ? null : maskOf(z);
       const hasMask = !!(mask && anySet(mask));
       if (hasMask && mask && layers.mask) {
         // área irregular: células pintadas (fill mais denso SÓ na violação)
@@ -810,7 +888,17 @@ export function drawZoneOverlays(
               ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
       }
       if (layers.zones) {
-        if (!hasMask) {
+        if (pts) {
+          // a MESMA linguagem do retângulo (hachura quieta / fill saturado na violação),
+          // recortada pelo path do polígono; rótulo/badge seguem ancorados na bbox.
+          if (violada) {
+            tracePolygon(ctx, cr, pts);
+            ctx.fillStyle = cor + "2e"; // fill saturado da violação
+            ctx.fill();
+          } else {
+            drawProibidaHatch(ctx, x, y, w, h, cor, () => tracePolygon(ctx, cr, pts));
+          }
+        } else if (!hasMask) {
           if (violada) {
             ctx.fillStyle = cor + "2e"; // fill saturado da violação
             ctx.fillRect(x, y, w, h);
@@ -821,8 +909,14 @@ export function drawZoneOverlays(
         ctx.setLineDash([6, 4]); // tracejado: identidade da zona proibida mesmo quieta
         ctx.lineWidth = violada ? 3 : 1.5;
         ctx.strokeStyle = cor;
-        ctx.strokeRect(x, y, w, h);
+        if (pts) {
+          tracePolygon(ctx, cr, pts);
+          ctx.stroke();
+        } else {
+          ctx.strokeRect(x, y, w, h);
+        }
         ctx.setLineDash([]);
+        if (pts && detailed) drawVertexHandles(ctx, cr, pts, cor);
         // rótulo do modo + badge de estado (ARMADA discreto / VIOLADA saturado)
         const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
         const label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
@@ -894,10 +988,23 @@ export function drawZoneOverlays(
       color = riskCanvasColor(r.risk);
       label2 = `${z.label} · ${RISK_LABEL[r.risk]}${r.ear != null ? ` · EAR ${r.ear.toFixed(2)}` : ""}${r.phone ? " · 📱" : ""}`;
     }
-    const mask = maskOf(z);
+    // Polígono (F2): fill/stroke por PATH na mesma linguagem do retângulo; a máscara vira
+    // legado quando há points (P5). Rótulo/estado seguem ancorados na bbox derivada.
+    const pts = zonePolygon(z);
+    const mask = pts ? null : maskOf(z);
     const hasMask = !!(mask && anySet(mask));
     const alerting = r?.modo === "atividade" && r.view.state === "ALERTA";
-    if (hasMask && mask) {
+    if (pts) {
+      if (layers.zones) {
+        tracePolygon(ctx, cr, pts);
+        ctx.lineWidth = alerting ? 3 : 2;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color + "1f";
+        ctx.fill();
+        ctx.stroke();
+        if (detailed) drawVertexHandles(ctx, cr, pts, color);
+      }
+    } else if (hasMask && mask) {
       // área irregular: pinta as células marcadas na cor do modo (camada "máscara")
       if (layers.mask) {
         const cw = cr.w / mask.cols,

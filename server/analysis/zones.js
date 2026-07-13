@@ -91,6 +91,105 @@ function decodeMask(str) {
   return m;
 }
 
+// ── ZONA POLIGONAL (spec zonas-poligonais F1) — espelhos byte-a-byte do TS ───
+// pointInPolygon: cópia EXATA de src/fusion/floor-polygon.ts (ray casting par/ímpar). Mudou lá,
+// re-porta AQUI — o sensor de paridade cross-language são as fixtures compartilhadas
+// src/zones-polygon-fixtures.json (CA-4), consumidas por zones.test.ts E zones.test.js.
+// Ponto exatamente sobre aresta: determinístico, sem garantia dentro/fora (documentado lá).
+
+const isFiniteNum = (v) => typeof v === "number" && Number.isFinite(v);
+const isVec = (v) => !!v && typeof v === "object" && isFiniteNum(v.x) && isFiniteNum(v.y);
+
+function pointInPolygon(p, polygon) {
+  if (!isVec(p) || !Array.isArray(polygon) || polygon.length < 3) return false;
+  const n = polygon.length;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = a.y > p.y !== b.y > p.y;
+    if (crosses) {
+      const xIntersect = ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x;
+      if (p.x < xIntersect) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Validação do polígono — espelho de src/zones.ts (isSimplePolygon/sanitizeZonePoints/
+// polygonBBox; comentários de decisão vivem LÁ). Consumida por camcfg.js (cleanZone).
+const POLYGON_MIN_POINTS = 3;
+const POLYGON_MAX_POINTS = 20;
+const clampCoord = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+function cross(o, a, b) {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+function onSegment(p, q, r) {
+  return (
+    Math.min(p.x, r.x) <= q.x &&
+    q.x <= Math.max(p.x, r.x) &&
+    Math.min(p.y, r.y) <= q.y &&
+    q.y <= Math.max(p.y, r.y)
+  );
+}
+function segmentsIntersect(p1, p2, p3, p4) {
+  const d1 = cross(p3, p4, p1);
+  const d2 = cross(p3, p4, p2);
+  const d3 = cross(p1, p2, p3);
+  const d4 = cross(p1, p2, p4);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+    return true;
+  if (d1 === 0 && onSegment(p3, p1, p4)) return true;
+  if (d2 === 0 && onSegment(p3, p2, p4)) return true;
+  if (d3 === 0 && onSegment(p1, p3, p2)) return true;
+  if (d4 === 0 && onSegment(p1, p4, p2)) return true;
+  return false;
+}
+function isSimplePolygon(pts) {
+  const n = pts.length;
+  if (n < POLYGON_MIN_POINTS) return false;
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue; // arestas adjacentes compartilham vértice
+      if (segmentsIntersect(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n])) return false;
+    }
+  return true;
+}
+/** malformado → undefined, NUNCA [] (armadilha 8); válido → vértices clampados 0..1 */
+function sanitizeZonePoints(raw) {
+  if (!Array.isArray(raw) || raw.length < POLYGON_MIN_POINTS || raw.length > POLYGON_MAX_POINTS)
+    return undefined;
+  const pts = [];
+  for (const p of raw) {
+    const x = p ? p.x : undefined;
+    const y = p ? p.y : undefined;
+    if (typeof x !== "number" || !Number.isFinite(x)) return undefined;
+    if (typeof y !== "number" || !Number.isFinite(y)) return undefined;
+    pts.push({ x: clampCoord(x), y: clampCoord(y) });
+  }
+  return isSimplePolygon(pts) ? pts : undefined;
+}
+/** bbox derivada dos vértices (padrão maskBBoxNorm) — o pré-filtro retangular segue válido */
+function polygonBBox(pts) {
+  let minX = 1,
+    minY = 1,
+    maxX = 0,
+    maxY = 0;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { x: minX, y: minY, w: Math.max(0, maxX - minX), h: Math.max(0, maxY - minY) };
+}
+/** polígono efetivo da zona (já saneado por cleanZone) ou null — espelho de zonePolygon */
+function polygonOf(z) {
+  const p = z.points;
+  return Array.isArray(p) && p.length >= POLYGON_MIN_POINTS ? p : null;
+}
+
 // Cache de máscaras decodificadas (config de zona muda raramente; o motor chama
 // attributeZone por track × rodada). Chave = string codificada. Cap defensivo.
 const maskCache = new Map();
@@ -133,8 +232,16 @@ function attributeZone(target, zones) {
   let bestOv = -1;
   for (const z of zones) {
     if (cx < z.x || cx > z.x + z.w || cy < z.y || cy > z.y + z.h) continue;
-    const mc = maskFor(z.mask);
-    if (mc && mc.any && !containsNorm(mc.mask, cx, cy)) continue;
+    // Teste fino após o pré-filtro bbox — PRECEDÊNCIA points>mask (P5, idêntica ao cliente):
+    // zona poligonal usa pointInPolygon EXATO no CENTRO (âncora preservada, CA-6); a máscara
+    // vira legado quando points existe. Sem points: caminho de máscara intocado (CA-5).
+    const poly = polygonOf(z);
+    if (poly) {
+      if (!pointInPolygon({ x: cx, y: cy }, poly)) continue;
+    } else {
+      const mc = maskFor(z.mask);
+      if (mc && mc.any && !containsNorm(mc.mask, cx, cy)) continue;
+    }
     let ov = 0;
     if (bbox) {
       const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
@@ -175,8 +282,15 @@ function inExclusionZone(target, zones) {
   if (typeof fx !== "number" || typeof fy !== "number") return false;
   for (const z of zones) {
     if (fx < z.x || fx > z.x + z.w || fy < z.y || fy > z.y + z.h) continue;
-    const mc = maskFor(z.mask);
-    if (mc && mc.any && !containsNorm(mc.mask, fx, fy)) continue; // fora da máscara → não exclui
+    // PRECEDÊNCIA points>mask (P5) com a âncora no PÉ preservada (CA-6 — NÃO unificar com o
+    // centro do attributeZone); sem points, caminho de máscara intocado (CA-5).
+    const poly = polygonOf(z);
+    if (poly) {
+      if (!pointInPolygon({ x: fx, y: fy }, poly)) continue; // fora do polígono → não exclui
+    } else {
+      const mc = maskFor(z.mask);
+      if (mc && mc.any && !containsNorm(mc.mask, fx, fy)) continue; // fora da máscara → não exclui
+    }
     return true;
   }
   return false;
@@ -192,4 +306,10 @@ module.exports = {
   fillRectNorm,
   encodeMask,
   decodeMask,
+  // helpers de POLÍGONO (espelhos de src/zones.ts + fusion/floor-polygon.ts; consumidos por
+  // camcfg.js/cleanZone e pelos testes de paridade — fixtures compartilhadas, CA-4)
+  pointInPolygon,
+  isSimplePolygon,
+  sanitizeZonePoints,
+  polygonBBox,
 };

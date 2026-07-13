@@ -2,6 +2,7 @@
 // e os utilitários puros de zones.ts. loadZones/saveZones dependem de localStorage (browser) →
 // PULADOS aqui (cobertos pelo e2e); ver observação no relatório.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   createMask,
   maskGet,
@@ -26,9 +27,31 @@ import {
   ZONE_MODE_COLOR,
   ZONE_MODE_LABEL,
   DEFAULT_PRESENCA_ALERT_MS,
+  POLYGON_MAX_POINTS,
+  isSimplePolygon,
+  sanitizeZonePoints,
+  polygonBBox,
+  zonePolygon,
+  zoneContainsFn,
+  maskContainsFn,
+  rasterizePolygonMask,
+  type ZonePoint,
 } from "./zones";
+import { pointInPolygon } from "./fusion/floor-polygon";
 import { APP_CONFIG } from "./config";
 import { OBJECT_KEYS } from "./objects/catalog";
+
+// FIXTURES COMPARTILHADAS (CA-4): o MESMO arquivo é consumido por server/analysis/zones.test.js —
+// paridade TS↔JS do pointInPolygon/isSimplePolygon (armadilha 9: divergência ε na borda colocaria
+// a pessoa em zonas diferentes no cliente e no hub).
+type PolygonFixtures = {
+  polygons: Record<string, ZonePoint[]>;
+  containment: { polygon: string; point: ZonePoint; inside: boolean; why: string }[];
+  simplicity: { name: string; points: ZonePoint[]; simple: boolean; why: string }[];
+};
+const FIX: PolygonFixtures = JSON.parse(
+  readFileSync(new URL("./zones-polygon-fixtures.json", import.meta.url), "utf8"),
+);
 
 describe("zoneMask — geometria de máscara", () => {
   it("get/set respeitam limites e ignoram fora da grade", () => {
@@ -383,5 +406,134 @@ describe("zones — assignZone (desempate por interseção, depois menor área)"
     expect(assignZone([mascarada], 0.5, 0.2, undefined, (s) => s.contains)?.label).toBe("M");
     expect(assignZone([mascarada], 0.5, 0.8, undefined, (s) => s.contains)).toBeNull();
     expect(assignZone([especifica], 0.1, 0.1)).toBeNull();
+  });
+});
+
+// ── ZONAS POLIGONAIS (spec zonas-poligonais F1) ───────────────────────────────
+
+// CA-4: as fixtures compartilhadas passam IDÊNTICAS no cliente (este arquivo) e no hub
+// (server/analysis/zones.test.js) — o 1º sensor de paridade cross-language da casa.
+describe("polígono — paridade das fixtures compartilhadas (CA-4, lado TS)", () => {
+  it("pointInPolygon responde exatamente o registrado (inclui bordas/vértices — CA-3 no L)", () => {
+    for (const c of FIX.containment) {
+      const poly = FIX.polygons[c.polygon];
+      expect(poly, `polígono ${c.polygon} existe nas fixtures`).toBeDefined();
+      expect(pointInPolygon(c.point, poly), `${c.polygon} @ (${c.point.x},${c.point.y}): ${c.why}`).toBe(
+        c.inside,
+      );
+    }
+  });
+
+  it("isSimplePolygon valida/bloqueia exatamente o registrado (P2/P3)", () => {
+    for (const s of FIX.simplicity)
+      expect(isSimplePolygon(s.points), `${s.name}: ${s.why}`).toBe(s.simple);
+  });
+});
+
+describe("polígono — sanitizeZonePoints/polygonBBox (validação P2, armadilha 8)", () => {
+  const tri: ZonePoint[] = [
+    { x: 0.2, y: 0.2 },
+    { x: 0.8, y: 0.2 },
+    { x: 0.5, y: 0.7 },
+  ];
+
+  it("válido → clamp 0..1 aplicado; malformado → undefined, NUNCA []", () => {
+    expect(sanitizeZonePoints(tri)).toEqual(tri);
+    // clamp de vértice fora do frame
+    expect(sanitizeZonePoints([{ x: -0.5, y: 0.2 }, { x: 1.8, y: 0.2 }, { x: 0.5, y: 0.7 }])).toEqual([
+      { x: 0, y: 0.2 },
+      { x: 1, y: 0.2 },
+      { x: 0.5, y: 0.7 },
+    ]);
+    // malformados: nunca devolver [] (zona sem área muda)
+    for (const bad of [
+      undefined,
+      null,
+      "abc",
+      [],
+      tri.slice(0, 2), // <3 vértices
+      Array.from({ length: POLYGON_MAX_POINTS + 1 }, (_, i) => ({ x: i / 30, y: 0.5 })), // 21º recusado
+      [{ x: 0.1, y: 0.1 }, { x: NaN, y: 0.2 }, { x: 0.5, y: 0.7 }],
+      [{ x: 0.1, y: 0.1 }, { x: 0.2 }, { x: 0.5, y: 0.7 }],
+      // auto-intersecção (gravata) — P2 bloqueia
+      [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.9, y: 0.1 }, { x: 0.1, y: 0.9 }],
+    ]) {
+      const out = sanitizeZonePoints(bad);
+      expect(out, `malformado ${JSON.stringify(bad)?.slice(0, 40)}`).toBeUndefined();
+    }
+  });
+
+  it("polygonBBox deriva a envolvente dos vértices (pré-filtro retangular, armadilha 3)", () => {
+    const bb = polygonBBox(tri); // w/h por subtração de floats → comparação com tolerância
+    expect(bb.x).toBeCloseTo(0.2, 10);
+    expect(bb.y).toBeCloseTo(0.2, 10);
+    expect(bb.w).toBeCloseTo(0.6, 10);
+    expect(bb.h).toBeCloseTo(0.5, 10);
+  });
+});
+
+describe("polígono — withDefaults (CA-1 round-trip do modelo + CA-5 retrocompat)", () => {
+  const elle = FIX.polygons.elle;
+
+  it("points válidos: preservados e bbox x,y,w,h DERIVADA deles (ignora a bbox informada)", () => {
+    const z = withDefaults({ points: elle, x: 0.9, y: 0.9, w: 0.05, h: 0.05 }, "cam-p");
+    expect(z.points).toEqual(elle);
+    // envolvente do L (w/h por subtração de floats → tolerância)
+    expect(z.x).toBeCloseTo(0.1, 10);
+    expect(z.y).toBeCloseTo(0.1, 10);
+    expect(z.w).toBeCloseTo(0.5, 10);
+    expect(z.h).toBeCloseTo(0.7, 10);
+  });
+
+  it("points malformados → undefined (nunca []), zona segue como retângulo (armadilha 8)", () => {
+    const z = withDefaults({ points: [{ x: 0.1, y: 0.1 }], x: 0.2, y: 0.2, w: 0.3, h: 0.3 }, "c");
+    expect(z.points).toBeUndefined();
+    expect(z).toMatchObject({ x: 0.2, y: 0.2, w: 0.3, h: 0.3 }); // bbox informada intocada
+  });
+
+  it("CA-5: zona SEM points é bit-idêntica ao comportamento anterior (rect ± máscara)", () => {
+    const antes = withDefaults(
+      { id: "z-r", label: "Doca", x: 0.1, y: 0.2, w: 0.3, h: 0.4, mask: "8x8:AAAA" },
+      "cam-1",
+    );
+    expect(antes).toMatchObject({ x: 0.1, y: 0.2, w: 0.3, h: 0.4, mask: "8x8:AAAA" });
+    expect(antes.points).toBeUndefined();
+  });
+});
+
+describe("polígono — precedência points>mask e consumo rasterizado (P5/P6, CA-5/CA-6)", () => {
+  const elle = FIX.polygons.elle;
+
+  it("zoneContainsFn: com points, a máscara é IGNORADA (points vence — P5)", () => {
+    // máscara que só aceitaria a metade DIREITA (x ≥ 0.5) — o oposto do braço do L
+    const m = createMask(2, 1);
+    fillRectNorm(m, 0.5, 0, 0.5, 1, true);
+    const fn = zoneContainsFn({ points: elle }, m)!;
+    expect(fn(0.2, 0.3)).toBe(true); // dentro do L, FORA da máscara → polígono decide
+    expect(fn(0.45, 0.3)).toBe(false); // vão do L (CA-3), mesmo com máscara irrelevante
+  });
+
+  it("zoneContainsFn sem points degrada p/ o caminho de máscara (CA-5)", () => {
+    const m = createMask(2, 1);
+    fillRectNorm(m, 0, 0, 0.5, 1, true); // só metade esquerda
+    const fn = zoneContainsFn({}, m)!;
+    expect(fn(0.25, 0.5)).toBe(true);
+    expect(fn(0.75, 0.5)).toBe(false);
+    expect(zoneContainsFn({}, null)).toBeUndefined(); // retângulo cheio → sem teste fino
+    expect(maskContainsFn(createMask(2, 1))).toBeUndefined(); // máscara vazia degrada p/ retângulo
+  });
+
+  it("rasterizePolygonMask: centro da célula decide; o L côncavo vira células fiéis (P6)", () => {
+    const m = rasterizePolygonMask(10, 10, elle);
+    expect(containsNorm(m, 0.2, 0.3)).toBe(true); // braço vertical
+    expect(containsNorm(m, 0.45, 0.7)).toBe(true); // pé horizontal
+    expect(containsNorm(m, 0.45, 0.3)).toBe(false); // vão do L
+    expect(containsNorm(m, 0.95, 0.95)).toBe(false); // fora
+  });
+
+  it("zonePolygon devolve os points efetivos (≥3) ou null", () => {
+    expect(zonePolygon({ points: elle })).toEqual(elle);
+    expect(zonePolygon({})).toBeNull();
+    expect(zonePolygon({ points: elle.slice(0, 2) })).toBeNull();
   });
 });

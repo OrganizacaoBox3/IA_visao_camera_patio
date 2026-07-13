@@ -17,7 +17,15 @@ const {
   fillRectNorm,
   encodeMask,
   decodeMask,
+  pointInPolygon,
+  isSimplePolygon,
+  sanitizeZonePoints,
+  polygonBBox,
 } = require("./zones");
+
+// FIXTURES COMPARTILHADAS (spec zonas-poligonais CA-4): o MESMO arquivo é consumido por
+// src/zones.test.ts — paridade TS↔JS do pointInPolygon/isSimplePolygon (armadilha 9).
+const FIX = require("../../src/zones-polygon-fixtures.json");
 
 // Zona mínima (modo é irrelevante aqui: o caller pré-filtra por modo, como no TS).
 function zone(label, x, y, w, h, mask) {
@@ -179,5 +187,108 @@ describe("inExclusionZone — âncora no pé (bottom-center), mask-aware", () =>
     expect(inExclusionZone([0.4, 0.6, 0.1, 0.2], [z])).toBe(true);
     // pé em x=0.55 → dentro do retângulo mas col 1 (não pintada) → não exclui
     expect(inExclusionZone([0.5, 0.6, 0.1, 0.2], [z])).toBe(false);
+  });
+});
+
+// ── ZONAS POLIGONAIS (spec zonas-poligonais F1 — espelho do hub) ──────────────
+
+// CA-4: as fixtures compartilhadas passam IDÊNTICAS no hub (este arquivo) e no cliente
+// (src/zones.test.ts) — o 1º sensor de paridade cross-language da casa.
+describe("polígono — paridade das fixtures compartilhadas (CA-4, lado JS)", () => {
+  it("pointInPolygon responde exatamente o registrado (inclui bordas/vértices — CA-3 no L)", () => {
+    for (const c of FIX.containment) {
+      const poly = FIX.polygons[c.polygon];
+      expect(poly, `polígono ${c.polygon} existe nas fixtures`).toBeDefined();
+      expect(
+        pointInPolygon(c.point, poly),
+        `${c.polygon} @ (${c.point.x},${c.point.y}): ${c.why}`,
+      ).toBe(c.inside);
+    }
+  });
+
+  it("isSimplePolygon valida/bloqueia exatamente o registrado (P2/P3)", () => {
+    for (const s of FIX.simplicity)
+      expect(isSimplePolygon(s.points), `${s.name}: ${s.why}`).toBe(s.simple);
+  });
+
+  it("pointInPolygon é seguro p/ entrada degenerada (<3 pontos / não-array → false)", () => {
+    expect(pointInPolygon({ x: 0.5, y: 0.5 }, [])).toBe(false);
+    expect(pointInPolygon({ x: 0.5, y: 0.5 }, FIX.polygons.quadrado.slice(0, 2))).toBe(false);
+    expect(pointInPolygon({ x: 0.5, y: 0.5 }, null)).toBe(false);
+  });
+});
+
+// bbox derivada dos points (como cleanZone grava) — os testes de zona abaixo usam esta helper.
+function polyZone(label, points) {
+  const bb = polygonBBox(points);
+  return { id: label, label, x: bb.x, y: bb.y, w: bb.w, h: bb.h, points };
+}
+
+describe("attributeZone — zona POLIGONAL (centro EXATO no polígono; points>mask — P5/CA-5/CA-6)", () => {
+  const elle = polyZone("Elle", FIX.polygons.elle);
+
+  it("CA-3: pessoa dentro do L atribui; pessoa no VÃO do L não atribui", () => {
+    expect(attributeZone(bboxAt(0.2, 0.3), [elle])).toBe("Elle"); // braço vertical
+    expect(attributeZone(bboxAt(0.45, 0.7), [elle])).toBe("Elle"); // pé horizontal
+    expect(attributeZone(bboxAt(0.45, 0.3), [elle])).toBeNull(); // vão (dentro da BBOX!)
+  });
+
+  it("points VENCE mask quando ambos existem (a máscara vira legado — P5)", () => {
+    // máscara que só aceitaria a metade DIREITA (x ≥ 0.5) — o oposto do braço do L
+    const m = createMask(2, 1);
+    fillRectNorm(m, 0.5, 0, 0.5, 1, true);
+    const ambos = { ...polyZone("Ambos", FIX.polygons.elle), mask: encodeMask(m) };
+    expect(attributeZone(bboxAt(0.2, 0.3), [ambos])).toBe("Ambos"); // polígono decide (máscara diria não)
+    expect(attributeZone(bboxAt(0.45, 0.3), [ambos])).toBeNull(); // vão do L (máscara diria não também)
+  });
+
+  it("desempate segue o mesmo: polígono côncavo × zona aberta sobreposta", () => {
+    const aberta = zone("Aberta", 0.3, 0.1, 0.3, 0.5); // cobre o vão do L
+    expect(attributeZone(bboxAt(0.45, 0.3), [elle, aberta])).toBe("Aberta"); // vão → só a aberta contém
+    expect(attributeZone(bboxAt(0.2, 0.3), [elle, aberta])).toBe("Elle"); // braço → só o L contém
+  });
+});
+
+describe("inExclusionZone — zona POLIGONAL (âncora segue no PÉ — CA-6)", () => {
+  const elle = polyZone("ElleEx", FIX.polygons.elle);
+
+  it("PÉ dentro do polígono exclui; PÉ no vão do L não exclui (mesmo com centro noutro lugar)", () => {
+    // bbox alto: pé em (0.2, 0.7) dentro do pé do L; centro em y=0.5 estaria no braço também
+    expect(inExclusionZone([0.15, 0.3, 0.1, 0.4], [elle])).toBe(true);
+    // pé em (0.45, 0.3) → vão do L (dentro da bbox envolvente!) → NÃO exclui
+    expect(inExclusionZone([0.4, 0.1, 0.1, 0.2], [elle])).toBe(false);
+    // âncora é o PÉ, não o centro: centro no vão (0.45,0.3) mas pé em (0.45,0.7) dentro do L → exclui
+    expect(inExclusionZone([0.4, 0.1, 0.1, 0.6], [elle])).toBe(true);
+  });
+});
+
+describe("polígono — sanitizeZonePoints/polygonBBox (espelho da validação do cleanZone)", () => {
+  it("válido → clamp; malformado (curto/21+/NaN/auto-intersecção) → undefined, NUNCA []", () => {
+    const tri = [
+      { x: -0.5, y: 0.2 },
+      { x: 1.8, y: 0.2 },
+      { x: 0.5, y: 0.7 },
+    ];
+    expect(sanitizeZonePoints(tri)).toEqual([
+      { x: 0, y: 0.2 },
+      { x: 1, y: 0.2 },
+      { x: 0.5, y: 0.7 },
+    ]);
+    expect(sanitizeZonePoints(undefined)).toBeUndefined();
+    expect(sanitizeZonePoints([])).toBeUndefined();
+    expect(sanitizeZonePoints(tri.slice(0, 2))).toBeUndefined();
+    expect(
+      sanitizeZonePoints(Array.from({ length: 21 }, (_, i) => ({ x: i / 30, y: 0.5 }))),
+    ).toBeUndefined();
+    expect(sanitizeZonePoints([{ x: 0.1, y: 0.1 }, { x: NaN, y: 0.2 }, { x: 0.5, y: 0.7 }])).toBeUndefined();
+    expect(sanitizeZonePoints(FIX.simplicity.find((s) => s.name === "gravata").points)).toBeUndefined();
+  });
+
+  it("polygonBBox deriva a envolvente (pré-filtro retangular dos call-sites)", () => {
+    const bb = polygonBBox(FIX.polygons.elle); // w/h por subtração de floats → tolerância
+    expect(bb.x).toBeCloseTo(0.1, 10);
+    expect(bb.y).toBeCloseTo(0.1, 10);
+    expect(bb.w).toBeCloseTo(0.5, 10);
+    expect(bb.h).toBeCloseTo(0.7, 10);
   });
 });

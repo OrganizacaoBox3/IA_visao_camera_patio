@@ -1,0 +1,105 @@
+{
+  "$comment": "FIXTURES COMPARTILHADAS das zonas poligonais (spec zonas-poligonais CA-4) — o 1º sensor de paridade TS↔JS da casa. Consumidas por src/zones.test.ts (cliente, pointInPolygon de fusion/floor-polygon.ts) E server/analysis/zones.test.js (hub, espelho byte-a-byte). Os casos de ARESTA/VÉRTICE registram o comportamento DETERMINÍSTICO do ray-casting (não há garantia dentro/fora na borda — floor-polygon.ts documenta); o que este arquivo pina é a PARIDADE: os dois lados têm que dar a MESMA resposta, senão a pessoa cairia em zonas diferentes no cliente e no hub (armadilha 9). Valores verificados por execução em 2026-07-12.",
+  "polygons": {
+    "quadrado": [
+      { "x": 0.25, "y": 0.25 },
+      { "x": 0.75, "y": 0.25 },
+      { "x": 0.75, "y": 0.75 },
+      { "x": 0.25, "y": 0.75 }
+    ],
+    "elle": [
+      { "x": 0.1, "y": 0.1 },
+      { "x": 0.3, "y": 0.1 },
+      { "x": 0.3, "y": 0.6 },
+      { "x": 0.6, "y": 0.6 },
+      { "x": 0.6, "y": 0.8 },
+      { "x": 0.1, "y": 0.8 }
+    ],
+    "triangulo": [
+      { "x": 0.5, "y": 0.1 },
+      { "x": 0.9, "y": 0.9 },
+      { "x": 0.1, "y": 0.9 }
+    ]
+  },
+  "containment": [
+    { "polygon": "quadrado", "point": { "x": 0.5, "y": 0.5 }, "inside": true, "why": "centro" },
+    { "polygon": "quadrado", "point": { "x": 0.1, "y": 0.5 }, "inside": false, "why": "fora, à esquerda" },
+    { "polygon": "quadrado", "point": { "x": 0.8, "y": 0.8 }, "inside": false, "why": "fora, diagonal" },
+    { "polygon": "quadrado", "point": { "x": 0.25, "y": 0.5 }, "inside": true, "why": "BORDA: aresta esquerda (paridade, não semântica)" },
+    { "polygon": "quadrado", "point": { "x": 0.75, "y": 0.5 }, "inside": false, "why": "BORDA: aresta direita (paridade, não semântica)" },
+    { "polygon": "quadrado", "point": { "x": 0.5, "y": 0.25 }, "inside": true, "why": "BORDA: aresta do topo (paridade)" },
+    { "polygon": "quadrado", "point": { "x": 0.5, "y": 0.75 }, "inside": false, "why": "BORDA: aresta da base (paridade)" },
+    { "polygon": "quadrado", "point": { "x": 0.25, "y": 0.25 }, "inside": true, "why": "BORDA: vértice exato (paridade)" },
+    { "polygon": "quadrado", "point": { "x": 0.250001, "y": 0.5 }, "inside": true, "why": "ε dentro da borda esquerda (armadilha 9: divergência de float na borda)" },
+    { "polygon": "elle", "point": { "x": 0.2, "y": 0.3 }, "inside": true, "why": "CA-3: dentro do braço vertical do L" },
+    { "polygon": "elle", "point": { "x": 0.45, "y": 0.7 }, "inside": true, "why": "CA-3: dentro do pé horizontal do L" },
+    { "polygon": "elle", "point": { "x": 0.45, "y": 0.3 }, "inside": false, "why": "CA-3: no VÃO do L (côncavo) — NÃO atribui" },
+    { "polygon": "elle", "point": { "x": 0.05, "y": 0.5 }, "inside": false, "why": "fora, à esquerda do L" },
+    { "polygon": "elle", "point": { "x": 0.3, "y": 0.6 }, "inside": true, "why": "BORDA: vértice CÔNCAVO interno (paridade)" },
+    { "polygon": "elle", "point": { "x": 0.3, "y": 0.4 }, "inside": false, "why": "BORDA: aresta interna vertical do braço (paridade)" },
+    { "polygon": "triangulo", "point": { "x": 0.5, "y": 0.5 }, "inside": true, "why": "dentro (arestas diagonais)" },
+    { "polygon": "triangulo", "point": { "x": 0.15, "y": 0.2 }, "inside": false, "why": "fora (acima da diagonal esquerda)" },
+    { "polygon": "triangulo", "point": { "x": 0.5, "y": 0.1 }, "inside": false, "why": "BORDA: ápice exato (paridade)" }
+  ],
+  "simplicity": [
+    {
+      "name": "quadrado",
+      "points": [
+        { "x": 0.25, "y": 0.25 },
+        { "x": 0.75, "y": 0.25 },
+        { "x": 0.75, "y": 0.75 },
+        { "x": 0.25, "y": 0.75 }
+      ],
+      "simple": true,
+      "why": "convexo trivial"
+    },
+    {
+      "name": "elle",
+      "points": [
+        { "x": 0.1, "y": 0.1 },
+        { "x": 0.3, "y": 0.1 },
+        { "x": 0.3, "y": 0.6 },
+        { "x": 0.6, "y": 0.6 },
+        { "x": 0.6, "y": 0.8 },
+        { "x": 0.1, "y": 0.8 }
+      ],
+      "simple": true,
+      "why": "P3: côncavo PERMITIDO (só 'simples' é exigido)"
+    },
+    {
+      "name": "gravata",
+      "points": [
+        { "x": 0.1, "y": 0.1 },
+        { "x": 0.9, "y": 0.9 },
+        { "x": 0.9, "y": 0.1 },
+        { "x": 0.1, "y": 0.9 }
+      ],
+      "simple": false,
+      "why": "P2: auto-intersecção clássica (bowtie) — bloqueada"
+    },
+    {
+      "name": "cruzado5",
+      "points": [
+        { "x": 0.1, "y": 0.1 },
+        { "x": 0.9, "y": 0.1 },
+        { "x": 0.2, "y": 0.8 },
+        { "x": 0.5, "y": 0.05 },
+        { "x": 0.8, "y": 0.8 }
+      ],
+      "simple": false,
+      "why": "P2: 5 vértices com cruzamento de arestas não-adjacentes"
+    },
+    {
+      "name": "vertice-em-aresta",
+      "points": [
+        { "x": 0, "y": 0 },
+        { "x": 1, "y": 0 },
+        { "x": 1, "y": 1 },
+        { "x": 0.5, "y": 0 },
+        { "x": 0, "y": 1 }
+      ],
+      "simple": false,
+      "why": "P2: vértice tocando aresta não-adjacente (interseção imprópria) — bloqueado"
+    }
+  ]
+}
