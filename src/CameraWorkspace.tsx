@@ -1,28 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  ArrowLeftRight,
-  Brush,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  Eraser,
-  Grid3x3,
-  ImageDown,
-  Lock,
-  Pause,
-  PenLine,
-  Play,
-  Radar,
-  Snowflake,
-  Timer,
-  TriangleAlert,
-  Users,
-  X,
-} from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
-import { fmtDuration } from "./format";
 import { FrameMeter } from "./telemetry";
 import { type Detection } from "./vision/model";
 import { ensureDetectClient, detectFrame, getDetectBackend } from "./vision/detect";
@@ -72,18 +51,7 @@ import { panelSig, twSig, dominantMode, legendFor } from "./camera/derive";
 import { holderFor as holderForZone, type Holder } from "./camera/holders";
 import { useFocusTrap } from "./camera/useFocusTrap";
 import type { HubAnalysis, Track } from "./types/analysis";
-import {
-  Button,
-  IconButton,
-  Select,
-  Slider,
-  Tabs,
-  TabsContent,
-  ScrollArea,
-  Toggle,
-  Tooltip,
-  Badge,
-} from "./ui";
+import { Tabs, TabsContent, ScrollArea } from "./ui";
 import { useCineLoop } from "./camera/useCineLoop";
 import { useTripwires } from "./camera/useTripwires";
 import { useAuth } from "./auth";
@@ -107,6 +75,9 @@ import {
   type TrackBox,
 } from "./camera/draw";
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
+import { CamHeader } from "./camera/CamHeader";
+import { CamKpiBar } from "./camera/CamKpiBar";
+import { CineBar } from "./camera/CineBar";
 import { useTelemetry } from "./camera/useTelemetry";
 import { useWebrtcTransport } from "./camera/useWebrtcTransport";
 import { useHubAnalysis, applyHubAnalysis, HUB_TRACKS_STALE_MS } from "./camera/useHubAnalysis";
@@ -119,12 +90,6 @@ import { CamadasTab } from "./camera/tabs/CamadasTab";
 import { TimelineTab, type TimelineItem } from "./camera/tabs/TimelineTab";
 import { PresencaTab } from "./camera/tabs/PresencaTab";
 import "./camera/cine.css";
-
-const BRUSH_OPTS = [
-  { value: "1", label: "1×" },
-  { value: "2", label: "2×" },
-  { value: "3", label: "3×" },
-];
 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
 const HEAT_COLS = 32,
@@ -325,8 +290,14 @@ export function CameraWorkspace({
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
   // HUD: toggle no estado (UI); o rAF lê o REF (a régua não pode custar re-render por frame).
-  const [hud, setHud] = useState(false);
+  // Setter ÚNICO (mesmo idioma do setFloorOn/useCalibrationOverlay): ref (rAF) + estado (UI)
+  // mudam numa só unidade — nenhum caminho escreve um sem o outro.
+  const [hud, setHudState] = useState(false);
   const hudRef = useRef(false);
+  const setHud = (v: boolean) => {
+    hudRef.current = v;
+    setHudState(v);
+  };
   const [detBackend, setDetBackend] = useState<string | null>(null); // null até o worker reportar
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
@@ -1426,6 +1397,12 @@ export function CameraWorkspace({
     });
   }
 
+  // ⚠ NOS TEXTOS DE onAlert É CONTRATO, NÃO DECORAÇÃO (não "limpe" numa varredura de ícones):
+  // DashboardPage.handleAlert usa `msg.includes("⚠")` p/ escolher o TOM do toast e
+  // `alertMetaFromText` faz o parse do padrão "⚠ <câmera>[ · <zona>]: …" p/ derivar cameraId/zona
+  // dos campos ESTRUTURADOS do emit `alert` (hub → andon/webhook). Os glifos de UI (que eram
+  // ícone) viraram Lucide; estes são PROTOCOLO e ficam.
+
   // Write-through: aplica a edição já e persiste no BACKEND (localStorage = cache/fallback).
   // Erro do PUT → toast SEM perder a edição local; a central re-sincroniza depois.
   function persist(next: Zone[]): Zone[] {
@@ -1537,12 +1514,25 @@ export function CameraWorkspace({
         }}
         role="button"
         tabIndex={0}
+        // aria-label distingue os tiles entre si (o `title` é IDÊNTICO em todos e é contrato de
+        // SELETOR do e2e: `.tile[title='Abrir câmera']` — permanece, mas não é mais o nome).
+        aria-label={`Abrir câmera ${label}`}
         title="Abrir câmera"
       >
         <div className="viewport tile-vp" ref={viewportRef}>
-          <canvas ref={canvasRef} />
+          {/* O canvas é a IMAGEM da câmera: o nome acessível do tile (aria-label acima) já
+              descreve o conteúdo — o canvas em si não acrescenta nada ao leitor de tela. */}
+          <canvas ref={canvasRef} aria-hidden />
           <div className="tile-badges">
-            {alertCount > 0 && <span className="tb alert">⚠ {alertCount}</span>}
+            {/* Emoji ⚠ → Lucide (regra 11). Nunca só-por-cor: ícone + número + texto acessível. */}
+            {alertCount > 0 && (
+              <span className="tb alert">
+                <TriangleAlert size={12} strokeWidth={1.75} aria-hidden /> {alertCount}
+                <span className="sr-only">
+                  {alertCount === 1 ? "1 zona em alerta" : `${alertCount} zonas em alerta`}
+                </span>
+              </span>
+            )}
           </div>
         </div>
         <div className="tile-foot">
@@ -1567,154 +1557,41 @@ export function CameraWorkspace({
     >
       {/* a11y (A5): heading da casca fullscreen — só p/ leitores de tela. */}
       <h1 className="sr-only">Câmera {label}</h1>
-      <header className="cam-head">
-        <div className="cam-title">
-          <b>{label}</b>
-          {paintZone ? (
-            <span className="muted">pintando “{paintZone.label}”</span>
-          ) : (
-            <>
-              <span className="muted">
-                {zones.length} {zones.length === 1 ? "zona" : "zonas"}
-              </span>
-              {activePresetDef && (
-                <Tooltip
-                  content={`Preset ativo: ${activePresetDef.label} — ${activePresetDef.description}${presetDirty ? " (ajustado manualmente nesta sessão)" : ""}`}
-                >
-                  <span>
-                    <Badge tone={MODE_TONE[activePreset!]}>
-                      {activePresetDef.label}
-                      {presetDirty ? " ·" : ""}
-                    </Badge>
-                  </span>
-                </Tooltip>
-              )}
-              {!canConfigure && (
-                <Tooltip content="Edição de configuração requer perfil de engenharia">
-                  <span>
-                    <Badge tone="info">
-                      <Lock size={12} strokeWidth={1.75} aria-hidden /> Somente leitura
-                    </Badge>
-                  </span>
-                </Tooltip>
-              )}
-            </>
-          )}
-        </div>
-        <div className="spacer" />
-        {paintZone ? (
-          <>
-            <IconButton label="Pincel (pintar)" active={!erase} onClick={() => setErase(false)}>
-              <Brush size={18} strokeWidth={1.75} aria-hidden />
-            </IconButton>
-            <IconButton
-              label="Borracha (Alt/botão-direito também apagam)"
-              active={erase}
-              onClick={() => setErase(true)}
-            >
-              <Eraser size={18} strokeWidth={1.75} aria-hidden />
-            </IconButton>
-            <Select
-              value={String(brush)}
-              onChange={(v) => setBrush(Number(v))}
-              options={BRUSH_OPTS}
-              ariaLabel="Tamanho do pincel"
-            />
-            <Button onClick={clearActive}>Limpar</Button>
-            <Button active onClick={() => setPaintZoneId(null)}>
-              <Check size={16} strokeWidth={1.75} aria-hidden /> Concluir
-            </Button>
-          </>
-        ) : (
-          <>
-            <Tooltip content="Congela o palco e abre a revisão dos últimos ~10s (cine-loop). Buffer em memória, nunca enviado ao servidor.">
-              <Toggle pressed={review} onPressedChange={(v) => (v ? enterReview() : exitReview())}>
-                {review ? (
-                  <>
-                    <Play size={16} strokeWidth={1.75} aria-hidden /> Ao vivo
-                  </>
-                ) : (
-                  <>
-                    <Snowflake size={16} strokeWidth={1.75} aria-hidden /> Congelar
-                  </>
-                )}
-              </Toggle>
-            </Tooltip>
-            <Tooltip content="Congela o frame e rotula quem está em cena">
-              <Toggle pressed={paused} disabled={review} onPressedChange={(v) => setPaused(v)}>
-                {paused ? (
-                  <>
-                    <Play size={16} strokeWidth={1.75} aria-hidden /> Retomar
-                  </>
-                ) : (
-                  <>
-                    <Pause size={16} strokeWidth={1.75} aria-hidden /> Pausar
-                  </>
-                )}
-              </Toggle>
-            </Tooltip>
-            <Tooltip
-              content={
-                canConfigure
-                  ? "Desenhar uma nova zona sobre o vídeo"
-                  : "Requer perfil de engenharia"
-              }
-            >
-              {/* Nome acessível "Zona" (o e2e clica getByRole button name "Zona", exact). */}
-              <Toggle
-                pressed={drawMode}
-                disabled={review || !canConfigure}
-                onPressedChange={() => toggleDrawMode()}
-              >
-                {drawMode ? (
-                  "Desenhando…"
-                ) : (
-                  <>
-                    <PenLine size={16} strokeWidth={1.75} aria-hidden /> Zona
-                  </>
-                )}
-              </Toggle>
-            </Tooltip>
-            <Tooltip
-              content={
-                canConfigure
-                  ? "Desenhar uma linha de contagem (clique em A e arraste até B)"
-                  : "Requer perfil de engenharia"
-              }
-            >
-              <Toggle
-                pressed={tripwireMode}
-                disabled={review || !canConfigure}
-                onPressedChange={() => toggleTripwireMode()}
-              >
-                {tripwireMode ? (
-                  "Traçando…"
-                ) : (
-                  <>
-                    <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden /> Linha
-                  </>
-                )}
-              </Toggle>
-            </Tooltip>
-            <IconButton label="Fechar" onClick={onClose}>
-              <X size={18} strokeWidth={1.75} aria-hidden />
-            </IconButton>
-          </>
-        )}
-        {reviewTip && (
-          <span className="muted" style={{ color: "var(--state-warn-fg, #fde68a)" }}>
-            {reviewTip}
-          </span>
-        )}
-      </header>
+      {/* Barra de ferramentas do palco → ./camera/CamHeader (JSX puro; nenhum canvas/rAF lá). */}
+      <CamHeader
+        label={label}
+        zonesCount={zones.length}
+        canConfigure={canConfigure}
+        activePreset={activePreset}
+        activePresetDef={activePresetDef}
+        presetDirty={presetDirty}
+        paintZone={paintZone}
+        erase={erase}
+        setErase={setErase}
+        brush={brush}
+        setBrush={setBrush}
+        clearActive={clearActive}
+        endPaint={() => setPaintZoneId(null)}
+        review={review}
+        enterReview={enterReview}
+        exitReview={exitReview}
+        paused={paused}
+        setPaused={setPaused}
+        drawMode={drawMode}
+        toggleDrawMode={toggleDrawMode}
+        tripwireMode={tripwireMode}
+        toggleTripwireMode={toggleTripwireMode}
+        poly={poly}
+        reviewTip={reviewTip}
+        onClose={onClose}
+      />
 
       {/* Palco + drawer lado a lado (.cam-body, cine.css): o palco encolhe quando o
           drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
       <div className="cam-body">
         <div
-          className={`cam-stage ${drawMode || tripwireMode || paintZone ? "draw-cursor" : ""}`}
+          className={`cam-stage ${drawMode || tripwireMode || paintZone || poly.active ? "draw-cursor" : ""}`}
           ref={viewportRef}
-          style={{ background: "var(--cam-surface-bg)" }}
           onMouseDown={onDown}
           onMouseMove={onMove}
           onMouseUp={onUp}
@@ -1727,81 +1604,37 @@ export function CameraWorkspace({
           {webrtc && <video-stream ref={videoStreamRef} />}
           {/* `key` por transporte: os atributos do 1º getContext travam p/ sempre (opaco no MJPEG,
               transparente no WebRTC) → troca em runtime REMONTA o canvas com o alpha certo. O
-              canvas vem DEPOIS do <video-stream> → pinta por cima (ordem de pintura). */}
-          <canvas className="overlay" key={webrtc ? "rtc" : "mjpeg"} ref={canvasRef} />
+              canvas vem DEPOIS do <video-stream> → pinta por cima (ordem de pintura).
+              a11y: o palco é uma IMAGEM (vídeo + geometria) — role/aria-label dão o nome; os
+              NÚMEROS têm alternativa textual na barra de KPIs abaixo ("a imagem é soberana":
+              número nunca vive sobre o vídeo). */}
+          <canvas
+            className="overlay"
+            key={webrtc ? "rtc" : "mjpeg"}
+            ref={canvasRef}
+            role="img"
+            aria-label={`Vídeo ao vivo de ${label} com as marcações de análise (zonas, linhas e pessoas). Os indicadores em texto estão na barra abaixo.`}
+          />
+          {/* Barra do cine-loop → ./camera/CineBar (irmã do canvas, nunca ancestral). */}
           {review && (
-            <>
-              <div className="cine-flag">
-                <span className="dot" /> REVISÃO · cine-loop (buffer em memória)
-              </div>
-              <div className="cine-bar">
-                <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>
-                  <ChevronLeft size={18} strokeWidth={1.75} aria-hidden />
-                </IconButton>
-                <Tooltip content={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}>
-                  <Toggle
-                    aria-label={cinePlaying ? "Pausar reprodução" : "Reproduzir cine-loop"}
-                    pressed={cinePlaying}
-                    onPressedChange={(v) => setCinePlaying(v)}
-                  >
-                    {cinePlaying ? (
-                      <Pause size={16} strokeWidth={1.75} aria-hidden />
-                    ) : (
-                      <Play size={16} strokeWidth={1.75} aria-hidden />
-                    )}
-                  </Toggle>
-                </Tooltip>
-                <IconButton label="Próximo quadro" onClick={() => scrubBy(1)}>
-                  <ChevronRight size={18} strokeWidth={1.75} aria-hidden />
-                </IconButton>
-                <div className="cine-slider">
-                  <Slider
-                    value={scrubIndex}
-                    min={0}
-                    max={Math.max(0, cineSize - 1)}
-                    step={1}
-                    onChange={(v) => {
-                      setCinePlaying(false);
-                      setScrubIndex(v);
-                    }}
-                    ariaLabel="Posição no cine-loop"
-                  />
-                </div>
-                <span className="cine-time">
-                  {cineRef.current
-                    ? `${cineRef.current.relativeSeconds(scrubIndex).toFixed(1)}s`
-                    : "0.0s"}
-                </span>
-                <span className="cine-count">
-                  {cineSize ? scrubIndex + 1 : 0}/{cineSize}
-                </span>
-                <span className="cine-spacer" />
-                <Tooltip content="Baixar este quadro como PNG (download local — nunca enviado ao servidor)">
-                  <Button onClick={downloadSnapshot} disabled={clipState === "working"}>
-                    <ImageDown size={16} strokeWidth={1.75} aria-hidden /> Snapshot
-                  </Button>
-                </Tooltip>
-                <Tooltip content="Exporta a janela do cine-loop como clipe (WebM) — download local, nunca enviado ao servidor. Fallback: montagem PNG se o navegador não suportar.">
-                  <Button onClick={exportClip} disabled={clipState === "working"}>
-                    <Download size={16} strokeWidth={1.75} aria-hidden />
-                    {clipState === "working" ? `Gravando… ${clipPct}%` : "Exportar clipe"}
-                  </Button>
-                </Tooltip>
-                <Button active onClick={exitReview}>
-                  <Play size={16} strokeWidth={1.75} aria-hidden /> Ao vivo
-                </Button>
-              </div>
-            </>
+            <CineBar
+              cineRef={cineRef}
+              cineSize={cineSize}
+              scrubIndex={scrubIndex}
+              setScrubIndex={setScrubIndex}
+              cinePlaying={cinePlaying}
+              setCinePlaying={setCinePlaying}
+              scrubBy={scrubBy}
+              downloadSnapshot={downloadSnapshot}
+              exportClip={exportClip}
+              clipState={clipState}
+              clipPct={clipPct}
+              exitReview={exitReview}
+            />
           )}
         </div>
-        <aside
-          className="cam-drawer"
-          style={{
-            background: "var(--cam-panel-bg)",
-            color: "var(--cam-panel-fg)",
-            borderLeftColor: "var(--cam-panel-border)",
-          }}
-        >
+        {/* Painel lateral: cor/espaçamento por TOKEN em cine.css (.cam-drawer), não style inline. */}
+        <aside className="cam-drawer" aria-label="Painel da câmera">
           <Tabs
             className="drawer-tabs"
             value={drawerTab}
@@ -1896,89 +1729,24 @@ export function CameraWorkspace({
         </aside>
       </div>
 
-      <div className="cam-kpibar">
-        <span className="kb">
-          <Users size={14} strokeWidth={1.75} aria-hidden /> <b>{presence.now}</b> pessoas
-        </span>
-        <span className="kb">
-          <Timer size={14} strokeWidth={1.75} aria-hidden /> <b>{fmtDuration(presence.dwell)}</b>{" "}
-          permanência
-        </span>
-        <span className="kb muted">pico {presence.peak}</span>
-        <span
-          className="kb muted"
-          style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
-          {summary || "sem zonas"}
-        </span>
-        <span className="kb muted">FPS {perf.fps}</span>
-        {/* Toggle do HUD (going-gray: régua de medição, não anormalidade). O rAF lê o ref. */}
-        <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local), idade do overlay e latência por estágio (OWL-ViT/ZXing/MediaPipe) + fila de inferência">
-          <Toggle
-            aria-label="HUD de telemetria"
-            pressed={hud}
-            onPressedChange={(v) => {
-              hudRef.current = v;
-              setHud(v);
-            }}
-          >
-            HUD
-          </Toggle>
-        </Tooltip>
-        {/* Malha da calibração: grade do chão (homografia) + pontos cadastrados. Some quando a
-            câmera nunca foi calibrada. Going-gray: conferência de posicionamento, não anormalidade. */}
-        {calib.hasCalibration && (
-          <Tooltip content="Mostrar a malha da calibração sobre o vídeo: grade do chão (via homografia) + os pontos cadastrados — confere o posicionamento da pessoa no piso">
-            <Toggle
-              aria-label="Malha da calibração"
-              pressed={calib.on}
-              onPressedChange={calib.setOn}
-            >
-              <Grid3x3 size={16} strokeWidth={1.75} aria-hidden /> Malha
-            </Toggle>
-          </Tooltip>
-        )}
-        {/* Tags no chão: âncoras (posição exata) + estação + anéis de distância BLE. Default
-            LIGADO; some quando não há calibração/leituras. Cores VIVAS (exceção declarada ao
-            going-gray — overlay sobre vídeo; ver drawFloorTags); o anel tracejado comunica
-            incerteza (é distância, não posição); vermelho só p/ âncora calada (anomalia). */}
-        {floorTags.available && (
-          <Tooltip content="Tags no chão: âncoras dos cantos (posição exata), a estação BLE e um anel tracejado de distância p/ cada tag visível ainda não associada a uma pessoa — o anel é DISTÂNCIA (RSSI), não posição">
-            <Toggle aria-label="Tags no chão" pressed={floorOn} onPressedChange={setFloorOn}>
-              <Radar size={16} strokeWidth={1.75} aria-hidden /> Tags
-            </Toggle>
-          </Tooltip>
-        )}
-        {/* Fonte da análise (ADR-009): NEUTRO e só no modo hub; local = nada. No modo hub o
-            worker tfjs nem sobe p/ pessoas — o badge de detecção abaixo só aparece se um
-            consumidor local (fadiga/celular, engine local) o iniciou. */}
-        {analysisEngine === "hub" && (
-          <Tooltip content="indicadores gravados pelo servidor — D-FINE">
-            <span className="kb muted">análise: hub</span>
-          </Tooltip>
-        )}
-        {/* Backend de detecção — going-gray: neutro em GPU; satura (warn) SÓ em CPU, o modo
-            degradado (~10× mais lento). null = worker ainda não reportou → não exibe. */}
-        {detBackend != null &&
-          (detBackend === "cpu" ? (
-            <Tooltip content="Detecção degradada: WebGL indisponível — tfjs rodando em CPU (~10× mais lento)">
-              <span className="kb" style={{ color: "var(--state-warn-fg, #facc15)" }}>
-                detecção: CPU <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
-              </span>
-            </Tooltip>
-          ) : (
-            <Tooltip content={`Backend de detecção (tfjs): ${detBackend}`}>
-              <span className="kb muted">
-                detecção: {detBackend === "webgl" || detBackend === "webgpu" ? "GPU" : detBackend}
-              </span>
-            </Tooltip>
-          ))}
-        {paused && (
-          <span className="kb muted">
-            <Pause size={14} strokeWidth={1.75} aria-hidden /> inspecionando
-          </span>
-        )}
-      </div>
+      {/* Barra de KPIs (rodapé) → ./camera/CamKpiBar. "A imagem é soberana" (ADR-003): o número
+          vive AQUI, no painel — nunca sobre o vídeo. */}
+      <CamKpiBar
+        presence={presence}
+        fps={perf.fps}
+        summary={summary}
+        hud={hud}
+        setHud={setHud}
+        calibAvailable={calib.hasCalibration}
+        calibOn={calib.on}
+        setCalibOn={calib.setOn}
+        floorAvailable={floorTags.available}
+        floorOn={floorOn}
+        setFloorOn={setFloorOn}
+        analysisEngine={analysisEngine}
+        detBackend={detBackend}
+        paused={paused}
+      />
 
       <ConfigZonaDialog
         zone={cfgZone}

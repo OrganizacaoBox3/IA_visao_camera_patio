@@ -1,7 +1,7 @@
 // Aba "Linhas" do drawer da câmera — linhas de contagem (tripwires) + contadores in/out "hoje".
 // Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace (edição via hook useTripwires).
 import { ArrowLeftRight, RotateCcw, X } from "lucide-react";
-import { Button, HelpTip, Tooltip, Badge } from "../../ui";
+import { Button, HelpTip, SectionTitle, Tooltip, Badge } from "../../ui";
 import { type Tripwire, type TripwireCounts } from "../../vision/counting";
 
 type Props = {
@@ -35,6 +35,8 @@ export function LinhasTab({
 }: Props) {
   return (
     <>
+      {/* Seção com heading semântico (<h2> via SectionTitle) — o painel deixa de ser <div> mudo. */}
+      <SectionTitle>Linhas de contagem</SectionTitle>
       <div className="row tw-actions">
         <Tooltip
           content={

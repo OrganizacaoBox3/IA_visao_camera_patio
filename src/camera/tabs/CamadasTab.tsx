@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   HelpTip,
+  SectionTitle,
   Tooltip,
   ToggleRow,
   Field,
@@ -49,7 +50,11 @@ export function CamadasTab({
       {activePresetDef && activePreset && (
         <div className="preset-card">
           <div className="preset-head">
-            <span className="preset-eyebrow">Preset ativo</span>
+            {/* heading SEMÂNTICO (<h2>) preservando o visual da classe legada (CSS de página
+                unlayered vence a utility do átomo) — as seções deixam de ser <div> mudas. */}
+            <SectionTitle flush className="preset-eyebrow">
+              Preset ativo
+            </SectionTitle>
             <Badge tone={presetTone}>{activePresetDef.label}</Badge>
             {presetDirty && <span className="preset-dirty">· ajustado</span>}
           </div>
@@ -72,6 +77,7 @@ export function CamadasTab({
           )}
         </div>
       )}
+      <SectionTitle>Camadas do overlay</SectionTitle>
       {(
         [
           ["boxes", "Caixas / detecções"],
@@ -118,6 +124,7 @@ export function CamadasTab({
       {/* Perfil de detecção da CÂMERA (persiste no backend) — só engenharia edita. */}
       {canConfigure && (
         <div className="lr-card">
+          <SectionTitle>Perfil de detecção</SectionTitle>
           <div className="lr-head">
             <span>
               Longo alcance / Panorâmica{" "}

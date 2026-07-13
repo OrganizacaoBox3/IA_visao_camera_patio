@@ -17,6 +17,17 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
+// APERTADO na varredura F3 (UI dos consoles), 2000 → 1760: o ratchet fez o que devia — o diff
+// PRECISAVA crescer (o modo POLÍGONO não tinha nenhum botão: usePolygonEditor existia com
+// start/undo/close SEM consumidor, inalcançável por mouse ou teclado) e, em vez de subir o teto,
+// a barra de ferramentas saiu do god-component. Extraídos 3 subcomponentes de JSX PURO — nenhum
+// deles ancestral do <canvas>, nenhum toca rAF/refs (ADR-007 intacta):
+//   ./camera/CamHeader.tsx  — identidade + ferramentas do palco (zona · polígono · linha · cine)
+//   ./camera/CineBar.tsx    — controles da revisão (cine-loop)
+//   ./camera/CamKpiBar.tsx  — barra de KPIs do rodapé ("a imagem é soberana": número no painel)
+// Contabilidade REAL (método deste teste, que conta linhas vazias): 1994 → 1762 (teto 1765
+// mantém a folga mínima da convenção, ≈3). NÃO medir com `Measure-Object -Line`.
+//
 // Teto ATUAL (não-ideal). BAIXE ao extrair uma responsabilidade; SUBIR exige justificativa.
 // 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
 // (carga da homografia + fusão tag↔pessoa) foi EXTRAÍDO p/ src/fusion/useCameraTagLabels.ts — aqui
@@ -34,7 +45,7 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
 // a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
 // vazias e já induziu um falso "coube em 1930" numa revisão).
-const MAX_LINES = 2000;
+const MAX_LINES = 1765;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

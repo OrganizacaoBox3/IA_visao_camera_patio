@@ -94,6 +94,45 @@
   min-width: var(--ui-ctrl-h);
 }
 
+/* ── Barra de ferramentas do palco (CamHeader) e barra de KPIs (CamKpiBar) — F3 ──
+   Fim dos `style` inline com hex/px cru: cor de estado por token, tamanho pelos 7 papéis. */
+
+/* Aviso do cine-loop (buffer vazio) no cabeçalho — token de estado, nunca hex. */
+.cam-head .cam-head-tip {
+  font-size: var(--fs-sec);
+  color: var(--state-warn-fg);
+}
+/* A barra do palco quebra linha quando o modo polígono acrescenta Voltar/Concluir (em vez de
+   empurrar o botão Fechar p/ fora da tela em palco estreito). */
+.cam-head {
+  flex-wrap: wrap;
+}
+/* Resumo das zonas: ocupa a folga da barra e trunca (era `style` inline com flex/ellipsis). */
+.cam-kpibar .kb-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Único item SATURADO da barra (going-gray): detecção degradada em CPU. Cor por token + o ícone
+   e o texto ao lado — nunca só-por-cor. */
+.cam-kpibar .kb-warn {
+  color: var(--state-warn-fg);
+}
+
+/* Estimativa de alertas/dia no Dialog de config (fora da casca .cam — o Dialog é um Portal):
+   papel `label` (11px) + token de texto; era `style` inline com px cru. */
+.cfg-estimate {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.cfg-estimate b {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
 /* ── Drawer migrado p/ Radix Tabs + ScrollArea (Fase 1) ──
    O .cam-drawer é flex column de altura definida; Tabs.Root e a ScrollArea
    precisam crescer (flex:1; min-height:0) para a viewport rolável ter altura.
@@ -194,6 +233,28 @@
   margin-bottom: var(--sp-2);
 }
 
+/* Aba "Timeline": severidade do evento deixa de ser SÓ-COR (going-gray) — vira ícone Lucide com
+   FORMA distinta por nível (Info · TriangleAlert · OctagonAlert) + nome acessível no aria-label.
+   A cor sai dos tokens de estado (mapa fixo da regra 1): advisory=info, atenção=warn, alto=crítico. */
+.cam-drawer .tl .sev {
+  flex: none;
+  margin-top: 2px;
+}
+.cam-drawer .tl .sev.info {
+  color: var(--state-info-fg);
+}
+.cam-drawer .tl .sev.warn {
+  color: var(--state-warn-fg);
+}
+.cam-drawer .tl .sev.high {
+  color: var(--state-critical-fg);
+}
+
+/* Aba "Zonas": estado da zona no KPI usa o papel `body` (13px) — era `fontSize: 13` inline. */
+.cam-drawer .zone .ws-kpis .kpi .v.kpi-state {
+  font-size: var(--fs-body);
+}
+
 /* Aba "Camadas": cartão do preset ativo + cartão do perfil de longo alcance.
    Migrados de style inline (px cru) p/ classe — computado idêntico, tokens onde há. */
 .cam-drawer .preset-card {
@@ -266,12 +327,19 @@
 .cam-body .cam-stage {
   flex: 1 1 auto;
   min-width: 0;
+  /* fundo do letterbox por TOKEN (era `style` inline no JSX — F3) */
+  background: var(--cam-surface-bg);
 }
 .cam-body .cam-drawer {
   position: static;
   flex: none;
   height: auto;
   min-height: 0;
+  /* cor do painel por TOKEN --cam-panel-* (era `style` inline no JSX — F3); seletor mais
+     específico que o `.cam-drawer` do index.css, mesma técnica do bloco de layout acima. */
+  background: var(--cam-panel-bg);
+  color: var(--cam-panel-fg);
+  border-left-color: var(--cam-panel-border);
 }
 /* sm (≤640px): empilha — vídeo em cima, drawer vira faixa inferior (58%, como o
    bottom-sheet do index.css, agora sem sobrepor o palco). */

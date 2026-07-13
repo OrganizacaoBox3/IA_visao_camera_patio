@@ -6,7 +6,7 @@ import { fmtDuration } from "../../format";
 import { sensitivityFactor } from "../../processors/atividade";
 import { objClass } from "../../objects/catalog";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
-import { Badge, HelpTip, Tooltip } from "../../ui";
+import { Badge, HelpTip, SectionTitle, Tooltip } from "../../ui";
 import { MetricCell } from "../../components/Sparkline";
 import { RISK_LABEL, stateVar, type ZoneResult } from "../draw";
 import {
@@ -151,7 +151,9 @@ export function ZonasTab({
                       {/* estado/parada: indicadores categóricos/temporais (mantidos como KPI) */}
                       <div className="kpis ws-kpis">
                         <div className="kpi">
-                          <div className="v" style={{ color: stateVar(r.view.state), fontSize: 13 }}>
+                          {/* cor = token de estado (stateVar → var(--state-*)); o TAMANHO saiu do
+                              `style` inline (13px cru) p/ o papel `body` — .kpi-state em cine.css. */}
+                          <div className="v kpi-state" style={{ color: stateVar(r.view.state) }}>
                             {r.view.state}
                           </div>
                           <div className="l">estado</div>
@@ -248,15 +250,19 @@ export function ZonasTab({
                     const o = objClass(k);
                     const n = r?.modo === "objetos" ? (r.counts[k] ?? 0) : 0;
                     return (
-                      // title em dado, não affordance: o chip mostra emoji + contagem;
-                      // o title revela o VALOR (rótulo da classe atrás do emoji).
+                      // title em dado, não affordance: o chip mostra emoji + contagem; o title
+                      // revela o VALOR (rótulo da classe). O emoji vem do CATÁLOGO (é dado do
+                      // domínio, não ícone de UI — por isso não vira Lucide): fica aria-hidden e
+                      // o rótulo textual da classe entra sr-only, para o chip não informar só por
+                      // emoji/cor (going-gray + regra 11).
                       <span
                         key={k}
                         className={`count-chip ${n > 0 ? "on" : ""}`}
                         style={n > 0 ? { borderColor: o?.color, color: o?.color } : undefined}
                         title={o?.label}
                       >
-                        {o?.emoji} <b>{n}</b>
+                        <span aria-hidden>{o?.emoji}</span>
+                        <span className="sr-only">{o?.label ?? k}:</span> <b>{n}</b>
                       </span>
                     );
                   })}
@@ -329,7 +335,12 @@ export function ZonasTab({
       })}
       {legend.length > 0 && (
         <div className="ws-legend">
-          <div className="ws-legend-title">Legenda do overlay</div>
+          {/* Seção interna com heading SEMÂNTICO (<h2> do SectionTitle). A classe legada
+              `ws-legend-title` fica: é CSS de página (unlayered) e vence as utilities do átomo —
+              o visual não muda, e o seletor não vira órfão (G6). */}
+          <SectionTitle flush className="ws-legend-title">
+            Legenda do overlay
+          </SectionTitle>
           <div className="ws-legend-items">
             {legend.map((e, i) => (
               <span key={i} className="leg">

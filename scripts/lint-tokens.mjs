@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // LINT DE TOKENS (ratchet) — enforcement da constituição visual (spec-padronizacao-interface.md §1
-// "gate novo no CI"; doutrina 02-doutrina-casa.md regras 2 e 5): em página (src/routes/** e
-// src/components/**) são PROIBIDOS `text-[Npx]` (tipografia fora dos 7 papéis) e cor `#hex` crua
-// (fora dos tokens `--state-*`/`--cam-*` do index.css). `src/ui/**` fica FORA do escopo de
-// propósito: os átomos são a implementação dos tokens (lá o px é tolerado — regra 6).
+// "gate novo no CI"; doutrina 02-doutrina-casa.md regras 2 e 5): em página são PROIBIDOS
+// `text-[Npx]` (tipografia fora dos 7 papéis) e cor `#hex` crua (fora dos tokens
+// `--state-*`/`--cam-*` do index.css). `src/ui/**` fica FORA do escopo de propósito: os átomos são
+// a implementação dos tokens (lá o px é tolerado — regra 6).
+//
+// ESCOPO ALARGADO na varredura F3 (consoles): antes o lint só via `src/routes/**` e
+// `src/components/**` — e os dois arquivos que o operador MAIS usa (`src/CameraWorkspace.tsx` e
+// `src/camera/**`) ficavam FORA do gate. Um sensor que não enxerga o maior ofensor não é sensor:
+// o escopo passa a ser `src/**` MENOS `src/ui/**` (a única exceção de propósito). A dívida que
+// isso revelou entrou na BASELINE abaixo — catalogada, e daqui em diante só pode DIMINUIR.
 //
 // MECÂNICA DO RATCHET: a BASELINE abaixo congela as ocorrências ATUAIS (dívida F1/F2 catalogada —
 // só pode DIMINUIR). O script conta ocorrências por arquivo e FALHA se algum arquivo passar da
@@ -50,14 +56,27 @@ const BASELINE = {
   // Fallback literal do cssVar() p/ canvas (exceção documentada G8 — contraste de canvas);
   // entra na baseline mesmo assim: se a exceção crescer, a revisão precisa ver.
   "src/routes/dashboard/TrackOverlay.tsx": { "#hex": 2 },
+  // ── Dívida REVELADA pelo alargamento de escopo da F3 (antes invisível ao gate) ──
+  // CameraWorkspace: os 2 hex de `style` inline (fallback de var()) saíram na F3; sobrou 1 — o
+  // fallback do cssVar() p/ o canvas 2D (MESMA exceção G8 do TrackOverlay/Replay: o canvas não
+  // entende var()). Zero `text-[`.
+  "src/CameraWorkspace.tsx": { "#hex": 1 },
+  // CalibrationPanel/TagPicker: dívida de TIPOGRAFIA (text-[12px] etc.) da tela de calibração —
+  // é a F2 da spec ("CalibrationPanel, DEPOIS da multi-antena F3"), ainda em frente de produto.
+  // Catalogada aqui p/ NÃO CRESCER enquanto a varredura não chega: quando chegar, zera.
+  "src/camera/CalibrationPanel.tsx": { "text-[": 16 },
+  "src/camera/TagPicker.tsx": { "text-[": 1 },
 };
 
-// ——— varredura: src/routes/**/*.tsx + src/components/**/*.tsx ———
-const SCOPES = ["src/routes", "src/components"];
+// ——— varredura: src/**/*.tsx MENOS src/ui/** (os átomos SÃO a implementação dos tokens) ———
+const SCOPES = ["src"];
+const EXCLUDED = ["src/ui"];
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
+    const rel = path.relative(root, full).split(path.sep).join("/");
+    if (EXCLUDED.includes(rel)) continue;
     if (statSync(full).isDirectory()) yield* walk(full);
     else if (entry.endsWith(".tsx")) yield full;
   }

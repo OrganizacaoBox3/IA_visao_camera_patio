@@ -218,10 +218,9 @@ export function ConfigZonaDialog({
                       />
                       <span className="ss-end">+</span>
                     </div>
-                    <div
-                      style={{ marginTop: "var(--sp-1)", fontSize: 11, color: "var(--text-dim)" }}
-                      aria-live="polite"
-                    >
+                    {/* Estimativa de alertas/dia: espaçamento/tipografia por TOKEN (.cfg-estimate
+                        em cine.css) — o `style` inline trazia px cru (fora dos 7 papéis). */}
+                    <div className="cfg-estimate" aria-live="polite">
                       {histState === "loading" && (
                         <span className="muted">estimando alertas/dia…</span>
                       )}
@@ -240,11 +239,7 @@ export function ConfigZonaDialog({
                             );
                           return (
                             <span>
-                              ≈{" "}
-                              <b style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>
-                                {p.perDay}
-                              </b>{" "}
-                              alerta(s)/dia estimados{" "}
+                              ≈ <b>{p.perDay}</b> alerta(s)/dia estimados{" "}
                               <span className="muted">
                                 (base {p.baselinePerDay}/dia · {p.days}d)
                               </span>
@@ -286,11 +281,13 @@ export function ConfigZonaDialog({
                     ariaLabel="Classes a contar"
                     value={z.selectedClasses}
                     onValueChange={(vals) => patchZone(z.id, { selectedClasses: vals })}
+                    // O emoji é DADO do catálogo (não ícone de UI): aria-hidden p/ o leitor de
+                    // tela não soletrá-lo — o rótulo textual ao lado já nomeia a classe.
                     items={OBJECT_CATALOG.map((o) => ({
                       value: o.key,
                       label: (
                         <>
-                          {o.emoji} {o.label}
+                          <span aria-hidden>{o.emoji}</span> {o.label}
                         </>
                       ),
                       ariaLabel: o.label,

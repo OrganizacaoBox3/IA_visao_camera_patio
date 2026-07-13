@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 // Login real (hub valida POST /api/login → token → socket autenticado).
 async function login(page: Page) {
@@ -50,6 +51,90 @@ async function drawZone(page: Page) {
   }
   await expect(cfgBtn).toBeVisible(); // falha com mensagem clara se nenhum drag pegou
 }
+
+// ── Varredura F3 (consoles): o palco da câmera ABERTA ─────────────────────────────────────────
+// O modo POLÍGONO (spec-zonas-poligonais P1/P7) tinha o editor pronto (usePolygonEditor) e
+// NENHUM ponto de entrada na UI — start/undo/close sem consumidor, inalcançável por mouse OU
+// teclado. A F3 pôs os controles na barra do palco; este teste é o critério de aceite deles
+// (CA-1: clico N vértices + Concluir ⇒ zona criada).
+//
+// O palco só aceita vértice quando JÁ HÁ FRAME (toNorm precisa do content-rect do vídeo) — mesma
+// corrida do drawZone acima. Aqui o rascunho dá um sinal MELHOR que o retry cego: "Concluir
+// polígono" só habilita com ≥3 vértices. Se os cliques não pegaram (sem frame), ESC descarta o
+// rascunho e a tentativa recomeça limpa — sem acumular vértices de tentativas anteriores.
+test("Polígono: a barra do palco cria uma zona de N vértices (botão → vértices → Concluir)", async ({
+  page,
+  context,
+}) => {
+  // O teste paga conexão do nó + chegada do 1º frame ao palco (+ cold-start do dev server quando
+  // é o primeiro do arquivo): o orçamento de 90s estoura por INFRA, não por bug. Medido: ~12s com
+  // o servidor quente, ~70s+ frio.
+  test.slow();
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+
+  const stage = page.locator(".cam-stage");
+  const polyBtn = page.getByRole("button", { name: "Polígono" });
+  const concluir = page.getByRole("button", { name: "Concluir polígono" });
+  const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
+  const VERTICES = [
+    [0.3, 0.3],
+    [0.65, 0.32],
+    [0.6, 0.65],
+    [0.32, 0.62],
+  ] as const;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await polyBtn.click(); // abre o rascunho (o Toggle vira "N vértices")
+    const box = await stage.boundingBox();
+    if (!box) throw new Error(".cam-stage sem boundingBox");
+    for (const [fx, fy] of VERTICES)
+      await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+    try {
+      // Espera de verdade (não polling instantâneo): sem esta janela, as 8 tentativas queimam
+      // em ~2s — antes do 1º frame chegar ao palco — e o teste falha por corrida, não por bug.
+      await expect(concluir).toBeEnabled({ timeout: 2_000 });
+      break; // vértices registraram → dá p/ fechar o polígono
+    } catch {
+      await page.keyboard.press("Escape"); // sem frame ainda: descarta o rascunho e repete
+    }
+  }
+
+  await expect(concluir).toBeEnabled(); // falha com mensagem clara se nenhum vértice pegou
+  await concluir.click();
+  await expect(cfgBtn).toBeVisible(); // a zona poligonal existe (card na aba Zonas)
+  await expect(concluir).toHaveCount(0); // rascunho fechou → controles do rascunho somem
+
+  // Limpa o que este teste criou: as zonas são PERSISTIDAS por câmera no hub, e o e2e reusa a
+  // mesma câmera (key=e2e-cam) — deixar a zona aqui quebraria o estado-vazio que os testes
+  // seguintes (drawZone) exigem. Também exerce o caminho de remoção.
+  await page.getByRole("button", { name: "Remover zona" }).first().click();
+  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+});
+
+// GATE DE A11Y do console que o operador mais vive (a a11y.spec.ts varre só as rotas — a câmera
+// ABERTA exige um nó de câmera conectado, então o axe dela mora aqui, junto dos helpers).
+// Mesma régua do a11y.spec.ts: falha em violação critical/serious; `color-contrast` segue como a
+// dívida F1 conhecida (token --text-muted/--text-dim sobre --panel), não é da tela.
+test("axe: câmera ABERTA (console do operador) sem violação séria", async ({ page, context }) => {
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await expect(page.locator(".cam-stage")).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).analyze();
+  const blocked = results.violations.filter(
+    (v) => (v.impact === "critical" || v.impact === "serious") && v.id !== "color-contrast",
+  );
+  expect(
+    blocked.map(
+      (v) => `${v.id} (${v.impact}): ${v.help} → ${v.nodes[0]?.target.join(" ") ?? "?"}`,
+    ),
+    "violação séria de a11y na câmera aberta",
+  ).toEqual([]);
+});
 
 test("login + navegação das telas principais", async ({ page }) => {
   await login(page);
