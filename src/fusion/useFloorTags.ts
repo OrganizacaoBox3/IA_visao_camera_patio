@@ -11,13 +11,28 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import type { BtReading, CalibrationPoint } from "../api";
 import { pixelToWorld, type Matrix3, type Vec2 } from "../vision/homography";
-import { anchorResidualM, distFromRssi, fitPathLoss, ringPixels, type AnchorObs } from "./floor-plot";
+import {
+  anchorResidualM,
+  distFromRssi,
+  fitPathLoss,
+  ringPixels,
+  type AnchorObs,
+} from "./floor-plot";
+import type { StationPoints } from "./frame";
 
 /** Calibração no shape que este hook consome (exposto aditivamente por useCameraTagLabels). */
 export type FloorCalibration = {
   H: Matrix3 | null;
-  station: Vec2 | null; // ponto de IMAGEM (0..1) do chão onde a estação fica
+  station: Vec2 | null; // ponto de IMAGEM (0..1) do chão onde a estação PRINCIPAL fica
   points: CalibrationPoint[];
+  /** Pontos de TODAS as estações (`calibration.stations` — multi-antena F3/F5). ADITIVO e INERTE
+   *  neste hook, de propósito: o anel de distância continua sendo o da estação PRINCIPAL. Com N
+   *  antenas a tentação seria INTERSECTAR anéis — isso é trilateração por RSSI, REFUTADA no arco
+   *  (docs/cientifica: 1 estação + RSSI dá distância, não posição; a interseção só herda o erro de
+   *  duas). O ganho da 2ª antena está na IDENTIDADE (associate.ts, Fase B), não em desenhar um
+   *  ponto que não existe. Mora neste contrato porque é o MESMO fetch de calibração que alimenta a
+   *  fusão (useCameraTagLabels → useTagFusion.stationsPx) — sem 2º GET. */
+  stations?: StationPoints;
 };
 
 /**
@@ -174,7 +189,8 @@ export function useFloorTags(params: {
   const anchorPoints = useMemo(
     () =>
       calibration.points.filter(
-        (p): p is CalibrationPoint & { mac: string } => typeof p.mac === "string" && p.mac.length > 0,
+        (p): p is CalibrationPoint & { mac: string } =>
+          typeof p.mac === "string" && p.mac.length > 0,
       ),
     [calibration.points],
   );

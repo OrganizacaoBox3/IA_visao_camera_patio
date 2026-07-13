@@ -46,7 +46,12 @@ describe("buildFusionFrame — fallback sem calibração", () => {
   });
 
   it("reading sem rótulo cai no MAC", () => {
-    const f = buildFusionFrame([], [{ mac: "48:87:2D:9D:CE:8D", rotulo: null, rssi: -60 }], null, 0);
+    const f = buildFusionFrame(
+      [],
+      [{ mac: "48:87:2D:9D:CE:8D", rotulo: null, rssi: -60 }],
+      null,
+      0,
+    );
     expect(f.readings[0].tag).toBe("48:87:2D:9D:CE:8D");
   });
 });
@@ -93,6 +98,7 @@ describe("buildFusionFrame — o elo stationId→sourceId (spec multi-antena F4,
   });
 
   it("CA-2 fim-a-fim: com o elo, o motor (multiSourceFisher ON) VÊ 2 grupos — partição por fonte", () => {
+    // (o elo sourceId; a GEOMETRIA por fonte — Fase B — está no describe seguinte)
     // Cenário construído p/ DISCRIMINAR "2 grupos" de "pool único": a fonte A é anti-correlacionada
     // com a distância (o casamento físico) e a fonte B é o ESPELHO exato dela (rssiB = −120 − rssiA
     // ⇒ r_B = −r_A bit-a-bit ⇒ z_B = −z_A). Com a partição, a soma de Fisher-z se cancela em 0 →
@@ -107,7 +113,12 @@ describe("buildFusionFrame — o elo stationId→sourceId (spec multi-antena F4,
         const rssiA = -40 - 3 * k; // cai enquanto a distância cresce (corr −1)
         const readings = [
           { mac: "AA", rotulo: null, rssi: rssiA, ...(stationA ? { stationId: stationA } : {}) },
-          { mac: "AA", rotulo: null, rssi: -120 - rssiA, ...(stationB ? { stationId: stationB } : {}) },
+          {
+            mac: "AA",
+            rotulo: null,
+            rssi: -120 - rssiA,
+            ...(stationB ? { stationId: stationB } : {}),
+          },
         ];
         assoc.push(
           buildFusionFrame([{ id: 1, bbox: [0.45, y - 0.3, 0.1, 0.3] }], readings, H4, k * 500),
@@ -122,5 +133,48 @@ describe("buildFusionFrame — o elo stationId→sourceId (spec multi-antena F4,
     const [withoutLink] = run();
     expect(withoutLink.tag).toBe("AA");
     expect(withoutLink.confidence).toBeGreaterThan(0.9);
+  });
+});
+
+describe("buildFusionFrame — dist POR estação (spec multi-antena F5, Fase B)", () => {
+  // H identidade: px 0..1 = mundo 0..1, então a conta de distância é conferível a olho.
+  const tracks = [{ id: 1, bbox: [0.4, 0.4, 0.2, 0.1] as const }]; // pé em (0.5, 0.5)
+
+  it("uma distância POR estação calibrada — a geometria que o motor precisa p/ correlacionar por fonte", () => {
+    const f = buildFusionFrame(tracks, [], ID, 0, { x: 0.5, y: 1.0 }, undefined, {
+      "est-a": { x: 0.5, y: 1.0 }, // a principal (mesmo ponto do stationPx)
+      "est-b": { x: 0.1, y: 0.9 },
+    });
+    const t = f.tracks[0];
+    expect(t.dist).toBeCloseTo(0.5, 5); // principal: |(0.5,0.5) − (0.5,1.0)|
+    expect(t.metric).toBe(true);
+    expect(t.distByStation!["est-a"]).toBeCloseTo(0.5, 5); // idem, pela geometria da estação A
+    expect(t.distByStation!["est-b"]).toBeCloseTo(Math.hypot(0.4, 0.4), 5); // |(0.5,0.5) − (0.1,0.9)|
+    // As duas distâncias DIFEREM — é exatamente isso que quebra o rival radialmente confundível.
+    expect(t.distByStation!["est-a"]).not.toBeCloseTo(t.distByStation!["est-b"], 3);
+  });
+
+  it("sem stations → a chave NEM EXISTE (retrocompat dura: mundo de 1 antena, CA-3)", () => {
+    const f = buildFusionFrame(tracks, [], ID, 0);
+    expect("distByStation" in f.tracks[0]).toBe(false);
+    const vazio = buildFusionFrame(tracks, [], ID, 0, undefined, undefined, {});
+    expect("distByStation" in vazio.tracks[0]).toBe(false); // stations vazio = ausente
+  });
+
+  it("sem homografia (proxy de caixa) → sem distância por estação, mesmo com stations marcadas", () => {
+    // O proxy 1/bh não depende de ONDE a estação está: emitir uma "distância por estação" aqui
+    // seria inventar geometria. Degradação declarada — o motor cai na dist principal p/ toda fonte.
+    const f = buildFusionFrame(tracks, [], null, 0, undefined, undefined, {
+      "est-a": { x: 0.5, y: 1.0 },
+      "est-b": { x: 0.1, y: 0.9 },
+    });
+    expect("distByStation" in f.tracks[0]).toBe(false);
+  });
+
+  it("estação viva SEM ponto calibrado não aparece — a fonte cai na dist principal no motor", () => {
+    const f = buildFusionFrame(tracks, [], ID, 0, undefined, undefined, {
+      "est-a": { x: 0.5, y: 1.0 },
+    });
+    expect(Object.keys(f.tracks[0].distByStation!)).toEqual(["est-a"]); // "est-b" não foi marcada
   });
 });

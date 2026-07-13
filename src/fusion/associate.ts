@@ -81,10 +81,19 @@ export type TagReading = {
 };
 export type TrackDist = {
   trackId: number; // pessoa rastreada
-  dist: number; // distância-à-estação (m ou proxy monotônico)
+  dist: number; // distância à estação PRINCIPAL (m ou proxy monotônico)
   /** true = `dist` está em METROS reais (homografia calibrada), não no proxy 1/bh. A evidência
    *  absoluta (gate/blend) SÓ se aplica com metric=true — proxy não é comparável a distM. */
   metric?: boolean;
+  /** FASE B (spec multi-antena F5): distância desta pista a CADA estação calibrada, indexada pelo
+   *  `sourceId` da fonte (= o `stationId` que a estação carimba na leitura). Emitido por
+   *  buildFusionFrame a partir de `calibration.stations` (frame.ts) — em METROS, só com homografia.
+   *  ADITIVO/OPCIONAL: ausente = mundo de 1 antena (toda fonte correlaciona contra `dist`, a
+   *  distância à estação PRINCIPAL — o comportamento de sempre). Consumido SÓ pelo caminho
+   *  multi-fonte (`multiSourceFisher` com ≥2 fontes na janela): é a GEOMETRIA POR FONTE, a única
+   *  coisa que faz duas antenas atacarem o rival radialmente confundível. Fonte sem entrada aqui
+   *  (estação viva mas sem ponto calibrado) → cai na `dist` principal (degradação segura). */
+  distByStation?: Readonly<Record<string, number>>;
 };
 export type FusionFrame = { ts: number; readings: TagReading[]; tracks: TrackDist[] };
 export type Assignment = {
@@ -239,29 +248,38 @@ export type FusionConfig = {
    *  associate.test.ts). A guarda de margem top-2 e a atribuição 1-1 operam IGUAL sobre o score
    *  combinado — nada muda depois do pairScore.
    *
-   *  ⚠ LIMITAÇÃO DE ESCOPO v1 (decisão documentada desta entrega — a FASE 2 está pendente):
-   *  cada fonte correlaciona o SEU RSSI contra a MESMA série de distância disponível da pista —
-   *  a distância à ESTAÇÃO PRINCIPAL (o contrato TrackDist tem UMA `dist` por pista). Isso é
-   *  fisicamente correto quando as fontes são CO-LOCALIZADAS, OU quando a fonte B serve só como
-   *  dimensão EXTRA DE ASSINATURA de identidade (a soma de Fisher-z segue válida como evidência
-   *  adicional) SEM geometria própria ainda. Com estações em POSIÇÕES DISTINTAS, a série de
-   *  distância correta da fonte B seria a distância da pista AO PONTO DA ESTAÇÃO B (distância a
-   *  A ≠ distância a B) — a geometria por-fonte (TrackDist por fonte) é a fase 2, quando o frame
-   *  de produção souber a posição da estação B; é lá que o ganho pleno de ORTOGONALIDADE (duas
-   *  geometrias desempatando o "bloco") aparece.
+   *  GEOMETRIA POR FONTE — FASE B (spec multi-antena F5, ENTREGUE; antes era a "limitação de
+   *  escopo v1" deste knob): cada fonte correlaciona o seu RSSI contra a SUA série de distância —
+   *  `TrackDist.distByStation[sourceId]`, a distância da pista AO PONTO DAQUELA estação
+   *  (`calibration.stations`, projetado por frame.ts). É o que faz duas antenas atacarem o RIVAL
+   *  RADIALMENTE CONFUNDÍVEL: o vizinho que espelha meu perfil de distância à estação A tem, em
+   *  geral, perfil DIFERENTE à estação B — dois eixos radiais quebram o espelho (M4/M5 da spec).
+   *  DEGRADAÇÃO SEGURA (a limitação que RESTA, declarada): fonte sem ponto calibrado — ou com a
+   *  série incompleta na janela — cai na `dist` principal, exatamente a Fase A (fonte como
+   *  dimensão extra de ASSINATURA, sem geometria própria); e sem `distByStation` em lugar nenhum
+   *  o caminho é bit-a-bit o de antes desta entrega. Estações CO-LOCALIZADAS ou COLINEARES com o
+   *  eixo de movimento dominante não quebram o espelho (a geometria é a mesma) — é geometria de
+   *  instalação, não de software: o painel de calibração avisa (M4), não bloqueia.
    *
    *  Combinações NÃO medidas (mesmo precedente do blend×significanceGate acima): no caminho com
    *  ≥2 fontes votantes, maxDistRatio/distWeight NÃO se aplicam (knobs v4 já aposentados dos
    *  defaults); significanceGate, se presente, aplica POR FONTE (fonte individualmente
    *  insignificante não vota; nenhuma votante → não fala).
    *
-   *  MÉTRICA DE UNIVERSALIDADE (ADR-013 item 7 — previsão do especialista a testar quando o
-   *  ESP32 chegar): esta entrega mudou 61 linhas EXECUTÁVEIS do motor (este arquivo, medido no
-   *  diff sem comentários/vazias: campo sourceId nos tipos + partição por fonte +
-   *  multiSourceScore + repasse nos builders de série) + 1 linha em frame.ts (repasse do
-   *  sourceId). Previsão registrada p/ a CHEGADA da 2ª antena: ZERO linhas adicionais no motor —
-   *  só o adapter de ingest preenchendo `sourceId`. Se confirmar, a interface está no lugar
-   *  certo e UWB/AoA/mmWave entram pela mesma porta. */
+   *  MÉTRICA DE UNIVERSALIDADE (ADR-013 item 7 — previsão do especialista): a entrega anterior
+   *  mudou 61 linhas EXECUTÁVEIS do motor (campo sourceId nos tipos + partição por fonte +
+   *  multiSourceScore + repasse nos builders de série) + 1 em frame.ts, e REGISTROU a previsão
+   *  "ZERO linhas adicionais no motor quando a 2ª antena chegar — só o adapter de ingest
+   *  preenchendo sourceId".
+   *  VEREDITO MEDIDO (F5, esta entrega): a previsão vale para a 2ª fonte CO-LOCALIZADA (o elo
+   *  stationId→sourceId da F4 custou 1 linha em frame.ts, motor intacto) e FALHA para a 2ª fonte
+   *  com POSIÇÃO PRÓPRIA: a geometria por fonte custou ~19 linhas executáveis AQUI
+   *  (distByStation em TrackDist/DistSample + stationDistSeries + veto de movimento por fonte)
+   *  + ~15 em frame.ts. A lição, honesta: `sourceId` universaliza a EVIDÊNCIA (quem mediu), mas
+   *  não a GEOMETRIA (de onde mediu) — sensor com posição própria (2ª antena, UWB, AoA, mmWave)
+   *  precisa que o frame lhe dê a sua própria série de referência. O contrato ficou pronto para
+   *  isso agora: um sensor novo entra preenchendo `sourceId` + `distByStation[sourceId]`, sem
+   *  tocar no algoritmo. */
   multiSourceFisher?: boolean;
 };
 
@@ -395,8 +413,15 @@ function passesSignificance(
   return z >= gate.zCrit * Math.sqrt(1 / (nEff - 3));
 }
 
-/** Amostra alinhada de uma pista: distância no instante ts (+ se está em metros REAIS). */
-type DistSample = { ts: number; value: number; metric: boolean };
+/** Amostra alinhada de uma pista: distância no instante ts (+ se está em metros REAIS).
+ *  `byStation` (FASE B): a distância a CADA estação calibrada naquele instante (TrackDist.
+ *  distByStation) — a geometria por fonte que multiSourceScore consome. Ausente = 1 antena. */
+type DistSample = {
+  ts: number;
+  value: number;
+  metric: boolean;
+  byStation?: Readonly<Record<string, number>>;
+};
 /** Amostra de uma tag: RSSI no instante ts (+ distM calibrado e sourceId da fonte, quando há). */
 type RssiSample = { ts: number; value: number; distM?: number; sourceId?: string };
 
@@ -665,8 +690,14 @@ export class TagTrackAssociator {
    * não desambigua mesma-distância; só VETA inconsistência ou REPONDERA candidato já validado.
    */
   private pairScore(distSeries: DistSample[], rssiSeries: RssiSample[]): PairEvidence {
-    const { minSamples, minConfidence, maxDistRatio, distWeight, useLogDistance, significanceGate } =
-      this.cfg;
+    const {
+      minSamples,
+      minConfidence,
+      maxDistRatio,
+      distWeight,
+      useLogDistance,
+      significanceGate,
+    } = this.cfg;
     if (distSeries.length < minSamples || rssiSeries.length < minSamples) return NO_EVIDENCE;
     // PESQUISA multiSourceFisher (OFF por default — ver FusionConfig): com ≥2 fontes na janela,
     // a evidência é a combinação de Fisher-z POR FONTE. Com 1 fonte só (ou todas sem sourceId),
@@ -702,30 +733,58 @@ export class TagTrackAssociator {
               0,
               Math.min(
                 1,
-                (1 - distWeight) * base +
-                  distWeight * Math.exp(-median(gaps) / DIST_BLEND_SCALE_M),
+                (1 - distWeight) * base + distWeight * Math.exp(-median(gaps) / DIST_BLEND_SCALE_M),
               ),
             )
           : base;
       // Gate em log-espaço: par fisicamente inconsistente é vetado, mas mantém o guard pré-gate.
-      if (gateOn && median(logGaps) > Math.log10(maxDistRatio))
-        return { score: 0, guard: blended };
+      if (gateOn && median(logGaps) > Math.log10(maxDistRatio)) return { score: 0, guard: blended };
       return { score: blended, guard: blended };
     }
     return { score: base, guard: base };
   }
 
   /**
-   * PESQUISA multiSourceFisher (ADR-013 item 4; chamado por pairScore SÓ com ≥2 fontes na
-   * janela): evidência do par com as leituras PARTICIONADAS por fonte. Fórmula, redução p/ fonte
-   * única e a LIMITAÇÃO DE ESCOPO v1 (mesma série de distância p/ toda fonte — geometria
-   * por-fonte é a fase 2) documentadas em FusionConfig.multiSourceFisher.
+   * FASE B (spec multi-antena F5): a série de distância que a fonte `src` DE FATO enxerga —
+   * `DistSample.byStation[src]`, a distância da pista ao ponto DAQUELA estação (calibration.
+   * stations → frame.ts). Sem isso, a fonte B correlacionaria contra a distância à estação A —
+   * fisicamente errado com antenas em posições distintas (era a limitação de escopo v1).
    *
-   * Gates POR FONTE (os mesmos de sempre): série crua ≥ minSamples, alinhada ≥ minSamples,
-   * Pearson definida (série constante → a fonte não vota) e, se presente, significanceGate.
-   * O veto de MOVIMENTO é da PISTA, não da fonte — a série alinhada de distância é a MESMA para
-   * toda fonte não-vazia (align() emite 1 par por amostra de distância) — checado 1× com a
-   * MESMA função do caminho único (movementVetoed).
+   * DEGRADAÇÃO SEGURA (regra deliberada): a série por estação só vale quando está COMPLETA na
+   * janela — todo frame com a entrada da fonte, finita. Qualquer buraco (estação sem ponto
+   * calibrado, calibração salva no meio da janela, fonte que apareceu agora) → devolve a série
+   * PRINCIPAL INTEIRA (a MESMA referência quando não há `byStation` em lugar nenhum ⇒ caminho
+   * bit-a-bit o de antes). MISTURAR duas geometrias dentro da MESMA correlação seria pior que
+   * usar uma só: a correlação leria como "movimento" o degrau artificial entre as duas réguas.
+   */
+  private stationDistSeries(distSeries: DistSample[], src: string): DistSample[] {
+    if (distSeries.length === 0) return distSeries;
+    const out: DistSample[] = [];
+    for (const d of distSeries) {
+      const v = d.byStation?.[src];
+      if (v === undefined || !Number.isFinite(v)) return distSeries; // incompleta → a principal
+      out.push({ ts: d.ts, value: v, metric: d.metric });
+    }
+    return out;
+  }
+
+  /**
+   * PESQUISA multiSourceFisher (ADR-013 item 4; chamado por pairScore SÓ com ≥2 fontes na
+   * janela): evidência do par com as leituras PARTICIONADAS por fonte, cada fonte correlacionando
+   * o SEU RSSI contra a SUA distância (Fase B — ver stationDistSeries e FusionConfig.
+   * multiSourceFisher, onde moram a fórmula, a redução p/ fonte única e a degradação segura).
+   *
+   * Gates POR FONTE (os mesmos de sempre): série crua ≥ minSamples, alinhada ≥ minSamples, veto de
+   * MOVIMENTO, Pearson definida (série constante → a fonte não vota) e, se presente,
+   * significanceGate.
+   *
+   * MOVIMENTO POR FONTE (mudança da Fase B, deliberada): o veto roda sobre a série de distância
+   * DAQUELA fonte, com a MESMA função do caminho único (movementVetoed) — a régua é o movimento
+   * RADIAL visto POR AQUELA estação. Quem anda em círculo ao redor de A não move a distância a A
+   * (ambíguo LÁ, a fonte A não vota) mas move a distância a B (discriminável AQUI) — vetar o par
+   * inteiro pelo movimento visto só de A jogaria fora exatamente o ganho da 2ª antena. Sem
+   * `byStation` a série é a MESMA para toda fonte ⇒ o veto vira o de sempre e, se ele corta,
+   * NENHUMA fonte vota → NO_EVIDENCE: idêntico ao comportamento anterior, bit-a-bit.
    *
    * Fonte ÚNICA VOTANTE (as demais caíram nos gates): usa o r cru direto (sem o round-trip
    * tanh∘atanh, que introduziria erro de fp) — BIT-IDÊNTICO a rodar só com a fonte votante.
@@ -736,7 +795,6 @@ export class TagTrackAssociator {
     groups: Map<string, RssiSample[]>,
   ): PairEvidence {
     const { minSamples, useLogDistance, significanceGate } = this.cfg;
-    let movementChecked = false;
     let sumZW = 0; // Σ z_i·√(n_i−3)
     let sumW = 0; // Σ (n_i−3)
     let voters = 0;
@@ -746,12 +804,11 @@ export class TagTrackAssociator {
     for (const src of [...groups.keys()].sort()) {
       const series = groups.get(src)!;
       if (series.length < minSamples) continue; // gate de amostras cruas, POR fonte
-      const { rssi, dist } = align(distSeries, series);
+      // A GEOMETRIA DA FONTE (Fase B): distância da pista ao ponto DESTA estação; sem ponto
+      // calibrado (ou série incompleta) cai na principal — Fase A, declarada.
+      const { rssi, dist } = align(this.stationDistSeries(distSeries, src), series);
       if (rssi.length < minSamples) continue; // gate de amostras alinhadas, POR fonte
-      if (!movementChecked) {
-        if (this.movementVetoed(dist)) return NO_EVIDENCE; // veto da PISTA — 1× (ver docstring)
-        movementChecked = true;
-      }
+      if (this.movementVetoed(dist)) continue; // parado NO EIXO DESTA estação → não vota
       const p = pearson(rssi, useLogDistance ? log10Dist(dist) : dist);
       if (p === null) continue; // série constante NESTA fonte → a fonte não vota
       if (significanceGate !== undefined && !passesSignificance(p.corr, rssi, significanceGate))
@@ -771,7 +828,8 @@ export class TagTrackAssociator {
   }
 
   /** Veto de MOVIMENTO sobre a série ALINHADA de distância CRUA (m ou proxy) — fonte única
-   *  (pairScore E diagnoseFunnel usam ESTA função; nunca recalcule por fora):
+   *  (pairScore, multiSourceScore — lá, sobre a série DAQUELA estação — e diagnoseFunnel usam
+   *  ESTA função; nunca recalcule por fora):
    *  - default (useLogDistance OFF): variância < minMovement (m²) — variance() é bitwise-igual
    *    ao p.varY histórico do pearson;
    *  - useLogDistance + minMovementDecades>0: std(log10 d) < minMovementDecades — o gate
@@ -847,7 +905,9 @@ export class TagTrackAssociator {
           arr = [];
           distByTrack.set(t.trackId, arr);
         }
-        arr.push({ ts: f.ts, value: t.dist, metric: t.metric === true });
+        const d: DistSample = { ts: f.ts, value: t.dist, metric: t.metric === true };
+        if (t.distByStation !== undefined) d.byStation = t.distByStation; // geometria por fonte (Fase B)
+        arr.push(d);
       }
       for (const r of f.readings) {
         let arr = rssiByTag.get(r.tag);
@@ -934,14 +994,26 @@ export class TagTrackAssociator {
       const diag = rowDiag.get(i);
       if (a !== undefined) {
         // diag sempre existe aqui: `a` só existe p/ i que veio de `accepted`, subconjunto de `chosen`.
-        return { trackId: id, tag: a.tag, confidence: a.score, margin: diag!.margin, hadConflict: diag!.hadConflict };
+        return {
+          trackId: id,
+          tag: a.tag,
+          confidence: a.score,
+          margin: diag!.margin,
+          hadConflict: diag!.hadConflict,
+        };
       }
       // "não sei": reporta o melhor score que a pista alcançou (honesto — mostra o quão perto chegou).
       const confidence = score[i].length > 0 ? Math.max(...score[i]) : 0;
       if (diag !== undefined) {
         // chosen mas recusado pela guarda de margem: abstenção AMBÍGUA — margin real, hadConflict
         // real (foi a concorrência que barrou a fala).
-        return { trackId: id, tag: null, confidence, margin: diag.margin, hadConflict: diag.hadConflict };
+        return {
+          trackId: id,
+          tag: null,
+          confidence,
+          margin: diag.margin,
+          hadConflict: diag.hadConflict,
+        };
       }
       // nenhum candidato alcançou minConfidence: abstenção por FALTA de evidência, não por empate.
       return { trackId: id, tag: null, confidence, margin: 0, hadConflict: false };
@@ -991,7 +1063,9 @@ export class TagTrackAssociator {
           arr = [];
           distByTrack.set(t.trackId, arr);
         }
-        arr.push({ ts: f.ts, value: t.dist, metric: t.metric === true });
+        const d: DistSample = { ts: f.ts, value: t.dist, metric: t.metric === true };
+        if (t.distByStation !== undefined) d.byStation = t.distByStation; // geometria por fonte (Fase B)
+        arr.push(d);
       }
       for (const r of f.readings) {
         let arr = rssiByTag.get(r.tag);

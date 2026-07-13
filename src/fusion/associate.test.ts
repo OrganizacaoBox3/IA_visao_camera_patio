@@ -1021,3 +1021,163 @@ describe("TagTrackAssociator — fusão multi-fonte por soma de Fisher-z (knob m
   });
 });
 
+describe("TagTrackAssociator — FASE B: dist POR estação (spec multi-antena F5/M5, CA-2)", () => {
+  // A CENA é o erro que domina o arco — o RIVAL RADIALMENTE CONFUNDÍVEL — em geometria real (m):
+  //   estação A em (0,0) [PRINCIPAL], estação B em (8,0);
+  //   pessoa 1 anda pelo eixo X, de (1,0) a (6,0) → afasta-se de A e APROXIMA-se de B;
+  //   pessoa 2 anda pelo eixo Y, de (0,1) a (0,6) → afasta-se de A com a MESMA série de distância
+  //     (mesmo raio, outro ângulo: a antena A não pode distingui-las nem em teoria) e afasta-se de B.
+  // Cada tag emite por AMBAS as fontes, com o MESMO modelo de canal (RSSI cai com a distância à
+  // fonte que mediu). Só a distância POR ESTAÇÃO desfaz o espelho: correlacionando as duas fontes
+  // contra a distância à estação A (Fase A), a fonte B vira ruído estruturado — e o motor,
+  // honestamente, cala.
+  const N = 16;
+  const A = { x: 0, y: 0 };
+  const B = { x: 8, y: 0 };
+  const px1 = (i: number) => ({ x: ramp(1, 6, i, N), y: 0 });
+  const px2 = (i: number) => ({ x: 0, y: ramp(1, 6, i, N) });
+  const dist = (p: { x: number; y: number }, s: { x: number; y: number }) =>
+    Math.hypot(p.x - s.x, p.y - s.y);
+  const wiggle = (i: number) => (i % 2 === 0 ? 1 : -1); // evita |r| = 1 exato (exercita a soma de z)
+  const rssi = (d: number, i: number) => -40 - 3 * d + wiggle(i); // o que importa é a MONOTONIA
+
+  /** Fase A: só a distância à estação PRINCIPAL (o contrato de antes da F5). */
+  const tracksFaseA = (i: number): TrackDist[] => [
+    { trackId: 1, dist: dist(px1(i), A), metric: true },
+    { trackId: 2, dist: dist(px2(i), A), metric: true },
+  ];
+  /** Fase B: a geometria POR FONTE (calibration.stations → frame.ts). */
+  const tracksFaseB = (i: number): TrackDist[] => [
+    {
+      trackId: 1,
+      dist: dist(px1(i), A),
+      metric: true,
+      distByStation: { "est-a": dist(px1(i), A), "est-b": dist(px1(i), B) },
+    },
+    {
+      trackId: 2,
+      dist: dist(px2(i), A),
+      metric: true,
+      distByStation: { "est-a": dist(px2(i), A), "est-b": dist(px2(i), B) },
+    },
+  ];
+  const readings = (i: number): TagReading[] => [
+    { tag: "AA", rssi: rssi(dist(px1(i), A), i), sourceId: "est-a" }, // tag da pessoa 1, vista por A
+    { tag: "AA", rssi: rssi(dist(px1(i), B), i), sourceId: "est-b" }, // ... e por B
+    { tag: "BB", rssi: rssi(dist(px2(i), A), i), sourceId: "est-a" }, // tag da pessoa 2, vista por A
+    { tag: "BB", rssi: rssi(dist(px2(i), B), i), sourceId: "est-b" }, // ... e por B
+  ];
+  const run = (
+    tk: (i: number) => TrackDist[],
+    cfg: FusionConfig = { multiSourceFisher: true },
+    rd: (i: number) => TagReading[] = readings,
+  ) => {
+    const a = new TagTrackAssociator(cfg);
+    for (const f of makeFrames(N, 0, 500, (i) => ({ tracks: tk(i), readings: rd(i) }))) a.push(f);
+    return a.assign();
+  };
+
+  it("CA-2: com dist POR estação as 2 antenas QUEBRAM o rival radial — e sem ela o motor cala", () => {
+    // Fase A (a limitação documentada até a F5): a série de distância à estação A é IDÊNTICA para
+    // as duas pessoas ⇒ quem "explica" uma pista explica a outra ⇒ margem EXATAMENTE 0 (o espelho
+    // perfeito) ⇒ abstenção honesta — com confiança alta, note-se: a evidência é forte, o que falta
+    // é DE QUEM ela é. É a assinatura do rival radialmente confundível.
+    const faseA = run(tracksFaseA);
+    expect(faseA.map((r) => r.tag)).toEqual([null, null]);
+    expect(faseA.every((r) => r.confidence > 0.9)).toBe(true); // sabe que é UM dos dois...
+    expect(faseA.every((r) => r.margin === 0)).toBe(true); // ...e não tem como escolher
+    // Fase B: cada fonte contra a SUA distância ⇒ a antena B separa quem a antena A não separa.
+    const faseB = run(tracksFaseB);
+    expect(faseB.find((r) => r.trackId === 1)!.tag).toBe("AA");
+    expect(faseB.find((r) => r.trackId === 2)!.tag).toBe("BB");
+    expect(faseB.every((r) => r.confidence > 0.9)).toBe(true);
+    // Margem MEDIDA: 0,44 e 0,43 (contra 0 na Fase A) — o espelho quebrou com folga de 4× o
+    // minMargin default (0,1), e sem conflito reportado.
+    expect(faseB.every((r) => (r.margin ?? 0) > 0.4)).toBe(true);
+    expect(faseB.every((r) => r.hadConflict === false)).toBe(true);
+  });
+
+  it("1 fonte só: distByStation é INERTE — bit-idêntico ao caminho sem geometria por fonte", () => {
+    // Regressão explícita (CA-3): com uma antena o motor nem entra no caminho multi-fonte.
+    const soUmaFonte = (i: number): TagReading[] => [
+      { tag: "AA", rssi: rssi(dist(px1(i), A), i), sourceId: "est-a" },
+      { tag: "BB", rssi: rssi(dist(px2(i), A), i), sourceId: "est-a" },
+    ];
+    const comGeo = run(tracksFaseB, { multiSourceFisher: true }, soUmaFonte);
+    const semGeo = run(tracksFaseA, { multiSourceFisher: true }, soUmaFonte);
+    expect(JSON.stringify(comGeo)).toBe(JSON.stringify(semGeo));
+  });
+
+  it("knob OFF (default): distByStation é IGNORADO — byte-idêntico à mesma cena sem o campo", () => {
+    const comGeo = run(tracksFaseB, {});
+    const semGeo = run(tracksFaseA, {});
+    expect(JSON.stringify(comGeo)).toBe(JSON.stringify(semGeo)); // pool único, como sempre
+  });
+
+  it("degradação: estação SEM ponto calibrado cai na dist principal (== Fase A, bit-a-bit)", () => {
+    // A estação B está viva (posta RSSI) mas o operador ainda não marcou o ponto dela no chão.
+    // HONESTO: a fonte B vira dimensão extra de assinatura (Fase A), não geometria inventada.
+    const soPontoDeA = (i: number): TrackDist[] => [
+      {
+        trackId: 1,
+        dist: dist(px1(i), A),
+        metric: true,
+        distByStation: { "est-a": dist(px1(i), A) },
+      },
+      {
+        trackId: 2,
+        dist: dist(px2(i), A),
+        metric: true,
+        distByStation: { "est-a": dist(px2(i), A) },
+      },
+    ];
+    expect(JSON.stringify(run(soPontoDeA))).toBe(JSON.stringify(run(tracksFaseA)));
+  });
+
+  it("degradação: série INCOMPLETA na janela → a principal INTEIRA (não mistura duas geometrias)", () => {
+    // Um único frame sem a entrada de "est-b" (calibração salva no meio da janela): a fonte B usa a
+    // série PRINCIPAL inteira — misturar réguas dentro da mesma correlação leria o degrau artificial
+    // entre elas como "movimento".
+    const furada = (i: number): TrackDist[] =>
+      tracksFaseB(i).map((t) => {
+        if (i !== 3) return t;
+        const by = { ...t.distByStation } as Record<string, number>;
+        delete by["est-b"];
+        return { ...t, distByStation: by };
+      });
+    expect(JSON.stringify(run(furada))).toBe(JSON.stringify(run(tracksFaseA)));
+  });
+
+  it("movimento é vetado POR FONTE: parado no eixo de A, mas andando no de B → a antena B fala", () => {
+    // A pessoa anda num ARCO ao redor de A (raio ~4 m constante: A não vê movimento radial NENHUM —
+    // o gate de movimento corta a fonte A) enquanto a distância a B varia de verdade. Antes da F5 o
+    // veto era da PISTA (série da principal) e teria matado o par inteiro; agora só cala a fonte
+    // cega, e a antena que ENXERGA o movimento decide. É o ganho da 2ª antena em estado puro.
+    const arco = (i: number) => {
+      const th = ramp(0, Math.PI / 2, i, N); // 90° de arco, raio 4 m em torno de A
+      return { x: 4 * Math.cos(th), y: 4 * Math.sin(th) };
+    };
+    const tracksArco = (i: number): TrackDist[] => [
+      {
+        trackId: 1,
+        dist: dist(arco(i), A), // ~4 m o tempo todo → variância ~0 (abaixo do minMovement)
+        metric: true,
+        distByStation: { "est-a": dist(arco(i), A), "est-b": dist(arco(i), B) },
+      },
+    ];
+    const readingsArco = (i: number): TagReading[] => [
+      { tag: "AA", rssi: rssi(dist(arco(i), A), i), sourceId: "est-a" },
+      { tag: "AA", rssi: rssi(dist(arco(i), B), i), sourceId: "est-b" },
+    ];
+    const comGeo = run(tracksArco, { multiSourceFisher: true }, readingsArco);
+    expect(comGeo[0].tag).toBe("AA");
+    // Sem a geometria por fonte (Fase A), a MESMA cena é abstenção: as duas fontes olham a série da
+    // estação A, que não se move → veto de movimento em ambas → ninguém vota.
+    const semGeo = run(
+      (i) => [{ trackId: 1, dist: dist(arco(i), A), metric: true }],
+      { multiSourceFisher: true },
+      readingsArco,
+    );
+    expect(semGeo[0].tag).toBeNull();
+  });
+});

@@ -4,7 +4,7 @@
 // em associate.ts e frame.ts (puros/testados). Desligado (enabled=false / sem readings) → labelFor null.
 import { useEffect, useMemo, useRef } from "react";
 import { TagTrackAssociator } from "./associate";
-import { buildFusionFrame, type RawReading } from "./frame";
+import { buildFusionFrame, type RawReading, type StationPoints } from "./frame";
 import type { Matrix3, Vec2 } from "../vision/homography";
 import type { HubAnalysis } from "../types/analysis";
 
@@ -15,7 +15,13 @@ type Params = {
   // sempre. O elo fonte→motor (stationId→sourceId) é feito por buildFusionFrame (frame.ts).
   getReadings?: () => RawReading[] | null;
   H: Matrix3 | null; // homografia da câmera (null = fallback por tamanho de caixa)
-  stationPx?: Vec2; // ponto do chão da estação (0..1); undefined = default do frame.ts
+  stationPx?: Vec2; // ponto do chão da estação PRINCIPAL (0..1); undefined = default do frame.ts
+  /** Pontos de chão de TODAS as estações (`calibration.stations`, spec multi-antena F5) — dão a
+   *  cada fonte a SUA geometria (distByStation), o que ataca o rival radialmente confundível.
+   *  ADITIVO: ausente = mundo de 1 antena (toda fonte contra a distância à principal). Só tem
+   *  efeito com H e com o knob `multiSourceFisher` ligado (OFF por default — promoção só pelo
+   *  torneio da F6). */
+  stationsPx?: StationPoints;
   /** MACs (MAIÚSCULOS) das tags-âncora CADASTRADAS — excluídas das leituras antes da fusão
    *  (âncora tem posição conhecida, jamais está numa pessoa; ver buildFusionFrame). ADITIVO. */
   excludeTags?: ReadonlySet<string>;
@@ -29,6 +35,7 @@ export function useTagFusion({
   getReadings,
   H,
   stationPx,
+  stationsPx,
   excludeTags,
   enabled = true,
 }: Params) {
@@ -54,14 +61,14 @@ export function useTagFusion({
       const readings = getReadings();
       if (!hd || !readings || !readings.length) return;
       const now = performance.now();
-      a.push(buildFusionFrame(hd.tracks, readings, H, now, stationPx, excludeTags));
+      a.push(buildFusionFrame(hd.tracks, readings, H, now, stationPx, excludeTags, stationsPx));
       const m = new Map<number, string>();
       for (const as of a.assign(now)) if (as.tag) m.set(as.trackId, as.tag);
       labels.current = m;
       assigned.current = new Set(m.values());
     }, TICK_MS);
     return () => window.clearInterval(id);
-  }, [getHubAnalysis, getReadings, H, stationPx, excludeTags, enabled]);
+  }, [getHubAnalysis, getReadings, H, stationPx, stationsPx, excludeTags, enabled]);
 
   // Getters estáveis (leem os refs) → não quebram o React.memo de quem consome o overlay.
   return useMemo(

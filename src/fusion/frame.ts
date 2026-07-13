@@ -2,8 +2,15 @@
 // as CAIXAS das pessoas (analysis-tracks, 0..1) viram DISTÂNCIA à estação (via homografia se a câmera
 // está calibrada; senão um proxy monotônico pelo tamanho da caixa), e as leituras BLE viram {tag, rssi}.
 // Puro/sem estado → testável isolado. Responsabilidade única: traduzir os dados brutos p/ o frame.
+//
+// FASE B (spec multi-antena, F5): com N estações calibradas (`calibration.stations`), cada pista ganha
+// também a distância a CADA estação (`TrackDist.distByStation`) — é a GEOMETRIA POR FONTE que o motor
+// precisava para que a fonte B correlacione o SEU RSSI contra a SUA distância. É o que ataca o rival
+// radialmente confundível (o vizinho que espelha meu perfil de distância à estação A): dois eixos
+// radiais distintos quebram o espelho. Sem stations (mundo de 1 antena) a chave nem existe — o motor
+// segue idêntico ao de hoje (toda fonte contra a `dist` da estação PRINCIPAL).
 import { pixelToWorld, type Matrix3, type Vec2 } from "../vision/homography";
-import type { FusionFrame, TagReading } from "./associate";
+import type { FusionFrame, TagReading, TrackDist } from "./associate";
 
 /** Caixa de pessoa (subset do track do hub): id + bbox [x,y,w,h] normalizado 0..1. */
 export type DrawTrack = { id: number; bbox: readonly [number, number, number, number] };
@@ -29,6 +36,13 @@ export type RawReading = {
   stationId?: string;
 };
 
+/** Pontos de chão das ESTAÇÕES BLE em coords de IMAGEM (0..1), por `stationId` — o espelho de
+ *  `calibration.stations` (contrato ADITIVO da spec multi-antena F3; o `calibration.station`
+ *  singular segue sendo o ponto da estação PRINCIPAL, retrocompat). A chave é o MESMO id que chega
+ *  em `RawReading.stationId` e vira `sourceId` no motor — é o que casa RSSI da fonte com a
+ *  geometria da fonte. */
+export type StationPoints = Readonly<Record<string, Vec2>>;
+
 // Padrão da estação: base-centro da imagem (0.5, 1.0) = ponto do chão MAIS PERTO da câmera. Assume a
 // estação junto da câmera (caminho C). Trocável se a estação ficar em outro ponto conhecido do chão.
 const STATION_PX: Vec2 = { x: 0.5, y: 1.0 };
@@ -53,6 +67,11 @@ function boxProxyDist(bbox: readonly [number, number, number, number]): number {
  *   todo o ganho da v4 era âncoras deixando de grudar em gente — a exclusão captura esse ganho
  *   sem depender do modelo RSSI→distância, logo IMUNE a viés de RSSI). Compara pelo MAC da
  *   leitura em maiúsculas. ADITIVO: ausente/vazio = comportamento intacto.
+ * @param stationsPx pontos de chão das N estações (`calibration.stations`, spec multi-antena F5).
+ *   ADITIVO — ausente/vazio = mundo de 1 antena, `TrackDist.distByStation` nem é emitido. SÓ tem
+ *   efeito COM homografia: sem H a `dist` é o proxy 1/bh (tamanho da caixa), que NÃO depende de
+ *   onde a estação está — distância por estação não existiria (degradação segura e declarada: o
+ *   motor cai na dist principal para toda fonte, exatamente como na Fase A).
  */
 export function buildFusionFrame(
   tracks: readonly DrawTrack[],
@@ -61,19 +80,37 @@ export function buildFusionFrame(
   now: number,
   stationPx: Vec2 = STATION_PX,
   excludeTags?: ReadonlySet<string>,
+  stationsPx?: StationPoints,
 ): FusionFrame {
   const stationWorld = H ? pixelToWorld(H, stationPx) : null;
+  // FASE B: cada estação com ponto calibrado vira uma ORIGEM RADIAL própria no mundo (metros).
+  // Estação cujo ponto não projeta (H degenerada naquele pixel) fica de fora — a fonte cai na dist
+  // principal no motor, sem inventar geometria. Ordem das chaves ordenada = saída determinística.
+  const stationWorlds: Array<[string, Vec2]> = [];
+  if (H && stationsPx) {
+    for (const id of Object.keys(stationsPx).sort()) {
+      const w = pixelToWorld(H, stationsPx[id]);
+      if (w) stationWorlds.push([id, w]);
+    }
+  }
   // `metric: true` SÓ quando a distância saiu da homografia (metros reais) — o proxy de caixa não
   // ganha a flag, e a evidência absoluta do associador (gate/blend, v4) fica inerte nele.
   const outTracks: FusionFrame["tracks"] = tracks.map((t) => {
     if (H && stationWorld) {
       const g = pixelToWorld(H, foot(t.bbox));
-      if (g)
-        return {
+      if (g) {
+        const out: TrackDist = {
           trackId: t.id,
           dist: Math.hypot(g.x - stationWorld.x, g.y - stationWorld.y),
           metric: true,
         };
+        if (stationWorlds.length > 0) {
+          const byStation: Record<string, number> = {};
+          for (const [id, sw] of stationWorlds) byStation[id] = Math.hypot(g.x - sw.x, g.y - sw.y);
+          out.distByStation = byStation; // chave ausente sem stations (retrocompat dura)
+        }
+        return out;
+      }
     }
     return { trackId: t.id, dist: boxProxyDist(t.bbox) };
   });
@@ -89,7 +126,8 @@ export function buildFusionFrame(
     // `stationId` e ninguém a mapeava — RssiSample.sourceId chegava vazio e partitionBySource via
     // sempre 1 grupo. sourceId EXPLÍCITO (replay/session-loader) tem precedência; ambos ausentes
     // (ou stationId vazio) → chave ausente (retrocompat dura: fonte única implícita — CA-3).
-    if (r.sourceId !== undefined) out.sourceId = r.sourceId; // fonte → fusão multi-fonte (ADR-013)
+    if (r.sourceId !== undefined)
+      out.sourceId = r.sourceId; // fonte → fusão multi-fonte (ADR-013)
     else if (typeof r.stationId === "string" && r.stationId.length > 0) out.sourceId = r.stationId;
     outReadings.push(out);
   }
