@@ -12,7 +12,7 @@
 // o arraste do botão "Zona" agora é do MESMO editor da zona ("polygon"), que também seleciona,
 // insere e move. Um alvo a menos = uma ordem a menos para errar.
 import { describe, it, expect } from "vitest";
-import { stageTarget, sceneLayers, type StageState } from "./useStageModes";
+import { stageTarget, sceneLayers, activeStageMode, type StageState } from "./useStageModes";
 
 const base: StageState = {
   mode: "full",
@@ -68,5 +68,34 @@ describe("sceneLayers — quais camadas de operação o palco desenha por modo",
     const v = sceneLayers({ calActive: true });
     expect(Object.values(v).some(Boolean)).toBe(false);
     expect(v.calibrationMesh).toBe(false); // explícito: a grade salva NÃO se sobrepõe à viva (SVG)
+  });
+});
+
+// ── QUAL PAINEL O DRAWER MOSTRA (spec-tela-camera-arquitetura §3-A): Zona/Linha viram MODOS ────────
+// Zona e Linha DEIXARAM de ser abas navegáveis do drawer (a metáfora de aba mentia: são estados do
+// palco que não coexistem, não vistas). Entra-se pelo toggle do CamHeader e o painel vira O painel
+// contextual daquele modo — o mesmo molde do Calibrar. `activeStageMode` é o UM mecanismo que decide
+// isso, e a ordem é REGRA (mesma precedência do stageTarget). Controle negativo: troque a ordem dos
+// `if` (RBAC/precedência) e um caso abaixo fica vermelho — o painel errado subiria para o operador.
+describe("activeStageMode — qual painel contextual o drawer mostra por modo armado", () => {
+  const m = (p: Partial<{ calActive: boolean; tripwireMode: boolean; zonaMode: boolean }> = {}) =>
+    activeStageMode({ calActive: false, tripwireMode: false, zonaMode: false, ...p });
+
+  it("nenhum modo armado → null (o drawer mostra as abas de OBSERVAÇÃO)", () => {
+    expect(m()).toBe(null);
+  });
+
+  it("cada modo isolado mapeia para o SEU painel", () => {
+    expect(m({ calActive: true })).toBe("calibrar");
+    expect(m({ tripwireMode: true })).toBe("linha");
+    expect(m({ zonaMode: true })).toBe("zona");
+  });
+
+  // A ordem é a rede de segurança (os modos já são exclusivos por construção). Injete a falha
+  // (mova o `if (s.zonaMode)` para o topo) e ESTES casos ficam vermelhos: o painel de zona subiria
+  // por cima do de calibração/linha — dois vocabulários misturados, o que a spec proíbe (NN/g).
+  it("precedência (rede de segurança): calibrar > linha > zona", () => {
+    expect(m({ calActive: true, tripwireMode: true, zonaMode: true })).toBe("calibrar");
+    expect(m({ tripwireMode: true, zonaMode: true })).toBe("linha");
   });
 });

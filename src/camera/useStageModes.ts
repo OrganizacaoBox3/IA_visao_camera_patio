@@ -73,6 +73,31 @@ export type StageLayers = {
   hud: boolean;
 };
 
+// ── QUAL PAINEL CONTEXTUAL o drawer mostra (spec-tela-camera-arquitetura §3-A, a generalização do
+// molde do Calibrar) ──────────────────────────────────────────────────────────────────────────
+// A onda anterior fez Calibrar virar MODO: ao entrar, o painel deixa de ser as abas e vira SÓ o
+// passo-a-passo daquele modo (não misturar dois vocabulários — NN/g). Aqui esse padrão vira UM
+// mecanismo, não três casos especiais espalhados: dado o modo de edição ARMADO, diz que painel o
+// drawer deve mostrar — Calibrar → passo-a-passo · Linha → linhas · Zona → zonas — e, sem modo
+// armado, `null` (→ as abas de OBSERVAÇÃO). A PRECEDÊNCIA é a MESMA do stageTarget (cal > linha >
+// zona), agora projetada para o CHROME do painel: os modos já são mutuamente exclusivos na lógica
+// (stageTarget + onStart), então a ordem aqui é a rede de segurança, PURA e testada.
+// `zonaMode` = o editor da zona ARMADO pelo toggle (preset retângulo OU rascunho polígono); é o
+// análogo de `calActive`/`tripwireMode`. Editar uma zona já existente (selecionar/mover no palco)
+// roda sem toggle — é o default do palco, não "estar no modo Zona" para efeito de painel.
+export type StageMode = "calibrar" | "linha" | "zona" | null;
+
+export function activeStageMode(s: {
+  calActive: boolean;
+  tripwireMode: boolean;
+  zonaMode: boolean;
+}): StageMode {
+  if (s.calActive) return "calibrar";
+  if (s.tripwireMode) return "linha";
+  if (s.zonaMode) return "zona";
+  return null;
+}
+
 export function sceneLayers(s: { calActive: boolean }): StageLayers {
   const op = !s.calActive; // camadas de operação só existem FORA do modo calibrar
   return {

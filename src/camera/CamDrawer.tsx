@@ -17,15 +17,21 @@ import { CalibracaoTab } from "./tabs/CalibracaoTab";
 import { PorQueTab } from "./tabs/PorQueTab";
 import type { ComponentProps } from "react";
 import type { CalibrationEditor } from "./useCalibrationEditor";
+import type { StageMode } from "./useStageModes";
 import type { FunnelDiagnosis } from "../fusion/useFunnelDiagnosis";
 
-/** Abas de OPERAÇÃO do drawer. A calibração NÃO é aba: virou MODO do palco (spec §3.4) — quando
- *  ativa, o drawer mostra SÓ o passo-a-passo dela (ramo cal.active abaixo), não uma 7ª aba espremida
- *  entre as de operação. "porque" entrou com a TELA DO PORQUÊ (bug B8 do laudo de 2026-07-13: o
- *  diagnóstico do silêncio existia e não tinha consumidor de UI). */
-export type DrawerTab = "zonas" | "linhas" | "timeline" | "presenca" | "porque" | "camadas";
+/** Abas de OBSERVAÇÃO do drawer (só-leitura, convivem com o vídeo). Zona/Linha/Calibrar NÃO são
+ *  abas: são MODOS do palco (spec-tela-camera-arquitetura §3-A) — entra-se por toggle no CamHeader,
+ *  e o painel vira O painel contextual daquele modo (ramo `mode` abaixo), não uma aba espremida no
+ *  meio. Fim da duplicação header×aba. "porque" entrou com a TELA DO PORQUÊ (bug B8 do laudo de
+ *  2026-07-13: o diagnóstico do silêncio existia e não tinha consumidor de UI). A fusão destas 4
+ *  numa superfície única é a F2 — POR ORA seguem como abas. */
+export type DrawerTab = "timeline" | "presenca" | "porque" | "camadas";
 
 type Props = {
+  /** Modo de edição ARMADO no palco (activeStageMode) — governa QUAL painel contextual mostrar;
+   *  `null` = nenhum modo → as abas de observação. */
+  mode: StageMode;
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
   zonas: ComponentProps<typeof ZonasTab>;
@@ -41,6 +47,7 @@ type Props = {
 };
 
 export function CamDrawer({
+  mode,
   tab,
   onTab,
   zonas,
@@ -53,15 +60,22 @@ export function CamDrawer({
   onCalibrate,
   diag,
 }: Props) {
-  // MODO CALIBRAR (spec §3.4): o palco inteiro se reconfigura, e o painel também — ele vira SÓ o
-  // passo-a-passo da calibração, não a operação com uma aba de calibração no meio. Sair (ESC/toggle)
-  // volta às abas normais. É o padrão do mercado (Figma Dev Mode troca o painel inteiro, Milestone
-  // Setup substitui a operação): não misturar os vocabulários de dois modos ao mesmo tempo (NN/g).
-  if (cal.active) {
+  // MODO ATIVO → o painel INTEIRO se reconfigura (spec §3-A, o molde do Calibrar GENERALIZADO): UM
+  // mecanismo escolhe o painel contextual do modo armado — Calibrar → passo-a-passo · Zona → zonas
+  // · Linha → linhas —, não três `if` especiais. Sair do modo (ESC/toggle) volta às abas. É o
+  // padrão do mercado (Figma Dev Mode troca o painel inteiro, Milestone Setup substitui a operação):
+  // não misturar os vocabulários de dois modos ao mesmo tempo (NN/g).
+  if (mode) {
+    const ctx =
+      mode === "calibrar"
+        ? { aria: "calibração", body: <CalibracaoTab cal={cal} onActivate={onCalibrate} /> }
+        : mode === "zona"
+          ? { aria: "zonas", body: <ZonasTab {...zonas} /> }
+          : { aria: "linhas", body: <LinhasTab {...linhas} /> };
     return (
-      <aside className="cam-drawer" aria-label="Painel da câmera — calibração">
+      <aside className="cam-drawer" aria-label={`Painel da câmera — ${ctx.aria}`}>
         <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
-          <CalibracaoTab cal={cal} onActivate={onCalibrate} />
+          {ctx.body}
         </ScrollArea>
       </aside>
     );
@@ -75,45 +89,18 @@ export function CamDrawer({
         value={tab}
         onValueChange={(v) => onTab(v as DrawerTab)}
         ariaLabel="Aba do painel"
-        // Contagens em chip compacto (.dt-n, cine.css) p/ as abas caberem em 1 linha — triggers
-        // distribuem por flex + rótulos curtos (fix #14: "Presença"→"Pessoas"; valores internos
-        // INTACTOS). Nome acessível continua "Zonas N" / "Linhas N".
+        // Só as abas de OBSERVAÇÃO — Zona/Linha/Calibrar saíram (viraram modos do palco; ramo `mode`
+        // acima). Rótulos curtos distribuídos por flex (fix #14: "Presença"→"Pessoas").
         items={[
-          {
-            value: "zonas",
-            label: (
-              <>
-                Zonas <i className="dt-n">{zonas.zones.length}</i>
-              </>
-            ),
-          },
-          {
-            value: "linhas",
-            label: (
-              <>
-                Linhas <i className="dt-n">{linhas.tripwires.length}</i>
-              </>
-            ),
-          },
           { value: "camadas", label: "Camadas" },
           { value: "timeline", label: "Timeline" },
           { value: "presenca", label: "Pessoas" },
           // A aba do PORQUÊ: quando o sistema não identifica alguém, ele deixa de CALAR e diz qual
           // elo barrou (rádio · movimento · evidência · âncora). O produto não é só acertar.
           { value: "porque", label: "Por quê" },
-          // (calibração NÃO é aba — é MODO do palco; entra pelo toggle "Calibrar" do header e ocupa
-          //  o painel inteiro no ramo cal.active acima.)
         ]}
       >
         <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
-          <TabsContent value="zonas">
-            <ZonasTab {...zonas} />
-          </TabsContent>
-
-          <TabsContent value="linhas">
-            <LinhasTab {...linhas} />
-          </TabsContent>
-
           <TabsContent value="timeline">
             <TimelineTab timeline={timeline} />
           </TabsContent>

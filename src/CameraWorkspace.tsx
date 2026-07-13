@@ -38,7 +38,7 @@ import { useCalibrationEditor } from "./camera/useCalibrationEditor";
 import { CalibrationLayer } from "./camera/CalibrationLayer";
 import { useZoneMasks } from "./camera/useZoneMasks";
 import { usePolygonEditor } from "./camera/usePolygonEditor";
-import { useStageModes, sceneLayers } from "./camera/useStageModes";
+import { useStageModes, sceneLayers, activeStageMode } from "./camera/useStageModes";
 import {
   createCounter,
   createOccupancy,
@@ -285,7 +285,9 @@ export function CameraWorkspace({
   const [detBackend, setDetBackend] = useState<string | null>(null); // null até o worker reportar
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("zonas");
+  // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
+  // vista diária do operador.
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("presenca");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
@@ -1576,6 +1578,14 @@ export function CameraWorkspace({
         </div>
         {/* Painel lateral (abas) → ./camera/CamDrawer: JSX puro, nenhum canvas/rAF lá. */}
         <CamDrawer
+          // Qual painel contextual: o modo de edição ARMADO (activeStageMode, pura+testada) —
+          // Calibrar/Linha/Zona → o painel daquele modo; nenhum → as abas de observação. `zonaMode`
+          // = o editor da zona armado pelo toggle (preset retângulo OU rascunho polígono).
+          mode={activeStageMode({
+            calActive: cal.active,
+            tripwireMode,
+            zonaMode: poly.rectMode || poly.active,
+          })}
           tab={drawerTab}
           onTab={setDrawerTab}
           zonas={{

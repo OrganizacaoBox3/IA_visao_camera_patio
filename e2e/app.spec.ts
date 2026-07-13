@@ -29,8 +29,11 @@ async function connectCamera(context: BrowserContext, dashboard: Page) {
 // E prova o novo comportamento) e retry no drag (o onUp descarta o traço se o 1º frame ainda
 // não chegou ao palco).
 async function drawZone(page: Page) {
-  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
+  // "Zona" ENTRA no modo do palco (spec-tela-camera-arquitetura §3-A): Zona/Linha saíram das abas do
+  // drawer e viram o painel CONTEXTUAL do modo. Só depois de armar o modo o painel de zonas (e seu
+  // estado-vazio) aparece — por isso a espera do estado-vazio vem AGORA, não antes do toggle.
   await page.getByRole("button", { name: "Zona", exact: true }).click();
+  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
   const stage = page.locator(".cam-stage");
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
   // 8 tentativas (era 5): sob carga (probe WHIP do nó + fetch /go2rtc/api/streams) o 1º frame
@@ -73,10 +76,12 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
   await login(page);
   await connectCamera(context, page);
   await page.locator(".tile[title='Abrir câmera']").first().click();
-  await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
-
+  // Guard de carga: a barra do palco montou (a câmera abre em OBSERVAÇÃO — Zona/Linha viram modos,
+  // então o estado-vazio da zona só aparece DENTRO do modo, exercido pelo laço abaixo ao clicar
+  // "Polígono", que arma o rascunho e faz o painel de zonas subir).
   const stage = page.locator(".cam-stage");
   const polyBtn = page.getByRole("button", { name: "Polígono" });
+  await expect(polyBtn).toBeVisible();
   const concluir = page.getByRole("button", { name: "Concluir polígono" });
   const cfgBtn = page.getByRole("button", { name: "Configurar zona" }).first();
   const VERTICES = [
@@ -104,8 +109,12 @@ test("Polígono: a barra do palco cria uma zona de N vértices (botão → vért
 
   await expect(concluir).toBeEnabled(); // falha com mensagem clara se nenhum vértice pegou
   await concluir.click();
-  await expect(cfgBtn).toBeVisible(); // a zona poligonal existe (card na aba Zonas)
   await expect(concluir).toHaveCount(0); // rascunho fechou → controles do rascunho somem
+
+  // Fechar o polígono SAI do modo Zona (o rascunho fecha) → o drawer volta às abas de observação.
+  // Re-arma o modo Zona (toggle "Zona") p/ ver o card da zona criada — o painel CONTEXTUAL do modo.
+  await page.getByRole("button", { name: "Zona", exact: true }).click();
+  await expect(cfgBtn).toBeVisible(); // a zona poligonal existe (card no painel de zonas do modo)
 
   // Limpa o que este teste criou: as zonas são PERSISTIDAS por câmera no hub, e o e2e reusa a
   // mesma câmera (key=e2e-cam) — deixar a zona aqui quebraria o estado-vazio que os testes
@@ -170,7 +179,10 @@ test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértic
   await expect(tip).toContainText(/Vértice \d+ de 4/); // há um VÉRTICE exatamente ali ⇒ a forma andou
 
   // Limpa o que este teste criou (as zonas são PERSISTIDAS por câmera no hub e o e2e reusa a
-  // mesma câmera): o estado-vazio que os testes seguintes exigem volta a valer.
+  // mesma câmera): o estado-vazio que os testes seguintes exigem volta a valer. O modo Zona foi
+  // DESARMADO acima (p/ editar) → o painel voltou às abas de observação; re-arma o modo p/ acessar
+  // o painel de zonas e remover.
+  await page.getByRole("button", { name: "Zona", exact: true }).click();
   await page.getByRole("button", { name: "Remover zona" }).first().click();
   await expect(page.getByText(/Use “Zona” para desenhar/)).toBeVisible();
 });
@@ -226,7 +238,11 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
   const poligono = page.getByRole("button", { name: "Polígono" });
   const tablist = page.getByRole("tablist", { name: "Aba do painel" });
   await expect(zona).toBeVisible(); // operação: os toggles de edição vivem na barra do palco
-  await expect(tablist).toBeVisible(); // e o painel tem as abas de operação
+  await expect(tablist).toBeVisible(); // e o painel tem as abas de OBSERVAÇÃO
+  // F1 (spec-tela-camera-arquitetura §3-A): Zona e Linha DEIXARAM de ser abas — viram MODOS do palco
+  // (entram pelo toggle do header e ocupam o painel contextual). O strip de abas guarda só
+  // observação; nenhuma aba "Zonas"/"Linhas" (fim da duplicação header×aba).
+  await expect(tablist.getByRole("tab", { name: /Zonas|Linhas/ })).toHaveCount(0);
 
   // Entra no 5º modo do palco (o toggle "Calibrar"; antes da ativação há UM só botão com esse nome).
   await page.getByRole("button", { name: "Calibrar" }).click();
