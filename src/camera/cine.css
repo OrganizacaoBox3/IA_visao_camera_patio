@@ -310,6 +310,31 @@
   border: 1px solid var(--cam-panel-border);
   color: var(--cam-panel-fg);
 }
+/* Aba "Por quê" (a tela do porquê — bug B8): um cartão por pessoa em cena + a CADEIA de vetos
+   (rádio → movimento → evidência → veredito). Mesmo cartão dos presets (borda/superfície por
+   token), classe PRÓPRIA: a aba não herda o estilo da aba Camadas por acidente. */
+.cam-drawer .funnel-card {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2);
+  border-radius: 8px;
+  border: 1px solid var(--cam-panel-border);
+  background: var(--cam-surface-bg);
+}
+.cam-drawer .funnel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+/* A cadeia é uma LISTA (semântica: são elos em ordem) — sem marcador, sem recuo. */
+.cam-drawer .funnel-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-2);
+  padding: 0;
+  list-style: none;
+}
 .cam-drawer .lr-card {
   margin-top: var(--sp-3);
   padding: var(--sp-2);

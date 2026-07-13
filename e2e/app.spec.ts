@@ -138,8 +138,7 @@ test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértic
   const stage = page.locator(".cam-stage");
   const tip = page.locator(".cam-head-tip"); // a dica do editor (role=status)
   const box = (await stage.boundingBox())!;
-  const px = (fx: number, fy: number) =>
-    [box.x + box.width * fx, box.y + box.height * fy] as const;
+  const px = (fx: number, fy: number) => [box.x + box.width * fx, box.y + box.height * fy] as const;
 
   // O modo "Zona" continua armado depois do desenho (arraste = nova zona). Desarma p/ EDITAR.
   await page.getByRole("button", { name: /Desenhando/ }).click();
@@ -180,6 +179,33 @@ test("Zona: o retângulo nasce POLÍGONO editável — seleciona, insere vértic
 // ABERTA exige um nó de câmera conectado, então o axe dela mora aqui, junto dos helpers).
 // Mesma régua do a11y.spec.ts: falha em violação critical/serious; `color-contrast` segue como a
 // dívida F1 conhecida (token --text-muted/--text-dim sobre --panel), não é da tela.
+// A TELA DO PORQUÊ (bug B8 do laudo 2026-07-13): quando o sistema não associa a tag à pessoa, ele
+// CALAVA. O diagnóstico (`diagnoseFunnel`) existia, testado, com ZERO consumidor de UI. Este teste
+// prova que ele CHEGOU NA TELA e que a aba fala em português — no nó de webcam do e2e não há
+// estação BLE nem motor do hub, então o estado esperado aqui é justamente o HONESTO: "o diagnóstico
+// não está rodando / a fusão não roda", em vez do silêncio de antes. (O funil COM tag/rádio é
+// coberto por unidade em src/camera/tabs/PorQueTab.test.tsx, com os números medidos em campo.)
+test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunca cala)", async ({
+  page,
+  context,
+}) => {
+  test.slow(); // paga conexão do nó + 1º frame no palco (mesmo orçamento dos demais testes de câmera)
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await expect(page.locator(".cam-stage")).toBeVisible();
+
+  const tablist = page.getByRole("tablist", { name: "Aba do painel" });
+  await tablist.getByRole("tab", { name: "Por quê" }).click();
+  const panel = page.getByRole("tabpanel");
+  await expect(panel.getByRole("heading", { name: "Por que não identificou?" })).toBeVisible();
+  // O contrato com o operador: a tela NUNCA fica muda — ou explica a cadeia, ou explica por que
+  // nem há cadeia (sem leituras BLE nesta câmera / sem pistas do motor do hub).
+  await expect(
+    panel.getByText(/Diagnóstico desligado|A fusão não está rodando|Ninguém em cena/),
+  ).toBeVisible();
+});
+
 test("axe: câmera ABERTA (console do operador) sem violação séria", async ({ page, context }) => {
   await login(page);
   await connectCamera(context, page);
@@ -191,9 +217,7 @@ test("axe: câmera ABERTA (console do operador) sem violação séria", async ({
     (v) => (v.impact === "critical" || v.impact === "serious") && v.id !== "color-contrast",
   );
   expect(
-    blocked.map(
-      (v) => `${v.id} (${v.impact}): ${v.help} → ${v.nodes[0]?.target.join(" ") ?? "?"}`,
-    ),
+    blocked.map((v) => `${v.id} (${v.impact}): ${v.help} → ${v.nodes[0]?.target.join(" ") ?? "?"}`),
     "violação séria de a11y na câmera aberta",
   ).toEqual([]);
 });

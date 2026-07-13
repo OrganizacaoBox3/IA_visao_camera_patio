@@ -53,7 +53,6 @@ import { panelSig, twSig, dominantMode, legendFor } from "./camera/derive";
 import { holderFor as holderForZone, type Holder } from "./camera/holders";
 import { useFocusTrap } from "./camera/useFocusTrap";
 import type { HubAnalysis, Track } from "./types/analysis";
-import { Tabs, TabsContent, ScrollArea } from "./ui";
 import { useCineLoop } from "./camera/useCineLoop";
 import { useTripwires } from "./camera/useTripwires";
 import { useAuth } from "./auth";
@@ -83,13 +82,9 @@ import { useWebrtcTransport } from "./camera/useWebrtcTransport";
 import { useHubAnalysis, applyHubAnalysis, HUB_TRACKS_STALE_MS } from "./camera/useHubAnalysis";
 import { TrackInterpolator, toDisplayTracks } from "./camera/interpolate";
 import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
-import { MODE_TONE } from "./camera/tabs/tone";
-import { ZonasTab } from "./camera/tabs/ZonasTab";
-import { LinhasTab } from "./camera/tabs/LinhasTab";
-import { CamadasTab } from "./camera/tabs/CamadasTab";
-import { TimelineTab, type TimelineItem } from "./camera/tabs/TimelineTab";
-import { PresencaTab } from "./camera/tabs/PresencaTab";
-import { CalibracaoTab } from "./camera/tabs/CalibracaoTab";
+import { CamDrawer, type DrawerTab } from "./camera/CamDrawer";
+import { type TimelineItem } from "./camera/tabs/TimelineTab";
+import { useFunnelDiagnosis } from "./fusion/useFunnelDiagnosis";
 import "./camera/cine.css";
 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
@@ -164,11 +159,6 @@ type Props = {
 };
 
 const C = APP_CONFIG.detection;
-
-// Abas do drawer da câmera aberta. "calibracao" entrou na spec-arquitetura-informacao §1 (a rota
-// /calibracao virou MODO do palco — o painel é o chrome, o palco é o insumo: vídeo REAL, não um
-// JPEG parado).
-type DrawerTab = "zonas" | "linhas" | "timeline" | "presenca" | "camadas" | "calibracao";
 
 export function CameraWorkspace({
   cameraId,
@@ -347,6 +337,16 @@ export function CameraWorkspace({
     getReadings,
     enabled: !!getReadings,
     calibrationRev,
+  });
+
+  // POR QUE NÃO IDENTIFICOU (aba "Por quê") — o funil de vetos do associador (diagnoseFunnel), que
+  // existia sem NENHUM consumidor de UI (bug B8). SÓ-LEITURA e SÓ com a aba aberta: fora dela o hook
+  // é inerte. A matemática/estado vivem em fusion/useFunnelDiagnosis; aqui só a fiação.
+  const funnelDiag = useFunnelDiagnosis({
+    calibration: tagCalibration,
+    getHubAnalysis,
+    getReadings,
+    enabled: !!getReadings && drawerTab === "porque",
   });
 
   // TAGS NO CHÃO — âncoras dos cantos (posição exata), estação e anéis de distância BLE (fusion/
@@ -1556,102 +1556,53 @@ export function CameraWorkspace({
             />
           )}
         </div>
-        {/* Painel lateral: cor/espaçamento por TOKEN em cine.css (.cam-drawer), não style inline. */}
-        <aside className="cam-drawer" aria-label="Painel da câmera">
-          <Tabs
-            className="drawer-tabs"
-            value={drawerTab}
-            onValueChange={(v) => setDrawerTab(v as DrawerTab)}
-            ariaLabel="Aba do painel"
-            // Contagens em chip compacto (.dt-n, cine.css) p/ as 5 abas caberem em 1 linha —
-            // triggers distribuem por flex + rótulos curtos (fix #14: "Presença"→"Pessoas";
-            // valores internos INTACTOS). Nome acessível continua "Zonas N" / "Linhas N".
-            items={[
-              {
-                value: "zonas",
-                label: (
-                  <>
-                    Zonas <i className="dt-n">{zones.length}</i>
-                  </>
-                ),
-              },
-              {
-                value: "linhas",
-                label: (
-                  <>
-                    Linhas <i className="dt-n">{tripwires.length}</i>
-                  </>
-                ),
-              },
-              { value: "camadas", label: "Camadas" },
-              { value: "timeline", label: "Timeline" },
-              { value: "presenca", label: "Pessoas" },
-              // A 6ª aba (spec §1): a calibração deixou de ser uma ROTA e virou o chrome do modo
-              // do palco. Visível para TODOS — o operador não calibra, mas MEDE distância aqui.
-              { value: "calibracao", label: "Calibrar" },
-            ]}
-          >
-            <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
-              <TabsContent value="zonas">
-                <ZonasTab
-                  zonesLoading={zonesLoading}
-                  zones={zones}
-                  canConfigure={canConfigure}
-                  panel={panel}
-                  hist={hist}
-                  legend={legend}
-                  setCfgZoneId={setCfgZoneId}
-                  removeZone={removeZone}
-                />
-              </TabsContent>
-
-              <TabsContent value="linhas">
-                <LinhasTab
-                  tripwireMode={tripwireMode}
-                  canConfigure={canConfigure}
-                  toggleTripwireMode={toggleTripwireMode}
-                  resetCounts={resetCounts}
-                  tripwires={tripwires}
-                  twCounts={twCounts}
-                  analysisEngine={analysisEngine}
-                  hubFlowToday={hubFlowToday}
-                  flowBase={flowBase}
-                  invertTripwire={invertTripwire}
-                  removeTripwire={removeTripwire}
-                />
-              </TabsContent>
-
-              <TabsContent value="timeline">
-                <TimelineTab timeline={timeline} />
-              </TabsContent>
-
-              <TabsContent value="presenca">
-                <PresencaTab presence={presence} paused={paused} />
-              </TabsContent>
-
-              <TabsContent value="calibracao">
-                <CalibracaoTab cal={cal} onActivate={toggleCalibration} />
-              </TabsContent>
-
-              <TabsContent value="camadas">
-                <CamadasTab
-                  activePresetDef={activePresetDef}
-                  activePreset={activePreset}
-                  presetTone={activePreset ? MODE_TONE[activePreset] : "info"}
-                  presetDirty={presetDirty}
-                  applyPreset={applyPreset}
-                  layers={layers}
-                  setLayers={setLayers}
-                  conf={conf}
-                  setConf={setConf}
-                  canConfigure={canConfigure}
-                  longRange={longRange}
-                  onLongRangeChange={onLongRangeChange}
-                />
-              </TabsContent>
-            </ScrollArea>
-          </Tabs>
-        </aside>
+        {/* Painel lateral (abas) → ./camera/CamDrawer: JSX puro, nenhum canvas/rAF lá. */}
+        <CamDrawer
+          tab={drawerTab}
+          onTab={setDrawerTab}
+          zonas={{
+            zonesLoading,
+            zones,
+            canConfigure,
+            panel,
+            hist,
+            legend,
+            setCfgZoneId,
+            removeZone,
+          }}
+          linhas={{
+            tripwireMode,
+            canConfigure,
+            toggleTripwireMode,
+            resetCounts,
+            tripwires,
+            twCounts,
+            analysisEngine,
+            hubFlowToday,
+            flowBase,
+            invertTripwire,
+            removeTripwire,
+          }}
+          camadas={{
+            activePresetDef,
+            activePreset,
+            presetDirty,
+            applyPreset,
+            layers,
+            setLayers,
+            conf,
+            setConf,
+            canConfigure,
+            longRange,
+            onLongRangeChange,
+          }}
+          timeline={timeline}
+          presence={presence}
+          paused={paused}
+          cal={cal}
+          onCalibrate={toggleCalibration}
+          diag={funnelDiag}
+        />
       </div>
 
       {/* Barra de KPIs (rodapé) → ./camera/CamKpiBar. "A imagem é soberana" (ADR-003): o número
