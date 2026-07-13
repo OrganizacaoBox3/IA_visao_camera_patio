@@ -41,6 +41,13 @@ export function useAlarmesVM(args: { active: boolean; alarms: AlarmEvent[]; peri
     [active, alarms, aFilters, alarmWindow, alarmHour],
   );
   const ak = useMemo(() => alarmKpis(alarmsView), [alarmsView]);
+  // KPIs do PERÍODO — só o filtro global, sem prioridade/estado/janela/hora. É o que o CARTÃO do
+  // Resumo (N2) mostra: se herdasse a seleção feita DENTRO do modo Alarmes (ex.: "só críticos do
+  // dia 7"), o Resumo mentiria em silêncio — o gestor leria um subconjunto achando que é o total.
+  const akPeriod = useMemo(
+    () => alarmKpis(filterAlarms(alarms, { period, priority: "Todas", state: "Todos" })),
+    [alarms, period],
+  );
   const aTrend = useMemo(() => alarmTrend(alarmsScoped, 14), [alarmsScoped]);
   const aHeat = useMemo(() => alarmHeatmap(alarmsScoped), [alarmsScoped]);
   const aTips = useMemo(
@@ -89,6 +96,7 @@ export function useAlarmesVM(args: { active: boolean; alarms: AlarmEvent[]; peri
     trendRef,
     alarmsView,
     ak,
+    akPeriod,
     aTrend,
     aHeat,
     aTips,

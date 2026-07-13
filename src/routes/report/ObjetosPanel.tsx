@@ -3,7 +3,6 @@ import {
   objectHeatmap,
   objectPresence,
   objectRanking,
-  objectByClass,
   objectEvolution,
   type ObjectEventRow,
 } from "../../report/calc";
@@ -14,7 +13,7 @@ import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type R
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
-import { TrendChart } from "./TrendChart";
+import { TrendSection } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
 
 // Rótulo humano da classe SEM emoji (#9/#12 — emoji era glifo funcional; a cor/ícone do
@@ -33,7 +32,6 @@ export function ObjetosPanel({
   ohm,
   opres,
   orank,
-  obyClass,
   oevo,
   oevt,
   classes,
@@ -48,7 +46,6 @@ export function ObjetosPanel({
   ohm: ReturnType<typeof objectHeatmap>;
   opres: ReturnType<typeof objectPresence>;
   orank: ReturnType<typeof objectRanking>;
-  obyClass: ReturnType<typeof objectByClass>;
   oevo: ReturnType<typeof objectEvolution>;
   oevt: ObjectEventRow[];
   classes: string[];
@@ -59,9 +56,10 @@ export function ObjetosPanel({
   return (
     <>
       <RepLens lens={lens} />
-      <KpiRow>
-        <Kpi value={ok.avgCount} label="objetos médios em cena" />
-        <Kpi value={ok.peak} label="pico simultâneo" />
+      {/* "objetos médios", "pico simultâneo" e "presença (predominante)" DESCERAM p/ o CSV:
+          são números crus sem faixa-alvo (não sustentam decisão — doutrina 12). O que a matriz
+          Setor × Classe e a tendência já mostram COM contexto continua na tela. */}
+      <KpiRow fit>
         {/* #9: ícone Lucide neutro no lugar do emoji 📦 do catálogo (.kpi-vico, report.css) */}
         <Kpi
           value={
@@ -71,8 +69,6 @@ export function ObjetosPanel({
           }
           label="objeto predominante"
         />
-        {/* going-gray: cor em valor numérico só condicional a estado — sem accent incondicional */}
-        <Kpi value={`${ok.presenceTopPct}%`} label="presença (predominante)" />
         <Kpi
           value={oLoads}
           label="carregamentos"
@@ -164,6 +160,8 @@ export function ObjetosPanel({
                 </table>
               </ScrollArea>
             </section>
+            {/* O rank "Por classe" MORREU aqui: a matriz Setor × Classe ao lado JÁ é isso (e com
+                mais contexto). A quebra por classe segue no CSV (seção POR CLASSE). */}
             <section className="panel">
               <SectionTitle>Por setor (média em cena)</SectionTitle>
               <RankingBars
@@ -177,34 +175,21 @@ export function ObjetosPanel({
                 read
                 emptyNote="Sem objetos no período."
               />
-              <SectionTitle className="mt-3">Por classe</SectionTitle>
-              <RankingBars
-                rows={obyClass.rows.map((r) => ({
-                  key: r.classe,
-                  label: classLabel(r.classe),
-                  value: r.avg,
-                  valueText: `média ${r.avg}`,
-                }))}
-                max={obyClass.max}
-                read
-              />
             </section>
           </div>
         </TabsContent>
         <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
-          <section className="panel flex-1">
-            <SectionTitle>Tendência (14 dias) — objetos médios/dia</SectionTitle>
-            <TrendChart
-              bars={oevo.bars.map((b) => ({
-                key: b.dayIndex,
-                label: b.label,
-                value: b.avg,
-                title: `${b.label} · ${b.avg} em média`,
-              }))}
-              max={oevo.max}
-              read
-            />
-          </section>
+          <TrendSection
+            bars={oevo.bars.map((b) => ({
+              key: b.dayIndex,
+              label: b.label,
+              value: b.avg,
+              title: `${b.label} · ${b.avg} em média`,
+            }))}
+            max={oevo.max}
+            read
+            note="objetos médios/dia"
+          />
         </TabsContent>
         <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable

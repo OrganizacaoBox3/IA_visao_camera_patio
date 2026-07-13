@@ -1035,13 +1035,10 @@ label.file input {
   padding: 8px;
 }
 
-/* Modo apresentação */
-.report.present .rep-filters {
-  display: none;
-}
-.report.present .kpi.big .v {
-  font-size: 30px;
-}
+/* (Modo apresentação REMOVIDO — spec-arquitetura-informacao §2.3: o efeito TOTAL do "modo TV"
+   eram estas 2 regras (esconder os filtros e crescer o KPI de 24→30px). Sem fullscreen, sem
+   rotação, sem auto-refresh: não era um modo, era um zoom. Se o CD pedir TV, constrói-se de
+   verdade — como feature, não como classe de CSS.) */
 
 /* Impressão */
 .only-print {

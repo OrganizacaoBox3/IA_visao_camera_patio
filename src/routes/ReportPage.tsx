@@ -1,9 +1,21 @@
-// Relatório Operacional — ORQUESTRAÇÃO: carga do histórico, modo/filtros, CSV/PDF e o JSX
-// das cascas. O pipeline de cada modo vive num view-model hook (routes/report/use*VM) que
-// computa SÓ a visão atual ("off"/"summary"/"full"); as agregações puras vivem em report/calc.
-// LGPD: tudo aqui são indicadores agregados — nunca imagens.
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { Download, Printer, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+// Relatório Operacional — ORQUESTRAÇÃO da tela unificada (spec-arquitetura-informacao §2).
+// A saúde de alarmes (rota /alarmes-saude) foi ABSORVIDA aqui: nenhuma das duas telas respondia
+// sozinha "o alarme está saudável E o que aconteceu ontem" — o gestor trocava de rota.
+//
+// A HIERARQUIA (o que o gestor lê primeiro):
+//   N1  saúde do detector  — AlarmHealthStrip (janela de ~10 min, EM MEMÓRIA; NÃO obedece ao
+//                            filtro de período, e diz isso na cara; é o ÚNICO relógio da tela)
+//   N2  resumo executivo   — só as dimensões COM DADO + o 5º cartão (Alarmes)
+//   N3  alarmes            — tendência clicável + heatmap prioridade×hora + fila com ack
+//   N4  dimensão           — só as que têm dado; o filtro do recorte é ANCORADO NA SEÇÃO
+//   N5  ferramentas        — silenciamentos · limpar histórico · fonte (canConfigure)
+// Razão de N1 vir primeiro: se o alarme está inundando, TODO número abaixo é suspeito.
+//
+// A carga do histórico é ÚNICA (useReportData); o pipeline de cada modo vive num view-model hook
+// (routes/report/use*VM) que computa SÓ a visão atual ("off"/"summary"/"full"); as agregações
+// puras vivem em report/calc. LGPD: tudo aqui são indicadores agregados — nunca imagens.
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Download, Printer, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   ALL_SHIFTS,
   legacyShiftsIn,
@@ -14,17 +26,10 @@ import {
   type ShiftRow,
 } from "../report/calc";
 import { getShifts, type Shift as ShiftCfg } from "../api";
+import { useAuth } from "../auth";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
 import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/csv";
-import {
-  Button,
-  IconButton,
-  PageHeader,
-  Select,
-  SegmentedControl,
-  Skeleton,
-  AlertDialog,
-} from "../ui";
+import { Button, IconButton, PageHeader, Select, SegmentedControl, Skeleton } from "../ui";
 import "../report/alarms.css";
 import { type RepTab, type VmView } from "./report/chrome";
 import {
@@ -41,12 +46,30 @@ import { useObjetosVM } from "./report/useObjetosVM";
 import { useFadigaVM } from "./report/useFadigaVM";
 import { useAlarmesVM } from "./report/useAlarmesVM";
 import { EmptyHistory } from "./report/EmptyHistory";
+import { AlarmHealthStrip } from "./report/AlarmHealthStrip";
+import { ReportTools } from "./report/ReportTools";
 import { ResumoPanel } from "./report/ResumoPanel";
 import { AtividadePanel } from "./report/AtividadePanel";
 import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel } from "./report/ObjetosPanel";
 import { FadigaPanel } from "./report/FadigaPanel";
 import { AlarmesPanel } from "./report/AlarmesPanel";
+
+// As 4 dimensões de câmera (o modo é por CÂMERA e elas são mutuamente exclusivas).
+const DIMS = ["atividade", "leitura", "objetos", "fadiga"] as const;
+type Dim = (typeof DIMS)[number];
+
+// Rótulo CURTO do botão de modo. O MODE_LABEL (labels.ts) é o do CSV/impressão — "Resumo
+// executivo", "Operador (fadiga)" — longo demais para o seletor. Os rótulos são CONTRATO do
+// e2e ("Atividade"): mudou aqui, atualiza o spec no mesmo PR (regra A18).
+const SEG_LABEL: Record<Mode, string> = {
+  resumo: "Resumo",
+  atividade: "Atividade",
+  leitura: "Leitura",
+  objetos: "Objetos",
+  fadiga: "Operador",
+  alarmes: "Alarmes",
+};
 
 // Filtro específico do modo (mesmo <Select> p/ ponto/setor/posto/área — só muda a fonte).
 // "Todas" (área) × "Todos" (demais) preservados como valores-sentinela.
@@ -59,54 +82,34 @@ type ModeFilter = {
   items: string[];
 };
 
-// Barra de filtros/ferramentas do Relatório (.rep-filters), extraída como componente local
-// coeso: recorte (período/turno + filtro do modo — ou prioridade/estado nos Alarmes) à
-// esquerda; fonte do histórico e ações (recarregar/apresentação/CSV/PDF/limpar) à direita.
-// Puramente apresentacional — estado e handlers vivem no ReportPage (props achatadas, o
-// mesmo padrão dos painéis de modo).
+// Barra de recorte GLOBAL (.rep-filters): período + turno à esquerda, ações à direita.
+// Enxugada na unificação: o filtro do MODO desceu p/ a seção (ver SectionFilter — a barra que
+// mudava de forma conforme o modo era exatamente o que produzia o "tem bastante coisa"); o
+// "modo apresentação" morreu (o efeito TOTAL eram 2 regras de CSS: esconder filtros e crescer o
+// KPI de 24→30px — não era um modo TV, era um zoom); e a "fonte do histórico" (banco/arquivo)
+// desceu p/ N5 (ninguém AGE sobre "pg vs json" no meio de um relatório).
 function FilterBar({
   period,
   setPeriod,
   isAlarmes,
-  isResumo,
   shift,
   setShift,
   shiftItems,
-  alarmPriority,
-  setAlarmPriority,
-  alarmState,
-  setAlarmState,
-  modeFilter,
-  dataSource,
-  present,
-  setPresent,
-  busy,
   refresh,
   downloadCSV,
   printPDF,
-  requestClear,
 }: {
   period: Period;
   setPeriod: (p: Period) => void;
+  /** Alarmes não tem recorte por turno (o evento de alarme não carrega carimbo de turno). */
   isAlarmes: boolean;
-  isResumo: boolean;
   shift: ShiftFilter;
   setShift: (v: ShiftFilter) => void;
   /** turnos do CADASTRO (+ legados presentes no dado) — nunca mais 3 strings hardcoded. */
   shiftItems: { value: string; label: string }[];
-  alarmPriority: AlarmPriority | "Todas";
-  setAlarmPriority: (v: AlarmPriority | "Todas") => void;
-  alarmState: AlarmState | "Todos";
-  setAlarmState: (v: AlarmState | "Todos") => void;
-  modeFilter: ModeFilter;
-  dataSource: string | null | undefined;
-  present: boolean;
-  setPresent: Dispatch<SetStateAction<boolean>>;
-  busy: boolean;
   refresh: () => void;
   downloadCSV: () => void;
   printPDF: () => void;
-  requestClear: () => void;
 }) {
   return (
     <div className="rep-filters rep-filters-m no-print">
@@ -129,71 +132,33 @@ function FilterBar({
           options={[{ value: ALL_SHIFTS, label: "Turno: todos" }, ...shiftItems]}
         />
       )}
-      {isAlarmes ? (
-        <>
-          <Select
-            value={alarmPriority}
-            onChange={(v) => setAlarmPriority(v as AlarmPriority | "Todas")}
-            ariaLabel="Prioridade"
-            options={[
-              { value: "Todas", label: "Prioridade: todas" },
-              { value: "critical", label: "Crítica" },
-              { value: "high", label: "Alta" },
-              { value: "advisory", label: "Informativo" },
-            ]}
-          />
-          <Select
-            value={alarmState}
-            onChange={(v) => setAlarmState(v as AlarmState | "Todos")}
-            ariaLabel="Estado"
-            options={[
-              { value: "Todos", label: "Estado: todos" },
-              { value: "new", label: "Novo" },
-              { value: "acknowledged", label: "Reconhecido" },
-              { value: "forwarded", label: "Encaminhado" },
-            ]}
-          />
-        </>
-      ) : isResumo ? null : (
-        <Select
-          value={modeFilter.value}
-          onChange={modeFilter.set}
-          ariaLabel={modeFilter.aria}
-          options={[
-            { value: modeFilter.allValue, label: modeFilter.allLabel },
-            ...modeFilter.items.map((x) => ({ value: x, label: x })),
-          ]}
-        />
-      )}
       <div className="spacer" />
-      {dataSource && (
-        <span className="muted text-label" title="Onde o hub grava os indicadores">
-          histórico: {dataSource === "pg" ? "banco" : "arquivo local"}
-        </span>
-      )}
       <IconButton label="Recarregar do histórico" onClick={refresh}>
         <RefreshCw size={18} strokeWidth={1.75} aria-hidden />
       </IconButton>
-      <Button onClick={() => setPresent((v) => !v)}>
-        {present ? "Sair da apresentação" : "Apresentação"}
-      </Button>
       <Button onClick={downloadCSV}>
         <Download size={16} strokeWidth={1.75} aria-hidden /> CSV
       </Button>
       <Button onClick={printPDF}>
         <Printer size={16} strokeWidth={1.75} aria-hidden /> PDF
       </Button>
-      {/* #13: ação destrutiva clara na área de ferramentas (ghost discreto, texto em tom
-          crítico) — era link mono 10px escondido no rodapé. O AlertDialog do pai confirma. */}
-      <Button variant="ghost" className="rep-clear" disabled={busy} onClick={requestClear}>
-        <Trash2 size={16} strokeWidth={1.75} aria-hidden /> Limpar histórico
-      </Button>
+    </div>
+  );
+}
+
+// Filtro ANCORADO NA SEÇÃO (N4/N3): o recorte que só vale para a dimensão aberta mora com ela,
+// não no header global. Some junto com a seção — nunca fica um Select órfão no topo.
+function SectionFilter({ children }: { children: ReactNode }) {
+  return (
+    <div className="rep-secfilter no-print" role="group" aria-label="Filtros da seção">
+      {children}
     </div>
   );
 }
 
 export function ReportPage() {
-  const [mode, setMode] = useState<Mode>("resumo");
+  const { canConfigure, isSuper } = useAuth();
+  const [modeState, setMode] = useState<Mode>("resumo");
   const [period, setPeriod] = useState<Period>("7d");
   const [shift, setShift] = useState<ShiftFilter>(ALL_SHIFTS);
   // Cadastro de turnos: fonte ÚNICA do filtro. Falha (hub antigo sem /api/shifts) → lista vazia
@@ -203,9 +168,7 @@ export function ReportPage() {
   const [ponto, setPonto] = useState<string | "Todos">("Todos");
   const [setor, setSetor] = useState<string | "Todos">("Todos");
   const [posto, setPosto] = useState<string | "Todos">("Todos");
-  const [present, setPresent] = useState(false);
   const [tab, setTab] = useState<RepTab>("quando");
-  const [confirmClear, setConfirmClear] = useState(false); // AlertDialog de "limpar histórico"
   const [printedAt, setPrintedAt] = useState("");
 
   // Carga do histórico (5 dimensões + alarmes + fluxo) e limpeza — useReportData.
@@ -217,6 +180,25 @@ export function ReportPage() {
       .then(setShifts)
       .catch(() => setShifts([]));
   }, []);
+
+  // ── Quais dimensões EXISTEM neste site (têm dado no histórico) ──
+  // `modo` é por CÂMERA e os 4 modos são mutuamente exclusivos: num CD de câmeras de ocupação,
+  // 3 dimensões ficam permanentemente vazias. Elas não viram botão nem cartão de zeros.
+  const has = useMemo(
+    () => ({
+      atividade: (data.ds?.cells.length ?? 0) > 0,
+      leitura: (data.rds?.cells.length ?? 0) > 0,
+      objetos: (data.ods?.cells.length ?? 0) > 0,
+      fadiga: (data.fds?.cells.length ?? 0) > 0,
+      alarmes: alarms.length > 0,
+    }),
+    [data.ds, data.rds, data.ods, data.fds, alarms],
+  );
+  const dims: Dim[] = DIMS.filter((d) => has[d]);
+  // "Alarmes" é SEÇÃO fixa da tela (N3) — existe sempre, com estado de vazio próprio e honesto.
+  const modeOptions: Mode[] = ["resumo", ...dims, "alarmes"];
+  // O modo escolhido pode deixar de existir (F5 depois de limpar o histórico): cai no Resumo.
+  const mode: Mode = modeOptions.includes(modeState) ? modeState : "resumo";
 
   // Opções do filtro = turnos ATIVOS do cadastro + os LEGADOS que o dado carregado ainda carrega
   // (linhas sem carimbo). Um site já 100% carimbado não exibe as 3 strings mortas.
@@ -234,7 +216,7 @@ export function ReportPage() {
   const shiftLabel = shiftLabelOf(shift, shifts);
 
   // ── View-models por modo: SÓ o modo ativo computa ("full"); o Resumo pede o "summary"
-  //    das 4 dimensões (é o que ele exibe); o resto fica "off" (memos devolvem null). ──
+  //    das dimensões (é o que ele exibe); o resto fica "off" (memos devolvem null). ──
   const viewFor = (m: Mode): VmView =>
     mode === m ? "full" : mode === "resumo" ? "summary" : "off";
   const atividade = useAtividadeVM({
@@ -280,14 +262,14 @@ export function ReportPage() {
   const isFadiga = mode === "fadiga";
   const isAlarmes = mode === "alarmes";
   // Alarmes tem estado de vazio próprio (dentro da view); não entra no noData genérico.
-  // Resumo só é "vazio" quando as QUATRO dimensões estão vazias.
+  // Resumo só é "vazio" quando NENHUMA dimensão (nem os alarmes) tem dado.
   const modeVm = isReading ? leitura : isObjects ? objetos : isFadiga ? fadiga : atividade;
   const noData =
     !loading &&
     !error &&
     !isAlarmes &&
     (isResumo
-      ? [atividade, leitura, objetos, fadiga].every((v) => v.dataset.cells.length === 0)
+      ? dims.length === 0 && !has.alarmes
       : modeVm.dataset.cells.length === 0);
   const ready = !loading && !error && !noData; // painéis só com dados carregados e não-vazios
   const { alarmPriority, alarmState } = al;
@@ -344,6 +326,8 @@ export function ReportPage() {
 
   // CSV "rico": metadados + indicadores + detalhamento + eventos, num arquivo só (auto-
   // descritivo). A montagem por modo vive em ./report/csv.ts (reportSections).
+  // É PARA CÁ que desceram os KPIs crus podados da tela (pico de pessoas, saldo do fluxo,
+  // bocejos, presença/médios/pico de objetos, quebras por turno/classe): o dado não some.
   function downloadCSV() {
     const now = new Date();
     const sections = reportSections({
@@ -368,7 +352,7 @@ export function ReportPage() {
   }
 
   return (
-    <div className={`page report ${present ? "present" : ""}`}>
+    <div className="page report">
       {/* Descrição do modo virou subtitle do PageHeader (padrão da casa) — era span custom. */}
       <PageHeader
         title="Relatório Operacional"
@@ -381,7 +365,9 @@ export function ReportPage() {
                 ? "objetos · contagem/presença"
                 : isFadiga
                   ? "operador · fadiga/risco"
-                  : "atividade · ocupação/ociosidade"
+                  : isResumo
+                    ? "resumo · o que aconteceu no período"
+                    : "atividade · ocupação/ociosidade"
         }
         className="no-print"
       >
@@ -393,14 +379,7 @@ export function ReportPage() {
             if (tab === "fluxo" && m !== "atividade") setTab("quando");
           }}
           ariaLabel="Modo do relatório"
-          options={[
-            { value: "resumo", label: "Resumo" },
-            { value: "atividade", label: "Atividade" },
-            { value: "leitura", label: "Leitura" },
-            { value: "objetos", label: "Objetos" },
-            { value: "fadiga", label: "Operador" },
-            { value: "alarmes", label: "Alarmes" },
-          ]}
+          options={modeOptions.map((m) => ({ value: m, label: SEG_LABEL[m] }))}
         />
         {/* going-gray (#12): estado normal → pílula neutra (.rep-privacy, report/report.css)
             com ShieldCheck (mesmo par do rail), não verde saturado permanente. */}
@@ -412,27 +391,20 @@ export function ReportPage() {
         <div className="flex-1" />
       </PageHeader>
 
+      {/* N1 — a saúde do detector. Fora do filtro de período (outra escala temporal) e dona do
+          ÚNICO timer da tela: o corpo histórico abaixo é carga única e não pode piscar. */}
+      <AlarmHealthStrip />
+
       <FilterBar
         period={period}
         setPeriod={setPeriod}
         isAlarmes={isAlarmes}
-        isResumo={isResumo}
         shift={shift}
         setShift={setShift}
         shiftItems={shiftItems}
-        alarmPriority={al.alarmPriority}
-        setAlarmPriority={al.setAlarmPriority}
-        alarmState={al.alarmState}
-        setAlarmState={al.setAlarmState}
-        modeFilter={modeFilter}
-        dataSource={dataSource}
-        present={present}
-        setPresent={setPresent}
-        busy={busy}
         refresh={refresh}
         downloadCSV={downloadCSV}
         printPDF={printPDF}
-        requestClear={() => setConfirmClear(true)}
       />
 
       <div className="print-head only-print" aria-hidden>
@@ -474,42 +446,67 @@ export function ReportPage() {
         )}
         {noData && <EmptyHistory mode={mode} dataSource={dataSource} />}
 
-        {ready &&
-          isResumo &&
-          atividade.summary &&
-          fadiga.summary &&
-          leitura.summary &&
-          objetos.summary && (
-            <ResumoPanel
-              periodLabel={PERIOD_LABEL[period]}
-              shiftLabel={shiftLabel}
-              k={atividade.summary.k}
-              tips={atividade.summary.tips}
-              fk={fadiga.summary.fk}
-              fOccFadiga={fadiga.summary.fOccFadiga}
-              fOccCelular={fadiga.summary.fOccCelular}
-              ftips={fadiga.summary.ftips}
-              rk={leitura.summary.rk}
-              rtips={leitura.summary.rtips}
-              ok={objetos.summary.ok}
-              oLoads={objetos.summary.oLoads}
-              onOpenMode={setMode}
+        {/* N2 — Resumo: só as dimensões COM DADO (o gate das 4 morreu) + o cartão de Alarmes. */}
+        {ready && isResumo && (
+          <ResumoPanel
+            periodLabel={PERIOD_LABEL[period]}
+            shiftLabel={shiftLabel}
+            atividade={
+              has.atividade && atividade.summary
+                ? { k: atividade.summary.k, tips: atividade.summary.tips }
+                : null
+            }
+            fadiga={
+              has.fadiga && fadiga.summary
+                ? {
+                    fk: fadiga.summary.fk,
+                    fOccFadiga: fadiga.summary.fOccFadiga,
+                    fOccCelular: fadiga.summary.fOccCelular,
+                    ftips: fadiga.summary.ftips,
+                  }
+                : null
+            }
+            leitura={
+              has.leitura && leitura.summary
+                ? { rk: leitura.summary.rk, rtips: leitura.summary.rtips }
+                : null
+            }
+            objetos={
+              has.objetos && objetos.summary
+                ? { ok: objetos.summary.ok, oLoads: objetos.summary.oLoads }
+                : null
+            }
+            alarmes={has.alarmes ? { ak: al.akPeriod } : null}
+            onOpenMode={setMode}
+          />
+        )}
+
+        {/* N4 — Dimensão. O filtro do recorte vive COM a seção (não no header global). */}
+        {ready && !isResumo && !isAlarmes && (
+          <SectionFilter>
+            <Select
+              value={modeFilter.value}
+              onChange={modeFilter.set}
+              ariaLabel={modeFilter.aria}
+              options={[
+                { value: modeFilter.allValue, label: modeFilter.allLabel },
+                ...modeFilter.items.map((x) => ({ value: x, label: x })),
+              ]}
             />
-          )}
+          </SectionFilter>
+        )}
 
         {ready && mode === "atividade" && atividade.summary && atividade.details && (
           <AtividadePanel
             lens={lens}
             k={atividade.summary.k}
             kPrev={atividade.summary.kPrev}
-            peoplePeak={atividade.summary.kPeople}
             ruler={atividade.summary.ruler}
             tips={atividade.summary.tips}
             hm={atividade.details.hm}
             rank={atividade.details.rank}
             byAtiv={atividade.details.byAtiv}
             evo={atividade.details.evo}
-            byShiftA={atividade.details.byShiftA}
             evt={atividade.details.evt}
             flow={atividade.details.flowView}
             tab={tab}
@@ -527,7 +524,6 @@ export function ReportPage() {
             rrank={leitura.details.rrank}
             byCam={leitura.details.byCam}
             revo={leitura.details.revo}
-            byShiftR={leitura.details.byShiftR}
             revt={leitura.details.revt}
             tab={tab}
             onTabChange={setTab}
@@ -543,7 +539,6 @@ export function ReportPage() {
             ohm={objetos.details.ohm}
             opres={objetos.details.opres}
             orank={objetos.details.orank}
-            obyClass={objetos.details.obyClass}
             oevo={objetos.details.oevo}
             oevt={objetos.summary.oevt}
             classes={objetos.dataset.classes}
@@ -559,7 +554,6 @@ export function ReportPage() {
             fk={fadiga.summary.fk}
             fOccFadiga={fadiga.summary.fOccFadiga}
             fOccCelular={fadiga.summary.fOccCelular}
-            fBocejos={fadiga.summary.fBocejos}
             ftips={fadiga.summary.ftips}
             fhm={fadiga.details.fhm}
             fevo={fadiga.details.fevo}
@@ -569,43 +563,72 @@ export function ReportPage() {
           />
         )}
 
+        {/* N3 — Alarmes (histórico persistido, sob o filtro de período — NUNCA confundir com a
+            faixa N1, que é a janela de 10 min em memória). Filtros ancorados na seção. */}
         {!loading && !error && isAlarmes && (
-          <AlarmesPanel
-            periodLabel={PERIOD_LABEL[period]}
-            alarmPriority={al.alarmPriority}
-            alarmState={al.alarmState}
-            alarms={alarms}
-            ak={al.ak}
-            aTips={al.aTips}
-            aTrend={al.aTrend}
-            aHeat={al.aHeat}
-            alarmsView={al.alarmsView}
-            alarmWindow={al.alarmWindow}
-            alarmHour={al.alarmHour}
-            selAlarm={al.selAlarm}
-            selDay={al.selDay}
-            selHour={al.selHour}
-            trendRef={al.trendRef}
-            pickDay={al.pickDay}
-            pickHour={al.pickHour}
-            pickAlarm={al.pickAlarm}
-            clearAlarmSel={al.clearAlarmSel}
-            onRefresh={refresh}
+          <>
+            {alarms.length > 0 && (
+              <SectionFilter>
+                <Select
+                  value={alarmPriority}
+                  onChange={(v) => al.setAlarmPriority(v as AlarmPriority | "Todas")}
+                  ariaLabel="Prioridade"
+                  options={[
+                    { value: "Todas", label: "Prioridade: todas" },
+                    { value: "critical", label: "Crítica" },
+                    { value: "high", label: "Alta" },
+                    { value: "advisory", label: "Informativo" },
+                  ]}
+                />
+                <Select
+                  value={alarmState}
+                  onChange={(v) => al.setAlarmState(v as AlarmState | "Todos")}
+                  ariaLabel="Estado"
+                  options={[
+                    { value: "Todos", label: "Estado: todos" },
+                    { value: "new", label: "Novo" },
+                    { value: "acknowledged", label: "Reconhecido" },
+                    { value: "forwarded", label: "Encaminhado" },
+                  ]}
+                />
+              </SectionFilter>
+            )}
+            <AlarmesPanel
+              periodLabel={PERIOD_LABEL[period]}
+              alarmPriority={al.alarmPriority}
+              alarmState={al.alarmState}
+              alarms={alarms}
+              ak={al.ak}
+              aTips={al.aTips}
+              aTrend={al.aTrend}
+              aHeat={al.aHeat}
+              alarmsView={al.alarmsView}
+              alarmWindow={al.alarmWindow}
+              alarmHour={al.alarmHour}
+              selAlarm={al.selAlarm}
+              selDay={al.selDay}
+              selHour={al.selHour}
+              trendRef={al.trendRef}
+              pickDay={al.pickDay}
+              pickHour={al.pickHour}
+              pickAlarm={al.pickAlarm}
+              clearAlarmSel={al.clearAlarmSel}
+              onRefresh={refresh}
+            />
+          </>
+        )}
+
+        {/* N5 — Ferramentas. RBAC EXPLÍCITO: a Saúde era protegida pela ROTA; a rota morreu, então
+            o gate mora aqui (senão ação de configuração vaza para o operador). */}
+        {canConfigure && !loading && (
+          <ReportTools
+            isSuper={isSuper}
+            dataSource={dataSource}
+            busy={busy}
+            onClear={clearHistory}
           />
         )}
       </div>
-
-      <AlertDialog
-        open={confirmClear}
-        onOpenChange={setConfirmClear}
-        variant="danger"
-        title="Limpar todo o histórico?"
-        description="Esta ação apaga permanentemente todos os indicadores, eventos e alarmes registrados no histórico do servidor. Não é possível desfazer."
-        confirmLabel="Limpar histórico"
-        cancelLabel="Cancelar"
-        onConfirm={clearHistory}
-        busy={busy}
-      />
     </div>
   );
 }

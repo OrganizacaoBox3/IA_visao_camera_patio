@@ -15,12 +15,11 @@ import {
   SectionTitle,
   REP_TABPANEL_CLS,
   type RepTab,
-  type ByShift,
 } from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
-import { TrendChart } from "./TrendChart";
+import { TrendSection } from "./TrendChart";
 import { EventsTable } from "./EventsTable";
 
 type RKpis = ReturnType<typeof readingKpis>;
@@ -34,7 +33,6 @@ export function LeituraPanel({
   rrank,
   byCam,
   revo,
-  byShiftR,
   revt,
   tab,
   onTabChange,
@@ -47,7 +45,6 @@ export function LeituraPanel({
   rrank: ReturnType<typeof readingRanking>;
   byCam: ReturnType<typeof readingByCamera>;
   revo: ReturnType<typeof readingEvolution>;
-  byShiftR: ByShift;
   revt: ReadingEventRow[];
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
@@ -155,35 +152,19 @@ export function LeituraPanel({
             </section>
           </div>
         </TabsContent>
+        {/* "Por turno" MORREU aqui: turno já é filtro GLOBAL — com um turno escolhido o gráfico
+            virava UMA barra. A quebra por turno segue no CSV (seção POR TURNO). */}
         <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
-          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
-            <section className="panel">
-              <SectionTitle>Tendência (14 dias)</SectionTitle>
-              <TrendChart
-                bars={revo.bars.map((b) => ({
-                  key: b.dayIndex,
-                  label: b.label,
-                  value: b.boxes,
-                  title: `${b.label} · ${b.boxes} caixas`,
-                }))}
-                max={revo.max}
-                read
-              />
-            </section>
-            <section className="panel">
-              <SectionTitle>Por turno</SectionTitle>
-              <RankingBars
-                rows={byShiftR.rows.map((s) => ({
-                  key: s.key,
-                  label: s.label,
-                  value: s.value,
-                  valueText: `${s.value.toLocaleString("pt-BR")} caixas`,
-                }))}
-                max={byShiftR.max}
-                read
-              />
-            </section>
-          </div>
+          <TrendSection
+            bars={revo.bars.map((b) => ({
+              key: b.dayIndex,
+              label: b.label,
+              value: b.boxes,
+              title: `${b.label} · ${b.boxes} caixas`,
+            }))}
+            max={revo.max}
+            read
+          />
         </TabsContent>
         <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable

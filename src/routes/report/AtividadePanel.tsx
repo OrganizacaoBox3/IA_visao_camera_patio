@@ -16,12 +16,12 @@ import {
   SectionTitle,
   REP_TABPANEL_CLS,
   type RepTab,
-  type ByShift,
 } from "./chrome";
 import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
-import { TrendChart } from "./TrendChart";
+import { TrendSection } from "./TrendChart";
+import { FlowBiChart } from "./FlowChart";
 import { EventsTable } from "./EventsTable";
 import type { FlowLineRow } from "../../report/calc";
 
@@ -41,14 +41,12 @@ export function AtividadePanel({
   lens,
   k,
   kPrev,
-  peoplePeak,
   ruler,
   tips,
   hm,
   rank,
   byAtiv,
   evo,
-  byShiftA,
   evt,
   flow,
   tab,
@@ -57,7 +55,6 @@ export function AtividadePanel({
   lens: string;
   k: Kpis;
   kPrev: Kpis;
-  peoplePeak: number; // pico de pessoas no recorte — 0 = sem detecção no período
   // Régua do turno: só existe se o hub CARIMBOU o turno no bucket (ruler.stamped). Sem carimbo,
   // a faixa some inteira — melhor nenhum número do que um número na régua errada (÷24h).
   ruler: ShiftRuler;
@@ -66,7 +63,6 @@ export function AtividadePanel({
   rank: ReturnType<typeof ranking>;
   byAtiv: ByAtiv;
   evo: ReturnType<typeof evolution>;
-  byShiftA: ByShift;
   evt: EventRow[];
   flow: FlowView | null; // null = hub sem o kind "flow" → seção oculta
   tab: RepTab;
@@ -78,7 +74,26 @@ export function AtividadePanel({
   return (
     <>
       <RepLens lens={lens} />
-      {/* 6 KPIs: grid auto-fit (KpiRow fit) — uma linha em telas largas, sem órfão na 2ª. */}
+      {/* RÉGUA DO TURNO PROMOVIDA AO TOPO (spec §2.4 N4): é a melhor peça da tela — ocupação
+          medida DENTRO da janela de trabalho (÷ turno−pausas, NUNCA ÷ 24h), com a atividade
+          FORA do turno como LINHA PRÓPRIA (jamais somada ao denominador). Vem ANTES dos KPIs
+          crus justamente porque é o número com RÉGUA; aparece só quando o hub carimba o turno. */}
+      {ruler.stamped && (
+        <section className="panel">
+          <SectionTitle>Régua do turno — dentro da janela de trabalho</SectionTitle>
+          <KpiRow fit>
+            <Kpi
+              value={ruler.occupancyPct === null ? "—" : `${ruler.occupancyPct}%`}
+              label="ocupação no turno"
+            />
+            <Kpi value={fmtMin(ruler.idleMinInShift)} label="tempo parado no turno" />
+            <Kpi value={ruler.alertsInShift} label="alertas no turno" />
+            <Kpi value={`${ruler.offActiveHours}h`} label="atividade fora do turno" />
+          </KpiRow>
+        </section>
+      )}
+      {/* 5 KPIs (o "pico de pessoas" desceu p/ o CSV — número cru sem faixa-alvo não sustenta
+          decisão; o dado continua no arquivo, só não ocupa a tela). */}
       <KpiRow fit>
         <Kpi
           value={fmtMin(k.idleMin)}
@@ -100,26 +115,7 @@ export function AtividadePanel({
         <Kpi value={`${String(k.peakHour).padStart(2, "0")}h`} label="horário crítico" />
         {/* going-gray: cor em valor numérico só condicional a estado — sem verde incondicional */}
         <Kpi value={`${k.activePct}%`} label="tempo ativo" />
-        {/* going-gray: contagem é informação neutra — sem cor saturada */}
-        <Kpi value={peoplePeak} label="pico de pessoas" />
       </KpiRow>
-      {/* RÉGUA DO TURNO (spec-turnos-por-zona §4.3 + D7): ocupação medida DENTRO da janela de
-          trabalho (÷ turno−pausas, nunca ÷ 24h) e a atividade FORA do turno como LINHA PRÓPRIA
-          — jamais somada ao denominador. Aparece só quando o hub carimba o turno no bucket. */}
-      {ruler.stamped && (
-        <section className="panel">
-          <SectionTitle>Régua do turno — dentro da janela de trabalho</SectionTitle>
-          <KpiRow fit>
-            <Kpi
-              value={ruler.occupancyPct === null ? "—" : `${ruler.occupancyPct}%`}
-              label="ocupação no turno"
-            />
-            <Kpi value={fmtMin(ruler.idleMinInShift)} label="tempo parado no turno" />
-            <Kpi value={ruler.alertsInShift} label="alertas no turno" />
-            <Kpi value={`${ruler.offActiveHours}h`} label="atividade fora do turno" />
-          </KpiRow>
-        </section>
-      )}
       <Insight label="Oportunidades" tips={tips} />
       <Tabs
         className="rep-tabs flex-1"
@@ -185,33 +181,18 @@ export function AtividadePanel({
             </section>
           </div>
         </TabsContent>
+        {/* "Por turno" MORREU aqui: turno já é filtro GLOBAL — com um turno escolhido o gráfico
+            virava UMA barra. A quebra por turno segue no CSV (seção POR TURNO). */}
         <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
-          <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
-            <section className="panel">
-              <SectionTitle>Tendência (14 dias)</SectionTitle>
-              <TrendChart
-                bars={evo.bars.map((b) => ({
-                  key: b.dayIndex,
-                  label: b.label,
-                  value: b.idleMin,
-                  title: `${b.label} · ${fmtMin(b.idleMin)} parado`,
-                }))}
-                max={evo.max}
-              />
-            </section>
-            <section className="panel">
-              <SectionTitle>Por turno</SectionTitle>
-              <RankingBars
-                rows={byShiftA.rows.map((s) => ({
-                  key: s.key,
-                  label: s.label,
-                  value: s.value,
-                  valueText: fmtMin(s.value),
-                }))}
-                max={byShiftA.max}
-              />
-            </section>
-          </div>
+          <TrendSection
+            bars={evo.bars.map((b) => ({
+              key: b.dayIndex,
+              label: b.label,
+              value: b.idleMin,
+              title: `${b.label} · ${fmtMin(b.idleMin)} parado`,
+            }))}
+            max={evo.max}
+          />
         </TabsContent>
         <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable
@@ -246,8 +227,6 @@ export function AtividadePanel({
 // ── Fluxo (linhas de contagem) — in/out agregados dos buckets persistidos no hub ──
 // Respeita período/turno (recorte feito no view-model via calc/flow). O filtro de
 // ÁREA não se aplica: cruzamentos são registrados por câmera×linha, sem área.
-const pad2 = (h: number) => String(h).padStart(2, "0");
-
 function FlowSection({ flow }: { flow: FlowView }) {
   const { hasAny, k, byHour, byLine } = flow;
   if (!hasAny || k.in + k.out === 0) {
@@ -281,11 +260,12 @@ function FlowSection({ flow }: { flow: FlowView }) {
     <>
       <section className="panel">
         <SectionTitle>Fluxo de pessoas — linhas de contagem</SectionTitle>
-        {/* going-gray: fluxo é informação neutra — sem cor saturada */}
+        {/* going-gray: fluxo é informação neutra — sem cor saturada.
+            O "saldo (entradas − saídas)" desceu p/ o CSV: número cru sem faixa-alvo. O saldo
+            AGORA se lê no gráfico bidirecional abaixo (a assimetria entre as duas metades). */}
         <KpiRow fit>
           <Kpi value={k.in} label="entradas no período" />
           <Kpi value={k.out} label="saídas no período" />
-          <Kpi value={k.in - k.out} label="saldo (entradas − saídas)" />
           <Kpi
             value={k.lines}
             label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"}
@@ -296,33 +276,12 @@ function FlowSection({ flow }: { flow: FlowView }) {
           câmera × linha, sem área).
         </p>
       </section>
-      <div className="rep-2col">
-        <section className="panel">
-          <SectionTitle>Entradas por hora</SectionTitle>
-          <TrendChart
-            bars={byHour.hours.map((v, h) => ({
-              key: h,
-              label: h % 3 === 0 ? `${pad2(h)}h` : "",
-              value: v.in,
-              title: `${pad2(h)}h · ${v.in} entradas`,
-            }))}
-            max={byHour.max}
-          />
-        </section>
-        <section className="panel">
-          <SectionTitle>Saídas por hora</SectionTitle>
-          <TrendChart
-            read
-            bars={byHour.hours.map((v, h) => ({
-              key: h,
-              label: h % 3 === 0 ? `${pad2(h)}h` : "",
-              value: v.out,
-              title: `${pad2(h)}h · ${v.out} saídas`,
-            }))}
-            max={byHour.max}
-          />
-        </section>
-      </div>
+      {/* UM gráfico bidirecional no lugar de "Entradas por hora" + "Saídas por hora" (dois
+          gráficos com o mesmo eixo e a mesma escala, lidos em par p/ responder uma pergunta). */}
+      <section className="panel">
+        <SectionTitle>Entradas e saídas por hora</SectionTitle>
+        <FlowBiChart hours={byHour.hours} max={byHour.max} />
+      </section>
       <section className="panel flex-1">
         <SectionTitle>Por linha / câmera</SectionTitle>
         <RankingBars

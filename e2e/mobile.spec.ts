@@ -9,10 +9,13 @@ const SCREENS = [
   { path: "/", name: "mapa", heading: /Mapa de tags/i },
   { path: "/monitoramento", name: "central", heading: /Central de câmeras/i },
   { path: "/cameras", name: "cameras", heading: /Câmeras/i },
+  // /relatorio ABSORVEU a /alarmes-saude (spec-arquitetura-informacao §2): a rota morreu, e com
+  // ela a linha deste gate. A cobertura mobile do conteúdo NÃO se perdeu — a faixa de saúde (N1)
+  // e as ferramentas/silenciamentos (N5) agora renderizam DENTRO desta mesma tela, no mesmo
+  // viewport de 390px. Uma tela a menos para o gestor decidir; nenhuma a menos para o gate.
   { path: "/relatorio", name: "relatorio", heading: /Relatório/i },
   { path: "/usuarios", name: "usuarios", heading: /Usuários/i },
   { path: "/perfil", name: "perfil", heading: /perfil/i },
-  { path: "/alarmes-saude", name: "saude", heading: /.*/ },
 ];
 
 async function login(page: Page) {

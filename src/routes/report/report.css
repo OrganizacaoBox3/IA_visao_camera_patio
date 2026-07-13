@@ -52,10 +52,101 @@
   color: var(--text-muted);
 }
 
-/* "Limpar histórico" (#13): ação destrutiva VISÍVEL na barra de ferramentas (era link mono
-   10px escondido no rodapé). Ghost discreto com texto no tom crítico; AlertDialog confirma. */
+/* "Limpar histórico": ação destrutiva com texto no tom crítico; AlertDialog confirma.
+   Mora em N5 (ferramentas, sob canConfigure + isSuper) — saiu da barra do gestor. */
 .rep-clear {
   color: var(--state-critical-fg);
+}
+
+/* Filtro ANCORADO NA SEÇÃO (N3/N4): o recorte que só vale para a dimensão aberta mora com ela.
+   A barra global do topo ficou com o que é GLOBAL (período + turno). */
+.rep-secfilter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* ── Fluxo bidirecional (entradas ↑ / saídas ↓ no mesmo eixo) ──────────────────────────────
+   Era UM gráfico p/ entradas e OUTRO p/ saídas, lado a lado, com o mesmo eixo de horas e a
+   mesma escala — o gestor lia dois para responder uma pergunta ("entrou mais do que saiu?").
+   Aqui o SENTIDO (acima/abaixo do eixo) carrega a informação; a cor é redundante, nunca
+   sozinha (a legenda tem ícone + texto e cada coluna leva os números no title). */
+.flowbi {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  height: 170px;
+  padding-top: 8px;
+}
+.flowbi-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.flowbi-up,
+.flowbi-dn {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  min-height: 0;
+}
+.flowbi-up {
+  align-items: flex-end;
+}
+.flowbi-dn {
+  align-items: flex-start;
+}
+.flowbi-axis {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  flex: none;
+}
+.flowbi-bar {
+  width: 60%;
+  min-width: 2px;
+}
+/* Entrada = accent do produto; saída = neutro. Going-gray: nenhum dos dois é anormalidade. */
+.flowbi-bar.in {
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+}
+.flowbi-bar.out {
+  background: var(--state-neutral-fg);
+  border-radius: 0 0 3px 3px;
+}
+.flowbi-lbl {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+  flex: none;
+  padding-top: 2px;
+}
+.flowbi-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-top: var(--sp-2);
+}
+.flowbi-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.flowbi-ico {
+  flex: none;
+}
+.flowbi-ico.in {
+  color: var(--accent);
+}
+.flowbi-ico.out {
+  color: var(--state-neutral-fg);
 }
 
 @media print {

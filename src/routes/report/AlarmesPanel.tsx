@@ -13,6 +13,7 @@ import { ScrollArea } from "../../ui";
 import { Insight, SectionTitle } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
+import { TrendSection } from "./TrendChart";
 
 // Rampa do heatmap sobre o TOKEN da prioridade (sem RGB cru): intensidade 18%..100%
 // via color-mix — célula vazia fica transparente (mesma leitura do heatColor comum).
@@ -109,38 +110,22 @@ export function AlarmesPanel({
           </KpiRow>
           <Insight label="Alarmes" tips={aTips} icon={Bell} />
           <div className="rep-2col" ref={trendRef}>
-            <section className="panel">
-              <SectionTitle>
-                Tendência (14 dias){" "}
-                <span className="muted text-label font-normal">— clique p/ filtrar o dia</span>
-              </SectionTitle>
-              <div className="evo">
-                {aTrend.bars.map((b) => {
-                  const active = !!(
-                    (alarmWindow && alarmWindow.from === b.dayStart) ||
-                    selDay === b.dayStart
-                  );
-                  return (
-                    <button
-                      type="button"
-                      className={`evo-col clk ${active ? "sel" : ""}`}
-                      key={b.dayStart}
-                      title={`${b.label} · ${b.count} alarme(s)`}
-                      onClick={() => pickDay(b.dayStart, b.label)}
-                      aria-pressed={active}
-                    >
-                      <div
-                        className={`evo-bar ${b.critical > 0 ? "crit" : ""}`}
-                        style={{
-                          height: `${Math.max(2, Math.round((b.count / aTrend.max) * 100))}%`,
-                        }}
-                      />
-                      <span className="evo-lbl">{b.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            {/* A MESMA peça dos outros modos (era a 5ª reimplementação à mão) — aqui com as
+                barras clicáveis (filtro do dia). O título "Tendência (14 dias)" é contrato. */}
+            <TrendSection
+              fill={false}
+              hint="clique p/ filtrar o dia"
+              bars={aTrend.bars.map((b) => ({
+                key: b.dayStart,
+                label: b.label,
+                value: b.count,
+                title: `${b.label} · ${b.count} alarme(s)`,
+                critical: b.critical > 0,
+              }))}
+              max={aTrend.max}
+              onPick={(b) => pickDay(Number(b.key), b.label)}
+              isSelected={(b) => alarmWindow?.from === b.key || selDay === b.key}
+            />
             <section className="panel">
               <SectionTitle>
                 Quando — prioridade × hora{" "}
