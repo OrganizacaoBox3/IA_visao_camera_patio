@@ -22,6 +22,13 @@
 // Contra o código PRÉ-FIX esses asserts FALHAM de propósito (prova de
 // sensibilidade do sensor); ficam verdes quando o fix do tracker aterrissar.
 //
+// PESSOA PARADA (spec-tracking-pessoa-parada C3/F2): os cenários abaixo são de
+// TRAVESSIA e chamam processRound TODA rodada — não exercitam o gate de
+// movimento/probe/skip nem aferem ocupação. Esse buraco é coberto pela suite de
+// eval/stationary.mjs (gate simulado com motion.gateDecision de produção +
+// métricas de ocupação/ghost/id-switch, régua CA-8 pinada lá), que roda JUNTO
+// neste mesmo rito (npm run eval:counting) — o torneio deixou de ser cego.
+//
 // O que NÃO mede (fronteira honesta): o recall do DETECTOR (sensor: gate.mjs/
 // run-eval.mjs) e travessias em vídeo real (replay de campo — extensão prevista
 // em docs/analises/acuracia-modelos.md §3/Onda 2; bancada VISUAL do salto:
@@ -37,6 +44,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import { ROOT } from "./lib.mjs";
+import { runStationarySuite } from "./stationary.mjs";
 
 const require = createRequire(import.meta.url);
 const { createByteTracker } = require(path.join(ROOT, "server", "analysis", "bytetrack.js"));
@@ -348,18 +356,29 @@ for (const sc of SCENARIOS) {
   if (!ok) console.log(`  ${" ".repeat(w0)}  (${sc.why})`);
 }
 
-if (failed) {
-  console.error(
-    `\n[eval/counting] FALHOU: ${failed} de ${SCENARIOS.length} cenário(s) fora do contrato (contagem in/out ou payload de tracks).`,
-  );
-  console.error(
-    `       Mudou knob/lógica de tracking ou contagem? O diff acima diz QUAL mecanismo quebrou.`,
-  );
-  console.error(
-    `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver docs/analises/fix-rastro-tracking.md.\n`,
-  );
+// ── Cenários ESTACIONÁRIOS (pessoa parada × gate de movimento — spec C3/F2):
+// suite própria em stationary.mjs (gate simulado fiel ao engine.gateAndDispatch +
+// régua CA-8 pinada); roda no MESMO rito p/ o torneio nunca mais ser cego a dwell.
+const stationaryFailed = runStationarySuite();
+
+if (failed || stationaryFailed) {
+  if (failed) {
+    console.error(
+      `\n[eval/counting] FALHOU: ${failed} de ${SCENARIOS.length} cenário(s) fora do contrato (contagem in/out ou payload de tracks).`,
+    );
+    console.error(
+      `       Mudou knob/lógica de tracking ou contagem? O diff acima diz QUAL mecanismo quebrou.`,
+    );
+    console.error(
+      `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver docs/analises/fix-rastro-tracking.md.\n`,
+    );
+  }
+  if (stationaryFailed)
+    console.error(
+      `\n[eval/counting] FALHOU: ${stationaryFailed} cenário(s) ESTACIONÁRIO(s) fora da régua CA-8 — ver [eval/stationary] acima.\n`,
+    );
   process.exit(1);
 }
 console.log(
-  `\n[eval/counting] OK — ${SCENARIOS.length} cenários: travessias e payload de tracks dentro do contrato em todos.\n`,
+  `\n[eval/counting] OK — ${SCENARIOS.length} cenários de travessia + suite estacionária dentro do contrato/régua.\n`,
 );
