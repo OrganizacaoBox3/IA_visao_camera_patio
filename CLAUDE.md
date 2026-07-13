@@ -42,6 +42,10 @@ de implementação: `docs/analises/implementacao-changelog.md`.
 - **Casca fullscreen da câmera NÃO vira Radix Dialog** (Portal/scroll-lock remontaria o `<canvas>` e quebraria o rAF/editor). Trap de foco manual permanece. (ADR-007)
 - **Radix é a camada de UI.** Todo controle interativo usa primitiva Radix via wrappers de `src/ui/`. (ADR-003, ADR-007)
 - **"Going gray":** cor é informação. Base neutra (tokens `--state-*`); saturada só para anormalidade.
+- **A caixa da PESSOA nunca exibe NÚMERO** — nem id de track, nem contagem. Sem tag BLE associada, o
+  rótulo é o genérico **"Pessoa"**. O id do tracker é detalhe interno (muda a cada re-associação) e
+  não significa nada para o operador; **contagem vive no PAINEL, nunca sobre a imagem** ("a imagem é
+  soberana", ADR-003). Gate: `src/camera/drawTracks.test.ts` quebra o build se um dígito voltar.
 - **Gravação de campo é artefato imutável e append-only.** Nenhum agente (nem humano, em modo automático) tem
   poder de deleção sobre sessões de gravação real (`server/bt/fusion-session*.jsonl` e afins). Nasceu de um
   incidente (2026-07-10): um `rm -f` num arquivo sob escrita ativa apagou ~7h de dado de campo irrecuperável.

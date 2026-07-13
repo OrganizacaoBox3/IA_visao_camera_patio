@@ -253,7 +253,7 @@ export function drawTracks(
   conf: number,
   inspecting: boolean,
   // Rótulo da TAG BLE associada a esta pessoa (fusão, caminho C). Devolve o nome quando há confiança;
-  // null = "não sei" → cai no "Pessoa <id>". Ausente = feature desligada (comportamento de sempre).
+  // null = "não sei" → cai no genérico "Pessoa". Ausente = feature desligada (comportamento de sempre).
   labelFor?: (trackId: number) => string | null,
 ) {
   ctx.lineWidth = 1.5;
@@ -270,7 +270,11 @@ export function drawTracks(
       h = t.bbox[3] * cr.h;
     ctx.strokeStyle = personStroke;
     ctx.strokeRect(x, y, w, h);
-    const who = labelFor?.(t.id) || `Pessoa ${t.id}`; // nome da tag quando associada, senão o id
+    // INVARIANTE DE RENDERIZAÇÃO (decisão do dono, 2026-07-12): a caixa da pessoa NUNCA exibe
+    // NÚMERO — nem id de track, nem contagem. Sem tag associada, o rótulo é o genérico "Pessoa".
+    // O id é detalhe interno do tracker (muda a cada re-associação) e não significa nada para o
+    // operador; contagem de pessoas vive no PAINEL, não sobre a imagem ("a imagem é soberana").
+    const who = labelFor?.(t.id) || "Pessoa";
     const tag = inspecting
       ? `${who} · ${fmtDuration(performance.now() - t.firstSeen)}${t.zone ? " · " + t.zone : ""}`
       : who;
