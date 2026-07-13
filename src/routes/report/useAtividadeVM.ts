@@ -11,6 +11,7 @@ import {
   evolution,
   insights,
   byAtividade,
+  shiftRuler,
   flowWindow,
   flowKpis,
   flowByHour,
@@ -20,7 +21,9 @@ import {
   type Filters,
   type Kpis,
   type Period,
-  type Shift,
+  type ShiftDef,
+  type ShiftFilter,
+  type ShiftRuler,
   type FlowDataset,
 } from "../../report/calc";
 import { peoplePeakOf } from "../../report/store";
@@ -35,6 +38,9 @@ export type AtividadeSummary = {
   kPrev: Kpis;
   kPeople: number; // pico de pessoas no recorte (0 = sem detecção no período)
   tips: string[];
+  // Régua do TURNO (spec §4.3): ocupação ÷ turno−pausas (não ÷ 24h) + a linha "fora do turno"
+  // (D7). `ruler.stamped=false` ⇒ o hub ainda não carimba shiftId no bucket → a UI omite.
+  ruler: ShiftRuler;
 };
 export type AtividadeDetails = {
   hm: ReturnType<typeof heatmap>;
@@ -54,10 +60,12 @@ export function useAtividadeVM(args: {
   events: EventRow[];
   flowDs: FlowDataset | null;
   period: Period;
-  shift: Shift | "Todos";
+  shift: ShiftFilter;
   area: string | "Todas";
+  /** cadastro de turnos (/api/shifts) — rótulo e ordem das barras "Por turno". */
+  shifts: ShiftDef[];
 }): { dataset: Dataset; summary: AtividadeSummary | null; details: AtividadeDetails | null } {
-  const { view, ds, events, flowDs, period, shift, area } = args;
+  const { view, ds, events, flowDs, period, shift, area, shifts } = args;
   const dataset = ds ?? EMPTY_DS;
   const off = view === "off";
   const full = view === "full";
@@ -74,6 +82,7 @@ export function useAtividadeVM(args: {
         kPrev: kpis(previous),
         kPeople: peoplePeakOf(current),
         tips: insights(current, k),
+        ruler: shiftRuler(current),
       } satisfies AtividadeSummary,
     };
   }, [off, dataset, period, shift, area]);
@@ -96,14 +105,14 @@ export function useAtividadeVM(args: {
       rank: ranking(aCur, dataset.areas),
       byAtiv: byAtividade(aCur),
       evo: evolution(dataset, { period, shift, area }, 14),
-      byShiftA: byShift(aCur, (c) => c.idleMin),
+      byShiftA: byShift(aCur, (c) => c.idleMin, shifts),
       evt: filterByWindow(events, period, shift, (e) => area === "Todas" || e.area === area).slice(
         0,
         80,
       ),
       flowView,
     };
-  }, [full, base, dataset, events, flowDs, period, shift, area]);
+  }, [full, base, dataset, events, flowDs, period, shift, area, shifts]);
 
   return { dataset, summary: base?.summary ?? null, details };
 }

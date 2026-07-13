@@ -1,9 +1,10 @@
 // MODO OBJETOS (contagem/identificação) — presença e contagem por Setor × Classe.
 // "present" = nº de amostras com a classe em cena; presença % = present/samples.
 
-import { type Period, type Shift, periodDays, inShift } from "./common";
+import { type Period, type ShiftFilter, type ShiftStamp, periodDays, inShift } from "./common";
 
-export type ObjectCell = {
+// Carimbo de turno (ShiftStamp) é ADITIVO na célula e no evento — ver calc/common.
+export type ObjectCell = ShiftStamp & {
   setor: string;
   classe: string;
   dayIndex: number;
@@ -20,14 +21,14 @@ export type ObjectDataset = {
   cells: ObjectCell[];
   startMs: number;
 };
-export type ObjectEventRow = {
+export type ObjectEventRow = ShiftStamp & {
   ts: number;
   type: string;
   setor: string;
   classe: string;
-  shift: Shift;
+  shift: string;
 };
-export type ObjectFilters = { period: Period; shift: Shift | "Todos"; setor: string | "Todos" };
+export type ObjectFilters = { period: Period; shift: ShiftFilter; setor: string | "Todos" };
 export type ObjectKpis = {
   avgCount: number;
   peak: number;
@@ -44,7 +45,7 @@ export function objectWindows(ds: ObjectDataset, f: ObjectFilters) {
       (c) =>
         c.dayIndex >= lo &&
         c.dayIndex <= hi &&
-        inShift(c.hour, f.shift) &&
+        inShift(c, f.shift) &&
         (f.setor === "Todos" || c.setor === f.setor),
     );
   return {
@@ -160,11 +161,7 @@ export function objectEvolution(ds: ObjectDataset, f: ObjectFilters, lastN = 14)
     let count = 0,
       samples = 0;
     for (const c of ds.cells)
-      if (
-        c.dayIndex === d &&
-        inShift(c.hour, f.shift) &&
-        (f.setor === "Todos" || c.setor === f.setor)
-      ) {
+      if (c.dayIndex === d && inShift(c, f.shift) && (f.setor === "Todos" || c.setor === f.setor)) {
         count += c.countSum;
         samples += c.samples;
       }

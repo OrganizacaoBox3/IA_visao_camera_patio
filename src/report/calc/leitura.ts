@@ -2,9 +2,11 @@
 // "caixa" = leitura distinta no ponto (dedup por código+janela); "reads" = volume bruto;
 // "multiReads" = caixas confirmadas por +1 câmera. perCamera = contribuição por câmera.
 
-import { type Period, type Shift, periodDays, inShift } from "./common";
+import { type Period, type ShiftFilter, type ShiftStamp, periodDays, inShift } from "./common";
 
-export type ReadingCell = {
+// Carimbo de turno (ShiftStamp) é ADITIVO na célula e no evento: hub antigo omite e o filtro cai
+// no legado (calc/common). O front não resolve turno — só lê o carimbo.
+export type ReadingCell = ShiftStamp & {
   ponto: string;
   dayIndex: number;
   hour: number;
@@ -21,14 +23,14 @@ export type ReadingDataset = {
   cells: ReadingCell[];
   startMs: number;
 };
-export type ReadingEventRow = {
+export type ReadingEventRow = ShiftStamp & {
   ts: number;
   ponto: string;
   code: string;
   cameras: number;
-  shift: Shift;
+  shift: string;
 };
-export type ReadingFilters = { period: Period; shift: Shift | "Todos"; ponto: string | "Todos" };
+export type ReadingFilters = { period: Period; shift: ShiftFilter; ponto: string | "Todos" };
 export type ReadingKpis = {
   boxes: number;
   reads: number;
@@ -53,7 +55,7 @@ export function readingWindows(ds: ReadingDataset, f: ReadingFilters) {
       (c) =>
         c.dayIndex >= lo &&
         c.dayIndex <= hi &&
-        inShift(c.hour, f.shift) &&
+        inShift(c, f.shift) &&
         (f.ponto === "Todos" || c.ponto === f.ponto),
     );
   return {
@@ -148,11 +150,7 @@ export function readingEvolution(ds: ReadingDataset, f: ReadingFilters, lastN = 
   for (let d = lo; d < ds.days; d++) {
     let boxes = 0;
     for (const c of ds.cells)
-      if (
-        c.dayIndex === d &&
-        inShift(c.hour, f.shift) &&
-        (f.ponto === "Todos" || c.ponto === f.ponto)
-      )
+      if (c.dayIndex === d && inShift(c, f.shift) && (f.ponto === "Todos" || c.ponto === f.ponto))
         boxes += c.boxes;
     const date = new Date(ds.startMs + d * 86_400_000);
     out.push({

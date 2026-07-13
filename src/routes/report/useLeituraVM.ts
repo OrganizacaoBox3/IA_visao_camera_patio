@@ -14,7 +14,8 @@ import {
   type ReadingFilters,
   type ReadingKpis,
   type Period,
-  type Shift,
+  type ShiftDef,
+  type ShiftFilter,
 } from "../../report/calc";
 import { filterByWindow, byShift } from "./aggregate";
 import type { ByShift, VmView } from "./chrome";
@@ -42,10 +43,12 @@ export function useLeituraVM(args: {
   ds: ReadingDataset | null;
   events: ReadingEventRow[];
   period: Period;
-  shift: Shift | "Todos";
+  shift: ShiftFilter;
   ponto: string | "Todos";
+  /** cadastro de turnos (/api/shifts) — rótulo e ordem das barras "Por turno". */
+  shifts: ShiftDef[];
 }): { dataset: ReadingDataset; summary: LeituraSummary | null; details: LeituraDetails | null } {
-  const { view, ds, events, period, shift, ponto } = args;
+  const { view, ds, events, period, shift, ponto, shifts } = args;
   const dataset = ds ?? EMPTY_RDS;
   const off = view === "off";
   const full = view === "full";
@@ -73,7 +76,7 @@ export function useLeituraVM(args: {
       rrank: readingRanking(rCur, dataset.pontos),
       byCam: readingByCamera(rCur, dataset.cameraLabels),
       revo: readingEvolution(dataset, { period, shift, ponto }, 14),
-      byShiftR: byShift(rCur, (c) => c.boxes),
+      byShiftR: byShift(rCur, (c) => c.boxes, shifts),
       revt: filterByWindow(
         events,
         period,
@@ -81,7 +84,7 @@ export function useLeituraVM(args: {
         (e) => ponto === "Todos" || e.ponto === ponto,
       ).slice(0, 120),
     };
-  }, [full, base, dataset, events, period, shift, ponto]);
+  }, [full, base, dataset, events, period, shift, ponto, shifts]);
 
   return { dataset, summary: base?.summary ?? null, details };
 }

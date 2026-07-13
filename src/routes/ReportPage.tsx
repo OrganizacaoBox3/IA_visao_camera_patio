@@ -2,9 +2,18 @@
 // das cascas. O pipeline de cada modo vive num view-model hook (routes/report/use*VM) que
 // computa SÓ a visão atual ("off"/"summary"/"full"); as agregações puras vivem em report/calc.
 // LGPD: tudo aqui são indicadores agregados — nunca imagens.
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { Download, Printer, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import { type Period, type Shift } from "../report/calc";
+import {
+  ALL_SHIFTS,
+  legacyShiftsIn,
+  shiftLabelOf,
+  shiftOptions,
+  type Period,
+  type ShiftFilter,
+  type ShiftRow,
+} from "../report/calc";
+import { getShifts, type Shift as ShiftCfg } from "../api";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
 import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/csv";
 import {
@@ -62,6 +71,7 @@ function FilterBar({
   isResumo,
   shift,
   setShift,
+  shiftItems,
   alarmPriority,
   setAlarmPriority,
   alarmState,
@@ -80,8 +90,10 @@ function FilterBar({
   setPeriod: (p: Period) => void;
   isAlarmes: boolean;
   isResumo: boolean;
-  shift: Shift | "Todos";
-  setShift: (v: Shift | "Todos") => void;
+  shift: ShiftFilter;
+  setShift: (v: ShiftFilter) => void;
+  /** turnos do CADASTRO (+ legados presentes no dado) — nunca mais 3 strings hardcoded. */
+  shiftItems: { value: string; label: string }[];
   alarmPriority: AlarmPriority | "Todas";
   setAlarmPriority: (v: AlarmPriority | "Todas") => void;
   alarmState: AlarmState | "Todos";
@@ -107,17 +119,14 @@ function FilterBar({
           label: PERIOD_LABEL[p],
         }))}
       />
+      {/* Filtro de turno POPULADO DO CADASTRO (/api/shifts) — o hardcode "Manhã/Tarde/Noite"
+          morreu; os legados só aparecem se o DADO carregado ainda os tiver (retrocompat CA-8). */}
       {!isAlarmes && (
         <Select
           value={shift}
-          onChange={(v) => setShift(v as Shift | "Todos")}
+          onChange={setShift}
           ariaLabel="Turno"
-          options={[
-            { value: "Todos", label: "Turno: todos" },
-            { value: "Manhã", label: "Manhã" },
-            { value: "Tarde", label: "Tarde" },
-            { value: "Noite", label: "Noite" },
-          ]}
+          options={[{ value: ALL_SHIFTS, label: "Turno: todos" }, ...shiftItems]}
         />
       )}
       {isAlarmes ? (
@@ -186,7 +195,10 @@ function FilterBar({
 export function ReportPage() {
   const [mode, setMode] = useState<Mode>("resumo");
   const [period, setPeriod] = useState<Period>("7d");
-  const [shift, setShift] = useState<Shift | "Todos">("Todos");
+  const [shift, setShift] = useState<ShiftFilter>(ALL_SHIFTS);
+  // Cadastro de turnos: fonte ÚNICA do filtro. Falha (hub antigo sem /api/shifts) → lista vazia
+  // e o relatório segue no legado, sem derrubar a página (mesmo padrão do status/fluxo).
+  const [shifts, setShifts] = useState<ShiftCfg[]>([]);
   const [area, setArea] = useState<string | "Todas">("Todas");
   const [ponto, setPonto] = useState<string | "Todos">("Todos");
   const [setor, setSetor] = useState<string | "Todos">("Todos");
@@ -200,6 +212,27 @@ export function ReportPage() {
   const data = useReportData();
   const { alarms, loading, error, dataSource, busy, refresh, clearHistory } = data;
 
+  useEffect(() => {
+    getShifts()
+      .then(setShifts)
+      .catch(() => setShifts([]));
+  }, []);
+
+  // Opções do filtro = turnos ATIVOS do cadastro + os LEGADOS que o dado carregado ainda carrega
+  // (linhas sem carimbo). Um site já 100% carimbado não exibe as 3 strings mortas.
+  const shiftItems = useMemo(() => {
+    const rows: ShiftRow[] = [
+      ...(data.ds?.cells ?? []),
+      ...(data.rds?.cells ?? []),
+      ...(data.ods?.cells ?? []),
+      ...(data.fds?.cells ?? []),
+      ...data.allEvents,
+    ];
+    return shiftOptions(shifts, legacyShiftsIn(rows));
+  }, [shifts, data.ds, data.rds, data.ods, data.fds, data.allEvents]);
+  // A CHAVE do filtro é o id do turno; o rótulo (lente/impressão/CSV) é o NOME do cadastro.
+  const shiftLabel = shiftLabelOf(shift, shifts);
+
   // ── View-models por modo: SÓ o modo ativo computa ("full"); o Resumo pede o "summary"
   //    das 4 dimensões (é o que ele exibe); o resto fica "off" (memos devolvem null). ──
   const viewFor = (m: Mode): VmView =>
@@ -212,6 +245,7 @@ export function ReportPage() {
     period,
     shift,
     area,
+    shifts,
   });
   const leitura = useLeituraVM({
     view: viewFor("leitura"),
@@ -220,6 +254,7 @@ export function ReportPage() {
     period,
     shift,
     ponto,
+    shifts,
   });
   const objetos = useObjetosVM({
     view: viewFor("objetos"),
@@ -256,7 +291,18 @@ export function ReportPage() {
       : modeVm.dataset.cells.length === 0);
   const ready = !loading && !error && !noData; // painéis só com dados carregados e não-vazios
   const { alarmPriority, alarmState } = al;
-  const filters = { mode, period, shift, area, ponto, setor, posto, alarmPriority, alarmState };
+  const filters = {
+    mode,
+    period,
+    shift,
+    shiftLabel,
+    area,
+    ponto,
+    setor,
+    posto,
+    alarmPriority,
+    alarmState,
+  };
   const lens = reportLens(filters);
   const filtroLabel = reportFiltroLabel(filters);
   // Filtro específico do modo (tipo ModeFilter acima) — só muda a fonte por modo.
@@ -303,7 +349,7 @@ export function ReportPage() {
     const sections = reportSections({
       mode,
       period,
-      shift,
+      shiftLabel,
       filtroLabel,
       now,
       atividade,
@@ -373,6 +419,7 @@ export function ReportPage() {
         isResumo={isResumo}
         shift={shift}
         setShift={setShift}
+        shiftItems={shiftItems}
         alarmPriority={al.alarmPriority}
         setAlarmPriority={al.setAlarmPriority}
         alarmState={al.alarmState}
@@ -391,9 +438,7 @@ export function ReportPage() {
       <div className="print-head only-print" aria-hidden>
         <div className="ph-title">Relatório Operacional · {MODE_LABEL[mode]}</div>
         <div className="ph-sub">
-          {isResumo
-            ? `${PERIOD_LABEL[period]} · Turno: ${shift === "Todos" ? "todos" : shift}`
-            : lens}
+          {isResumo ? `${PERIOD_LABEL[period]} · Turno: ${shiftLabel}` : lens}
         </div>
         <div className="ph-meta">
           Gerado em {printedAt || "—"} · indicadores agregados, sem imagens (LGPD)
@@ -437,7 +482,7 @@ export function ReportPage() {
           objetos.summary && (
             <ResumoPanel
               periodLabel={PERIOD_LABEL[period]}
-              shiftLabel={shift === "Todos" ? "todos" : shift}
+              shiftLabel={shiftLabel}
               k={atividade.summary.k}
               tips={atividade.summary.tips}
               fk={fadiga.summary.fk}
@@ -458,6 +503,7 @@ export function ReportPage() {
             k={atividade.summary.k}
             kPrev={atividade.summary.kPrev}
             peoplePeak={atividade.summary.kPeople}
+            ruler={atividade.summary.ruler}
             tips={atividade.summary.tips}
             hm={atividade.details.hm}
             rank={atividade.details.rank}

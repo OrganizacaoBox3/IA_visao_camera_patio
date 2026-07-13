@@ -6,6 +6,7 @@ import {
   evolution,
   fmtMin,
   type EventRow,
+  type ShiftRuler,
 } from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
 import {
@@ -13,7 +14,6 @@ import {
   HistoryFooter,
   Insight,
   SectionTitle,
-  SHIFTS,
   REP_TABPANEL_CLS,
   type RepTab,
   type ByShift,
@@ -42,6 +42,7 @@ export function AtividadePanel({
   k,
   kPrev,
   peoplePeak,
+  ruler,
   tips,
   hm,
   rank,
@@ -57,6 +58,9 @@ export function AtividadePanel({
   k: Kpis;
   kPrev: Kpis;
   peoplePeak: number; // pico de pessoas no recorte — 0 = sem detecção no período
+  // Régua do turno: só existe se o hub CARIMBOU o turno no bucket (ruler.stamped). Sem carimbo,
+  // a faixa some inteira — melhor nenhum número do que um número na régua errada (÷24h).
+  ruler: ShiftRuler;
   tips: string[];
   hm: ReturnType<typeof heatmap>;
   rank: ReturnType<typeof ranking>;
@@ -99,6 +103,23 @@ export function AtividadePanel({
         {/* going-gray: contagem é informação neutra — sem cor saturada */}
         <Kpi value={peoplePeak} label="pico de pessoas" />
       </KpiRow>
+      {/* RÉGUA DO TURNO (spec-turnos-por-zona §4.3 + D7): ocupação medida DENTRO da janela de
+          trabalho (÷ turno−pausas, nunca ÷ 24h) e a atividade FORA do turno como LINHA PRÓPRIA
+          — jamais somada ao denominador. Aparece só quando o hub carimba o turno no bucket. */}
+      {ruler.stamped && (
+        <section className="panel">
+          <SectionTitle>Régua do turno — dentro da janela de trabalho</SectionTitle>
+          <KpiRow fit>
+            <Kpi
+              value={ruler.occupancyPct === null ? "—" : `${ruler.occupancyPct}%`}
+              label="ocupação no turno"
+            />
+            <Kpi value={fmtMin(ruler.idleMinInShift)} label="tempo parado no turno" />
+            <Kpi value={ruler.alertsInShift} label="alertas no turno" />
+            <Kpi value={`${ruler.offActiveHours}h`} label="atividade fora do turno" />
+          </KpiRow>
+        </section>
+      )}
       <Insight label="Oportunidades" tips={tips} />
       <Tabs
         className="rep-tabs flex-1"
@@ -181,11 +202,11 @@ export function AtividadePanel({
             <section className="panel">
               <SectionTitle>Por turno</SectionTitle>
               <RankingBars
-                rows={SHIFTS.map((s) => ({
-                  key: s,
-                  label: s,
-                  value: byShiftA.m[s],
-                  valueText: fmtMin(byShiftA.m[s]),
+                rows={byShiftA.rows.map((s) => ({
+                  key: s.key,
+                  label: s.label,
+                  value: s.value,
+                  valueText: fmtMin(s.value),
                 }))}
                 max={byShiftA.max}
               />
@@ -265,7 +286,10 @@ function FlowSection({ flow }: { flow: FlowView }) {
           <Kpi value={k.in} label="entradas no período" />
           <Kpi value={k.out} label="saídas no período" />
           <Kpi value={k.in - k.out} label="saldo (entradas − saídas)" />
-          <Kpi value={k.lines} label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"} />
+          <Kpi
+            value={k.lines}
+            label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"}
+          />
         </KpiRow>
         <p className="muted text-label">
           Respeita período e turno. O filtro de área não se aplica ao fluxo (cruzamentos são por

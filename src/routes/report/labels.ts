@@ -1,7 +1,7 @@
 // Rótulos do recorte do Relatório: modo/período + a "lente" (linha de contexto exibida/impressa)
 // e a etiqueta de filtro (CSV). Funções PURAS do estado dos filtros — texto idêntico nos três
 // destinos (tela, print-head, CSV), num lugar só.
-import type { Period, Shift } from "../../report/calc";
+import type { Period, ShiftFilter } from "../../report/calc";
 import {
   ALARM_PRIORITY_LABEL,
   ALARM_STATE_LABEL,
@@ -27,7 +27,10 @@ export const PERIOD_LABEL: Record<Period, string> = {
 export type ReportFilters = {
   mode: Mode;
   period: Period;
-  shift: Shift | "Todos";
+  shift: ShiftFilter;
+  /** rótulo JÁ resolvido do turno (nome do cadastro; "todos" na sentinela) — a página resolve
+   *  com `shiftLabelOf`, porque a CHAVE do filtro hoje é o id do turno, não o texto exibido. */
+  shiftLabel: string;
   area: string | "Todas";
   ponto: string | "Todos";
   setor: string | "Todos";
@@ -38,7 +41,7 @@ export type ReportFilters = {
 
 /** Linha de contexto do recorte atual (ex.: "Últimos 7 dias · Todas as áreas · Turno: todos"). */
 export function reportLens(f: ReportFilters): string {
-  const turno = `Turno: ${f.shift === "Todos" ? "todos" : f.shift}`;
+  const turno = `Turno: ${f.shiftLabel}`;
   switch (f.mode) {
     case "alarmes":
       return `${PERIOD_LABEL[f.period]} · Prioridade: ${f.alarmPriority === "Todas" ? "todas" : ALARM_PRIORITY_LABEL[f.alarmPriority]} · Estado: ${f.alarmState === "Todos" ? "todos" : ALARM_STATE_LABEL[f.alarmState]}`;

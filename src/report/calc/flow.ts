@@ -4,9 +4,12 @@
 // mesma geometria de janela de windows() (calc/atividade). O I/O (ingest/load) vive em
 // report/store.ts; aqui só funções determinísticas (Vitest ao lado em flow.test.ts).
 
-import { type Period, type Shift, periodDays, shiftOf } from "./common";
+import { type Period, type ShiftFilter, type ShiftStamp, periodDays, inShift } from "./common";
 
-export type FlowCell = {
+// Carimbo de turno ADITIVO — mas ATENÇÃO (spec §8, fora de escopo v1): o cruzamento é por LINHA,
+// não por zona, e a linha não tem turno atribuído. Enquanto o hub não carimbar o bucket de flow,
+// o recorte por turno aqui cai no legado (derivação pela hora) — pendência registrada.
+export type FlowCell = ShiftStamp & {
   cameraId: string;
   cameraLabel: string;
   tripwireId: string;
@@ -19,13 +22,11 @@ export type FlowDataset = { days: number; cells: FlowCell[]; startMs: number };
 
 /** Recorte "current" do período/turno (janela idêntica à de windows() — sem previous:
  *  o fluxo não exibe delta vs. período anterior). */
-export function flowWindow(ds: FlowDataset, period: Period, shift: Shift | "Todos"): FlowCell[] {
+export function flowWindow(ds: FlowDataset, period: Period, shift: ShiftFilter): FlowCell[] {
   const W = periodDays[period];
   const lo = ds.days - W;
   const hi = ds.days - 1;
-  return ds.cells.filter(
-    (c) => c.dayIndex >= lo && c.dayIndex <= hi && (shift === "Todos" || shiftOf(c.hour) === shift),
-  );
+  return ds.cells.filter((c) => c.dayIndex >= lo && c.dayIndex <= hi && inShift(c, shift));
 }
 
 /** Totais do recorte: entradas, saídas e nº de linhas distintas com cruzamento. */

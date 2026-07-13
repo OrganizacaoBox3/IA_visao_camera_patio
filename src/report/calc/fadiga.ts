@@ -1,9 +1,10 @@
 // MODO FADIGA (operador) — tempo em cada estado de risco + ocorrências, por posto.
 // 1 amostra ≈ 1s. minutos = samples/60.
 
-import { type Period, type Shift, periodDays, inShift } from "./common";
+import { type Period, type ShiftFilter, type ShiftStamp, periodDays, inShift } from "./common";
 
-export type FadigaCell = {
+// Carimbo de turno (ShiftStamp) é ADITIVO na célula e no evento — ver calc/common.
+export type FadigaCell = ShiftStamp & {
   posto: string;
   dayIndex: number;
   hour: number;
@@ -21,8 +22,13 @@ export type FadigaDataset = {
   cells: FadigaCell[];
   startMs: number;
 };
-export type FadigaEventRow = { ts: number; posto: string; type: string; shift: Shift };
-export type FadigaFilters = { period: Period; shift: Shift | "Todos"; posto: string | "Todos" };
+export type FadigaEventRow = ShiftStamp & {
+  ts: number;
+  posto: string;
+  type: string;
+  shift: string;
+};
+export type FadigaFilters = { period: Period; shift: ShiftFilter; posto: string | "Todos" };
 export type FadigaKpis = {
   alertPct: number;
   okPct: number;
@@ -39,7 +45,7 @@ export function fadigaWindows(ds: FadigaDataset, f: FadigaFilters) {
       (c) =>
         c.dayIndex >= lo &&
         c.dayIndex <= hi &&
-        inShift(c.hour, f.shift) &&
+        inShift(c, f.shift) &&
         (f.posto === "Todos" || c.posto === f.posto),
     );
   return {
@@ -90,11 +96,7 @@ export function fadigaEvolution(ds: FadigaDataset, f: FadigaFilters, lastN = 14)
     let samples = 0,
       alert = 0;
     for (const c of ds.cells)
-      if (
-        c.dayIndex === d &&
-        inShift(c.hour, f.shift) &&
-        (f.posto === "Todos" || c.posto === f.posto)
-      ) {
+      if (c.dayIndex === d && inShift(c, f.shift) && (f.posto === "Todos" || c.posto === f.posto)) {
         samples += c.samples;
         alert += c.fadiga + c.celular + c.duplo;
       }

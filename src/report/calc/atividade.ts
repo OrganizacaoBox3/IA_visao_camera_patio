@@ -1,9 +1,19 @@
 // Modo ATIVIDADE — ociosidade/ocupação por Área × Hora. Agregações puras.
 // Tudo aqui são INDICADORES (tempo/alertas/ocupação) — nunca imagens.
 
-import { type Period, type Shift, periodDays, inShift } from "./common";
+import {
+  type Period,
+  type ShiftFilter,
+  type ShiftStamp,
+  periodDays,
+  inShift,
+  shiftStateOf,
+} from "./common";
 
-export type Cell = {
+// A célula é um bucket hora×área. Os campos de TURNO (ShiftStamp) e as amostras são ADITIVOS:
+// hub antigo omite → o relatório cai no legado (CA-5/CA-8) e a régua de turno se declara
+// "sem carimbo" em vez de inventar número.
+export type Cell = ShiftStamp & {
   area: string;
   dayIndex: number;
   hour: number;
@@ -11,6 +21,9 @@ export type Cell = {
   alerts: number;
   activePct: number;
   atividade?: string;
+  /** amostras do bucket — PESO da ocupação (sem elas, activePct vira média simples de médias). */
+  samples?: number;
+  activeSamples?: number;
 };
 export type Dataset = {
   days: number;
@@ -20,7 +33,7 @@ export type Dataset = {
   startMs: number;
 };
 
-export type Filters = { period: Period; shift: Shift | "Todos"; area: string | "Todas" };
+export type Filters = { period: Period; shift: ShiftFilter; area: string | "Todas" };
 
 /** Recorta janelas current/previous conforme filtros. */
 export function windows(ds: Dataset, f: Filters) {
@@ -34,7 +47,7 @@ export function windows(ds: Dataset, f: Filters) {
       (c) =>
         c.dayIndex >= lo &&
         c.dayIndex <= hi &&
-        inShift(c.hour, f.shift) &&
+        inShift(c, f.shift) &&
         (f.area === "Todas" || c.area === f.area),
     );
   return {
@@ -126,7 +139,7 @@ export function evolution(ds: Dataset, f: Filters, lastN = 14) {
   for (let d = lo; d < ds.days; d++) {
     let idleMin = 0;
     for (const c of ds.cells)
-      if (c.dayIndex === d && inShift(c.hour, f.shift) && (f.area === "Todas" || c.area === f.area))
+      if (c.dayIndex === d && inShift(c, f.shift) && (f.area === "Todas" || c.area === f.area))
         idleMin += c.idleMin;
     const date = new Date(ds.startMs + d * 86_400_000);
     out.push({
@@ -139,13 +152,106 @@ export function evolution(ds: Dataset, f: Filters, lastN = 14) {
   return { bars: out, max };
 }
 
-export type EventRow = {
+export type EventRow = ShiftStamp & {
   ts: number;
   area: string;
   camera: string;
   durationMin: number;
-  shift: Shift;
+  /** rótulo exibível do turno (nome cadastrado ou legado) — sempre presente na linha gravada. */
+  shift: string;
 };
+
+// ── RÉGUA DO TURNO (spec §4.3 + D7) ──────────────────────────────────────────────────────────
+// A ociosidade só existe DENTRO do turno, fora das pausas (modelo OEE: Planned Production Time =
+// turno − pausas; fora do turno é Schedule Loss, EXCLUÍDO da conta). Duas consequências duras:
+//   1. o denominador da ocupação é o tempo de turno OBSERVADO — nunca 24h;
+//   2. atividade FORA do turno é LINHA PRÓPRIA (D7) — nunca entra naquele denominador.
+// `stamped=false` ⇒ o hub ainda NÃO carimba `shiftId` nos buckets: a régua não existe e a UI/CSV
+// tem de dizer isso (número honesto ou número nenhum). Ver PENDÊNCIA no fim do arquivo.
+
+export type ShiftRuler = {
+  /** o hub carimbou turno em ALGUMA célula do recorte? false ⇒ tudo abaixo é legado/24-7. */
+  stamped: boolean;
+  /** ocupação DENTRO do turno: amostras ativas ÷ amostras do turno (pausas excluídas). */
+  occupancyPct: number | null;
+  idleMinInShift: number;
+  alertsInShift: number;
+  hoursInShift: number;
+  /** horas-bucket em PAUSA (D3): vazio esperado — fora do numerador E do denominador. */
+  pauseHours: number;
+  /** D7 — atividade FORA do turno: semântica própria, jamais misturada na ocupação acima. */
+  offActivePct: number | null;
+  offActiveHours: number;
+  offIdleMin: number;
+  offAlerts: number;
+  /** horas-bucket sem carimbo (dado antigo): não são "fora de turno", são desconhecidas. */
+  unknownHours: number;
+};
+
+// Amostras da célula: peso real quando o hub as manda; 1 (média simples) quando não — e aí o
+// activePct do bucket é tudo que existe. Degradação explícita, não silenciosa.
+function weightOf(c: Cell): { samples: number; active: number } {
+  const samples = typeof c.samples === "number" && c.samples > 0 ? c.samples : 1;
+  const active =
+    typeof c.activeSamples === "number" ? c.activeSamples : (c.activePct / 100) * samples;
+  return { samples, active };
+}
+
+export function shiftRuler(cells: Cell[]): ShiftRuler {
+  let inSamples = 0,
+    inActive = 0,
+    idleMinInShift = 0,
+    alertsInShift = 0,
+    hoursInShift = 0,
+    pauseHours = 0;
+  let offSamples = 0,
+    offActive = 0,
+    offIdleMin = 0,
+    offAlerts = 0,
+    offHours = 0,
+    offActiveHours = 0;
+  let unknownHours = 0;
+
+  for (const c of cells) {
+    const state = shiftStateOf(c);
+    const { samples, active } = weightOf(c);
+    if (state === "dentro") {
+      if (c.inPause) {
+        pauseHours++; // pausa = vazio ESPERADO (D3) — não vira ociosidade nem ocupação
+        continue;
+      }
+      hoursInShift++;
+      inSamples += samples;
+      inActive += active;
+      idleMinInShift += c.idleMin;
+      alertsInShift += c.alerts;
+    } else if (state === "fora") {
+      offHours++;
+      offSamples += samples;
+      offActive += active;
+      offIdleMin += c.idleMin;
+      offAlerts += c.alerts;
+      if (active > 0) offActiveHours++;
+    } else {
+      unknownHours++;
+    }
+  }
+
+  const pct = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 100) : null);
+  return {
+    stamped: hoursInShift + pauseHours + offHours > 0,
+    occupancyPct: pct(inActive, inSamples),
+    idleMinInShift,
+    alertsInShift,
+    hoursInShift,
+    pauseHours,
+    offActivePct: pct(offActive, offSamples),
+    offActiveHours,
+    offIdleMin,
+    offAlerts,
+    unknownHours,
+  };
+}
 
 /** Eventos de alerta sintéticos a partir das células com alerts>0. */
 export function insights(cells: Cell[], k: Kpis): string[] {

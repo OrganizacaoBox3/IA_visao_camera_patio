@@ -6,7 +6,7 @@
 
 import { fmtMin } from "../../report/calc";
 import type {
-  Shift,
+  ShiftRuler,
   Period,
   Kpis,
   ReadingKpis,
@@ -23,7 +23,7 @@ import type { FlowLineRow } from "../../report/calc";
 import type { AlarmEvent } from "../../types/alarm";
 import { alarmSection, type CsvSection } from "../../report/csv";
 import { classLabel } from "./ObjetosPanel";
-import { SHIFTS } from "./chrome";
+import type { ByShift } from "./chrome";
 import { MODE_LABEL, PERIOD_LABEL, type Mode } from "./labels";
 import type { AtividadeSummary, AtividadeDetails } from "./useAtividadeVM";
 import type { LeituraSummary, LeituraDetails } from "./useLeituraVM";
@@ -90,14 +90,15 @@ export function resumoSection(p: {
 export function atividadeSections(p: {
   k: Kpis;
   peoplePeak: number;
+  ruler: ShiftRuler;
   rankRows: { area: string; idleMin: number; alerts: number }[];
   byAtivRows: { atividade: string; idleMin: number; alerts: number }[];
-  byShiftA: Record<Shift, number>;
+  byShiftA: ByShift;
   // null = hub sem o kind "flow" → seções de fluxo omitidas (área não se aplica ao fluxo).
   flow: { k: { in: number; out: number; lines: number }; lineRows: FlowLineRow[] } | null;
   evt: EventRow[];
 }): CsvSection[] {
-  const { k, peoplePeak, rankRows, byAtivRows, byShiftA, flow, evt } = p;
+  const { k, peoplePeak, ruler, rankRows, byAtivRows, byShiftA, flow, evt } = p;
   const out: CsvSection[] = [
     {
       title: "INDICADORES",
@@ -124,9 +125,32 @@ export function atividadeSections(p: {
     {
       title: "POR TURNO",
       headers: ["Turno", "Tempo parado"],
-      rows: SHIFTS.map((s) => [s, fmtMin(byShiftA[s])]),
+      rows: byShiftA.rows.map((s) => [s.label, fmtMin(s.value)]),
     },
   ];
+  // RÉGUA DO TURNO (§4.3 + D7): só sai no CSV quando o hub carimbou o turno no bucket — sem
+  // carimbo não há régua, e um "0%" inventado seria pior que a ausência da seção.
+  if (ruler.stamped) {
+    out.push({
+      title: "RÉGUA DO TURNO (dentro da janela de trabalho)",
+      headers: ["Indicador", "Valor"],
+      rows: [
+        ["Ocupação no turno (%)", ruler.occupancyPct === null ? "—" : ruler.occupancyPct],
+        ["Tempo parado no turno", fmtMin(ruler.idleMinInShift)],
+        ["Alertas no turno", ruler.alertsInShift],
+        ["Horas de turno observadas", ruler.hoursInShift],
+        ["Horas em pausa (vazio esperado)", ruler.pauseHours],
+        // D7 — linha PRÓPRIA: fora do turno não é ociosidade, nunca entra no denominador acima.
+        ["Atividade FORA do turno (horas)", ruler.offActiveHours],
+        [
+          "Atividade FORA do turno (% do tempo)",
+          ruler.offActivePct === null ? "—" : ruler.offActivePct,
+        ],
+        ["Alertas fora do turno", ruler.offAlerts],
+        ["Horas sem carimbo de turno (dado antigo)", ruler.unknownHours],
+      ],
+    });
+  }
   if (flow) {
     out.push({
       title: "FLUXO DE PESSOAS (linhas de contagem)",
@@ -163,7 +187,7 @@ export function leituraSections(p: {
   rk: ReadingKpis;
   rrankRows: { ponto: string; boxes: number; ratePct: number; noReads: number }[];
   byCamRows: { camera: string; reads: number }[];
-  byShiftR: Record<Shift, number>;
+  byShiftR: ByShift;
   revt: ReadingEventRow[];
 }): CsvSection[] {
   const { rk, rrankRows, byCamRows, byShiftR, revt } = p;
@@ -192,7 +216,7 @@ export function leituraSections(p: {
     {
       title: "POR TURNO",
       headers: ["Turno", "Caixas"],
-      rows: SHIFTS.map((s) => [s, byShiftR[s]]),
+      rows: byShiftR.rows.map((s) => [s.label, s.value]),
     },
     {
       title: `LEITURAS (${revt.length})`,
@@ -318,7 +342,9 @@ export function alarmesSections(p: {
 export function reportSections(p: {
   mode: Mode;
   period: Period;
-  shift: Shift | "Todos";
+  /** rótulo JÁ resolvido do turno filtrado (nome do cadastro, ou "todos") — o CSV NÃO resolve
+   *  turno: quem resolve é o servidor, e a página só transporta o rótulo. */
+  shiftLabel: string;
   filtroLabel: string;
   now: Date;
   atividade: { summary: AtividadeSummary | null; details: AtividadeDetails | null };
@@ -336,7 +362,7 @@ export function reportSections(p: {
     metaSection({
       modeLabel: MODE_LABEL[mode],
       periodLabel: PERIOD_LABEL[p.period],
-      shift: p.shift === "Todos" ? "Todos" : p.shift,
+      shift: p.shiftLabel,
       filtroLabel: p.filtroLabel,
       now: p.now,
     }),
@@ -364,9 +390,10 @@ export function reportSections(p: {
       ...atividadeSections({
         k: summary.k,
         peoplePeak: summary.kPeople,
+        ruler: summary.ruler,
         rankRows: details.rank.rows,
         byAtivRows: details.byAtiv.rows,
-        byShiftA: details.byShiftA.m,
+        byShiftA: details.byShiftA,
         // Fluxo só quando o hub expõe o kind "flow" (hub antigo → omite).
         flow: details.flowView
           ? { k: details.flowView.k, lineRows: details.flowView.byLine.rows }
@@ -380,7 +407,7 @@ export function reportSections(p: {
         rk: leitura.summary.rk,
         rrankRows: leitura.details.rrank.rows,
         byCamRows: leitura.details.byCam.rows,
-        byShiftR: leitura.details.byShiftR.m,
+        byShiftR: leitura.details.byShiftR,
         revt: leitura.details.revt,
       }),
     );

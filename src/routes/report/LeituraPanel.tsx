@@ -13,7 +13,6 @@ import {
   HistoryFooter,
   Insight,
   SectionTitle,
-  SHIFTS,
   REP_TABPANEL_CLS,
   type RepTab,
   type ByShift,
@@ -174,11 +173,11 @@ export function LeituraPanel({
             <section className="panel">
               <SectionTitle>Por turno</SectionTitle>
               <RankingBars
-                rows={SHIFTS.map((s) => ({
-                  key: s,
-                  label: s,
-                  value: byShiftR.m[s],
-                  valueText: `${byShiftR.m[s].toLocaleString("pt-BR")} caixas`,
+                rows={byShiftR.rows.map((s) => ({
+                  key: s.key,
+                  label: s.label,
+                  value: s.value,
+                  valueText: `${s.value.toLocaleString("pt-BR")} caixas`,
                 }))}
                 max={byShiftR.max}
                 read

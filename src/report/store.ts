@@ -3,7 +3,8 @@
 // load* = GET /api/data/*. clearAll = clear. Agregações puras vivem em ./calc.
 import { apiGet, apiSend, listAlarms } from "../api";
 import {
-  shiftOf,
+  legacyShiftOf,
+  type ShiftStamp,
   type Dataset,
   type Cell,
   type EventRow,
@@ -21,7 +22,22 @@ import {
 } from "./calc";
 
 const DAY = 86_400_000;
-const shiftFor = (ts: number) => shiftOf(new Date(ts).getHours());
+
+// ── TURNO no ingest: carimbo LEGADO, com prazo de validade ────────────────────────────────────
+// O cliente NÃO decide turno (spec-turnos-por-zona §3 — a resolução é do hub, shift-clock.js).
+// Este `shift` viaja só para o hub que ainda NÃO carimba: é hint de retrocompat, e o hub que
+// resolve DEVE sobrescrevê-lo (dupla escrita: `shift` = rótulo, `shiftId` = a chave). Quando o
+// ingest do servidor carimbar (F3/F5), estas 5 chamadas perdem o campo e a função morre.
+// PENDÊNCIA registrada no relatório da frente — não invente turno aqui.
+const legacyShiftHint = (ts: number) => legacyShiftOf(new Date(ts).getHours());
+
+// Carimbo de turno vindo do hub (ADITIVO): `shiftId` string = dentro do turno; `null` = fora
+// (D7); AUSENTE = hub antigo → o relatório cai no legado. Repassado CRU — sem reinterpretar.
+const stampOf = (b: ShiftStamp): ShiftStamp => ({
+  shiftId: b.shiftId,
+  shift: b.shift,
+  inPause: b.inPause,
+});
 
 // ── Geometria de JANELA compartilhada pelos load*Dataset (extraída do boilerplate 5×) ──
 // Ambas PURAS: dado o mesmo `hourStarts`/`startMs` (e `now`) devolvem o mesmo resultado.
@@ -96,7 +112,7 @@ export type AlertPayload = {
   ts: number;
   durationMin: number;
 };
-type Bucket = {
+type Bucket = ShiftStamp & {
   id: string;
   cameraId: string;
   area: string;
@@ -113,7 +129,7 @@ export function recordSamples(p: SamplePayload): Promise<void> {
   return p.samples.length ? ingest("ativ", "samples", p) : Promise.resolve();
 }
 export function recordAlert(a: AlertPayload): Promise<void> {
-  return ingest("ativ", "alert", { ...a, shift: shiftFor(a.ts) });
+  return ingest("ativ", "alert", { ...a, shift: legacyShiftHint(a.ts) });
 }
 
 // Extensão ADITIVA de Cell: o tipo canônico (calc/atividade) segue intocado — pessoas entram
@@ -141,9 +157,14 @@ export async function loadDataset(): Promise<Dataset> {
     return {
       area: b.area,
       ...cellTime(b.hourStart, startMs),
+      ...stampOf(b), // turno carimbado pelo hub (aditivo) — a régua do turno depende dele
       idleMin: Math.round(b.idleMs / 60000),
       alerts: b.alerts,
       activePct: b.samples ? Math.round((b.activeSamples / b.samples) * 100) : 0,
+      // amostras cruas: PESO da ocupação na régua do turno (calc/atividade shiftRuler) — sem
+      // elas o KPI vira média simples de médias (degradação documentada, não silenciosa).
+      samples: b.samples,
+      activeSamples: b.activeSamples,
       atividade: b.atividade,
       // o SELECT do hub expõe people_peak como "peoplePeak" (campo aditivo — hub antigo omite)
       peoplePeak: typeof b.peoplePeak === "number" ? b.peoplePeak : 0,
@@ -153,19 +174,22 @@ export async function loadDataset(): Promise<Dataset> {
 }
 
 export async function loadEvents(): Promise<EventRow[]> {
-  const evs = await fetchEvents<{
-    ts: number;
-    camera?: string;
-    cameraId?: string;
-    area: string;
-    durationMin: number;
-    shift: EventRow["shift"];
-  }>("ativ");
+  const evs = await fetchEvents<
+    ShiftStamp & {
+      ts: number;
+      camera?: string;
+      cameraId?: string;
+      area: string;
+      durationMin: number;
+      shift: string;
+    }
+  >("ativ");
   return evs.map((e) => ({
     ts: e.ts,
     area: e.area,
     camera: e.camera ?? e.cameraId ?? "—",
     durationMin: e.durationMin,
+    ...stampOf(e),
     shift: e.shift,
   }));
 }
@@ -180,7 +204,7 @@ export type ReadRecord = {
   newBox: boolean;
   becameMulti: boolean;
 };
-type ReadingBucket = {
+type ReadingBucket = ShiftStamp & {
   id: string;
   ponto: string;
   hourStart: number;
@@ -206,10 +230,10 @@ export type FlowCross = {
   ts: number;
 };
 export function recordFlow(ev: FlowCross): Promise<void> {
-  return ingest("flow", "cross", { ...ev, shift: shiftFor(ev.ts) });
+  return ingest("flow", "cross", { ...ev, shift: legacyShiftHint(ev.ts) });
 }
 /** Bucket de fluxo devolvido pelo servidor (hora×câmera×linha). */
-export type FlowBucket = {
+export type FlowBucket = ShiftStamp & {
   cameraId: string;
   cameraLabel: string;
   tripwireId: string;
@@ -246,6 +270,7 @@ export async function loadFlowDataset(): Promise<FlowDataset> {
     cameraLabel: b.cameraLabel,
     tripwireId: b.tripwireId,
     ...cellTime(b.hourStart, startMs),
+    ...stampOf(b),
     in: b.in,
     out: b.out,
   }));
@@ -253,7 +278,7 @@ export async function loadFlowDataset(): Promise<FlowDataset> {
 }
 
 export function recordReads(r: ReadRecord): Promise<void> {
-  return ingest("read", "read", { ...r, shift: shiftFor(r.ts) });
+  return ingest("read", "read", { ...r, shift: legacyShiftHint(r.ts) });
 }
 
 export async function loadReadingDataset(): Promise<ReadingDataset> {
@@ -273,6 +298,7 @@ export async function loadReadingDataset(): Promise<ReadingDataset> {
     return {
       ponto: b.ponto,
       ...cellTime(b.hourStart, startMs),
+      ...stampOf(b),
       boxes: b.boxes,
       reads: b.reads,
       multiReads: b.multiReads,
@@ -298,7 +324,7 @@ export type ObjSample = {
 };
 export type ObjectSamplePayload = { samples: ObjSample[] };
 export type ObjectEvent = { type: string; setor: string; classe: string; ts: number };
-type ObjectBucket = {
+type ObjectBucket = ShiftStamp & {
   id: string;
   setor: string;
   classe: string;
@@ -313,7 +339,7 @@ export function recordObjectSamples(p: ObjectSamplePayload): Promise<void> {
   return p.samples.length ? ingest("obj", "samples", p) : Promise.resolve();
 }
 export function recordObjectEvent(e: ObjectEvent): Promise<void> {
-  return ingest("obj", "event", { ...e, shift: shiftFor(e.ts) });
+  return ingest("obj", "event", { ...e, shift: legacyShiftHint(e.ts) });
 }
 
 export async function loadObjectDataset(): Promise<ObjectDataset> {
@@ -329,6 +355,7 @@ export async function loadObjectDataset(): Promise<ObjectDataset> {
       setor: b.setor,
       classe: b.classe,
       ...cellTime(b.hourStart, startMs),
+      ...stampOf(b),
       samples: b.samples,
       countSum: b.countSum,
       peak: b.peak,
@@ -354,7 +381,7 @@ export type FadigaSamplePayload = {
   earSamples: number;
 };
 export type FadigaEvent = { posto: string; type: string; ts: number };
-type FadigaBucket = {
+type FadigaBucket = ShiftStamp & {
   id: string;
   posto: string;
   hourStart: number;
@@ -371,7 +398,7 @@ export function recordFadigaSamples(p: FadigaSamplePayload): Promise<void> {
   return p.samples ? ingest("fad", "samples", p) : Promise.resolve();
 }
 export function recordFadigaEvent(e: FadigaEvent): Promise<void> {
-  return ingest("fad", "event", { ...e, shift: shiftFor(e.ts) });
+  return ingest("fad", "event", { ...e, shift: legacyShiftHint(e.ts) });
 }
 
 export async function loadFadigaDataset(): Promise<FadigaDataset> {
@@ -384,6 +411,7 @@ export async function loadFadigaDataset(): Promise<FadigaDataset> {
     return {
       posto: b.posto,
       ...cellTime(b.hourStart, startMs),
+      ...stampOf(b),
       samples: b.samples,
       ok: b.ok,
       fadiga: b.fadiga,

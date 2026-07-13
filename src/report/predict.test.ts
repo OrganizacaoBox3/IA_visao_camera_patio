@@ -43,7 +43,9 @@ describe("predictAlertsPerDay — casos no-data", () => {
     expect(predictAlertsPerDay(null, "Expedição", 5)).toEqual({ status: "no-data" });
   });
   it("retorna no-data quando days < 1", () => {
-    expect(predictAlertsPerDay({ ...ds(), days: 0 }, "Expedição", 5)).toEqual({ status: "no-data" });
+    expect(predictAlertsPerDay({ ...ds(), days: 0 }, "Expedição", 5)).toEqual({
+      status: "no-data",
+    });
   });
   it("retorna no-data quando a área não tem células", () => {
     expect(predictAlertsPerDay(ds(), "Inexistente", 5)).toEqual({ status: "no-data" });
@@ -86,5 +88,56 @@ describe("predictAlertsPerDay — estimativa e escala por sensibilidade", () => 
     const r = predictAlertsPerDay(ds(), "Carga", 5);
     if (r.status !== "ok") throw new Error("esperado ok");
     expect(r.baselinePerDay).toBe(1); // 2 alertas / 2 dias
+  });
+});
+
+// Armadilha 10 da spec-turnos-por-zona: o preview SUPERESTIMAVA porque contava a ociosidade da
+// madrugada — que o gate de ociosidade do hub suprime (alerta só dispara DENTRO do turno).
+describe("predictAlertsPerDay — régua do TURNO (armadilha 10)", () => {
+  // 2 dias: 4 alertas DENTRO do turno + 16 FORA (madrugada vazia, o clássico falso positivo).
+  const dsCarimbado = (): Dataset => ({
+    days: 2,
+    areas: ["Expedição"],
+    cameraOf: {},
+    startMs: 0,
+    cells: [
+      cell({ dayIndex: 0, hour: 8, alerts: 3, shiftId: "t1" }),
+      cell({ dayIndex: 1, hour: 9, alerts: 1, shiftId: "t1" }),
+      cell({ dayIndex: 0, hour: 3, alerts: 9, shiftId: null }),
+      cell({ dayIndex: 1, hour: 4, alerts: 7, shiftId: null }),
+    ],
+  });
+
+  it("histórico CARIMBADO: a base exclui os alertas fora do turno (era 10/dia, é 2/dia)", () => {
+    const r = predictAlertsPerDay(dsCarimbado(), "Expedição", 5);
+    if (r.status !== "ok") throw new Error("esperado ok");
+    expect(r.shiftAware).toBe(true);
+    expect(r.baselinePerDay).toBe(2); // 4 alertas dentro do turno / 2 dias
+    expect(r.perDay).toBe(2);
+    expect(r.outOfShiftPerDay).toBe(8); // 16 / 2 — o que o gate de turno poupa
+  });
+
+  it("histórico SEM carimbo: comportamento anterior (24/7) e shiftAware=false — sem mentir", () => {
+    const r = predictAlertsPerDay(ds(), "Expedição", 5);
+    if (r.status !== "ok") throw new Error("esperado ok");
+    expect(r.shiftAware).toBe(false);
+    expect(r.baselinePerDay).toBe(5);
+    expect(r.outOfShiftPerDay).toBe(0);
+  });
+
+  it("shiftIds da zona: turno de OUTRA zona não conta como janela desta", () => {
+    const r = predictAlertsPerDay(dsCarimbado(), "Expedição", 5, { shiftIds: ["t9"] });
+    if (r.status !== "ok") throw new Error("esperado ok");
+    expect(r.baselinePerDay).toBe(0); // nenhuma célula caiu num turno DA zona
+    expect(r.outOfShiftPerDay).toBe(10); // 20 alertas / 2 dias
+  });
+
+  it("dado MISTO (migração): o antigo, indivisível, permanece na base", () => {
+    const misto = dsCarimbado();
+    misto.cells.push(cell({ dayIndex: 0, hour: 8, alerts: 6 })); // pré-turnos, sem carimbo
+    const r = predictAlertsPerDay(misto, "Expedição", 5);
+    if (r.status !== "ok") throw new Error("esperado ok");
+    expect(r.shiftAware).toBe(true);
+    expect(r.baselinePerDay).toBe(5); // (4 dentro + 6 sem carimbo) / 2 dias
   });
 });
