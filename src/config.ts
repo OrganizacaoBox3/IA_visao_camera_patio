@@ -166,6 +166,10 @@ export const APP_CONFIG = {
   // OVERLAY da câmera ao vivo (Onda A — fundação consumida pela Onda 2/CameraWorkspace).
   //   confidenceThreshold: slider GLOBAL de confiança (0..1) p/ filtrar o que é desenhado.
   //   layers: toggles das camadas sobre o vídeo (caixas, máscara, zonas, heatmap).
+  //   floorTagsOn: default do overlay dos ANÉIS DAS ANTENAS BLE (âncoras + estação + anéis de
+  //     distância — drawFloorTags). DESLIGADO por default (decisão do dono, 2026-07-13): é dado de
+  //     conferência/diagnóstico, não a vista do cliente — não poluir a tela por padrão. O operador
+  //     LIGA quando quer ver (toggle "Anéis das antenas" no CamKpiBar); a capacidade NÃO some.
   // Os casts `as number`/`as boolean` mantêm os tipos largos (não literais) p/ que o
   // CameraWorkspace possa atualizar os valores em estado/UI sem conflito de tipos.
   overlay: {
@@ -176,6 +180,7 @@ export const APP_CONFIG = {
       zones: true as boolean,
       heatmap: false as boolean,
     },
+    floorTagsOn: false as boolean,
   },
 
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS

@@ -80,14 +80,20 @@ export function CamKpiBar({
           </Toggle>
         </Tooltip>
       )}
-      {/* Tags no chão: âncoras (posição exata) + estação + anéis de distância BLE. Default LIGADO;
-          some quando não há calibração/leituras. Cores VIVAS (exceção declarada ao going-gray —
-          overlay sobre vídeo; ver drawFloorTags); o anel tracejado comunica incerteza (é
-          distância, não posição); vermelho só p/ âncora calada (anomalia). */}
+      {/* Anéis das antenas (BLE): âncoras (posição exata) + estação + anéis de distância. Default
+          DESLIGADO (decisão do dono: dado de conferência, não a vista do cliente — não poluir a
+          tela por padrão); some quando não há calibração/leituras. Going-gray: estado por TEXTO +
+          ícone + pressed (não só cor). Cores VIVAS no desenho são exceção declarada ao going-gray —
+          overlay sobre vídeo (ver drawFloorTags); o anel tracejado comunica incerteza (é distância,
+          não posição); vermelho só p/ âncora calada (anomalia). */}
       {floorAvailable && (
-        <Tooltip content="Tags no chão: âncoras dos cantos (posição exata), a estação BLE e um anel tracejado de distância p/ cada tag visível ainda não associada a uma pessoa — o anel é DISTÂNCIA (RSSI), não posição">
-          <Toggle aria-label="Tags no chão" pressed={floorOn} onPressedChange={setFloorOn}>
-            <Radar size={16} strokeWidth={1.75} aria-hidden /> Tags
+        <Tooltip content="Anéis das antenas BLE: âncoras dos cantos (posição exata), a estação e um anel tracejado de distância p/ cada tag visível ainda não associada a uma pessoa — o anel é DISTÂNCIA (RSSI), não posição. Desligado por padrão; ligue para conferir a cobertura das antenas.">
+          <Toggle
+            aria-label="Anéis das antenas"
+            pressed={floorOn}
+            onPressedChange={setFloorOn}
+          >
+            <Radar size={16} strokeWidth={1.75} aria-hidden /> Anéis
           </Toggle>
         </Tooltip>
       )}

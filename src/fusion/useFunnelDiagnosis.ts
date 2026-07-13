@@ -53,6 +53,11 @@ export type HeardAnchor = { mac: string; label: string };
 export type FunnelDiagnosis = {
   /** false = o diagnóstico não está rodando (aba fechada / sem leituras BLE ligadas). */
   running: boolean;
+  /** Motor de análise ATIVO nesta câmera (ADR-009). "local" = a fusão tag↔pessoa é
+   *  ESTRUTURALMENTE morta (B7): o `labelFor` só é populado com tracks do HUB, e em local eles
+   *  não existem → nenhum nome de tag jamais aparece. A aba "Por quê" DIZ isso (motivo preciso),
+   *  em vez do B7 genérico "o hub não está entregando". */
+  analysisEngine: "hub" | "local";
   /** Pistas do MOTOR DO HUB. null = o motor do hub não está entregando tracks p/ esta câmera —
    *  a fusão NÃO RODA (bug B7 do laudo: com `analysisEngine="local"`, `labelFor` fica vazio p/
    *  sempre). É o 1º elo da cadeia e o único que nem chega ao funil. */
@@ -70,6 +75,7 @@ export type FunnelDiagnosis = {
 
 export const EMPTY_DIAGNOSIS: FunnelDiagnosis = {
   running: false,
+  analysisEngine: "local",
   hubTracks: null,
   tagsHeard: 0,
   anchors: [],
@@ -118,6 +124,9 @@ type Params = {
   calibration: FloorCalibration;
   getHubAnalysis?: () => HubAnalysis | null;
   getReadings?: () => RawReading[];
+  /** Motor de análise da câmera (ADR-009). Repassado ao diagnóstico p/ a aba "Por quê" dar o
+   *  motivo PRECISO do silêncio em modo local (a fusão nem roda), em vez do B7 genérico. */
+  analysisEngine?: "hub" | "local";
   /** Liga o diagnóstico (a aba "Por quê" está aberta). Desligado → EMPTY_DIAGNOSIS, custo zero. */
   enabled: boolean;
 };
@@ -126,6 +135,7 @@ export function useFunnelDiagnosis({
   calibration,
   getHubAnalysis,
   getReadings,
+  analysisEngine = "local",
   enabled,
 }: Params): FunnelDiagnosis {
   const [diag, setDiag] = useState<FunnelDiagnosis>(EMPTY_DIAGNOSIS);
@@ -219,6 +229,7 @@ export function useFunnelDiagnosis({
 
       setDiag({
         running: true,
+        analysisEngine,
         hubTracks: hd ? hd.tracks.length : null,
         tagsHeard: byTag.size,
         anchors: [...heardAnchors].map(([mac, label]) => ({ mac, label })),
@@ -228,7 +239,7 @@ export function useFunnelDiagnosis({
       });
     }, TICK_MS);
     return () => window.clearInterval(id);
-  }, [enabled, getHubAnalysis, getReadings, H, stationPx, excludeTags]);
+  }, [enabled, getHubAnalysis, getReadings, H, stationPx, excludeTags, analysisEngine]);
 
   return diag;
 }

@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../../ui";
-import { PorQueTab, eloStates, fmt3 } from "./PorQueTab";
+import { PorQueTab, eloStates, fmt3, fusionOffReason } from "./PorQueTab";
 import type { FunnelDiagnosis, PersonFunnel } from "../../fusion/useFunnelDiagnosis";
 import type { FunnelVerdict, PairFunnel } from "../../fusion/associate";
 
@@ -53,6 +53,7 @@ const person = (over: Partial<PersonFunnel> = {}): PersonFunnel => ({
 
 const diag = (over: Partial<FunnelDiagnosis> = {}): FunnelDiagnosis => ({
   running: true,
+  analysisEngine: "hub",
   hubTracks: 1,
   tagsHeard: 1,
   anchors: [],
@@ -120,10 +121,20 @@ describe("PorQueTab — os silêncios estruturais que ninguém via", () => {
     expect(t).toMatch(/remova-a das âncoras na aba Calibrar/);
   });
 
-  it("B7 (porta zero): sem pistas do motor do hub, avisa que a fusão NEM RODA", () => {
-    const t = text(diag({ hubTracks: null }));
+  it("B7 (porta zero) em HUB: hub calado é ANORMALIDADE — avisa que a fusão NEM RODA", () => {
+    const t = text(diag({ analysisEngine: "hub", hubTracks: null }));
     expect(t).toMatch(/motor de análise do hub não está entregando pistas/);
     expect(t).toMatch(/nenhuma tag será associada/);
+  });
+
+  it("motor LOCAL: aviso HONESTO e PRECISO (exige o motor no servidor), não o B7 genérico", () => {
+    // Em local a fusão é ESTRUTURALMENTE morta (o labelFor só vive de tracks do HUB) — o operador
+    // merece saber POR QUE não vê nomes, em vez de achar que está quebrado.
+    const t = text(diag({ analysisEngine: "local", hubTracks: null }));
+    expect(t).toMatch(/exige o motor de análise no servidor/);
+    expect(t).toMatch(/modo atual: local/);
+    // NÃO repete o texto genérico do hub calado (motivo é outro).
+    expect(t).not.toMatch(/o motor de análise do hub não está entregando pistas/);
   });
 
   it("sem tag no ar: o elo RÁDIO é o veredito (não inventa funil)", () => {
@@ -166,6 +177,21 @@ describe("eloStates — a cadeia é ORDENADA: o que veio depois do gate NÃO foi
       evidencia: "blocked",
     });
     expect(eloStates("SPOKE")).toEqual({ radio: "ok", movimento: "ok", evidencia: "ok" });
+  });
+});
+
+describe("fusionOffReason — o motivo do silêncio depende do MOTOR (going-gray: warn só p/ anomalia)", () => {
+  it("local: motivo estrutural e PRECISO, tom NEUTRO (escolha de deploy, não defeito)", () => {
+    const r = fusionOffReason("local");
+    expect(r.anomaly).toBe(false); // não satura cor — é escolha de deploy
+    expect(r.text).toMatch(/exige o motor de análise no servidor/);
+    expect(r.text).toMatch(/modo atual: local/);
+  });
+
+  it("hub: hub calado É anormalidade → warn", () => {
+    const r = fusionOffReason("hub");
+    expect(r.anomaly).toBe(true);
+    expect(r.text).toMatch(/não está entregando pistas/);
   });
 });
 

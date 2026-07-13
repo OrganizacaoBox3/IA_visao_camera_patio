@@ -35,6 +35,31 @@ import type { FunnelDiagnosis, PersonFunnel } from "../../fusion/useFunnelDiagno
 export function fmt3(n: number): string {
   return n.toFixed(3).replace(".", ",");
 }
+
+/** Por que a fusão tag↔pessoa não está rodando, conforme o MOTOR ativo (ADR-009). PURA/testável.
+ *
+ *  • "local": a fusão é ESTRUTURALMENTE morta — o `labelFor` só é populado por tracks do HUB, que em
+ *    modo local não existem (B7 do laudo). É uma ESCOLHA de deploy, não um defeito → aviso NEUTRO e
+ *    discreto (going-gray: cor saturada só p/ anormalidade). O operador merece o motivo PRECISO em
+ *    vez de achar que o sistema está quebrado.
+ *  • "hub": o motor do hub DEVERIA entregar pistas e não está (hub calado) → isso É anormalidade
+ *    (warn).
+ *
+ *  RESSALVA (documentada, não é feature): mesmo com o motor no hub, o nome só aparece quando a
+ *  ASSOCIAÇÃO por rádio de fato acontece — que é RARA (pessoa parada = 94,6% do silêncio medido).
+ *  Ligar o hub é NECESSÁRIO, não SUFICIENTE; persistência de rótulo + ReID são ondas futuras. Não
+ *  se promete aqui o que a física não entrega. */
+export function fusionOffReason(engine: "hub" | "local"): { text: string; anomaly: boolean } {
+  if (engine === "local")
+    return {
+      text: "Identidade por tag exige o motor de análise no servidor (modo atual: local). Enquanto a análise rodar localmente, a fusão tag↔pessoa nem chega a rodar — nenhuma pessoa em cena recebe o nome da tag.",
+      anomaly: false,
+    };
+  return {
+    text: "A fusão não está rodando: o motor de análise do hub não está entregando pistas para esta câmera. Sem as caixas das pessoas vindas do hub, não há distância para correlacionar com o rádio — nenhuma tag será associada, em nenhuma hipótese.",
+    anomaly: true,
+  };
+}
 function fmt2(n: number): string {
   return n.toFixed(2).replace(".", ",");
 }
@@ -248,7 +273,11 @@ function PersonCard({
 }
 
 export function PorQueTab({ diag }: { diag: FunnelDiagnosis }) {
-  const { running, hubTracks, tagsHeard, anchors, people, warmingUp, windowMs } = diag;
+  const { running, analysisEngine, hubTracks, tagsHeard, anchors, people, warmingUp, windowMs } =
+    diag;
+  // B7 — a PORTA ZERO: sem tracks do hub a fusão NEM RODA. O MOTIVO depende do motor: em modo
+  // LOCAL é estrutural (escolha de deploy) → aviso neutro; em HUB é o hub calado → anormalidade.
+  const off = running && hubTracks === null ? fusionOffReason(analysisEngine) : null;
   return (
     <div className="flex flex-col gap-3">
       <SectionTitle>Por que não identificou?</SectionTitle>
@@ -271,14 +300,14 @@ export function PorQueTab({ diag }: { diag: FunnelDiagnosis }) {
       )}
 
       {/* B7 — a PORTA ZERO: sem pistas do motor do hub, a fusão NEM RODA (falha 100% silenciosa até
-          aqui: 9 h de gravação com 0 tracks e ~6.500 leituras/h). Isto É anormalidade → tom. */}
-      {running && hubTracks === null && (
-        <Alert tone="warn">
-          A fusão não está rodando: o motor de análise do hub não está entregando pistas para esta
-          câmera. Sem as caixas das pessoas vindas do hub, não há distância para correlacionar com o
-          rádio — nenhuma tag será associada, em nenhuma hipótese.
-        </Alert>
-      )}
+          aqui: 9 h de gravação com 0 tracks e ~6.500 leituras/h). Going-gray: modo LOCAL é ESCOLHA
+          de deploy (motivo preciso, neutro/discreto); hub calado é anormalidade real (warn). */}
+      {off &&
+        (off.anomaly ? (
+          <Alert tone="warn">{off.text}</Alert>
+        ) : (
+          <p className="empty-note">{off.text}</p>
+        ))}
 
       {/* B5 — a ÂNCORA: excluída da fusão de propósito. Se a tag do crachá é âncora AQUI, ela é
           permanentemente inassociável NESTA câmera — e até hoje isso acontecia em silêncio. */}

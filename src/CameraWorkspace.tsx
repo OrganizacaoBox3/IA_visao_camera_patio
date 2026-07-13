@@ -329,6 +329,16 @@ export function CameraWorkspace({
   // useCameraTagLabels/Go2rtcVideoTile, então o custo por tile já era pago ali sem problema).
   // Ref lido no rAF/draw. Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points)
   // e as tags já associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
+  //
+  // PORTA ZERO (B7) — o NOME da tag só aparece com o motor no HUB (CLAUDE.md §1: a análise roda no
+  // hub 24/7). Por quê: `labelForRef` é indexado por id de track do HUB, e as caixas desenhadas
+  // vêm do interpolador do hub (toDisplayTracks preserva `id`) — as chaves casam. Em modo LOCAL as
+  // caixas têm id do tracker LOCAL e o getHubAnalysis retorna null → a fusão NEM roda e o labelFor
+  // fica vazio. Isto é condição de DEPLOY (escolha do motor), não gap de código: o labelForRef é
+  // passado ao drawTracks incondicionalmente (ver drawScene). A aba "Por quê" avisa quando o modo
+  // é local (fusionOffReason). RESSALVA: mesmo no hub, o nome só surge quando a ASSOCIAÇÃO por
+  // rádio acontece — RARA (pessoa parada = 94,6% do silêncio medido); persistência de rótulo +
+  // ReID são ondas futuras. Não prometer na UI o que a física não entrega.
   const {
     labelForRef,
     calibration: tagCalibration,
@@ -348,21 +358,26 @@ export function CameraWorkspace({
     calibration: tagCalibration,
     getHubAnalysis,
     getReadings,
+    // Motor local → a fusão é ESTRUTURALMENTE morta (o labelFor nunca sai vazio: B7). A aba "Por
+    // quê" usa isto p/ dar o motivo PRECISO ("exige o motor no servidor") em vez do B7 genérico.
+    analysisEngine,
     enabled: !!getReadings && drawerTab === "porque",
   });
 
-  // TAGS NO CHÃO — âncoras dos cantos (posição exata), estação e anéis de distância BLE (fusion/
-  // useFloorTags; matemática em floor-plot.ts). viewRef lido no rAF/drawScene; toggle default
-  // LIGADO (o dado só existe quando há calibração + leituras — sem eles nada é desenhado), no
-  // MESMO idioma do HUD/malha: estado p/ a UI (pressed) + ref espelho p/ o laço de desenho.
+  // ANÉIS DAS ANTENAS (BLE) — âncoras dos cantos (posição exata), estação e anéis de distância
+  // (fusion/useFloorTags; matemática em floor-plot.ts). viewRef lido no rAF/drawScene; toggle
+  // default DESLIGADO (APP_CONFIG.overlay.floorTagsOn=false — decisão do dono 2026-07-13: é dado
+  // de conferência/diagnóstico, não a vista do cliente; não poluir a tela por padrão). O operador
+  // LIGA quando quer ver — a capacidade NÃO some. MESMO idioma do HUD/malha: estado p/ a UI
+  // (pressed) + ref espelho p/ o laço de desenho.
   const floorTags = useFloorTags({
     calibration: tagCalibration,
     getReadings,
     getAssignedTags: assignedTags,
     enabled: !!getReadings,
   });
-  const [floorOn, setFloorOnState] = useState(true);
-  const floorOnRef = useRef(true);
+  const [floorOn, setFloorOnState] = useState(APP_CONFIG.overlay.floorTagsOn);
+  const floorOnRef = useRef(APP_CONFIG.overlay.floorTagsOn);
   // Setter ÚNICO do toggle (idioma da "Malha"/useCalibrationOverlay): ref (rAF) + estado (UI)
   // mudam numa só unidade — nenhum caminho escreve um sem o outro.
   const setFloorOn = (v: boolean) => {
@@ -1229,9 +1244,10 @@ export function CameraWorkspace({
     if (ov.heatmap && layersRef.current.heatmap && occRef.current)
       drawOccupancyHeatmap(ctx, cr, occRef.current);
 
-    // Tags no chão (toggle, default LIGADO): âncoras exatas + estação + anéis de distância BLE.
-    // Camada de FUNDO — desenha ANTES de caixas/zonas (espelha a grade/TrackOverlay: a geometria
-    // de pessoa vence a de chão). O rAF lê os refs; sem calibração/leituras o viewRef é null.
+    // Anéis das antenas (toggle, default DESLIGADO — APP_CONFIG.overlay.floorTagsOn): âncoras
+    // exatas + estação + anéis de distância BLE. Camada de FUNDO — desenha ANTES de caixas/zonas
+    // (espelha a grade/TrackOverlay: a geometria de pessoa vence a de chão). O rAF lê os refs;
+    // sem calibração/leituras o viewRef é null.
     if (ov.floorTags && floorOnRef.current) {
       const ft = floorTags.viewRef.current;
       if (ft) drawFloorTags(ctx, cr, ft);
