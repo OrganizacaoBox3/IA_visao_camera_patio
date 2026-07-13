@@ -1,7 +1,12 @@
 // Testes do núcleo PURO de saúde da estação de referência (src/fusion/stationHealth.ts).
 // Determinístico: `now` é sempre passado explicitamente (sem Date.now/random).
 import { describe, it, expect } from "vitest";
-import { computeStationHealth, rssiAt1m, type BtReadingLike } from "./stationHealth";
+import {
+  computeStationHealth,
+  computeStationsHealth,
+  rssiAt1m,
+  type BtReadingLike,
+} from "./stationHealth";
 
 const REF = "AA:BB:CC:DD:EE:FF";
 
@@ -66,6 +71,66 @@ describe("computeStationHealth — viva / baseline / drift", () => {
     const h = computeStationHealth([{ mac: REF.toLowerCase(), rssi: -50 }], REF, null, 0);
     expect(h.alive).toBe(true);
     expect(h.rssi).toBe(-50);
+  });
+});
+
+describe("computeStationsHealth — saúde POR estação (multi-antena F2)", () => {
+  const noBaselines = new Map<string, number | null>();
+
+  it("2 estações vendo a âncora → 2 entradas, saúde INDEPENDENTE por fonte (sem mistura)", () => {
+    const readings: BtReadingLike[] = [
+      { mac: REF, rssi: -50, stationId: "est-a" },
+      { mac: REF, rssi: -80, stationId: "est-b" },
+    ];
+    const out = computeStationsHealth(readings, REF, noBaselines, [], 0);
+    expect(out.map((e) => e.stationId)).toEqual(["est-a", "est-b"]); // ordem estável (alfabética)
+    expect(out[0].rssi).toBe(-50);
+    expect(out[1].rssi).toBe(-80); // o RSSI de CADA fonte, não o de quem postou por último
+    expect(out.every((e) => e.alive)).toBe(true);
+  });
+
+  it("baseline EMA é POR estação: drift numa fonte não contamina a outra", () => {
+    const baselines = new Map<string, number | null>([
+      ["est-a", -50],
+      ["est-b", -50],
+    ]);
+    const readings: BtReadingLike[] = [
+      { mac: REF, rssi: -51, stationId: "est-a", ts: 100 }, // estável
+      { mac: REF, rssi: -80, stationId: "est-b", ts: 100 }, // desviou muito
+    ];
+    const out = computeStationsHealth(readings, REF, baselines, [], 200);
+    expect(out.find((e) => e.stationId === "est-a")?.status).toBe("ok");
+    expect(out.find((e) => e.stationId === "est-b")?.status).toBe("drift");
+  });
+
+  it("CA-5: estação CONHECIDA que sumiu do snapshot vira 'down' (sem apagar as vivas)", () => {
+    const readings: BtReadingLike[] = [{ mac: REF, rssi: -55, stationId: "est-a" }];
+    const out = computeStationsHealth(readings, REF, noBaselines, ["est-b"], 0);
+    expect(out.find((e) => e.stationId === "est-a")?.status).toBe("ok");
+    expect(out.find((e) => e.stationId === "est-b")?.status).toBe("down");
+  });
+
+  it("estação viva mas SEM a âncora entre as leituras → down daquela fonte", () => {
+    const readings: BtReadingLike[] = [
+      { mac: REF, rssi: -55, stationId: "est-a" },
+      { mac: "11:22:33:44:55:66", rssi: -60, stationId: "est-b" }, // vê outra tag, não a âncora
+    ];
+    const out = computeStationsHealth(readings, REF, noBaselines, [], 0);
+    expect(out.find((e) => e.stationId === "est-b")?.status).toBe("down");
+  });
+
+  it("CA-3: 1 estação → 1 entrada, idêntica ao computeStationHealth daquela fonte", () => {
+    const readings: BtReadingLike[] = [{ mac: REF, rssi: -55, stationId: "solo", ts: 1000 }];
+    const out = computeStationsHealth(readings, REF, noBaselines, [], 2000);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({ stationId: "solo", ...computeStationHealth(readings, REF, null, 2000) });
+  });
+
+  it("leituras SEM stationId (hub antigo) agrupam na fonte implícita ''", () => {
+    const out = computeStationsHealth([{ mac: REF, rssi: -60 }], REF, noBaselines, [], 0);
+    expect(out).toHaveLength(1);
+    expect(out[0].stationId).toBe("");
+    expect(out[0].alive).toBe(true);
   });
 });
 

@@ -163,8 +163,9 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     return Math.hypot(a.x - b.x, a.y - b.y);
   }, [activeH, station, refTag]);
 
-  // Saúde da estação (heartbeat/drift/RSSI@1m) ancorada na tag fixa — hook de fusão (frente C).
-  const stationHealth = useStationHealth({
+  // Saúde POR ESTAÇÃO (heartbeat/drift/RSSI@1m) ancorada na tag fixa — hook de fusão (frente C).
+  // Multi-antena (F2): a lista tem 1 item por estação viva; com uma só, é o chip único de sempre.
+  const stationsHealth = useStationHealth({
     refMac: refTag?.mac || undefined,
     distMeters,
     enabled: mode === "calibrar" && calStep === "referencia" && !!refTag?.mac,
@@ -414,7 +415,14 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[12px] text-text-muted">Tags visíveis agora:</span>
-                <StationHealthChip health={stationHealth} />
+                {/* 1 chip por estação viva (F2); com uma só, o rótulo da fonte é omitido (CA-3). */}
+                {stationsHealth.map((s) => (
+                  <StationHealthChip
+                    key={s.stationId || "estacao"}
+                    health={s}
+                    station={stationsHealth.length > 1 ? s.stationId : undefined}
+                  />
+                ))}
               </div>
               <TagPicker
                 readings={btReadings}

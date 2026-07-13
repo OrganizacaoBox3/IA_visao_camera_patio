@@ -81,9 +81,14 @@ async function handle(req, res, ctx) {
   }
 
   // Dashboard que abre depois: snapshot do que está visível agora.
-  if (req.url === "/api/bt/readings" && req.method === "GET") {
+  // RETROCOMPAT (CA-3 da spec multi-antena): o DEFAULT colapsa por MAC (1 rec/MAC, o mais fresco)
+  // — com uma estação é indistinguível do formato de sempre, e os consumidores existentes que fazem
+  // merge por MAC (mapa de tags, fusão, TagPicker) seguem intactos com N estações. `?all=1`
+  // (ADITIVO) devolve TODAS as fontes vivas (N estações × MAC) p/ saúde por estação e UI agrupada.
+  if ((req.url || "").split("?")[0] === "/api/bt/readings" && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
-    json(res, 200, btReadings.snapshot());
+    const all = new URL(req.url, "http://x").searchParams.get("all") === "1";
+    json(res, 200, all ? btReadings.snapshot() : btReadings.snapshotLatestByMac());
     return true;
   }
 

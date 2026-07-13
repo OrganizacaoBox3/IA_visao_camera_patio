@@ -7,7 +7,8 @@
 // LGPD: só RSSI (efêmero), nada persistido.
 
 // Shape MÍNIMO de uma leitura BLE para este módulo — evita depender do BtReading completo (puro/testável).
-export type BtReadingLike = { mac: string; rssi: number; ts?: number };
+// `stationId` (ADITIVO, multi-antena F2): a FONTE que mediu — ausente = fonte única implícita (retrocompat).
+export type BtReadingLike = { mac: string; rssi: number; ts?: number; stationId?: string };
 
 export type StationHealth = {
   alive: boolean;
@@ -48,6 +49,50 @@ export function computeStationHealth(
   const driftDb = rssi - baseline;
   const status: StationHealth["status"] = Math.abs(driftDb) > DRIFT_DB ? "drift" : "ok";
   return { alive: true, rssi, baseline, driftDb, status };
+}
+
+// ── MULTI-ANTENA (spec-multi-antena-ble F2): saúde POR ESTAÇÃO ────────────────────────────────────
+// Antes, a âncora era medida contra a lista TODA — com 2 estações postando, o RSSI avaliado era o de
+// quem postou por último (mistura silenciosa de fontes). Aqui as leituras são PARTICIONADAS pela fonte
+// e a âncora é avaliada em CADA uma, com baseline EMA independente por estação.
+export type StationHealthEntry = StationHealth & { stationId: string };
+
+/**
+ * Avalia a saúde de CADA estação (fonte) a partir das leituras particionadas por stationId.
+ * @param readings       leituras vivas de TODAS as fontes (cada uma com seu stationId; ausente → "")
+ * @param refMac         MAC da tag-âncora (a mesma referência física p/ todas as estações)
+ * @param prevBaselines  baseline EMA anterior POR estação (acumulado fora, no hook)
+ * @param knownStations  estações já vistas antes (memória do chamador): estação que SUMIU do snapshot
+ *                       continua na resposta como "down" (CA-5 — a ausência do stream É o sinal)
+ * Ordem estável (alfabética por stationId) → chips não trocam de lugar entre ticks.
+ */
+export function computeStationsHealth(
+  readings: readonly BtReadingLike[],
+  refMac: string | undefined,
+  prevBaselines: ReadonlyMap<string, number | null>,
+  knownStations: Iterable<string>,
+  now: number,
+  staleMs = 15000,
+): StationHealthEntry[] {
+  const byStation = new Map<string, BtReadingLike[]>();
+  for (const r of readings) {
+    const st = r.stationId ?? "";
+    const arr = byStation.get(st);
+    if (arr) arr.push(r);
+    else byStation.set(st, [r]);
+  }
+  const ids = new Set<string>(knownStations);
+  for (const st of byStation.keys()) ids.add(st);
+  return [...ids].sort().map((stationId) => ({
+    stationId,
+    ...computeStationHealth(
+      byStation.get(stationId) ?? [],
+      refMac,
+      prevBaselines.get(stationId) ?? null,
+      now,
+      staleMs,
+    ),
+  }));
 }
 
 // Modelo log-distância: RSSI(d) = RSSI0 - 10*n*log10(d). Dada uma leitura a distância conhecida,
