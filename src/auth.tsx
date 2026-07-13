@@ -2,8 +2,9 @@
 // que devolve um token de sessão assinado + o papel do usuário. O token vai no handshake do
 // socket (auth.token); a senha nunca fica no cliente. O papel habilita áreas (ex.: superadmin).
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { Cctv } from "lucide-react";
 import { APP_CONFIG } from "./config";
-import { Button, Input, Field } from "./ui";
+import { Alert, Button, Input, Field } from "./ui";
 
 const KEY = "vp-auth";
 // Papéis (RBAC Setup × Live — Onda C item 12):
@@ -135,7 +136,12 @@ function LoginScreen({
   return (
     <div className="login-screen">
       <form className="login-card" onSubmit={submit}>
-        <div className="login-brand">▣ Visão de Pátio</div>
+        {/* h1 SEMÂNTICO (1ª tela do produto não tinha heading): visual do .login-brand
+            preservado (m-0/font-normal anulam os defaults de h1); o glifo ▣ vira o
+            Cctv do shell (Lucide único — regra 11 da doutrina). */}
+        <h1 className="login-brand m-0 flex items-center justify-center gap-2 font-normal">
+          <Cctv size={20} strokeWidth={1.75} aria-hidden /> Visão de Pátio
+        </h1>
         <p className="login-sub">Acesso restrito</p>
         <Field label="Usuário" htmlFor="login-user">
           <Input
@@ -148,7 +154,7 @@ function LoginScreen({
             onChange={(e) => setUsuario(e.target.value)}
           />
         </Field>
-        <Field label="Senha" htmlFor="login-pass" error={err ?? undefined}>
+        <Field label="Senha" htmlFor="login-pass">
           <Input
             id="login-pass"
             type="password"
@@ -158,11 +164,15 @@ function LoginScreen({
             onChange={(e) => setSenha(e.target.value)}
           />
         </Field>
+        {/* Erro de PÁGINA (credencial/servidor) = Alert inline com role="alert" (aria-live) —
+            padrão único de feedback da spec §3; não é erro de campo, então sai do Field. */}
+        {err && <Alert tone="alert">{err}</Alert>}
         <Button
           variant="primary"
           block
           type="submit"
           className="max-[640px]:min-h-[44px]"
+          aria-busy={busy}
           disabled={busy || !usuario.trim() || !senha}
         >
           {busy ? "Entrando…" : "Entrar"}

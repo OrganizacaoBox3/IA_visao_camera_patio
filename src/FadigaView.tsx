@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { RotateCcw, Smartphone } from "lucide-react";
+import { Hand, RotateCcw, Smartphone, ThumbsUp, Volume2, VolumeX, X } from "lucide-react";
 import { APP_CONFIG } from "./config";
+import { useFocusTrap } from "./camera/useFocusTrap";
 import { type FrameSource } from "./frame";
 import { drawFadigaScene } from "./fadiga/draw";
 import { type ManualSignal, type RiskState, type PhoneDetection } from "./fadiga/landmarks";
@@ -20,7 +21,17 @@ import {
 } from "./fadiga/calibration";
 import { type FadigaSamplePayload, type FadigaEvent } from "./report/store";
 import { FrameMeter } from "./telemetry";
-import { Button, IconButton, Slider, Toggle, ToggleGroup, ScrollArea, Tooltip } from "./ui";
+import {
+  Badge,
+  Button,
+  IconButton,
+  Slider,
+  Toggle,
+  ToggleGroup,
+  ScrollArea,
+  SectionTitle,
+  Tooltip,
+} from "./ui";
 
 // Modo FADIGA (casca fina): pipeline (Face/Hand/coco) + motor de risco vivem em FadigaProcessor;
 // aqui ficam só feed/overlay, painel, beep e telemetria.
@@ -36,6 +47,14 @@ const RISK_CLS: Record<RiskState, string> = {
   ALERTA_FADIGA: "OCIOSA",
   ALERTA_CELULAR: "OCIOSA",
   ALERTA_DUPLO: "ALERTA",
+};
+// Estado→tom do átomo Badge (going-gray, mapa da doutrina): ATIVA/VAZIA ficam na base
+// neutra (sem tom); cor saturada só para anormalidade — OCIOSA→warn, ALERTA→critical.
+const CLS_TONE: Record<string, "warn" | "alert" | undefined> = {
+  ATIVA: undefined,
+  VAZIA: undefined,
+  OCIOSA: "warn",
+  ALERTA: "alert",
 };
 const DETECTORS = [
   ["face", "Face"],
@@ -99,6 +118,9 @@ export function FadigaView({
   const mutedRef = useRef(false); // refs lidos no loop sem re-subscrever
   const flagsRef = useRef<FadigaFlags>({ ...FADIGA_FLAGS_ALL });
   const ackRef = useRef(false); // alerta reconhecido por gesto (silencia o episódio)
+  const fullRef = useRef<HTMLDivElement | null>(null); // raiz da casca fullscreen (foco preso)
+  const cfgOpenRef = useRef(false); // esta casca não tem Dialog Radix → o trap nunca defere
+  const onCloseRef = useRef(onClose); // estável p/ o ESC do trap (não re-arma o listener)
 
   const [ear, setEar] = useState<number | null>(null);
   const [mar, setMar] = useState<number | null>(null);
@@ -143,9 +165,17 @@ export function FadigaView({
     flagsRef.current = flags;
   }, [flags]);
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
     const e = engineRef.current;
     return () => e.dispose();
   }, []);
+
+  // Casca fullscreen NÃO vira Radix Dialog (ADR-007: Portal/scroll-lock remontaria o canvas)
+  // → ESC fecha + trap de foco MANUAIS, via o MESMO hook do CameraWorkspace (a outra casca
+  // fullscreen deste fluxo). Inativo no modo tile (fullRef só é anexado no full).
+  useFocusTrap(mode === "full", fullRef, cfgOpenRef, onCloseRef);
 
   function beep() {
     if (mode !== "full") return; // só a câmera aberta emite som
@@ -317,8 +347,17 @@ export function FadigaView({
   }
 
   // ── FULL (console do operador) ──
+  // Semântica de diálogo modal (paridade com o CameraWorkspace): role/aria-modal/aria-label
+  // + tabIndex=-1 (o trap foca a raiz quando não há focável).
   return (
-    <div className="cam fadiga-cam">
+    <div
+      className="cam fadiga-cam"
+      ref={fullRef}
+      tabIndex={-1}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Operador ${label} em tela cheia`}
+    >
       {/* a11y (A5): heading da casca fullscreen — só p/ leitores de tela. */}
       <h1 className="sr-only">Operador {label} — monitor de fadiga</h1>
       <header className="cam-head">
@@ -327,9 +366,9 @@ export function FadigaView({
           <span className="muted">operador · fadiga</span>
         </div>
         <div className="spacer" />
-        <span className={`badge ${status.cls}`}>{status.txt}</span>
+        <Badge tone={CLS_TONE[status.cls]}>{status.txt}</Badge>
         <IconButton label="Fechar" onClick={onClose}>
-          ✕
+          <X size={18} strokeWidth={1.75} aria-hidden />
         </IconButton>
       </header>
 
@@ -342,23 +381,16 @@ export function FadigaView({
         <aside className="cam-drawer">
           <ScrollArea style={{ flex: 1, minHeight: 0 }}>
             <div className="read-now">
+              {/* Badge --state-* no lugar do <b style> com aliases --ok/--idle/--alert
+                  (aposentados no G7 — a cor inline já não resolvia). Ack = confirmação
+                  pontual → tom ok, com ícone + texto (nunca só-por-ícone). */}
               <div className="obj-total">
-                Risco:{" "}
-                <b
-                  style={{
-                    color:
-                      risk === "OK"
-                        ? "var(--ok)"
-                        : risk === "ALERTA_DUPLO"
-                          ? "var(--alert)"
-                          : "var(--idle)",
-                  }}
-                >
-                  {RISK_LABEL[risk]}
-                </b>
+                Risco: <Badge tone={CLS_TONE[RISK_CLS[risk]]}>{RISK_LABEL[risk]}</Badge>
                 {ack && (
-                  <span className="flow-chip Baixo" style={{ marginLeft: 8 }}>
-                    ✋ reconhecido
+                  <span className="ml-2 inline-flex align-middle">
+                    <Badge tone="ok">
+                      <Hand size={12} strokeWidth={1.75} aria-hidden /> reconhecido
+                    </Badge>
                   </span>
                 )}
               </div>
@@ -372,7 +404,11 @@ export function FadigaView({
                 </span>
               </div>
             </div>
-            <div className="read-flow-h">Sinais</div>
+            {/* Seções internas = <h2> semântico (SectionTitle); .read-flow-h preserva o
+                padding/layout do drawer (a tipografia label 11 uppercase é a mesma). */}
+            <SectionTitle flush className="read-flow-h">
+              Sinais
+            </SectionTitle>
             <div className="fadiga-signals">
               <div className="fs-row">
                 <span>Celular</span>
@@ -397,7 +433,9 @@ export function FadigaView({
                 </span>
               </div>
             </div>
-            <div className="read-flow-h">Ocorrências</div>
+            <SectionTitle flush className="read-flow-h">
+              Ocorrências
+            </SectionTitle>
             <div className="fadiga-signals">
               <div className="fs-row">
                 <span>Fadiga</span>
@@ -417,7 +455,9 @@ export function FadigaView({
               </div>
             </div>
 
-            <div className="read-flow-h">Controles</div>
+            <SectionTitle flush className="read-flow-h">
+              Controles
+            </SectionTitle>
             <div className="fadiga-controls">
               <Tooltip content="Liga/desliga o alarme sonoro">
                 <Toggle
@@ -425,7 +465,12 @@ export function FadigaView({
                   onPressedChange={setMuted}
                   aria-label="Liga/desliga o alarme sonoro"
                 >
-                  {muted ? "🔇 Som off" : "🔊 Som on"}
+                  {muted ? (
+                    <VolumeX size={16} strokeWidth={1.75} aria-hidden />
+                  ) : (
+                    <Volume2 size={16} strokeWidth={1.75} aria-hidden />
+                  )}
+                  {muted ? "Som off" : "Som on"}
                 </Toggle>
               </Tooltip>
               <div className="cfg-classes">
@@ -449,11 +494,19 @@ export function FadigaView({
                 />
               </div>
               <p className="fadiga-hint">
-                👍 durante um alerta silencia o episódio até voltar a OK.
+                <ThumbsUp
+                  size={14}
+                  strokeWidth={1.75}
+                  aria-hidden
+                  className="inline-block align-text-bottom"
+                />{" "}
+                Um joinha durante um alerta silencia o episódio até voltar a OK.
               </p>
             </div>
 
-            <div className="read-flow-h">Calibração</div>
+            <SectionTitle flush className="read-flow-h">
+              Calibração
+            </SectionTitle>
             <div className="fadiga-calib">
               {FADIGA_THRESHOLD_FIELDS.map((fld) => (
                 <Tooltip key={fld.key} content={fld.hint}>
@@ -481,7 +534,7 @@ export function FadigaView({
 
       <div className="cam-kpibar">
         <span className="kb">
-          ⦿ risco <b>{RISK_LABEL[risk]}</b>
+          risco <b>{RISK_LABEL[risk]}</b>
         </span>
         <span className="kb">
           EAR <b>{ear == null ? "--" : ear.toFixed(2)}</b>
@@ -493,10 +546,20 @@ export function FadigaView({
           <Smartphone size={16} strokeWidth={1.75} role="img" aria-label="Celular" />{" "}
           <b>{phone ? "sim" : "não"}</b>
         </span>
+        {/* going-gray/a11y: estado NUNCA só-por-ícone — ícone Lucide + texto (antes 🔇/🔊/✋). */}
         <span className="kb">
-          {muted ? "🔇" : "🔊"}
-          {ack ? " ✋" : ""}
+          {muted ? (
+            <VolumeX size={16} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Volume2 size={16} strokeWidth={1.75} aria-hidden />
+          )}{" "}
+          <b>{muted ? "som off" : "som on"}</b>
         </span>
+        {ack && (
+          <span className="kb">
+            <Hand size={16} strokeWidth={1.75} aria-hidden /> <b>reconhecido</b>
+          </span>
+        )}
         <span className="kb muted">
           FPS {fps} · face {faceLat}ms · mãos {handLat}ms · cel {objLat}ms
         </span>

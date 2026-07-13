@@ -7,7 +7,7 @@ import { CameraWorkspace } from "../CameraWorkspace";
 import { FadigaView } from "../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { useAuth } from "../auth";
-import { Button, IconButton, Tooltip, Badge, useToast } from "../ui";
+import { Button, EmptyState, IconButton, PageHeader, Tooltip, Badge, useToast } from "../ui";
 import { type Camera } from "./dashboard/types";
 import { alertMetaFromText, type AlertEmitMeta } from "../types/alarm";
 import { CameraTile } from "./dashboard/CameraTile";
@@ -25,7 +25,7 @@ function colsFor(n: number): number {
   return n <= 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
 }
 
-// ── Central de câmeras: ORQUESTRAÇÃO ──────────────────────────────────────────────────────────
+// ── Central (dashboard de câmeras): ORQUESTRAÇÃO ──────────────────────────────────────────────
 // Hooks por domínio: relé de frames (useFrameRelay), socket (useDashboardSocket), transporte de
 // vídeo (useVideoTransport) e alarmes (useAlarms). Aqui ficam só a cola entre as frentes, a
 // paginação/feeds ativos e o JSX. A grade mostra SEMPRE todas as câmeras conectadas, paginadas
@@ -175,9 +175,11 @@ export function DashboardPage() {
 
   return (
     <div className="page">
-      <header className="page-head">
-        <h1 className="page-title">Central de câmeras</h1>
-        <div className="spacer" />
+      {/* PageHeader na forma ENXUTA (só title) — "menos cromo na Central" é decisão registrada.
+          Terminologia canônica: "Central" (= nav e 404). O marcador .page-head é LOAD-BEARING:
+          o fix #2 (.page:has(.cam-overlay) > .page-head) esconde o header com câmera aberta e
+          os alvos ≥44px do mobile (index.css) selecionam por ele. */}
+      <PageHeader title="Central" className="page-head">
         {/* Ação ÚNICA de câmeras: leva à tela /cameras, que adiciona/gerencia tanto câmera IP
             (superadmin) quanto o nó local (webcam) — visível a todos. */}
         <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
@@ -191,7 +193,7 @@ export function DashboardPage() {
             do .switch (index.css não-layered), por isso sem a classe. */}
         {pageCount > 1 && (
           <span
-            className="inline-flex items-center gap-1 text-[12px] text-text-dim"
+            className="inline-flex items-center gap-1 text-sec text-text-dim"
             aria-label="Paginação de feeds"
           >
             <IconButton
@@ -240,24 +242,28 @@ export function DashboardPage() {
             <Badge tone="alert">hub desconectado</Badge>
           </span>
         )}
-      </header>
+      </PageHeader>
 
       <div className="dash-body">
         {cameras.length === 0 ? (
-          <div className="dash-empty">
-            <p>
-              <b>Nenhuma câmera conectada.</b>
-            </p>
-            <p>
-              Adicione uma câmera IP/RTSP ou abra um nó de câmera (webcam) pela tela de câmeras.
-            </p>
-            <Button asChild variant="primary">
-              <Link to="/cameras">Adicionar câmera</Link>
-            </Button>
-            <p className="muted mt-3">
-              Hub: <code>{APP_CONFIG.net.serverUrl}</code> ·{" "}
-              {connected ? "conectado" : "desconectado"}
-            </p>
+          /* EmptyState da casa (fórmula status+causa+ação); o wrapper centra na altura toda
+             do .dash-body (papel do antigo .dash-empty, aposentado aqui). */
+          <div className="grid h-full place-items-center">
+            <EmptyState>
+              <p className="m-0">
+                <b>Nenhuma câmera conectada.</b>
+              </p>
+              <p className="m-0">
+                Adicione uma câmera IP/RTSP ou abra um nó de câmera (webcam) pela tela de câmeras.
+              </p>
+              <Button asChild variant="primary">
+                <Link to="/cameras">Adicionar câmera</Link>
+              </Button>
+              <p className="muted m-0 mt-3">
+                Hub: <code>{APP_CONFIG.net.serverUrl}</code> ·{" "}
+                {connected ? "conectado" : "desconectado"}
+              </p>
+            </EmptyState>
           </div>
         ) : (
           <div className="dash-grid" data-cols={colsFor(pageCameras.length)}>

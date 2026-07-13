@@ -83,10 +83,10 @@ test("axe: tela de login", async ({ page }) => {
   await checkA11y(page, "login");
 });
 
-test("axe: /monitoramento (Central de câmeras)", async ({ page }) => {
+test("axe: /monitoramento (Central)", async ({ page }) => {
   await login(page);
   await page.goto("/monitoramento");
-  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
   await checkA11y(page, "monitoramento");
 });
 

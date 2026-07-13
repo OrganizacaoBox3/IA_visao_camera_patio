@@ -95,7 +95,7 @@ type NavItem = {
   mobileHide?: boolean;
 };
 type NavGroup = { id: string; title: string; items: NavItem[] };
-// Resultado da busca: item de menu ou câmera. Câmera navega p/ o Monitoramento
+// Resultado da busca: item de menu ou câmera. Câmera navega p/ a Central
 // ("/monitoramento") — não há deep-link de câmera aberta hoje; quando houver, troque o `to` aqui.
 type SearchHit = { id: string; label: string; hint: string; icon: LucideIcon; to: string };
 
@@ -139,7 +139,7 @@ export function AppShell() {
   const [activeIdx, setActiveIdx] = useState(0);
   // Câmeras na busca — DUAS fontes, deduplicadas por id:
   //   • CONECTADAS (GET /api/cameras/connected, QUALQUER autenticado): as mesmas câmeras da
-  //     grade do Monitoramento, inclusive nós locais/webcam — sem url, só id/label/online.
+  //     grade da Central, inclusive nós locais/webcam — sem url, só id/label/online.
   //   • CADASTRADAS (GET /api/cameras, superadmin-only): registro IP/RTSP, inclui as offline
   //     que ainda nem conectaram.
   // Carga lazy no primeiro foco; falha transitória libera nova tentativa no próximo foco.
@@ -232,8 +232,10 @@ export function AppShell() {
       items: [
         // HOME: o Mapa (estilo AirTag) é a tela principal — última localização de cada tag.
         { to: "/", end: true, icon: MapPin, label: "Mapa" },
-        // Monitoramento (câmeras ao vivo): o antigo dashboard "Central" agora tem lar próprio.
-        { to: "/monitoramento", icon: LayoutDashboard, label: "Monitoramento", short: "Monitor" },
+        // Central (câmeras ao vivo): terminologia CANÔNICA única — nav, título do dashboard
+        // e o 404 dizem "Central" (a rota segue /monitoramento). Rótulo curto já cabe no
+        // bottom-nav, então dispensa `short`.
+        { to: "/monitoramento", icon: LayoutDashboard, label: "Central" },
         // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
         // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
         { to: "/cameras", icon: Video, label: "Câmeras" },

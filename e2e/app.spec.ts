@@ -6,11 +6,11 @@ async function login(page: Page) {
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
-  // Home agora é o Mapa (estilo AirTag). Confirma o login e segue p/ o Monitoramento
-  // (dashboard de câmeras), onde os testes de câmera operam.
+  // Home agora é o Mapa (estilo AirTag). Confirma o login e segue p/ a Central
+  // (dashboard de câmeras, rota /monitoramento), onde os testes de câmera operam.
   await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible();
   await page.goto("/monitoramento");
-  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 }
 
 // Abre um nó de câmera (webcam fake) e espera ele aparecer no dashboard.
@@ -201,7 +201,7 @@ test("ESC com o Dialog de config de zona aberto fecha SÓ o Dialog; 2º ESC fech
   // 2º ESC: agora sim fecha a câmera (volta à Central)
   await page.keyboard.press("Escape");
   await expect(page.locator(".cam")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 });
 
 // Tela de câmeras (/cameras) — fluxo NOVO que unifica "+ Nó de câmera" e "+ Câmera IP" numa ação
@@ -243,8 +243,8 @@ test("Câmeras: botão único leva a /cameras e a validação de url bloqueia ur
 
   // A tela também é alcançável pelo item "Câmeras" do menu lateral.
   await page.keyboard.press("Escape"); // fecha o dialog
-  await page.getByRole("link", { name: "Monitoramento" }).click();
-  await expect(page.getByRole("heading", { name: /Central de câmeras/i })).toBeVisible();
+  await page.getByRole("link", { name: "Central" }).click();
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "Câmeras" }).click();
   await expect(page).toHaveURL(/\/cameras/);
 });
