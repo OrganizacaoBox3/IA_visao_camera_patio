@@ -207,9 +207,19 @@ test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunc
   await page.locator(".tile[title='Abrir câmera']").first().click();
   await expect(page.locator(".cam-stage")).toBeVisible();
 
-  const tablist = page.getByRole("tablist", { name: "Aba do painel" });
-  await tablist.getByRole("tab", { name: "Por quê" }).click();
-  const panel = page.getByRole("tabpanel");
+  // F2 (spec-tela-camera-arquitetura §3-B): Pessoas · Por quê · Timeline viraram SUB-ABAS de um
+  // painel de OBSERVAÇÃO único. O nível de cima ("Aba do painel") é Observação × Camadas; "Por quê"
+  // agora mora na sub-tablist "Seção de observação". A câmera abre em Observação (default Pessoas),
+  // então a sub-tablist já está visível.
+  const painel = page.getByRole("tablist", { name: "Aba do painel" });
+  await expect(painel.getByRole("tab", { name: "Observação" })).toBeVisible();
+  // Controle negativo da fusão: as folhas de observação DEIXARAM o nível de cima (viraram sub-abas)
+  // — o topo é só Observação × Camadas. Sem isto, o teste passaria mesmo se a hierarquia não mudasse.
+  await expect(painel.getByRole("tab")).toHaveCount(2);
+  await expect(painel.getByRole("tab", { name: /Pessoas|Por quê|Timeline/ })).toHaveCount(0);
+  const obs = page.getByRole("tablist", { name: "Seção de observação" });
+  await obs.getByRole("tab", { name: "Por quê" }).click();
+  const panel = page.getByRole("tabpanel", { name: "Por quê" });
   await expect(panel.getByRole("heading", { name: "Por que não identificou?" })).toBeVisible();
   // O contrato com o operador: a tela NUNCA fica muda — ou explica a cadeia, ou explica por que
   // nem há cadeia (sem leituras BLE nesta câmera / sem pistas do motor do hub).
