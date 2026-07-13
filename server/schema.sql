@@ -5,15 +5,24 @@
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ── HISTÓRICO: ATIVIDADE (ocupação/ociosidade/fluxo por área) ────────────────
+-- CARIMBO DE TURNO (spec-turnos-por-zona F3 — colunas ADITIVAS, ver §"CARIMBO" no fim):
+-- `shift_id` tem TRÊS estados e o SQL só tem dois (valor/NULL) — por isso o SENTINELA:
+--   'sh…' = dentro do turno · ''  = resolvido e FORA de turno (D7) · NULL = linha SEM carimbo
+--   (dado antigo, ou zona/site sem turnos cadastrados = 24/7, comportamento de sempre).
+-- O bucket ganha a dimensão de turno na CHAVE: turno com minutos (06:30) corta a hora ao meio,
+-- então id = `${cameraId}|${zoneId}|${hourStart}|${turno}` — SÓ quando há carimbo. Sem carimbo o
+-- id segue com 3 segmentos (a linha de hoje continua a MESMA — zero migração de dado; CA-5).
 create table if not exists ativ_buckets (
-  id text primary key,            -- `${cameraId}|${zoneId}|${hourStart}`
+  id text primary key,            -- `${cameraId}|${zoneId}|${hourStart}` [|`${turno}` quando carimbado]
   camera_id text, area text, atividade text, hour_start bigint not null,
   idle_ms bigint default 0, alerts int default 0,
-  samples int default 0, active_samples int default 0, people_peak int default 0
+  samples int default 0, active_samples int default 0, people_peak int default 0,
+  shift_id text, shift text, in_pause boolean, business_date text
 );
 create table if not exists ativ_events (
   id bigserial primary key, ts bigint not null,
-  camera_id text, camera text, area text, atividade text, duration_min int, shift text
+  camera_id text, camera text, area text, atividade text, duration_min int, shift text,
+  shift_id text, in_pause boolean, business_date text
 );
 
 -- ── HISTÓRICO: LEITURA (código de barras / expedição) ────────────────────────
@@ -49,7 +58,8 @@ create table if not exists flow_buckets (
 );
 create table if not exists flow_events (
   id bigserial primary key, ts bigint not null,
-  camera_id text, camera_label text, tripwire_id text, dir text, shift text
+  camera_id text, camera_label text, tripwire_id text, dir text, shift text,
+  shift_id text, in_pause boolean, business_date text
 );
 
 -- ── HISTÓRICO: FADIGA (operador — tempo em cada estado de risco) ─────────────
@@ -203,3 +213,21 @@ create index if not exists idx_obj_buckets_hour  on obj_buckets  (hour_start);
 create index if not exists idx_fad_buckets_hour  on fad_buckets  (hour_start);
 create index if not exists idx_flow_buckets_hour on flow_buckets (hour_start);
 create index if not exists idx_alarm_events_ts on alarm_events (ts desc);
+
+-- ── CARIMBO DE TURNO: migração ADITIVA em banco JÁ CRIADO ────────────────────
+-- `create table if not exists` NÃO adiciona coluna nova a uma tabela existente — um hub que já
+-- rodou antes da spec-turnos-por-zona nunca veria as colunas do carimbo (o insert quebraria).
+-- `add column if not exists` é idempotente e ADITIVO: coluna NOVA e NULA (nenhuma coluna
+-- existente é alterada/renomeada/retipada, nenhum dado é reescrito). Linha antiga fica com
+-- shift_id NULL = "sem carimbo" — que NÃO é "fora de turno" (ausência de INFORMAÇÃO, não de
+-- turno): o relatório a lê pelo legado em vez de inventar ociosidade fora de turno.
+alter table ativ_buckets add column if not exists shift_id text;
+alter table ativ_buckets add column if not exists shift text;
+alter table ativ_buckets add column if not exists in_pause boolean;
+alter table ativ_buckets add column if not exists business_date text;
+alter table ativ_events  add column if not exists shift_id text;
+alter table ativ_events  add column if not exists in_pause boolean;
+alter table ativ_events  add column if not exists business_date text;
+alter table flow_events  add column if not exists shift_id text;
+alter table flow_events  add column if not exists in_pause boolean;
+alter table flow_events  add column if not exists business_date text;

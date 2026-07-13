@@ -6,11 +6,16 @@
 // dets sintéticos, sem worker/IPC (pipeline.test.js).
 //
 // CONTRATO com o relatório (INTOCÁVEL — mesmos shapes de src/report/store.ts):
-//   ingest("flow","cross", { cameraId, cameraLabel, tripwireId, dir, ts, shift })
+//   ingest("flow","cross", { cameraId, cameraLabel, tripwireId, dir, ts })
 //   ingest("ativ","samples", { cameraId, samples:[{ zoneId, label, atividade,
 //     idleMs:0, frames, activeFrames, people }] })
 //   people = PICO de pessoas na janela (→ people_peak); activeFrames = rodadas
 //   com ≥1 pessoa (→ activePct); idleMs fica 0 (ociosidade por MOTION é do front).
+//
+// TURNO: o pipeline NÃO carimba turno (e não tem mais o `shiftOf` hardcoded 06/14/22 que era
+// cópia manual do front — spec-turnos-por-zona F5). Quem carimba é o INGEST (server/pgstore.js),
+// o choke point de TODOS os produtores, resolvendo pela fonte única (server/shift-clock.js) sobre
+// o CADASTRO (server/shifts.js). O pipeline só entrega o `ts` — o motor mede, não interpreta.
 //
 // CONTRATO com o front (socket `analysis-tracks`, ADITIVO): o payload é montado
 // AQUI (projeção explícita — campos internos do tracker NÃO vazam: firstSeen,
@@ -32,10 +37,6 @@ const { attributeZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
 const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
-
-// Turno da fábrica. DUPLICAÇÃO DECLARADA de src/report/calc/common.ts:8 (front):
-// mudou o turno lá, mude AQUI — senão a contagem "flow" diverge do relatório.
-const shiftOf = (hour) => (hour >= 6 && hour < 14 ? "Manhã" : hour >= 14 && hour < 22 ? "Tarde" : "Noite");
 
 /**
  * @param {object} deps
@@ -118,13 +119,13 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
       const cameraLabel = cameraLabelOf(st.id);
       const ts = Date.now();
       for (const ev of crossings) {
+        // Sem `shift`: o carimbo (turno resolvido + businessDate) é do ingest — ver cabeçalho.
         ingest("flow", "cross", {
           cameraId: st.id,
           cameraLabel,
           tripwireId: ev.tripwireId,
           dir: ev.dir,
           ts,
-          shift: shiftOf(new Date(ts).getHours()),
         }).catch((e) => console.error("[analysis] ingest flow falhou:", e.message));
       }
     }
@@ -256,4 +257,4 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
   return { processRound, flushWindows, emitCoasting };
 }
 
-module.exports = { createPipeline, shiftOf };
+module.exports = { createPipeline };

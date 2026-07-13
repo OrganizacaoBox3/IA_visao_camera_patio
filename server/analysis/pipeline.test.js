@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { createPipeline, shiftOf } = require("./pipeline");
+const { createPipeline } = require("./pipeline");
+const pipelineModule = require("./pipeline");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { createAutoMask, amCell } = require("./automask");
@@ -333,13 +334,14 @@ describe("processRound — contagem de linha → ingest flow (contrato do relat�
     const [kind, sub, payload] = deps.ingest.mock.calls[0];
     expect(kind).toBe("flow");
     expect(sub).toBe("cross");
+    // SEM `shift`: quem carimba turno é o ingest (pgstore), pela resolução única do shift-clock
+    // sobre o cadastro — o motor entrega só o `ts` (F5: o shiftOf hardcoded morreu aqui).
     expect(payload).toEqual({
       cameraId: "cam1",
       cameraLabel: "Câmera 1", // veio do cameraLabelOf injetado
       tripwireId: "w1",
       dir: "in",
       ts: expect.any(Number),
-      shift: shiftOf(new Date(payload.ts).getHours()),
     });
   });
 
@@ -432,13 +434,12 @@ describe("flushWindows — ingest 'ativ'/'samples' (contrato do relatório)", ()
   });
 });
 
-describe("shiftOf — turno da fábrica (duplicação declarada com src/report/calc/common.ts)", () => {
-  it("6-13 Manhã · 14-21 Tarde · 22-5 Noite", () => {
-    expect(shiftOf(6)).toBe("Manhã");
-    expect(shiftOf(13)).toBe("Manhã");
-    expect(shiftOf(14)).toBe("Tarde");
-    expect(shiftOf(21)).toBe("Tarde");
-    expect(shiftOf(22)).toBe("Noite");
-    expect(shiftOf(5)).toBe("Noite");
+// F5 da spec-turnos-por-zona: o `shiftOf` hardcoded (06/14/22, cópia manual do front) MORREU do
+// motor. Este teste é o GATE que impede a ressurreição: se alguém reintroduzir a regra de turno
+// aqui, o pipeline volta a ser uma 2ª fonte de verdade e a contagem "flow" diverge do relatório.
+describe("turno — o motor NÃO resolve turno (fonte única: shift-clock, carimbo no ingest)", () => {
+  it("o módulo não exporta mais shiftOf (a regra de turno saiu do motor)", () => {
+    expect(pipelineModule.shiftOf).toBeUndefined();
+    expect(Object.keys(pipelineModule)).toEqual(["createPipeline"]);
   });
 });

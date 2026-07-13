@@ -61,6 +61,39 @@ export function alertMetaFromText(
   return zona ? { cameraId: cam.id, zona } : { cameraId: cam.id };
 }
 
+// ── SUPRIMIDOS PELA JANELA DE TURNO (spec-turnos-por-zona §4.1 — gate em server/alarm/shift.js) ──
+// Campos ADITIVOS de `GET /api/alarms/metrics`, expostos pelo alarmPolicy.metrics(). Existem por
+// DOUTRINA: supressão silenciosa é como se perde a confiança num sistema de alarme — quem cala,
+// MOSTRA que calou (e por quê). Going-gray: isto é informação NORMAL (o gate funcionando), não
+// anormalidade — renderiza em neutro, nunca em cor de alerta.
+//
+// NOTA DE PROPRIEDADE: o tipo `AlarmMetrics` mora em `src/api.ts` (o cliente da rota). Esta frente
+// não é dona daquele arquivo, então os campos novos entram COMPONDO (`AlarmMetrics &
+// AlarmShiftSuppression`) em vez de duplicar a definição. Opcionais de propósito: hub anterior a
+// esta onda não os manda — a UI degrada para "sem dados" em vez de mostrar 0 mentiroso.
+export type AlarmShiftSuppression = {
+  /** total de alarmes suprimidos pela janela desde o boot do hub (contador volátil). */
+  suppressedByShift?: number;
+  /** suprimidos na última hora (janela rolante — a leitura "está calando AGORA?"). */
+  suppressedByShiftLastHour?: number;
+  /** quebra por MOTIVO na última hora — a chave é o motivo do gate (ver rótulos abaixo). */
+  suppressedByShiftReasons?: Record<string, number>;
+};
+
+/** Motivos que o gate de turno reporta (server/alarm/shift.js). Chave desconhecida (motivo novo no
+ *  back, front antigo) renderiza a própria chave — nunca some da tela. */
+export const SHIFT_SUPPRESSION_REASON_LABEL: Record<string, string> = {
+  "fora-do-turno": "Fora do turno",
+  "em-pausa": "Em pausa",
+  "presenca-fora-do-turno": "Zona proibida · fora do turno",
+  "presenca-dentro-do-turno": "Zona proibida · dentro do turno",
+};
+
+/** Rótulo pt-BR do motivo do gate (fallback = a própria chave do back). */
+export function shiftSuppressionReasonLabel(reason: string): string {
+  return SHIFT_SUPPRESSION_REASON_LABEL[reason] ?? reason;
+}
+
 // ── Apresentação do vocabulário de alarme (fonte única — rótulos pt-BR + tokens de cor) ──
 // Antes replicado em AlarmesPanel, AlarmDrawer e report/csv (com RGB cru no heatmap).
 // Going-gray: advisory=info (azul, não-alarme), high=warn (amarelo), critical=critical (vermelho).

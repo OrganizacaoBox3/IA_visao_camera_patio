@@ -12,9 +12,112 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const db = require("./db");
+// CARIMBO DE TURNO (bloco abaixo): o ingest é o CHOKE POINT de TODOS os produtores de histórico
+// (motor do hub, navegador, futuros) — é aqui, e em nenhum outro lugar, que a linha ganha turno.
+const camcfg = require("./camcfg");
+const shiftsStore = require("./shifts");
+const { resolveShift, siteTz } = require("./shift-clock");
 
 const HOUR = 3_600_000;
 const hourOf = (ts) => Math.floor(ts / HOUR) * HOUR;
+
+// ── CARIMBO DE TURNO no INGEST (spec-turnos-por-zona F3/F5) ──────────────────
+// O `shiftOf` hardcoded (06/14/22, "Manhã/Tarde/Noite") que vivia no motor MORREU: a fonte é o
+// CADASTRO (server/shifts.js) e a resolução é a ÚNICA (server/shift-clock.js — overnight, borda,
+// pausa e SITE_TZ moram lá). Aqui só se ESCOLHE o cadastro relevante e se GRAVA o veredito.
+//
+// TRÊS estados (e o SQL só tem dois: valor/NULL) — daí o SENTINELA `OUT` (string vazia):
+//   shiftId "sh…" → DENTRO de um turno cadastrado (+ nome em `shift`, businessDate, inPause)
+//   shiftId ''    → resolvido e FORA de turno (D7: fora do turno não é ociosidade)
+//   SEM carimbo   → nenhum turno ATIVO aplicável (zona sem shiftIds, cadastro vazio, ids órfãos):
+//                   NADA é gravado e a linha se comporta EXATAMENTE como hoje (CA-5). O relatório
+//                   a decodifica pelo legado (o 06/14/22 sobrevive só lá, como retrocompat de
+//                   LEITURA — src/report/calc/common.ts). "Sem carimbo" ≠ "fora do turno": um é
+//                   ausência de INFORMAÇÃO, o outro é informação. Colapsar os dois inventaria
+//                   "atividade fora de turno" em cima de todo o histórico legado.
+//
+// DUPLA ESCRITA (aditivo, retrocompat): o campo legado `shift` continua sendo gravado — agora com
+// o NOME do turno resolvido — e os campos novos (shiftId/businessDate/inPause) entram ao lado.
+const OUT = ""; // sentinela de FORA DE TURNO na coluna shift_id (NULL = sem carimbo)
+const OUT_LABEL = "Fora de turno";
+
+// Fontes REAIS (produção). Injetáveis só no teste (_setStampSources) — mesmo padrão de deps do
+// alarm/shift.js: em produção usam-se os defaults.
+let sources = {
+  getZones: (cameraId) => camcfg.getZones(cameraId),
+  allShifts: () => shiftsStore.all(),
+  tz: () => siteTz(),
+};
+
+/**
+ * O carimbo de um instante contra um conjunto de turnos. PURO.
+ * @returns {null | {shiftId:string, shift:string|null, businessDate:string|null, inPause:boolean}}
+ *          null = SEM carimbo (nenhum turno ativo aplicável → comportamento de hoje).
+ */
+function shiftStampOf(ts, shifts, tz) {
+  // Turno INATIVO não vale como grade: uma zona cujos turnos foram todos desativados volta a ser
+  // 24/7 (sem carimbo) — nunca "tudo fora do turno" (fail-open, como o gate de alarme).
+  const ativos = (Array.isArray(shifts) ? shifts : []).filter((s) => s && s.ativo !== false);
+  if (!ativos.length) return null;
+  const r = resolveShift(ts, ativos, tz);
+  if (!r) return { shiftId: OUT, shift: OUT_LABEL, businessDate: null, inPause: false };
+  const s = ativos.find((x) => x.id === r.shiftId);
+  return {
+    shiftId: r.shiftId,
+    shift: (s && s.nome) || r.shiftId,
+    businessDate: r.businessDate,
+    inPause: r.inPause === true,
+  };
+}
+
+// Carimbo de uma ZONA (atividade): os turnos são os ATRIBUÍDOS a ela (Zone.shiftIds — F2).
+// Zona sem turnos = 24/7 = comportamento atual. Id DANGLING (turno excluído do cadastro) é
+// ignorado — some do subconjunto e, se sobrar vazio, a zona volta a 24/7 (fail-open).
+function stampForZone(cameraId, zoneId, ts) {
+  const zone = (sources.getZones(cameraId) || []).find((z) => z && z.id === zoneId);
+  const ids = zone && Array.isArray(zone.shiftIds) ? zone.shiftIds : [];
+  if (!ids.length) return null;
+  const set = new Set(ids);
+  return shiftStampOf(ts, (sources.allShifts() || []).filter((s) => s && set.has(s.id)), sources.tz());
+}
+
+// Carimbo de uma LINHA de contagem (flow/tripwire): a linha NÃO tem zona (spec §8), então a
+// referência é a grade GLOBAL do cadastro — a decisão que faltava na pendência "como atribuir
+// turno a um tripwire". Sem cadastro, nada é carimbado (o de hoje).
+function stampGlobal(ts) {
+  return shiftStampOf(ts, sources.allShifts() || [], sources.tz());
+}
+
+/** Chave do bucket de atividade. SEM carimbo → id LEGADO de 3 segmentos (a MESMA linha de hoje).
+ *  Com carimbo, o turno entra na chave (a hora sozinha é grosseira demais: um turno que começa
+ *  06:30 corta o bucket das 06h ao meio — e a pausa, idem). `~p` = trecho em PAUSA (D3). */
+function ativBucketId(cameraId, zoneId, hourStart, stamp) {
+  const base = `${cameraId}|${zoneId}|${hourStart}`;
+  if (!stamp) return base;
+  const turno = stamp.shiftId === OUT ? "fora" : stamp.shiftId;
+  return `${base}|${turno}${stamp.inPause ? "~p" : ""}`;
+}
+
+/** Leitura: decodifica o sentinela para o contrato do front (src/report/calc/common.ts):
+ *  string = dentro · null = FORA · campo AUSENTE = sem carimbo. Devolve CÓPIA (as linhas do
+ *  fallback JSON são o estado vivo em memória — mutá-las corromperia o store). */
+function decodeStamp(row) {
+  const r = { ...row };
+  if (r.shiftId === OUT) {
+    r.shiftId = null; // resolvido e fora de turno (D7)
+    r.inPause = false;
+  } else if (r.shiftId === null || r.shiftId === undefined) {
+    delete r.shiftId; // sem carimbo: o campo tem que sair AUSENTE, nunca null
+    delete r.inPause;
+    delete r.businessDate;
+  }
+  return r;
+}
+
+// Injeção das fontes do carimbo — SÓ p/ teste (isola do camcfg/shifts reais, que fazem I/O).
+function _setStampSources(s) {
+  sources = { ...sources, ...s };
+}
 
 // ── FALLBACK JSON: estado + persistência ─────────────────────────────────────
 // DATA_HIST_PATH: override do arquivo do fallback (default = server/data-hist.json). Ops pode
@@ -157,11 +260,27 @@ process.once("SIGINT", () => process.exit(0));
 process.once("SIGTERM", () => process.exit(0));
 
 // ── FALLBACK JSON: agregação por bucket (mesma semântica dos UPSERTs SQL) ────
+// Campos do carimbo gravados na linha (bucket/evento). SEM carimbo → nada é gravado: a linha
+// nasce igual à de hoje (e o decodeStamp da leitura a devolve como "sem carimbo").
+const stampFields = (stamp) =>
+  stamp
+    ? {
+        shiftId: stamp.shiftId,
+        shift: stamp.shift,
+        inPause: stamp.inPause,
+        businessDate: stamp.businessDate,
+      }
+    : {};
+
 const J_INGEST = {
   "ativ:samples"(p) {
-    const hs = hourOf(Date.now());
+    const now = Date.now();
+    const hs = hourOf(now);
     for (const sm of p.samples || []) {
-      const id = `${p.cameraId}|${sm.zoneId}|${hs}`;
+      // Turno resolvido POR SAMPLE (a janela do ingest é de ~3s — ANALYSIS_AGG_MS), nunca por
+      // hora: é o que dá precisão de segundos na borda do turno e dentro da pausa.
+      const stamp = stampForZone(p.cameraId, sm.zoneId, now);
+      const id = ativBucketId(p.cameraId, sm.zoneId, hs, stamp);
       let b = mem.buckets.ativ[id];
       if (!b)
         b = mem.buckets.ativ[id] = {
@@ -175,6 +294,7 @@ const J_INGEST = {
           samples: 0,
           activeSamples: 0,
           peoplePeak: 0,
+          ...stampFields(stamp), // o turno faz parte da CHAVE → constante dentro do bucket
         };
       b.idleMs += Number(sm.idleMs) || 0;
       b.samples += Number(sm.frames) || 0;
@@ -185,6 +305,9 @@ const J_INGEST = {
     }
   },
   "ativ:alert"(a) {
+    // O alerta é carimbado com o SEU ts (não com o "agora" da gravação) e com os turnos da SUA
+    // zona — o mesmo carimbo dos samples ⇒ o alerta cai no MESMO bucket (a chave bate).
+    const stamp = stampForZone(a.cameraId, a.zoneId, a.ts);
     mem.events.ativ.push({
       ts: a.ts,
       camera: a.cameraLabel ?? null,
@@ -192,10 +315,13 @@ const J_INGEST = {
       area: a.area ?? null,
       atividade: a.atividade ?? null,
       durationMin: a.durationMin ?? null,
+      // dupla escrita: o rótulo legado agora é o NOME do turno resolvido (stampFields sobrescreve
+      // `shift`); SEM carimbo, preserva o que o produtor mandou (hint de retrocompat do cliente).
       shift: a.shift ?? null,
+      ...stampFields(stamp),
     });
     const hs = hourOf(a.ts);
-    const id = `${a.cameraId}|${a.zoneId}|${hs}`;
+    const id = ativBucketId(a.cameraId, a.zoneId, hs, stamp);
     const b = mem.buckets.ativ[id];
     if (b) b.alerts += 1; // como o SQL: on conflict só incrementa alerts
     else
@@ -210,6 +336,7 @@ const J_INGEST = {
         samples: 0,
         activeSamples: 0,
         peoplePeak: 0,
+        ...stampFields(stamp),
       };
   },
   "read:read"(r) {
@@ -349,7 +476,8 @@ const J_INGEST = {
       cameraLabel: c.cameraLabel ?? null,
       tripwireId: c.tripwireId ?? null,
       dir: c.dir ?? null,
-      shift: c.shift ?? null,
+      shift: c.shift ?? null, // sobrescrito pelo NOME do turno quando há carimbo (stampFields)
+      ...stampFields(stampGlobal(c.ts)),
     });
   },
 };
@@ -382,11 +510,14 @@ async function ingest(kind, op, p) {
 
 const INGEST = {
   "ativ:samples": async (p) => {
-    const hs = hourOf(Date.now());
+    const now = Date.now();
+    const hs = hourOf(now);
     for (const sm of p.samples || []) {
+      // Turno POR SAMPLE (janela de ~3s), nunca por hora — e entra na CHAVE do bucket.
+      const stamp = stampForZone(p.cameraId, sm.zoneId, now);
       await db.query(
-        `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,idle_ms,samples,active_samples,people_peak)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,idle_ms,samples,active_samples,people_peak,shift_id,shift,in_pause,business_date)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          on conflict (id) do update set
            idle_ms=ativ_buckets.idle_ms+excluded.idle_ms,
            samples=ativ_buckets.samples+excluded.samples,
@@ -394,7 +525,7 @@ const INGEST = {
            people_peak=greatest(ativ_buckets.people_peak,excluded.people_peak),
            area=excluded.area, atividade=excluded.atividade`,
         [
-          `${p.cameraId}|${sm.zoneId}|${hs}`,
+          ativBucketId(p.cameraId, sm.zoneId, hs, stamp),
           p.cameraId,
           sm.label,
           sm.atividade,
@@ -403,20 +534,49 @@ const INGEST = {
           sm.frames,
           sm.activeFrames,
           sm.people,
+          stamp ? stamp.shiftId : null,
+          stamp ? stamp.shift : null,
+          stamp ? stamp.inPause : null,
+          stamp ? stamp.businessDate : null,
         ],
       );
     }
   },
   "ativ:alert": async (a) => {
+    // Carimbo com o ts DO ALERTA e os turnos da SUA zona → mesma chave dos samples da janela.
+    const stamp = stampForZone(a.cameraId, a.zoneId, a.ts);
     await db.query(
-      `insert into ativ_events (ts,camera_id,camera,area,atividade,duration_min,shift) values ($1,$2,$3,$4,$5,$6,$7)`,
-      [a.ts, a.cameraId, a.cameraLabel, a.area, a.atividade, a.durationMin, a.shift],
+      `insert into ativ_events (ts,camera_id,camera,area,atividade,duration_min,shift,shift_id,in_pause,business_date)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        a.ts,
+        a.cameraId,
+        a.cameraLabel,
+        a.area,
+        a.atividade,
+        a.durationMin,
+        stamp ? stamp.shift : (a.shift ?? null), // dupla escrita: legado = NOME do turno resolvido
+        stamp ? stamp.shiftId : null,
+        stamp ? stamp.inPause : null,
+        stamp ? stamp.businessDate : null,
+      ],
     );
     const hs = hourOf(a.ts);
     await db.query(
-      `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,alerts) values ($1,$2,$3,$4,$5,1)
+      `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,alerts,shift_id,shift,in_pause,business_date)
+       values ($1,$2,$3,$4,$5,1,$6,$7,$8,$9)
       on conflict (id) do update set alerts=ativ_buckets.alerts+1`,
-      [`${a.cameraId}|${a.zoneId}|${hs}`, a.cameraId, a.area, a.atividade, hs],
+      [
+        ativBucketId(a.cameraId, a.zoneId, hs, stamp),
+        a.cameraId,
+        a.area,
+        a.atividade,
+        hs,
+        stamp ? stamp.shiftId : null,
+        stamp ? stamp.shift : null,
+        stamp ? stamp.inPause : null,
+        stamp ? stamp.businessDate : null,
+      ],
     );
   },
   "read:read": async (r) => {
@@ -531,49 +691,68 @@ const INGEST = {
         c.dir === "out" ? 1 : 0,
       ],
     );
+    // A LINHA de contagem não tem zona (spec §8) → o carimbo usa a grade GLOBAL do cadastro.
+    const stamp = stampGlobal(c.ts);
     await db.query(
-      `insert into flow_events (ts,camera_id,camera_label,tripwire_id,dir,shift) values ($1,$2,$3,$4,$5,$6)`,
-      [c.ts, c.cameraId, c.cameraLabel, c.tripwireId, c.dir, c.shift],
+      `insert into flow_events (ts,camera_id,camera_label,tripwire_id,dir,shift,shift_id,in_pause,business_date)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        c.ts,
+        c.cameraId,
+        c.cameraLabel,
+        c.tripwireId,
+        c.dir,
+        stamp ? stamp.shift : (c.shift ?? null), // dupla escrita (legado = NOME do turno)
+        stamp ? stamp.shiftId : null,
+        stamp ? stamp.inPause : null,
+        stamp ? stamp.businessDate : null,
+      ],
     );
   },
 };
 
 // ── LEITURA (buckets/eventos crus, camelCase) ─────────────────────────────────
+// O carimbo de turno viaja nos SELECTs de ativ/flow e passa pelo decodeStamp (sentinela '' →
+// null = fora; NULL → campo AUSENTE = sem carimbo) — o contrato de 3 estados do relatório.
 const BUCKET_SQL = {
-  ativ: `select id, camera_id as "cameraId", area, atividade, hour_start as "hourStart", idle_ms as "idleMs", alerts, samples, active_samples as "activeSamples", people_peak as "peoplePeak" from ativ_buckets`,
+  ativ: `select id, camera_id as "cameraId", area, atividade, hour_start as "hourStart", idle_ms as "idleMs", alerts, samples, active_samples as "activeSamples", people_peak as "peoplePeak", shift_id as "shiftId", shift, in_pause as "inPause", business_date as "businessDate" from ativ_buckets`,
   read: `select id, ponto, hour_start as "hourStart", boxes, reads, multi_reads as "multiReads", passages, per_camera as "perCamera" from read_buckets`,
   obj: `select id, setor, classe, hour_start as "hourStart", samples, count_sum as "countSum", peak, present from obj_buckets`,
   fad: `select id, posto, hour_start as "hourStart", samples, ok, fadiga, celular, duplo, ear_sum as "earSum", ear_samples as "earSamples" from fad_buckets`,
   flow: `select id, camera_id as "cameraId", camera_label as "cameraLabel", tripwire_id as "tripwireId", hour_start as "hourStart", in_count as "in", out_count as "out" from flow_buckets`,
 };
 const EVENT_SQL = {
-  ativ: `select ts, camera, camera_id as "cameraId", area, atividade, duration_min as "durationMin", shift from ativ_events order by ts desc`,
+  ativ: `select ts, camera, camera_id as "cameraId", area, atividade, duration_min as "durationMin", shift, shift_id as "shiftId", in_pause as "inPause", business_date as "businessDate" from ativ_events order by ts desc`,
   read: `select ts, ponto, code, cameras, shift from read_events order by ts desc`,
   obj: `select ts, type, setor, classe, shift from obj_events order by ts desc`,
   fad: `select ts, posto, type, shift from fad_events order by ts desc`,
-  flow: `select ts, camera_id as "cameraId", camera_label as "cameraLabel", tripwire_id as "tripwireId", dir, shift from flow_events order by ts desc`,
+  flow: `select ts, camera_id as "cameraId", camera_label as "cameraLabel", tripwire_id as "tripwireId", dir, shift, shift_id as "shiftId", in_pause as "inPause", business_date as "businessDate" from flow_events order by ts desc`,
 };
+// Mesmo decode nos DOIS caminhos (PG e JSON): o fallback grava o sentinela igual ao SQL, então a
+// leitura é idêntica — o front não distingue PG de JSON (contrato do topo do arquivo).
+const decodeRows = (rows) => rows.map(decodeStamp);
+
 async function buckets(kind) {
   if (!KINDS.includes(kind)) return [];
   if (db.configured()) {
     try {
-      return (await db.query(BUCKET_SQL[kind])).rows;
+      return decodeRows((await db.query(BUCKET_SQL[kind])).rows);
     } catch (e) {
       warnPgDown(e);
     }
   }
-  return Object.values(mem.buckets[kind]);
+  return decodeRows(Object.values(mem.buckets[kind]));
 }
 async function events(kind) {
   if (!KINDS.includes(kind)) return [];
   if (db.configured()) {
     try {
-      return (await db.query(EVENT_SQL[kind])).rows;
+      return decodeRows((await db.query(EVENT_SQL[kind])).rows);
     } catch (e) {
       warnPgDown(e);
     }
   }
-  return [...mem.events[kind]].sort((a, b) => b.ts - a.ts); // como o SQL: ts desc
+  return decodeRows([...mem.events[kind]].sort((a, b) => b.ts - a.ts)); // como o SQL: ts desc
 }
 
 // Status da persistência do histórico (p/ "vazio honesto" na UI):
@@ -615,4 +794,9 @@ module.exports = {
   status,
   clear,
   flushIntervalMs, // exportado p/ teste/unit (puro: nº de eventos → intervalo de flush)
+  // Carimbo de turno — puros, exportados p/ teste (pgstore.stamp.test.js):
+  shiftStampOf, // (ts, shifts, tz) → carimbo | null (sem cadastro ativo = sem carimbo)
+  ativBucketId, // (cameraId, zoneId, hourStart, stamp) → id (3 segmentos sem carimbo — CA-5)
+  decodeStamp, // linha do banco → contrato de 3 estados do relatório (dentro/fora/sem-carimbo)
+  _setStampSources, // injeção das fontes (camcfg/shifts/tz) — SÓ teste
 };

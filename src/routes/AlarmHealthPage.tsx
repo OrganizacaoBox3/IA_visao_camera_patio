@@ -28,6 +28,10 @@ import {
   type AlarmCounts,
   type Shelve,
 } from "../api";
+import {
+  shiftSuppressionReasonLabel,
+  type AlarmShiftSuppression,
+} from "../types/alarm";
 import type { Camera } from "./dashboard/types";
 import "./alarm-health.css";
 
@@ -73,6 +77,10 @@ const TIPO_OPTS = [
   ...Object.entries(TIPO_LABEL).map(([value, label]) => ({ value, label })),
 ];
 
+// A rota devolve os campos do gate de turno ao lado das métricas de emissão (alarmPolicy.metrics()).
+// `AlarmMetrics` vive em src/api.ts; os campos do turno vêm de src/types/alarm.ts — compostos aqui.
+type Metrics = AlarmMetrics & AlarmShiftSuppression;
+
 function fmtDuration(ms: number): string {
   if (ms <= 0) return "expirado";
   const s = Math.floor(ms / 1000);
@@ -88,7 +96,7 @@ export function AlarmHealthPage() {
   const { token, canConfigure } = useAuth();
   const { toast } = useToast();
 
-  const [metrics, setMetrics] = useState<AlarmMetrics | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [shelves, setShelves] = useState<Shelve[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -338,6 +346,8 @@ export function AlarmHealthPage() {
                 <span className="ah-kpi__value">{metrics.shelvedActive}</span>
                 <span className="ah-kpi__sub">expiram sozinhos ao fim da duração</span>
               </div>
+
+              <ShiftSuppression m={metrics} />
             </section>
 
             {/* Distribuição por prioridade (analógica) — janela e última hora. */}
@@ -517,6 +527,49 @@ export function AlarmHealthPage() {
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+// Tile "Suprimidos por turno" (spec-turnos-por-zona §4.1): o gate de turno (server/alarm/shift.js)
+// CALA alertas de ociosidade fora do turno/na pausa — e supressão silenciosa mata a confiança no
+// sistema de alarme. Quem cala, MOSTRA que calou, e POR QUÊ (a quebra por motivo).
+// Going-gray: é o gate FUNCIONANDO (informação normal) → neutro; nada aqui é anormalidade.
+// Hub anterior a esta onda não manda os campos: a UI diz isso em vez de exibir um 0 mentiroso.
+function ShiftSuppression({ m }: { m: Metrics }) {
+  const total = m.suppressedByShift;
+  if (typeof total !== "number") {
+    return (
+      <div className="ah-kpi">
+        <span className="ah-kpi__label">Suprimidos por turno</span>
+        <span className="ah-kpi__value">—</span>
+        <span className="ah-kpi__sub">hub sem o gate de turno</span>
+      </div>
+    );
+  }
+  const lastHour = m.suppressedByShiftLastHour ?? 0;
+  const reasons = Object.entries(m.suppressedByShiftReasons ?? {})
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+  return (
+    <div className="ah-kpi">
+      <Tooltip content="Alertas que o gate calou porque a zona estava FORA do turno ou em PAUSA — janela esperada de vazio (convenção OEE: fora do turno não é ociosidade). Nenhum alerta é perdido em silêncio: ele aparece aqui.">
+        <span className="ah-kpi__label">Suprimidos por turno</span>
+      </Tooltip>
+      <span className="ah-kpi__value">{total}</span>
+      <span className="ah-kpi__sub">{lastHour} na última hora</span>
+      {reasons.length > 0 ? (
+        <ul className="ah-reasons" aria-label="Suprimidos por turno, por motivo (última hora)">
+          {reasons.map(([reason, n]) => (
+            <li className="ah-reasons__row" key={reason}>
+              <span className="ah-reasons__label">{shiftSuppressionReasonLabel(reason)}</span>
+              <span className="ah-reasons__num">{n}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className="ah-kpi__sub">nenhum alerta calado na última hora</span>
+      )}
     </div>
   );
 }

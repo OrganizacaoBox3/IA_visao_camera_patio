@@ -101,6 +101,27 @@ describe("CA-5 — default seguro: zona SEM turnos = comportamento de hoje (24/7
     expect(suprimido(inatividade, at(3), orfa)).toBe(false);
   });
 
+  // Turno DESATIVADO é irmão do órfão: o `resolveShift` já o ignora (shift-clock: ativo===false →
+  // continue), então uma zona cujos turnos foram todos desativados NÃO tem janela — é 24/7. Sem
+  // espelhar o filtro aqui, `assignedShifts` devolveria os turnos (eles existem no cadastro), o
+  // fail-open do CA-5 não dispararia e TODO alerta de ociosidade da zona morreria como
+  // "fora-do-turno", em silêncio. Fail-CLOSED é o pecado exato que este módulo existe para evitar.
+  it("todos os turnos da zona DESATIVADOS → fail-open: 24/7 (não é 'fora do turno' eterno)", () => {
+    const off = sources([zonaAtiv({ shiftIds: ["sh1", "sh2"] })], [
+      { ...T1, ativo: false },
+      { ...T2, ativo: false },
+    ]);
+    for (const h of [3, 10, 15, 23]) expect(suprimido(inatividade, at(h), off)).toBe(false);
+    expect(gate.shiftMetrics(at(10)).total).toBe(0);
+  });
+
+  it("turno ativo + turno desativado: só o ATIVO define a janela", () => {
+    // T1 (06–14) ativo, T2 (14–22) desativado ⇒ às 15h a zona está FORA de qualquer janela ativa.
+    const meio = sources([zonaAtiv({ shiftIds: ["sh1", "sh2"] })], [T1, { ...T2, ativo: false }]);
+    expect(suprimido(inatividade, at(10), meio)).toBe(false); // dentro do T1 → alerta passa
+    expect(suprimido(inatividade, at(15), meio)).toBe(true); // T2 desativado → 15h é fora do turno
+  });
+
   it("zona não identificável (outra câmera / zona inexistente) → passa", () => {
     expect(suprimido({ ...inatividade, cameraId: "cam-outra" }, at(3), src)).toBe(false);
     expect(suprimido({ ...inatividade, zona: "sala x", text: "⚠ Doca: sala x parada" }, at(3), src)).toBe(false);

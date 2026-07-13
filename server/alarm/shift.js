@@ -80,12 +80,18 @@ function findZone(zonesOfCam, zona, text) {
   return null;
 }
 
-// Turnos ATRIBUÍDOS à zona que EXISTEM no cadastro (dangling é ignorado — fail-open).
+// Turnos ATRIBUÍDOS à zona que EXISTEM no cadastro e estão ATIVOS.
+// O filtro de `ativo` não é detalhe: `resolveShift` já ignora turno inativo
+// (shift-clock.js:102). Sem espelhar isso AQUI, uma zona cujos turnos foram todos
+// DESATIVADOS teria `shifts.length > 0` (eles existem), escaparia do fail-open do
+// CA-5 e cairia em "fora-do-turno" para sempre — calando toda a ociosidade daquela
+// zona em silêncio. É o oposto da doutrina do módulo. Turno desativado é
+// equivalente a turno excluído: sem janela ativa, a zona é 24/7.
 function assignedShifts(zone, shifts) {
   const ids = Array.isArray(zone.shiftIds) ? zone.shiftIds : [];
   if (!ids.length) return [];
   const set = new Set(ids);
-  return (Array.isArray(shifts) ? shifts : []).filter((s) => s && set.has(s.id));
+  return (Array.isArray(shifts) ? shifts : []).filter((s) => s && set.has(s.id) && s.ativo !== false);
 }
 
 /**
