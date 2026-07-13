@@ -57,6 +57,12 @@
 // do front — o track está VIVO no hub e a caixa some do dashboard durante o skip.
 // É o elo C1/F1 (re-emissão coasting), medido aqui e resolvido em pipeline.js.
 //
+// O OUTRO LADO (F4/#31): esta suite mede o HUB (sob o gate). O tracker do FRONT — caminho
+// B, câmera sem hub — é medido por eval/front-tournament.mjs, que roda no MESMO rito e
+// ELEGE o ttl de src/config.ts pela régua dele. A POLÍTICA é a mesma nos dois (CA-7); os
+// NÚMEROS não podem ser: o hub deriva o ttl do probe (8000), o front não tem probe e tem
+// DUAS cadências (350ms aberta / 4000ms mosaico). Ver o cabeçalho de lá.
+//
 // Knobs: DERIVADOS de precision.js (fonte ÚNICA — mesmos do eval/counting.mjs).
 // Determinístico: now sintético (tick × ROUND_MS), zero Date.now() no caminho
 // medido, nenhuma aleatoriedade. PASS exit 0, FAIL exit 1 (standalone).

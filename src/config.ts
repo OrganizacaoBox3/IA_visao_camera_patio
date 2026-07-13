@@ -3,8 +3,13 @@
 // Acesso TIPADO às envs de build-time (Vite). Centraliza o cast largo
 // `import.meta.env as Record<string, string | undefined>` que antes se repetia em cada
 // leitura de VITE_* — um único ponto para ler variável de ambiente. undefined = ausente.
+// O acesso opcional (`?.`) NÃO é defensivismo: fora do Vite `import.meta.env` não existe
+// (é undefined) e o módulo explodia na AVALIAÇÃO. Quem importa este arquivo fora do Vite
+// é o SENSOR: eval/front-tournament.mjs lê os knobs do tracker daqui (fonte ÚNICA — o
+// mesmo painel que o CameraWorkspace resolve), como o eval do hub lê de precision.js.
 function env(key: string): string | undefined {
-  return (import.meta.env as Record<string, string | undefined>)[key];
+  const vars = import.meta.env as Record<string, string | undefined> | undefined;
+  return vars?.[key];
 }
 
 export const APP_CONFIG = {
@@ -80,7 +85,25 @@ export const APP_CONFIG = {
     // Consumido por vision/bytetrack.ts + counter.
     track: {
       iouThreshold: 0.25, // IoU mínimo p/ associar detecção×track (contra a bbox PREDITA)
-      ttlMs: 1500, // morte do track sem associação (ms)
+      // Morte por RELÓGIO do track MÓVEL (o ESTACIONÁRIO é isento — morre por EVIDÊNCIA).
+      // 3000 PROMOVIDO no TORNEIO da F4/#31 (eval/front-tournament.mjs — é o dono da régua e
+      // o gate: mudar este número sem passar por lá QUEBRA o build). Era 1500. Medido:
+      //   • COMPRA (o que a F4 queria): a pessoa PARADA sobrevive a uma oclusão cega de 2,8s
+      //     (era 1,4s) com o MESMO id — a empilhadeira passando na frente não zera mais o dwell
+      //     (id-switch do cenário "oclusão CEGA 2s": 1 → 0);
+      //   • NÃO PAGA: ocupação, ghost, anti-hijack e as 12 travessias ficam idênticos.
+      // POR QUE NÃO 8000 (o "alinhar ao hub" ingênuo, que era a leitura original do #31): o ttl
+      // é a JANELA DE HERANÇA DE ID. Acima de ~5s ele reprova a régua — quem REOCUPA o posto
+      // (troca de operador) HERDA o id de quem saiu: a caixa CONGELADA do track LOST vence o
+      // pareamento guloso por IoU (1ª passada) contra a predição do recém-chegado, e a
+      // permanência do novo operador nasce com o relógio do anterior. Medido: herança a partir
+      // de 6,3s (ttl 6000) e 8,05s (ttl 8000) — é o ímã de id-hijack que o arco já tinha visto
+      // crescer 12%→100% com ttl 1500→12000 (spec §2 C2). O anti-hijack da F3 NÃO cobre este
+      // caminho (ele exclui o estacionário do 2º estágio — por DISTÂNCIA; a herança aqui entra
+      // pela 1ª passada, por IoU com a caixa congelada). O 8000 do hub é OUTRA coisa: lá ele é
+      // DERIVADO (precision.trackTtlMs = max(1500, roundMs×3.5, probe+2000)) e o probe de 6s o
+      // exige. Paridade é de POLÍTICA, não de NÚMERO (CA-7).
+      ttlMs: 3000,
       // Guarda de NASCIMENTO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts + travessias
       // contadas): detecção alta sem par que sobrepõe um track ativo além disto NÃO nasce — mata
       // o bug de campo "2 pessoas onde há 1". 0.55 conservador: pessoas realmente lado a lado
