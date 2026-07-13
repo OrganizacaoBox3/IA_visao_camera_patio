@@ -28,6 +28,7 @@ const camcfg = require("../camcfg");
 const motion = require("./motion");
 const pgstore = require("../pgstore");
 const go2rtc = require("../go2rtc");
+const alarmPipeline = require("../alarm/pipeline"); // alarme server-side (presença em zona proibida)
 const { PRECISION, trackTtlMs } = require("./precision");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
@@ -114,6 +115,13 @@ const pipeline = createPipeline({
   hasViewers: () => !!(ctx && ctx.io.sockets.adapter.rooms.get("dashboards")?.size),
   emitTracks: (payload) => ctx.io.to("dashboards").volatile.emit("analysis-tracks", payload),
   cameraLabelOf,
+  // PRODUTOR server-side de alarme (presença em zona proibida — presence-alert.js
+  // via pipeline): handleAlert DIRETO no hub cobre a câmera 24/7 sem dashboard
+  // aberto (CA-4 da spec de atividade). O caminho a jusante (dedup/flap/flood/
+  // shelve/canais/alarm-event) é o MESMO do socket "alert" — agnóstico, intocado.
+  raiseAlarm: (p) => {
+    if (ctx) alarmPipeline.handleAlert(p, { cameras: ctx.cameras, io: ctx.io });
+  },
 });
 // worker-host (POOL): roteia por MENOR-CARGA e respawna POR-WORKER (nunca-cego
 // enquanto ≥1 vive). O path do modelo é lido no spawn (pode mudar por fallback/tier).
@@ -143,6 +151,13 @@ function ativZonesOf(cameraId) {
 // Contrato compartilhado com o front: modo "exclusao" no camcfg.
 function exclZonesOf(cameraId) {
   return camcfg.getZones(cameraId).filter((z) => z.modo === "exclusao");
+}
+
+// Zonas PROIBIDAS: presença vigiada 24/7 no hub (presence-alert.js — dwell →
+// alarme server-side). Contrato pinado com a frente de camcfg: modo "proibida"
+// + presencaAlertMs/arming aditivos — leitura read-only via getZones.
+function proibZonesOf(cameraId) {
+  return camcfg.getZones(cameraId).filter((z) => z.modo === "proibida");
 }
 
 // Máscara de HOTSPOT do gate de movimento: reaproveita as MESMAS zonas de exclusão
@@ -258,6 +273,8 @@ function createState(id) {
     }),
     zonesAtiv: ativZonesOf(id),
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
+    zonesProib: proibZonesOf(id), // modo "proibida" — presença vigiada (presence-alert.js)
+    presence: new Map(), // máquina ARMADA/VIOLADA por zona proibida (presence-alert.js muta)
     // ── Gate de movimento ──
     prevLuma: null, // thumbnail de luma anterior (MOTION_W×MOTION_H); null = sem baseline ainda
     motionIgnore: null, // mapa de ignore (hotspots das zonas de exclusão) — montado após states.set
@@ -268,6 +285,7 @@ function createState(id) {
     skipLog: [], // timestamps dos pulos (janela 60s → skipped1m)
     longRange: longRangeOf(id), // true → pedido ao worker leva tiles (LR_TILES)
     fadiga: isFadiga(id), // câmera modo=fadiga NÃO é analisada no hub (roda no cliente)
+    lastTracks: null, // último payload de analysis-tracks emitido — re-emissão coasting no skip (C1)
     // Cadência efetiva: se o operador já focou esta câmera antes do 1º frame, ela
     // nasce a FPS_FOCUS; senão com linha @FPS_LINE; senão @FPS (último-vence).
     roundMs: pickRoundMs(
@@ -404,6 +422,12 @@ async function gateAndDispatch(st, now) {
       st.skipLog.push(now);
       const cutoff = now - 60_000;
       while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
+      // C1 (spec-tracking §2): rodada PULADA re-emite o último payload com ts fresco
+      // e coasting:true — o interpolador do front não expira a caixa (expireMs 2,6s <
+      // probe 6s) com o track VIVO. Cadência = a própria rodada gateada (st.roundMs;
+      // o slot já foi consumido acima — de graça no laço); volatile e só com
+      // espectador, como a emissão normal (pipeline.emitCoasting).
+      pipeline.emitCoasting(st, now);
       return;
     }
     dispatchToWorker(st, frame, now);
@@ -518,8 +542,10 @@ function onCamcfgUpdated(p) {
   } else if (p.kind === "zones") {
     st.zonesAtiv = ativZonesOf(st.id);
     st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
+    st.zonesProib = proibZonesOf(st.id); // zonas vigiadas — presence-alert poda estados órfãos por id
     st.motionIgnore = buildMotionIgnore(st.zonesExcl); // e o mapa de hotspot do gate (mesmas zonas)
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
+    st.lastTracks = null; // snapshot de coasting carrega a lista de zonas ANTIGA → invalida
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // liga/desliga o tiling na PRÓXIMA rodada
     // Entrou/saiu do modo fadiga → atualiza o contrato anti-duplicação (hub ⇄ cliente).

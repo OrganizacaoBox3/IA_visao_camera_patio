@@ -35,10 +35,12 @@ function makeSt(over = {}) {
     }),
     zonesAtiv: [],
     zonesExcl: [],
+    zonesProib: [], // modo "proibida" — presença vigiada (presence-alert.js)
     autoMask: null,
     window: { frames: 0, zones: new Map() },
     rounds: [],
     detsLog: [],
+    lastTracks: null, // snapshot p/ re-emissão coasting (C1)
     lastMs: 0,
     ...over,
   };
@@ -60,6 +62,7 @@ beforeEach(() => {
     hasViewers: vi.fn(() => true),
     emitTracks: vi.fn(),
     cameraLabelOf: vi.fn(() => "Câmera 1"),
+    raiseAlarm: vi.fn(), // produtor server-side (presença em zona proibida)
   };
   pipeline = createPipeline(deps);
 });
@@ -184,6 +187,86 @@ describe("processRound — política LOST (anti-rastro na emissão)", () => {
     expect(emittedTracks(4)).toHaveLength(1);
     expect(emittedTracks(4)[0].id).toBe(id); // identidade sobreviveu ao salto
     expect(st.detsLog[st.detsLog.length - 1].r).toBe(1); // delta de re-associação → reassoc1m
+  });
+});
+
+describe("emitCoasting — re-emissão no skip do gate (C1 da spec de tracking)", () => {
+  it("rodada pulada re-emite o ÚLTIMO payload com ts fresco e coasting:true (tracks preservados)", () => {
+    const st = makeSt({ zonesAtiv: [{ id: "z1", label: "Doca", x: 0, y: 0, w: 1, h: 1 }] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000); // inferência → snapshot
+    pipeline.emitCoasting(st, 2000); // rodada gateada (skip) → re-emissão
+    expect(deps.emitTracks).toHaveBeenCalledTimes(2);
+    const coasted = deps.emitTracks.mock.calls[1][0];
+    expect(coasted.coasting).toBe(true); // flag ADITIVA — nenhum campo removido
+    expect(coasted.ts).toBe(2000); // ts ATUALIZADO (o interpolador do front não expira)
+    expect(coasted.cameraId).toBe("cam1");
+    expect(coasted.tracks).toEqual(deps.emitTracks.mock.calls[0][0].tracks); // último estado congelado
+    expect(coasted.zones).toEqual([{ id: "z1", label: "Doca", people: 1, occupied: true }]);
+  });
+
+  it("rodada de INFERÊNCIA emite payload normal SEM campo coasting", () => {
+    const st = makeSt();
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    expect(deps.emitTracks.mock.calls[0][0]).not.toHaveProperty("coasting");
+  });
+
+  it("sem snapshot (nunca inferiu com espectador) o skip não emite nada", () => {
+    const st = makeSt();
+    pipeline.emitCoasting(st, 1000);
+    expect(deps.emitTracks).not.toHaveBeenCalled();
+  });
+
+  it("sem espectador no momento do skip não gasta banda (hasViewers=false)", () => {
+    const st = makeSt();
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000); // snapshot existe
+    deps.hasViewers.mockReturnValue(false);
+    pipeline.emitCoasting(st, 2000);
+    expect(deps.emitTracks).toHaveBeenCalledTimes(1); // só a inferência original
+  });
+
+  it("inferência SEM espectador INVALIDA o snapshot — coasting nunca re-emite estado velho", () => {
+    const st = makeSt();
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000); // snapshot da rodada 1
+    deps.hasViewers.mockReturnValue(false);
+    pipeline.processRound(st, [], 2000); // inferiu sem espectador → tracks mudaram, snapshot morre
+    deps.hasViewers.mockReturnValue(true);
+    pipeline.emitCoasting(st, 3000);
+    expect(deps.emitTracks).toHaveBeenCalledTimes(1); // nada re-emitido (payload de 1000 seria mentira)
+  });
+});
+
+describe("processRound — zona proibida (produtor server-side de presença — CA-4)", () => {
+  const proib = { id: "p1", label: "Área Restrita", modo: "proibida", presencaAlertMs: 10_000, x: 0, y: 0, w: 1, h: 1 };
+
+  it("pessoa sustentada ≥ dwell dispara raiseAlarm UMA vez com o payload estruturado", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    // Observações esparsas (0/6s/12s) — como o gate de movimento entrega (probe ≤6s):
+    // o dwell conta do INÍCIO da permanência, rodada pulada não reseta.
+    pipeline.processRound(st, [person(0.5, 0.8)], 0);
+    pipeline.processRound(st, [person(0.5, 0.8)], 6000);
+    expect(deps.raiseAlarm).not.toHaveBeenCalled(); // 6s < 10s
+    pipeline.processRound(st, [person(0.5, 0.8)], 12_000); // 12s ≥ 10s → VIOLADA
+    expect(deps.raiseAlarm).toHaveBeenCalledTimes(1);
+    expect(deps.raiseAlarm.mock.calls[0][0]).toEqual({
+      text: "⚠ Câmera 1: presença em área proibida (Área Restrita) há 12s",
+      ts: 12_000,
+      cameraId: "cam1",
+      cameraLabel: "Câmera 1",
+      zona: "Área Restrita",
+      tipo: "presenca",
+    });
+    pipeline.processRound(st, [person(0.5, 0.8)], 20_000); // segue lá → MESMO evento, sem re-alerta
+    expect(deps.raiseAlarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("travessia curta (< dwell) não alerta — o contador reseta na saída", () => {
+    const st = makeSt({ zonesProib: [proib] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 0);
+    pipeline.processRound(st, [person(0.5, 0.8)], 4000); // 4s < 10s
+    pipeline.processRound(st, [], 6000); // 1ª sem det: graça LOST ainda conta (6s < 10s, sem alerta)
+    pipeline.processRound(st, [], 7000); // 2ª sem det: LOST → 0 pessoas → contador RESETA
+    pipeline.processRound(st, [person(0.5, 0.8)], 8000); // voltou — dwell recomeça do zero
+    expect(deps.raiseAlarm).not.toHaveBeenCalled();
   });
 });
 

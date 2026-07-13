@@ -15,16 +15,20 @@
 // CONTRATO com o front (socket `analysis-tracks`, ADITIVO): o payload é montado
 // AQUI (projeção explícita — campos internos do tracker NÃO vazam: firstSeen,
 // velocidade crua…); o engine só transporta (deps.emitTracks). ECONOMIA: sem
-// espectador (deps.hasViewers()=false) o payload nem é montado.
+// espectador (deps.hasViewers()=false) o payload nem é montado. Campo ADITIVO
+// `coasting:true` só nas re-emissões de rodada pulada pelo gate (emitCoasting —
+// C1 da spec-tracking-pessoa-parada); a rodada de inferência nunca o carrega.
 //
 // DEPS injetadas (createPipeline): highScore (nascimento de track — precision.js),
 // ingest (pgstore), hasViewers/emitTracks (socket — o engine é o dono do io),
-// cameraLabelOf (label p/ o evento de flow).
+// cameraLabelOf (label p/ o evento de flow), raiseAlarm (alarme server-side de
+// presença em zona proibida — engine liga em alarm/pipeline.handleAlert).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
 const { attributeZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
+const { createPresenceAlert } = require("./presence-alert");
 const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 
 // Turno da fábrica. DUPLICAÇÃO DECLARADA de src/report/calc/common.ts:8 (front):
@@ -38,8 +42,14 @@ const shiftOf = (hour) => (hour >= 6 && hour < 14 ? "Manhã" : hour >= 14 && hou
  * @param {() => boolean} deps.hasViewers    há dashboard ouvindo? (false → não monta o payload)
  * @param {(payload) => void} deps.emitTracks  transporte do `analysis-tracks` (engine/io)
  * @param {(cameraId) => string} deps.cameraLabelOf  label da câmera p/ o evento de flow
+ * @param {(p) => void} [deps.raiseAlarm]     entrada do pipeline de alarme server-side
+ *        (alarm/pipeline.handleAlert com o ctx do engine); ausente → produtor inerte
  */
-function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabelOf }) {
+function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabelOf, raiseAlarm }) {
+  // Presença em zona proibida (spec-alerta-por-atividade F2): a máquina de estados
+  // mora em presence-alert.js; aqui só a OBSERVAÇÃO por rodada de inferência é
+  // alimentada — o alarme nasce no HUB (24/7, sem dashboard aberto — CA-4).
+  const presence = raiseAlarm ? createPresenceAlert({ raiseAlarm, cameraLabelOf }) : null;
   /**
    * Uma rodada de UMA câmera: consome as dets cruas do worker e MUTA st
    * (tracker/counter/janela/logs). Emite overlay ao final (inclusive com 0
@@ -139,6 +149,12 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
       }
     }
 
+    // Zonas PROIBIDAS (modo "proibida" — st.zonesProib do engine): a observação da
+    // rodada alimenta a máquina de estados de presença (dwell → alarme server-side).
+    // SÓ rodada de INFERÊNCIA passa aqui — rodada pulada pelo gate não observa e
+    // NÃO reseta o dwell (skip = "nada mudou"; ver cabeçalho do presence-alert.js).
+    if (presence) presence.observe(st, tracks, now);
+
     // Gravação OPT-IN da sessão de fusão (FUSION_RECORD): tracks CRUS desta rodada, ANTES do gate de
     // espectador (o teste de campo grava mesmo sem dashboard aberto). Fail-safe: jamais lança.
     sessionRecorder.recordTracks(st.id, now, tracks);
@@ -146,7 +162,7 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // Overlay servido: roda TODA rodada com espectador (inclusive 0 tracks — o
     // dashboard precisa da rodada vazia p/ apagar caixas), mesmo sem zona/linha.
     if (hasViewers()) {
-      emitTracks({
+      const payload = {
         cameraId: st.id,
         ts: now,
         // Latência captura→emissão (ms): quanto o frame ENVELHECEU no pipeline (fila+decode+inferência)
@@ -173,8 +189,30 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
           const people = perLabel.get(z.label) || 0;
           return { id: z.id, label: z.label, people, occupied: people > 0 };
         }),
-      });
+      };
+      emitTracks(payload);
+      st.lastTracks = payload; // snapshot p/ re-emissão coasting nas rodadas puladas pelo gate (C1)
+    } else {
+      // Inferiu SEM espectador (payload nem foi montado — economia): o snapshot
+      // anterior deixou de representar os tracks → invalida. coasting jamais
+      // re-emite estado ANTERIOR à última inferência.
+      st.lastTracks = null;
     }
+  }
+
+  /**
+   * C1 — overlay nunca esfomeado (spec-tracking-pessoa-parada §2): em rodada
+   * PULADA pelo gate de movimento o engine re-emite o ÚLTIMO payload com ts
+   * fresco e a flag ADITIVA `coasting:true` (nenhum campo removido — contrato
+   * `analysis-tracks` intacto). É verdadeiro por construção: o gate só pula com
+   * a cena ESTÁTICA, logo os tracks estão congelados no último estado observado.
+   * Só emite com espectador (mesmo hasViewers da emissão normal — sem banda à
+   * toa) e só se há snapshot (dashboard que abriu no meio de um skip espera no
+   * máximo o probe do gate, ≤6s, pela 1ª inferência).
+   */
+  function emitCoasting(st, now) {
+    if (!st.lastTracks || !hasViewers()) return;
+    emitTracks({ ...st.lastTracks, ts: now, coasting: true });
   }
 
   /** Flush das janelas "ativ" acumuladas (~ANALYSIS_AGG_MS) de todas as câmeras. */
@@ -200,7 +238,7 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     }
   }
 
-  return { processRound, flushWindows };
+  return { processRound, flushWindows, emitCoasting };
 }
 
 module.exports = { createPipeline, shiftOf };
