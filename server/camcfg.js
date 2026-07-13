@@ -70,6 +70,39 @@ function cleanTripwires(arr) {
   }
   return out;
 }
+// ── MIGRAÇÃO rect → POLÍGONO (spec-zona-unificada §7) ────────────────────────────────────────
+// A zona É um polígono; o RETÂNGULO é o PRESET de 4 vértices (a leitura de ONVIF/Axis/Frigate —
+// nenhum deles tem "tipo retângulo"). Semeia os cantos da bbox JÁ SANEADA na ordem consistente
+// TL → TR → BR → BL (horária, y crescendo p/ baixo): ordem consistente ⇒ NUNCA auto-intersecta.
+// Roda dentro do cleanZone ⇒ no LOAD **e** no SAVE, e é IDEMPOTENTE (a 2ª passada entra pelo ramo
+// de `points`, que devolve os mesmos vértices) — por isso NÃO há script de migração nem downtime.
+// Os vértices saem CLAMPADOS 0..1 por sanitizeZonePoints (fonte ÚNICA da validação — não
+// duplicamos a regra aqui): retângulo que estourava o frame passa a valer o que já valia na
+// prática, a parte DENTRO do frame.
+//
+// DUAS zonas NÃO são semeadas — e as duas seguem valendo EXATAMENTE como hoje (retângulo/máscara):
+//  • com MÁSCARA PINTADA: o retângulo dela é a ENVOLVENTE da área pintada, não a área. A única em
+//    produção (cam-50fa5758e7 "Área 1") é uma faixa DIAGONAL serrilhada em 5 pedaços — semear os 4
+//    cantos AUMENTARIA a área EM SILÊNCIO. Preserva a mask; quem a redesenha é o operador (o
+//    polígono que ela sempre quis ser). É a única migração manual da onda.
+//  • DEGENERADA (w ou h = 0, ou colapsada pelo clamp): área zero não é polígono SIMPLES —
+//    sanitizeZonePoints a rejeita (undefined) e a zona segue retângulo, como já era.
+// Recebe a zona JÁ SANEADA (o `out` do cleanZone), não o input bruto: x/y/w/h já passaram pelo
+// clamp01 e `mask` já é string-não-vazia-ou-ausente. Depender do bruto aqui seria uma armadilha
+// (um `mask` truthy porém não-string bloquearia o preset SEM a zona ter máscara de verdade).
+function rectPreset(saneada) {
+  if (saneada.mask) return undefined;
+  const { x, y, w, h } = saneada;
+  const x1 = x + w;
+  const y1 = y + h;
+  return sanitizeZonePoints([
+    { x, y }, // TL
+    { x: x1, y }, // TR
+    { x: x1, y: y1 }, // BR
+    { x, y: y1 }, // BL
+  ]);
+}
+
 // Zona (src/zones.ts Zone): geometria normalizada + modo + config plana por modo.
 // `mask` é opcional (string codificada); só é incluída quando presente (retrocompat).
 function cleanZone(z) {
@@ -108,7 +141,12 @@ function cleanZone(z) {
   // NUNCA []. Com points válidos, a bbox x,y,w,h é RE-DERIVADA deles no save (padrão
   // maskBBoxNorm): o pré-filtro retangular dos call-sites nunca fica velho (armadilha 3).
   // NÃO confundir com calibration.points (homografia) — objetos distintos (armadilha 10).
-  const pts = sanitizeZonePoints(z.points);
+  //
+  // A REGRA (spec-zona-unificada §3): **`points` é a FONTE DA VERDADE; x/y/w/h é CACHE da
+  // envolvente — DERIVADO, nunca autorado.** Sem points válidos, o rectPreset semeia os 4 cantos
+  // do retângulo (migração) — logo, toda zona SEM MÁSCARA sai daqui COM polígono. Malformado não
+  // vira [] nem some: cai no preset, que é o que a zona já era na prática (retângulo).
+  const pts = sanitizeZonePoints(z.points) || rectPreset(out);
   if (pts) {
     out.points = pts;
     const bb = polygonBBox(pts);
