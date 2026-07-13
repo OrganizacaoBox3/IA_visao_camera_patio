@@ -59,6 +59,8 @@
 }
 
 @media print {
+  /* EXCEÇÃO G8 (contraste, não estado): impressão é tinta sobre papel BRANCO — os tokens
+     dark do :root ficariam ilegíveis. Mesmos hex do bloco @media print do index.css. */
   .rep-insight {
     border-color: #ccc;
     background: #fff;

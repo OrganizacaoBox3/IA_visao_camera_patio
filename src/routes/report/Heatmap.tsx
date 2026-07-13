@@ -89,12 +89,19 @@ export function Heatmap({
             const title = cellTitle(row, v, h); // title em dado, não affordance (ver nota acima)
             if (onCellClick) {
               const sel = isCellSelected ? isCellSelected(row, h) : false;
+              // Célula clicável é <button> DE VERDADE (teclado Enter/Space + foco de graça —
+              // era span com onClick, invisível para teclado/leitor de tela; dívida #4).
+              // border-0/p-0 neutralizam o UA-style do button (o .hm-cell não define ambos);
+              // o anel :focus-visible do .hm-cell.clk já existe em report/alarms.css.
               return (
-                <span
+                <button
                   key={h}
-                  className={`hm-cell clk ${sel ? "sel" : ""}`}
+                  type="button"
+                  className={`hm-cell clk border-0 p-0 ${sel ? "sel" : ""}`}
                   style={{ background }}
                   title={title}
+                  aria-label={title}
+                  aria-pressed={sel}
                   onClick={() => onCellClick(row, h)}
                 />
               );

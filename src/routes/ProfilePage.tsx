@@ -30,7 +30,6 @@ export function ProfilePage() {
   const [whatsapp, setWhatsapp] = useState("");
   const [optIn, setOptIn] = useState(false);
   const [prefs, setPrefs] = useState<NotifPrefs>(DEFAULT_PREFS);
-  const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,15 +46,15 @@ export function ProfilePage() {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setErr(null);
-    setStatus(null);
     try {
+      // Feedback ÚNICO (spec §3): sucesso de ação → toast (o Alert "Perfil salvo." duplicava).
       const m = await updateMe({ whatsapp, filtros: prefs, optIn });
       setMe(m);
       setWhatsapp(m.whatsapp || "");
       setOptIn(!!m.optInEm);
-      setStatus("Perfil salvo.");
       toast("Perfil salvo.", "ok");
     } catch (e2) {
       const m = e2 instanceof Error ? e2.message : "Falha ao salvar.";
@@ -137,13 +136,14 @@ export function ProfilePage() {
             <Button variant="primary" type="submit" disabled={busy}>
               {busy ? "Salvando…" : "Salvar"}
             </Button>
-            <span className={`prof-state ${willReceive ? "on" : ""}`}>
+            {/* role=status (aria-live polite): o estado efetivo do cadastro muda conforme o
+                usuário edita o form — antes mudava em silêncio para leitores de tela. */}
+            <span className={`prof-state ${willReceive ? "on" : ""}`} role="status">
               {willReceive
                 ? "● Este número receberá os alertas."
                 : `○ Ainda não receberá alertas — falta: ${faltando}.`}
             </span>
           </div>
-          {status && <Alert tone="ok">{status}</Alert>}
           {err && <Alert tone="alert">{err}</Alert>}
           {me?.optInEm ? (
             <p className="muted">

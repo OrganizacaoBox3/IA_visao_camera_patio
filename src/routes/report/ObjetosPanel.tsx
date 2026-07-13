@@ -9,7 +9,7 @@ import {
 } from "../../report/calc";
 import { Package } from "lucide-react";
 import { objClass } from "../../objects/catalog";
-import { Tabs, TabsContent, ScrollArea } from "../../ui";
+import { Tabs, TabsContent, ScrollArea, Th } from "../../ui";
 import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, readColor } from "./Heatmap";
@@ -121,22 +121,28 @@ export function ObjetosPanel({
               <div className="rep-scrollhint" aria-hidden="true">
                 deslize para ver todas as classes →
               </div>
+              {/* Matriz com estilo próprio (.obj-matrix) — fica FORA do átomo Table de
+                  propósito; o ganho de semântica vem do <Th> (scope por construção). */}
               <ScrollArea className="rep-matrixscroll" orientation="both">
                 <table className="obj-matrix">
                   <thead>
                     <tr>
-                      <th scope="col">Setor</th>
+                      <Th>Setor</Th>
                       {classes.map((cl) => (
-                        <th key={cl} scope="col" title={cl}>
+                        <Th key={cl} title={cl}>
                           {classLabel(cl)}
-                        </th>
+                        </Th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {presSetores.map((s) => (
                       <tr key={s}>
-                        <td className="obj-setor">{s}</td>
+                        {/* Setor é cabeçalho de LINHA (scope="row"); font-normal preserva o
+                            visual do antigo <td> (th nativo viria em bold). */}
+                        <Th scope="row" className="obj-setor font-normal">
+                          {s}
+                        </Th>
                         {classes.map((cl) => {
                           const v = opres[s]?.[cl] ?? 0;
                           return (

@@ -2,7 +2,7 @@
 // das cascas. O pipeline de cada modo vive num view-model hook (routes/report/use*VM) que
 // computa SÓ a visão atual ("off"/"summary"/"full"); as agregações puras vivem em report/calc.
 // LGPD: tudo aqui são indicadores agregados — nunca imagens.
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { Download, Printer, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { type Period, type Shift } from "../report/calc";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
@@ -38,6 +38,150 @@ import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel } from "./report/ObjetosPanel";
 import { FadigaPanel } from "./report/FadigaPanel";
 import { AlarmesPanel } from "./report/AlarmesPanel";
+
+// Filtro específico do modo (mesmo <Select> p/ ponto/setor/posto/área — só muda a fonte).
+// "Todas" (área) × "Todos" (demais) preservados como valores-sentinela.
+type ModeFilter = {
+  aria: string;
+  value: string;
+  set: (v: string) => void;
+  allValue: string;
+  allLabel: string;
+  items: string[];
+};
+
+// Barra de filtros/ferramentas do Relatório (.rep-filters), extraída como componente local
+// coeso: recorte (período/turno + filtro do modo — ou prioridade/estado nos Alarmes) à
+// esquerda; fonte do histórico e ações (recarregar/apresentação/CSV/PDF/limpar) à direita.
+// Puramente apresentacional — estado e handlers vivem no ReportPage (props achatadas, o
+// mesmo padrão dos painéis de modo).
+function FilterBar({
+  period,
+  setPeriod,
+  isAlarmes,
+  isResumo,
+  shift,
+  setShift,
+  alarmPriority,
+  setAlarmPriority,
+  alarmState,
+  setAlarmState,
+  modeFilter,
+  dataSource,
+  present,
+  setPresent,
+  busy,
+  refresh,
+  downloadCSV,
+  printPDF,
+  requestClear,
+}: {
+  period: Period;
+  setPeriod: (p: Period) => void;
+  isAlarmes: boolean;
+  isResumo: boolean;
+  shift: Shift | "Todos";
+  setShift: (v: Shift | "Todos") => void;
+  alarmPriority: AlarmPriority | "Todas";
+  setAlarmPriority: (v: AlarmPriority | "Todas") => void;
+  alarmState: AlarmState | "Todos";
+  setAlarmState: (v: AlarmState | "Todos") => void;
+  modeFilter: ModeFilter;
+  dataSource: string | null | undefined;
+  present: boolean;
+  setPresent: Dispatch<SetStateAction<boolean>>;
+  busy: boolean;
+  refresh: () => void;
+  downloadCSV: () => void;
+  printPDF: () => void;
+  requestClear: () => void;
+}) {
+  return (
+    <div className="rep-filters rep-filters-m no-print">
+      <SegmentedControl<Period>
+        value={period}
+        onChange={setPeriod}
+        ariaLabel="Período"
+        options={(["hoje", "7d", "30d"] as Period[]).map((p) => ({
+          value: p,
+          label: PERIOD_LABEL[p],
+        }))}
+      />
+      {!isAlarmes && (
+        <Select
+          value={shift}
+          onChange={(v) => setShift(v as Shift | "Todos")}
+          ariaLabel="Turno"
+          options={[
+            { value: "Todos", label: "Turno: todos" },
+            { value: "Manhã", label: "Manhã" },
+            { value: "Tarde", label: "Tarde" },
+            { value: "Noite", label: "Noite" },
+          ]}
+        />
+      )}
+      {isAlarmes ? (
+        <>
+          <Select
+            value={alarmPriority}
+            onChange={(v) => setAlarmPriority(v as AlarmPriority | "Todas")}
+            ariaLabel="Prioridade"
+            options={[
+              { value: "Todas", label: "Prioridade: todas" },
+              { value: "critical", label: "Crítica" },
+              { value: "high", label: "Alta" },
+              { value: "advisory", label: "Informativo" },
+            ]}
+          />
+          <Select
+            value={alarmState}
+            onChange={(v) => setAlarmState(v as AlarmState | "Todos")}
+            ariaLabel="Estado"
+            options={[
+              { value: "Todos", label: "Estado: todos" },
+              { value: "new", label: "Novo" },
+              { value: "acknowledged", label: "Reconhecido" },
+              { value: "forwarded", label: "Encaminhado" },
+            ]}
+          />
+        </>
+      ) : isResumo ? null : (
+        <Select
+          value={modeFilter.value}
+          onChange={modeFilter.set}
+          ariaLabel={modeFilter.aria}
+          options={[
+            { value: modeFilter.allValue, label: modeFilter.allLabel },
+            ...modeFilter.items.map((x) => ({ value: x, label: x })),
+          ]}
+        />
+      )}
+      <div className="spacer" />
+      {dataSource && (
+        <span className="muted text-label" title="Onde o hub grava os indicadores">
+          histórico: {dataSource === "pg" ? "banco" : "arquivo local"}
+        </span>
+      )}
+      <IconButton label="Recarregar do histórico" onClick={refresh}>
+        <RefreshCw size={18} strokeWidth={1.75} aria-hidden />
+      </IconButton>
+      <Button onClick={() => setPresent((v) => !v)}>
+        {present ? "Sair da apresentação" : "Apresentação"}
+      </Button>
+      <Button onClick={downloadCSV}>
+        <Download size={16} strokeWidth={1.75} aria-hidden /> CSV
+      </Button>
+      <Button onClick={printPDF}>
+        <Printer size={16} strokeWidth={1.75} aria-hidden /> PDF
+      </Button>
+      {/* #13: ação destrutiva clara na área de ferramentas (ghost discreto, texto em tom
+          crítico) — era link mono 10px escondido no rodapé. O AlertDialog do pai confirma. */}
+      <Button variant="ghost" className="rep-clear" disabled={busy} onClick={requestClear}>
+        <Trash2 size={16} strokeWidth={1.75} aria-hidden /> Limpar histórico
+      </Button>
+    </div>
+  );
+}
 
 export function ReportPage() {
   const [mode, setMode] = useState<Mode>("resumo");
@@ -115,9 +259,8 @@ export function ReportPage() {
   const filters = { mode, period, shift, area, ponto, setor, posto, alarmPriority, alarmState };
   const lens = reportLens(filters);
   const filtroLabel = reportFiltroLabel(filters);
-  // Filtro específico do modo (mesmo <Select> p/ ponto/setor/posto/área — só muda a fonte).
-  // "Todas" (área) × "Todos" (demais) preservados como valores-sentinela.
-  const modeFilter = isReading
+  // Filtro específico do modo (tipo ModeFilter acima) — só muda a fonte por modo.
+  const modeFilter: ModeFilter = isReading
     ? {
         aria: "Ponto",
         value: ponto,
@@ -180,7 +323,22 @@ export function ReportPage() {
 
   return (
     <div className={`page report ${present ? "present" : ""}`}>
-      <PageHeader title="Relatório Operacional" className="no-print">
+      {/* Descrição do modo virou subtitle do PageHeader (padrão da casa) — era span custom. */}
+      <PageHeader
+        title="Relatório Operacional"
+        subtitle={
+          isAlarmes
+            ? "alarmes · fila de eventos (metadados)"
+            : isReading
+              ? "leitura · código de barras"
+              : isObjects
+                ? "objetos · contagem/presença"
+                : isFadiga
+                  ? "operador · fadiga/risco"
+                  : "atividade · ocupação/ociosidade"
+        }
+        className="no-print"
+      >
         <SegmentedControl<Mode>
           value={mode}
           onChange={(m) => {
@@ -203,108 +361,32 @@ export function ReportPage() {
         <span className="rep-privacy">
           <ShieldCheck size={13} strokeWidth={1.75} aria-hidden /> indicadores · sem imagens
         </span>
+        {/* espaçador espelha o flex-1 interno do PageHeader: mantém o seletor de modo
+            centrado entre o título e a borda direita (layout anterior). */}
         <div className="flex-1" />
-        <span className="muted text-[11px]">
-          {isAlarmes
-            ? "alarmes · fila de eventos (metadados)"
-            : isReading
-              ? "leitura · código de barras"
-              : isObjects
-                ? "objetos · contagem/presença"
-                : isFadiga
-                  ? "operador · fadiga/risco"
-                  : "atividade · ocupação/ociosidade"}
-        </span>
       </PageHeader>
 
-      <div className="rep-filters rep-filters-m no-print">
-        <SegmentedControl<Period>
-          value={period}
-          onChange={setPeriod}
-          ariaLabel="Período"
-          options={(["hoje", "7d", "30d"] as Period[]).map((p) => ({
-            value: p,
-            label: PERIOD_LABEL[p],
-          }))}
-        />
-        {!isAlarmes && (
-          <Select
-            value={shift}
-            onChange={(v) => setShift(v as Shift | "Todos")}
-            ariaLabel="Turno"
-            options={[
-              { value: "Todos", label: "Turno: todos" },
-              { value: "Manhã", label: "Manhã" },
-              { value: "Tarde", label: "Tarde" },
-              { value: "Noite", label: "Noite" },
-            ]}
-          />
-        )}
-        {isAlarmes ? (
-          <>
-            <Select
-              value={al.alarmPriority}
-              onChange={(v) => al.setAlarmPriority(v as AlarmPriority | "Todas")}
-              ariaLabel="Prioridade"
-              options={[
-                { value: "Todas", label: "Prioridade: todas" },
-                { value: "critical", label: "Crítica" },
-                { value: "high", label: "Alta" },
-                { value: "advisory", label: "Informativo" },
-              ]}
-            />
-            <Select
-              value={al.alarmState}
-              onChange={(v) => al.setAlarmState(v as AlarmState | "Todos")}
-              ariaLabel="Estado"
-              options={[
-                { value: "Todos", label: "Estado: todos" },
-                { value: "new", label: "Novo" },
-                { value: "acknowledged", label: "Reconhecido" },
-                { value: "forwarded", label: "Encaminhado" },
-              ]}
-            />
-          </>
-        ) : isResumo ? null : (
-          <Select
-            value={modeFilter.value}
-            onChange={modeFilter.set}
-            ariaLabel={modeFilter.aria}
-            options={[
-              { value: modeFilter.allValue, label: modeFilter.allLabel },
-              ...modeFilter.items.map((x) => ({ value: x, label: x })),
-            ]}
-          />
-        )}
-        <div className="spacer" />
-        {dataSource && (
-          <span className="muted text-[11px]" title="Onde o hub grava os indicadores">
-            histórico: {dataSource === "pg" ? "banco" : "arquivo local"}
-          </span>
-        )}
-        <IconButton label="Recarregar do histórico" onClick={refresh}>
-          <RefreshCw size={18} strokeWidth={1.75} aria-hidden />
-        </IconButton>
-        <Button onClick={() => setPresent((v) => !v)}>
-          {present ? "Sair da apresentação" : "Apresentação"}
-        </Button>
-        <Button onClick={downloadCSV}>
-          <Download size={16} strokeWidth={1.75} aria-hidden /> CSV
-        </Button>
-        <Button onClick={printPDF}>
-          <Printer size={16} strokeWidth={1.75} aria-hidden /> PDF
-        </Button>
-        {/* #13: ação destrutiva clara na área de ferramentas (ghost discreto, texto em tom
-            crítico) — era link mono 10px escondido no rodapé. O AlertDialog abaixo confirma. */}
-        <Button
-          variant="ghost"
-          className="rep-clear"
-          disabled={busy}
-          onClick={() => setConfirmClear(true)}
-        >
-          <Trash2 size={16} strokeWidth={1.75} aria-hidden /> Limpar histórico
-        </Button>
-      </div>
+      <FilterBar
+        period={period}
+        setPeriod={setPeriod}
+        isAlarmes={isAlarmes}
+        isResumo={isResumo}
+        shift={shift}
+        setShift={setShift}
+        alarmPriority={al.alarmPriority}
+        setAlarmPriority={al.setAlarmPriority}
+        alarmState={al.alarmState}
+        setAlarmState={al.setAlarmState}
+        modeFilter={modeFilter}
+        dataSource={dataSource}
+        present={present}
+        setPresent={setPresent}
+        busy={busy}
+        refresh={refresh}
+        downloadCSV={downloadCSV}
+        printPDF={printPDF}
+        requestClear={() => setConfirmClear(true)}
+      />
 
       <div className="print-head only-print" aria-hidden>
         <div className="ph-title">Relatório Operacional · {MODE_LABEL[mode]}</div>

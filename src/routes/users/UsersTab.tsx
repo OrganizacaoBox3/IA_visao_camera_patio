@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { Dices } from "lucide-react";
 import { useAuth } from "../../auth";
 import {
@@ -7,8 +7,10 @@ import {
   Input,
   Select,
   Switch,
-  ScrollArea,
   Skeleton,
+  Table,
+  TableEmpty,
+  useConfirm,
   useToast,
   SectionTitle,
 } from "../../ui";
@@ -22,6 +24,12 @@ const PAPEL_OPTS = [
   { value: "engenheiro", label: "Engenheiro" },
   { value: "superadmin", label: "Superadmin" },
 ];
+
+// Hierarquia de privilégio p/ decidir quando a troca de papel é ELEVAÇÃO (exige confirmação).
+const PAPEL_RANK: Record<string, number> = { usuario: 0, engenheiro: 1, superadmin: 2 };
+const PAPEL_LABEL: Record<string, string> = Object.fromEntries(
+  PAPEL_OPTS.map((o) => [o.value, o.label]),
+);
 
 // Senha só por hash no servidor — ao criar/resetar, a senha aparece UMA vez para o superadmin
 // repassar (modelo de reset seguro).
@@ -55,9 +63,15 @@ export function UsersTab({
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
+  const confirm = useConfirm();
+  // Trava dupla submissão / mutações concorrentes (padrão da casa — IpCamerasSection):
+  // sem ela, clique duplo em "Criar" criava usuário DUPLICADO (integridade, não estética).
+  const [busy, setBusy] = useState(false);
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setErr(null);
     const senha = novo.senha.trim() || genSenha();
     try {
@@ -71,11 +85,14 @@ export function UsersTab({
       setErr(m);
       toast(m, "alert");
     }
+    setBusy(false);
   }
   async function onPatch(
     id: string,
     patch: Partial<{ ativo: boolean; papel: string; senha: string }>,
   ) {
+    if (busy) return;
+    setBusy(true);
     setErr(null);
     try {
       await patchUser(id, patch);
@@ -86,8 +103,40 @@ export function UsersTab({
       setErr(m);
       toast(m, "alert");
     }
+    setBusy(false);
+  }
+  // Troca de papel com assimetria de risco corrigida: ELEVAR (ganhar privilégio) exige
+  // confirmação — antes aplicava na hora, enquanto REMOVER confirmava (risco invertido).
+  // Decisão documentada: REBAIXAR terceiros aplica direto (reversível em 1 clique e não
+  // amplia poder); auto-rebaixamento também confirma (te tranca fora desta tela).
+  async function onChangePapel(u: AdminUser, papel: string) {
+    if (papel === u.papel) return;
+    const elevando = (PAPEL_RANK[papel] ?? 0) > (PAPEL_RANK[u.papel] ?? 0);
+    const autoRebaixando = !elevando && u.id === user.id;
+    if (elevando) {
+      const ok = await confirm({
+        title: `Promover a ${PAPEL_LABEL[papel] ?? papel}?`,
+        description: `"${u.usuario}" passará a ter os poderes de ${PAPEL_LABEL[papel] ?? papel}${
+          papel === "superadmin" ? " — acesso total, incluindo gestão de usuários" : ""
+        }.`,
+        confirmLabel: "Promover",
+        variant: "default",
+      });
+      if (!ok) return; // Select controlado volta ao papel atual (rows não mudou)
+    } else if (autoRebaixando) {
+      const ok = await confirm({
+        title: "Rebaixar o próprio papel?",
+        description: "Você perderá o acesso a esta tela de administração imediatamente.",
+        confirmLabel: "Rebaixar",
+        variant: "danger",
+      });
+      if (!ok) return;
+    }
+    await onPatch(u.id, { papel });
   }
   async function onReset(u: AdminUser) {
+    if (busy) return;
+    setBusy(true);
     const senha = genSenha();
     setErr(null);
     try {
@@ -99,6 +148,7 @@ export function UsersTab({
       setErr(m);
       toast(m, "alert");
     }
+    setBusy(false);
   }
   function onDelete(u: AdminUser) {
     // window.confirm → AlertDialog (variant danger): só remove ao confirmar.
@@ -109,6 +159,8 @@ export function UsersTab({
     });
   }
   async function doDeleteUser(u: AdminUser) {
+    if (busy) return;
+    setBusy(true);
     setErr(null);
     try {
       await deleteUser(u.id);
@@ -119,6 +171,7 @@ export function UsersTab({
       setErr(m);
       toast(m, "alert");
     }
+    setBusy(false);
   }
 
   return (
@@ -154,7 +207,7 @@ export function UsersTab({
             options={PAPEL_OPTS}
             ariaLabel="Papel"
           />
-          <Button variant="primary" type="submit" disabled={!novo.usuario.trim()}>
+          <Button variant="primary" type="submit" disabled={busy || !novo.usuario.trim()}>
             Criar
           </Button>
         </form>
@@ -167,75 +220,71 @@ export function UsersTab({
         <SectionTitle>
           {loading ? "Carregando…" : `${rows.length} ${rows.length === 1 ? "usuário" : "usuários"}`}
         </SectionTitle>
-        <ScrollArea orientation="both" className="min-h-[200px] flex-1">
-          <table className="rtable">
-            <thead>
-              <tr>
-                {/* Usuário absorve a largura livre (some a faixa morta); demais colunas compactas. */}
-                <th className="w-full">Usuário</th>
-                <th className="whitespace-nowrap">Papel</th>
-                <th className="whitespace-nowrap">Status</th>
-                <th className="whitespace-nowrap text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((u) => (
-                <tr key={u.id}>
-                  <td>
-                    {u.usuario}
-                    {u.id === user.id && <span className="muted"> (você)</span>}
-                  </td>
-                  <td>
-                    <Select
-                      value={u.papel}
-                      onChange={(v) => onPatch(u.id, { papel: v })}
-                      options={PAPEL_OPTS}
-                      ariaLabel="Papel"
+        {/* Átomo Table da casa: th scope="col" por construção + rolagem interna (regra A12). */}
+        <Table
+          ariaLabel="Usuários"
+          className="min-h-[200px] flex-1"
+          columns={[
+            // Usuário absorve a largura livre (some a faixa morta); demais colunas compactas.
+            { label: "Usuário", className: "w-full" },
+            { label: "Papel", className: "whitespace-nowrap" },
+            { label: "Status", className: "whitespace-nowrap" },
+            { label: "Ações", className: "whitespace-nowrap text-right" },
+          ]}
+        >
+          <tbody>
+            {rows.map((u) => (
+              <tr key={u.id}>
+                <td>
+                  {u.usuario}
+                  {u.id === user.id && <span className="muted"> (você)</span>}
+                </td>
+                <td>
+                  <Select
+                    value={u.papel}
+                    onChange={(v) => onChangePapel(u, v)}
+                    options={PAPEL_OPTS}
+                    ariaLabel="Papel"
+                    disabled={busy}
+                  />
+                </td>
+                <td>
+                  <div className="cell-toggle">
+                    <Switch
+                      checked={u.ativo}
+                      onCheckedChange={(v) => onPatch(u.id, { ativo: v })}
+                      ariaLabel="ativo"
+                      disabled={busy}
                     />
-                  </td>
-                  <td>
-                    <div className="cell-toggle">
-                      <Switch
-                        checked={u.ativo}
-                        onCheckedChange={(v) => onPatch(u.id, { ativo: v })}
-                        ariaLabel="ativo"
-                      />
-                      <span>{u.ativo ? "Ativo" : "Inativo"}</span>
-                    </div>
-                  </td>
-                  <td className="users-actions justify-end whitespace-nowrap">
-                    <Button size="sm" onClick={() => onReset(u)}>
-                      Resetar senha
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      onClick={() => onDelete(u)}
-                      disabled={u.id === user.id}
-                    >
-                      Remover
-                    </Button>
+                    <span>{u.ativo ? "Ativo" : "Inativo"}</span>
+                  </div>
+                </td>
+                <td className="users-actions justify-end whitespace-nowrap">
+                  <Button size="sm" onClick={() => onReset(u)} disabled={busy}>
+                    Resetar senha
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => onDelete(u)}
+                    disabled={busy || u.id === user.id}
+                  >
+                    Remover
+                  </Button>
+                </td>
+              </tr>
+            ))}
+            {loading &&
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  <td colSpan={4}>
+                    <Skeleton w="100%" h={16} />
                   </td>
                 </tr>
               ))}
-              {loading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={`sk-${i}`}>
-                    <td colSpan={4}>
-                      <Skeleton w="100%" h={16} />
-                    </td>
-                  </tr>
-                ))}
-              {!loading && rows.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="empty-note">
-                    Nenhum usuário.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </ScrollArea>
+            {!loading && rows.length === 0 && <TableEmpty colSpan={4}>Nenhum usuário.</TableEmpty>}
+          </tbody>
+        </Table>
       </section>
     </>
   );

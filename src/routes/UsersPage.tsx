@@ -42,12 +42,10 @@ export function UsersPage() {
   const [camToken, setCamToken] = useState<string | null>(null);
   const [wa, setWa] = useState<WaStatus | null>(null);
   const [waNum, setWaNum] = useState("");
-  const [waMsg, setWaMsg] = useState<string | null>(null);
   const [dests, setDests] = useState<Recipient[]>([]);
   const [novoDest, setNovoDest] = useState({ nome: "", numero: "", somenteCriticos: true });
   const [notif, setNotif] = useState<NotifSettings | null>(null);
   const [preview, setPreview] = useState<Record<string, string> | null>(null);
-  const [notifMsg, setNotifMsg] = useState<string | null>(null);
   const [secao, setSecao] = useState<"usuarios" | "notificacoes" | "cameras">("usuarios");
   const [confirmRemove, setConfirmRemove] = useState<ConfirmRemove | null>(null);
 
@@ -105,14 +103,18 @@ export function UsersPage() {
       {/* Cadeia flex (page → body → tabs → painel): a lista cresce com a viewport
           (plano de padronização visual — layout SaaS, sem max-h em conteúdo). */}
       <div className="users-body min-h-0 flex-1">
+        {/* Feedback ÚNICO (spec §3): a revelação de senha usa o átomo Alert (tom ok,
+            role=status — anunciada por leitor de tela) no lugar do banner bespoke .users-reveal. */}
         {reveal && (
-          <div className="users-reveal">
-            Senha de <b>{reveal.usuario}</b>: <code>{reveal.senha}</code> — copie agora, não será
-            exibida de novo.
+          <Alert tone="ok">
+            <span>
+              Senha de <b>{reveal.usuario}</b>: <code>{reveal.senha}</code> — copie agora, não será
+              exibida de novo.
+            </span>
             <Button variant="ghost" size="sm" onClick={() => setReveal(null)}>
               ok
             </Button>
-          </div>
+          </Alert>
         )}
         {err && <Alert tone="alert">{err}</Alert>}
 
@@ -139,8 +141,6 @@ export function UsersPage() {
               wa={wa}
               waNum={waNum}
               setWaNum={setWaNum}
-              waMsg={waMsg}
-              setWaMsg={setWaMsg}
               dests={dests}
               setDests={setDests}
               novoDest={novoDest}
@@ -149,8 +149,6 @@ export function UsersPage() {
               setNotif={setNotif}
               preview={preview}
               setPreview={setPreview}
-              notifMsg={notifMsg}
-              setNotifMsg={setNotifMsg}
               setErr={setErr}
               setConfirmRemove={setConfirmRemove}
             />

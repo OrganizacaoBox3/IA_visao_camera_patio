@@ -267,7 +267,7 @@ function FlowSection({ flow }: { flow: FlowView }) {
           <Kpi value={k.in - k.out} label="saldo (entradas − saídas)" />
           <Kpi value={k.lines} label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"} />
         </KpiRow>
-        <p className="muted text-[11px]">
+        <p className="muted text-label">
           Respeita período e turno. O filtro de área não se aplica ao fluxo (cruzamentos são por
           câmera × linha, sem área).
         </p>

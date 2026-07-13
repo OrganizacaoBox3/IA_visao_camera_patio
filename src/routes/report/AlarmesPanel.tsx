@@ -112,7 +112,7 @@ export function AlarmesPanel({
             <section className="panel">
               <SectionTitle>
                 Tendência (14 dias){" "}
-                <span className="muted text-[11px] font-normal">— clique p/ filtrar o dia</span>
+                <span className="muted text-label font-normal">— clique p/ filtrar o dia</span>
               </SectionTitle>
               <div className="evo">
                 {aTrend.bars.map((b) => {
@@ -144,7 +144,7 @@ export function AlarmesPanel({
             <section className="panel">
               <SectionTitle>
                 Quando — prioridade × hora{" "}
-                <span className="muted text-[11px] font-normal">— clique p/ filtrar a hora</span>
+                <span className="muted text-label font-normal">— clique p/ filtrar a hora</span>
               </SectionTitle>
               <Heatmap
                 rows={aHeat.rows.map((row) => ({

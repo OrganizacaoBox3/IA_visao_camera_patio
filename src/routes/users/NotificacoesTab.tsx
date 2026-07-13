@@ -1,12 +1,13 @@
-import { type Dispatch, type SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   Button,
   Input,
   Field,
   Switch,
   CheckboxRow,
-  ScrollArea,
   HelpTip,
+  Table,
+  TableEmpty,
   useToast,
   SectionTitle,
 } from "../../ui";
@@ -37,8 +38,6 @@ type Props = {
   wa: WaStatus | null;
   waNum: string;
   setWaNum: Dispatch<SetStateAction<string>>;
-  waMsg: string | null;
-  setWaMsg: Dispatch<SetStateAction<string | null>>;
   dests: Recipient[];
   setDests: Dispatch<SetStateAction<Recipient[]>>;
   novoDest: NovoDest;
@@ -47,8 +46,6 @@ type Props = {
   setNotif: Dispatch<SetStateAction<NotifSettings | null>>;
   preview: Record<string, string> | null;
   setPreview: Dispatch<SetStateAction<Record<string, string> | null>>;
-  notifMsg: string | null;
-  setNotifMsg: Dispatch<SetStateAction<string | null>>;
   setErr: Dispatch<SetStateAction<string | null>>;
   setConfirmRemove: Dispatch<SetStateAction<ConfirmRemove | null>>;
 };
@@ -57,8 +54,6 @@ export function NotificacoesTab({
   wa,
   waNum,
   setWaNum,
-  waMsg,
-  setWaMsg,
   dests,
   setDests,
   novoDest,
@@ -67,24 +62,26 @@ export function NotificacoesTab({
   setNotif,
   preview,
   setPreview,
-  notifMsg,
-  setNotifMsg,
   setErr,
   setConfirmRemove,
 }: Props) {
   const { toast } = useToast();
+  // Trava dupla submissão / mutações concorrentes (padrão da casa — IpCamerasSection):
+  // sem ela, clique duplo em "Adicionar"/"Salvar"/"Enviar teste" duplicava a ação.
+  const [busy, setBusy] = useState(false);
 
+  // Feedback ÚNICO (spec §3): sucesso/erro de AÇÃO → toast; os antigos spans inline
+  // (waMsg/notifMsg) duplicavam o mesmo texto e saíram.
   async function onWaTest() {
-    setWaMsg(null);
+    if (busy) return;
+    setBusy(true);
     try {
       await waTest(waNum.trim());
-      setWaMsg("Mensagem de teste enviada.");
       toast("Mensagem de teste enviada.", "ok");
     } catch (e) {
-      const m = e instanceof Error ? e.message : "Falha no envio.";
-      setWaMsg(m);
-      toast(m, "alert");
+      toast(e instanceof Error ? e.message : "Falha no envio.", "alert");
     }
+    setBusy(false);
   }
   function setTipo(
     k: string,
@@ -93,17 +90,15 @@ export function NotificacoesTab({
     setNotif((n) => (n ? { ...n, tipos: { ...n.tipos, [k]: { ...n.tipos[k], ...patch } } } : n));
   }
   async function onSaveNotif() {
-    if (!notif) return;
-    setNotifMsg(null);
+    if (!notif || busy) return;
+    setBusy(true);
     try {
       setNotif(await saveNotifSettings(notif));
-      setNotifMsg("Configuração salva.");
       toast("Configuração salva.", "ok");
     } catch (e) {
-      const m = e instanceof Error ? e.message : "Falha ao salvar.";
-      setNotifMsg(m);
-      toast(m, "alert");
+      toast(e instanceof Error ? e.message : "Falha ao salvar.", "alert");
     }
+    setBusy(false);
   }
   async function onPreview() {
     if (!notif) return;
@@ -135,6 +130,8 @@ export function NotificacoesTab({
     }
   }
   async function onDeleteDest(id: string) {
+    if (busy) return;
+    setBusy(true);
     try {
       await deleteRecipient(id);
       await refreshDests();
@@ -142,6 +139,7 @@ export function NotificacoesTab({
     } catch (e) {
       toast(e instanceof Error ? e.message : "Falha ao remover destinatário.", "alert");
     }
+    setBusy(false);
   }
   function requestDeleteDest(d: Recipient) {
     setConfirmRemove({
@@ -152,6 +150,8 @@ export function NotificacoesTab({
   }
   async function onAddDest(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setErr(null);
     try {
       await createRecipient(novoDest);
@@ -163,6 +163,7 @@ export function NotificacoesTab({
       setErr(m);
       toast(m, "alert");
     }
+    setBusy(false);
   }
 
   return (
@@ -195,10 +196,9 @@ export function NotificacoesTab({
                 value={waNum}
                 onChange={(e) => setWaNum(e.target.value)}
               />
-              <Button onClick={onWaTest} disabled={waNum.replace(/\D/g, "").length < 10}>
+              <Button onClick={onWaTest} disabled={busy || waNum.replace(/\D/g, "").length < 10}>
                 Enviar teste
               </Button>
-              {waMsg && <span className="muted">{waMsg}</span>}
             </div>
           </div>
         ) : wa.qr ? (
@@ -289,11 +289,10 @@ export function NotificacoesTab({
           </div>
 
           <div className="prof-actions">
-            <Button variant="primary" onClick={onSaveNotif}>
+            <Button variant="primary" onClick={onSaveNotif} disabled={busy}>
               Salvar
             </Button>
             <Button onClick={onPreview}>Pré-visualizar</Button>
-            {notifMsg && <span className="prof-ok">{notifMsg}</span>}
           </div>
           {preview && (
             <div className="notif-preview">
@@ -342,65 +341,66 @@ export function NotificacoesTab({
           <Button
             variant="primary"
             type="submit"
-            disabled={novoDest.numero.replace(/\D/g, "").length < 10}
+            disabled={busy || novoDest.numero.replace(/\D/g, "").length < 10}
           >
             Adicionar
           </Button>
         </form>
-        <ScrollArea orientation="both" className="mt-2 min-h-[160px] flex-1">
-          <table className="rtable">
-            <thead>
-              <tr>
-                {/* Nome absorve a largura livre; demais colunas compactas (sem faixa morta). */}
-                <th className="w-full">Nome</th>
-                <th className="whitespace-nowrap">Número</th>
-                <th className="whitespace-nowrap">Filtro</th>
-                <th className="whitespace-nowrap">Status</th>
-                <th className="whitespace-nowrap text-right">Ações</th>
+        {/* Átomo Table da casa: th scope="col" por construção + rolagem interna (regra A12). */}
+        <Table
+          ariaLabel="Destinatários do WhatsApp"
+          className="mt-2 min-h-[160px] flex-1"
+          columns={[
+            // Nome absorve a largura livre; demais colunas compactas (sem faixa morta).
+            { label: "Nome", className: "w-full" },
+            { label: "Número", className: "whitespace-nowrap" },
+            { label: "Filtro", className: "whitespace-nowrap" },
+            { label: "Status", className: "whitespace-nowrap" },
+            { label: "Ações", className: "whitespace-nowrap text-right" },
+          ]}
+        >
+          <tbody>
+            {dests.map((d) => (
+              <tr key={d.id}>
+                <td>{d.nome}</td>
+                <td className="mono">{d.numero}</td>
+                <td>
+                  <div className="cell-toggle">
+                    <Switch
+                      checked={d.somenteCriticos}
+                      onCheckedChange={(v) => onPatchDest(d.id, { somenteCriticos: v })}
+                      ariaLabel="só críticos"
+                    />
+                    <span>{d.somenteCriticos ? "só críticos" : "todos"}</span>
+                  </div>
+                </td>
+                <td>
+                  <div className="cell-toggle">
+                    <Switch
+                      checked={d.ativo}
+                      onCheckedChange={(v) => onPatchDest(d.id, { ativo: v })}
+                      ariaLabel="ativo"
+                    />
+                    <span>{d.ativo ? "Ativo" : "Inativo"}</span>
+                  </div>
+                </td>
+                <td className="whitespace-nowrap text-right">
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => requestDeleteDest(d)}
+                    disabled={busy}
+                  >
+                    Remover
+                  </Button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {dests.map((d) => (
-                <tr key={d.id}>
-                  <td>{d.nome}</td>
-                  <td className="mono">{d.numero}</td>
-                  <td>
-                    <div className="cell-toggle">
-                      <Switch
-                        checked={d.somenteCriticos}
-                        onCheckedChange={(v) => onPatchDest(d.id, { somenteCriticos: v })}
-                        ariaLabel="só críticos"
-                      />
-                      <span>{d.somenteCriticos ? "só críticos" : "todos"}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="cell-toggle">
-                      <Switch
-                        checked={d.ativo}
-                        onCheckedChange={(v) => onPatchDest(d.id, { ativo: v })}
-                        ariaLabel="ativo"
-                      />
-                      <span>{d.ativo ? "Ativo" : "Inativo"}</span>
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap text-right">
-                    <Button variant="danger" size="sm" onClick={() => requestDeleteDest(d)}>
-                      Remover
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-              {dests.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty-note">
-                    Nenhum destinatário avulso.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </ScrollArea>
+            ))}
+            {dests.length === 0 && (
+              <TableEmpty colSpan={5}>Nenhum destinatário avulso.</TableEmpty>
+            )}
+          </tbody>
+        </Table>
       </section>
     </>
   );
