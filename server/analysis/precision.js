@@ -101,7 +101,9 @@ const PRECISION = Object.freeze({
     birthIouThreshold: 0.55,
     // 9-11. Derivação do TTL — ver trackTtlMs() abaixo (nunca-cego: acoplado ao
     //    probe). É também o TTL INTERNO dos tracks LOST (janela máxima em que a
-    //    re-associação ainda devolve o MESMO id — knob 22).
+    //    re-associação ainda devolve o MESMO id — knob 22). Vale como MORTE só p/ o
+    //    track MÓVEL: p/ o ESTACIONÁRIO (knobs 23-26) ele vira PISO — não mata sozinho,
+    //    mas a morte por evidência também não acontece antes dele.
     ttlFloorMs: 1500,
     ttlRoundFactor: 3.5,
     ttlProbeMarginMs: 2000,
@@ -130,7 +132,53 @@ const PRECISION = Object.freeze({
     //     (bytetrack.js). 0 faria o overlay piscar a cada miss; subir recria o
     //     rastro. SENSOR: pipeline.test.js (payload sem lost) + eval:counting
     //     (salto extremo/oclusão longa) + status().tracker.lost.
+    //     Vale p/ o track MÓVEL; o ESTACIONÁRIO tem graça própria (knob 25).
     lostAfterMisses: 1,
+
+    // ── ESTADO ESTACIONÁRIO (F3 — spec-tracking-pessoa-parada §2 C2) ────────────
+    // "Parado" é ESTADO, não morte: o track cuja posição fica estável ENTRA no estado
+    // (caixa congelada, v=0), fica ISENTO do TTL de relógio (9-11) e passa a morrer
+    // por EVIDÊNCIA (rodadas ANALISADAS sem match — rodada PULADA pelo gate não conta:
+    // "não vi" ≠ "não estava"). É o conserto do bug de campo "o marcado some se a
+    // pessoa estiver parada" e da métrica-que-mata (zona VAZIA com pessoa dentro).
+    // SENSOR de todos: eval/stationary.mjs (roda no npm run eval:counting) — a régua
+    // CA-8 mede ocupação/ghost/id-switch de dwell sob o gate de movimento REAL.
+    // ⚠ WIRING: engine.js (createState) ainda NÃO passa estes 4 knobs no
+    //   createByteTracker — o motor herda hoje os MESMOS valores pelos DEFAULTS
+    //   internos do bytetrack.js (paridade por VALOR, não por referência). Ligar os
+    //   4 no createByteTracker é a próxima mudança de 4 linhas em engine.js (outro
+    //   dono de arquivo nesta onda); até lá, mudar um número AQUI não muda produção.
+    //
+    // 23. Tolerância de JITTER do bbox (norm.): deslocamento do centro que ainda NÃO é
+    //     movimento. Medido contra a ÂNCORA (onde a imobilidade começou) — quem TREME
+    //     oscila em volta dela, quem DERIVA acumula e estoura. 0.01 = o MESMO minMove
+    //     do counter (knob 12): a mesma noção de micro-jitter, um número só. Apertar é
+    //     FAIL-SAFE (o track só não entra no estado); afrouxar demais faz caminhada
+    //     lenta virar "parado" (perde-se a re-associação por distância — knob 20).
+    stationaryTolerance: 0.01,
+    // 24. Observações ESTÁVEIS consecutivas p/ ENTRAR no estado. 2 no hub: sob o gate,
+    //     a cena estática só é inferida no PROBE (6s — knob 17), então 2 observações
+    //     ≈ 12s de imobilidade (a ordem de grandeza do stationary.threshold do Frigate,
+    //     ~10s). NUNCA 1: o track precisa de mais de uma evidência de imobilidade antes
+    //     de sair do 2º estágio (anti-hijack). Espelho do front: 3 (rodada ~350ms).
+    stationaryEnterRounds: 2,
+    // 25. MORTE POR EVIDÊNCIA: rodadas ANALISADAS consecutivas sem match que o
+    //     ESTACIONÁRIO tolera — é também a graça de EMISSÃO dele (enquanto vivo e não
+    //     refutado, a caixa congelada É a evidência de presença: a zona fica OCIOSA,
+    //     nunca VAZIA). A morte exige ISTO **E** o TTL (9-11) como piso: só a evidência
+    //     mataria a pessoa parada em CENA MOVIMENTADA (aí o gate analisa a 2fps e 4
+    //     oclusões seguidas = 2s, mais cedo que o TTL de hoje). 3 = tolera 3 probes
+    //     cegos (~18s de detector piscando na pessoa sentada) e ainda fecha a saída em
+    //     ≤ 4 probes. Subir = mais ghost quando a pessoa some sem ser vista saindo;
+    //     baixar = a parada morre e o dwell zera. SENSOR: eval/stationary.mjs
+    //     (occupancySurvivalPct × ghostTimeMs — os dois lados do mesmo knob).
+    stationaryMaxMisses: 3,
+    // 26. Teto de vida do estacionário (ms). 0 = SEM teto (escolhido): matar por
+    //     RELÓGIO um track re-confirmado por evidência a cada probe é EXATAMENTE o bug
+    //     que a F3 conserta (o dwell do operador zeraria no meio do turno). Fica como
+    //     escape-hatch p/ o caso patológico (det fantasma eternamente re-confirmada —
+    //     cujo tratamento certo é a auto-máscara/zona de exclusão, não o tracker).
+    stationaryMaxMs: 0,
   }),
 
   // ── Contador de linha (consumidor: engine.js → createCounter) ───────────────

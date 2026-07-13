@@ -317,6 +317,143 @@ describe("createByteTracker — stream que SALTA (espelho F1: re-assoc 2º está
   });
 });
 
+// ── F3 — ESTADO ESTACIONÁRIO (spec-tracking-pessoa-parada §2 C2 / CA-1..CA-7).
+// PARIDADE (CA-7): a POLÍTICA é a MESMA de server/analysis/bytetrack.js (bloco espelhado
+// lá, com os mesmos nomes de caso); os KNOBS diferem por CADÊNCIA — aqui a rodada é
+// ~350ms (entra em parado com 3 observações estáveis); no hub, sob o gate de movimento, a
+// cena estática só é inferida no probe de 6s (2 observações ≈ 12s).
+describe("createByteTracker — ESTADO ESTACIONÁRIO (parado é estado, não morte)", () => {
+  const OPTS = {
+    highScore: 0.4,
+    iouThreshold: 0.25,
+    ttlMs: 1500, // TTL de RELÓGIO do móvel (o que matava a pessoa parada em ~3s no front)
+    reassocDist: 0.12,
+    reassocMaxGapMs: 2500,
+    lostAfterMisses: 1,
+    stationaryTolerance: 0.01,
+    stationaryEnterRounds: 3,
+    stationaryMaxMisses: 3,
+    stationaryMaxMs: 0,
+  };
+  const R = 350; // rodada do front (~3fps)
+
+  /** Anda até 0.5 (2 observações → velocidade estabelecida) e PARA lá; N rodadas paradas. */
+  function arrive(tk: ReturnType<typeof createByteTracker>, stillRounds = 3) {
+    tk.update([det(0.45, 0.5, 0.8)], R);
+    tk.update([det(0.5, 0.5, 0.8)], 2 * R); // v = +0.05/350ms — a caminhada que a predição extrapola
+    for (let k = 0; k < stillRounds; k++) tk.update([det(0.5, 0.5, 0.8)], (3 + k) * R);
+    return tk;
+  }
+
+  it("HIPÓTESE DE PARADA: det no lugar da última observação sustenta o track, mesmo com a predição envelhecida e score BAIXO", () => {
+    // A pessoa CHEGA andando e PARA; a rodada seguinte é LENTA (1,4s — perfil LR full) e o
+    // detector só dá 0.30 (< highScore). A predição levou a caixa p/ 0.5 + 0.05/350×1400 =
+    // 0.70: IoU 0 com a det. Antes: nenhuma passada casava (score baixo não nasce nem
+    // re-associa por distância) → o track morria e o id/dwell zeravam. Agora a 2ª passada
+    // tenta também a caixa CONGELADA (IoU 1.0) → sustenta.
+    const tk = createByteTracker(OPTS);
+    tk.update([det(0.45, 0.5, 0.8)], R);
+    tk.update([det(0.5, 0.5, 0.8)], 2 * R);
+    const out = tk.update([det(0.5, 0.5, 0.3)], 2 * R + 1400);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1); // MESMO id — a permanência não zera
+    expect(out[0].score).toBe(0.3); // sustentado pela 2ª passada (score baixo NÃO nasce)
+    expect(tk.tracks()).toHaveLength(1);
+  });
+
+  it("ENTRA no estado após N observações estáveis e ZERA a velocidade (caixa congelada)", () => {
+    const tk = createByteTracker(OPTS);
+    tk.update([det(0.45, 0.5, 0.8)], R);
+    tk.update([det(0.5, 0.5, 0.8)], 2 * R);
+    expect(tk.update([det(0.5, 0.5, 0.8)], 3 * R)[0].stationary).toBe(false); // 1ª estável
+    expect(tk.update([det(0.5, 0.5, 0.8)], 4 * R)[0].stationary).toBe(false); // 2ª estável
+    const out = tk.update([det(0.5, 0.5, 0.8)], 5 * R); // 3ª estável → ESTACIONÁRIO
+    expect(out[0].stationary).toBe(true);
+    expect(out[0].id).toBe(1);
+  });
+
+  it("JITTER de bbox não acorda o estacionário (tolerância medida contra a ÂNCORA)", () => {
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5
+    // treme ±0.008 (< 0.01) em torno da âncora: segue parado, sem re-armar o estado
+    expect(tk.update([det(0.508, 0.5, 0.8)], 6 * R)[0].stationary).toBe(true);
+    expect(tk.update([det(0.492, 0.5, 0.8)], 7 * R)[0].stationary).toBe(true);
+    // …mas ANDAR de verdade (0.03 > tolerância) devolve o track ao regime MÓVEL
+    const out = tk.update([det(0.53, 0.5, 0.8)], 8 * R);
+    expect(out[0].stationary).toBe(false);
+    expect(out[0].id).toBe(1);
+  });
+
+  it("morte por EVIDÊNCIA, não por relógio: rodada LENTA (3× o TTL) não mata o parado", () => {
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5
+    // gap de 5s (aba em background/stall de stream) — 3× o ttlMs de 1500. O relógio não
+    // roda p/ o estacionário; a rodada que não rodou não conta como miss.
+    const out = tk.update([det(0.5, 0.5, 0.8)], 5 * R + 5000);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1); // sobrevive (antes: morto pelo TTL → id novo, dwell zerado)
+    expect(out[0].firstSeen).toBe(R);
+  });
+
+  it("parado sem match segue DESENHADO/contando presença: a zona fica OCIOSA, nunca VAZIA", () => {
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5
+    for (let k = 6; k <= 8; k++) {
+      const out = tk.update([], k * R); // detector cego em 3 rodadas (recall intermitente)
+      expect(out).toHaveLength(1);
+      expect(out[0].cx).toBeCloseTo(0.5, 6); // congelada onde foi vista
+    }
+    const back = tk.update([det(0.5, 0.5, 0.8)], 9 * R);
+    expect(back[0].id).toBe(1); // re-detecção volta ao MESMO id (o dwell nunca zerou)
+    expect(back[0].firstSeen).toBe(R);
+  });
+
+  it("anti-ghost: passadas M rodadas ANALISADAS sem match (e o piso do relógio), o parado MORRE", () => {
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5, último match em 5×R
+    for (let k = 6; k <= 8; k++) expect(tk.update([], k * R)).toHaveLength(1); // 3 misses: graça
+    expect(tk.update([], 9 * R)).toHaveLength(0); // 4º miss > M → sai do desenho/ocupação…
+    expect(tk.tracks()).toHaveLength(1); // …mas ainda vivo: o relógio (1400ms < ttl 1500) é PISO
+    expect(tk.update([], 10 * R)).toHaveLength(0); // evidência (5 misses) E relógio (1750 > 1500)
+    expect(tk.tracks()).toHaveLength(0); // → morreu de vez (sem fantasma imortal)
+  });
+
+  it("CENA MOVIMENTADA: oclusão de M rodadas ANALISADAS não mata o parado antes do relógio (id sobrevive)", () => {
+    // O contraponto do teste acima e a razão do PISO: com outra pessoa/empilhadeira em
+    // quadro, TODA rodada é analisada (~3fps) — só a evidência mataria a pessoa parada em
+    // ~1,4s de oclusão, MAIS cedo que o TTL de hoje. Com o piso, ela some do desenho (a
+    // caixa congelada não fica de enfeite) mas o ID sobrevive e a re-detecção o recupera.
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5, último match em 5×R
+    for (let k = 6; k <= 9; k++) tk.update([], k * R); // 4 rodadas ocluso (1400ms < ttl 1500)
+    const back = tk.update([det(0.5, 0.5, 0.8)], 9 * R + 100); // reaparece dentro do TTL
+    expect(back).toHaveLength(1);
+    expect(back[0].id).toBe(1); // MESMO id — o dwell/permanência não zerou
+    expect(back[0].firstSeen).toBe(R);
+  });
+
+  it("ANTI-HIJACK: pessoa NOVA no raio do 2º estágio não herda o id do parado", () => {
+    const tk = arrive(createByteTracker(OPTS)); // A: ESTACIONÁRIO em 0.5
+    // Rodada em que o detector NÃO vê A (parada/oclusa) e B aparece a 0.12 dela — dentro do
+    // raio do 2º estágio (folga 0.12 + |v|·gap, com |v| = 0). Sem a exclusão do estacionário,
+    // B herdaria o id de A e arrastaria a caixa dela p/ cima de si.
+    const out = tk.update([det(0.62, 0.5, 0.8)], 6 * R);
+    expect(out.map((t) => t.id)).toEqual([2]); // B nasce com id NOVO (e A, refutada, não é desenhada)
+    expect(tk.tracks().find((t) => t.id === 1)!.cx).toBeCloseTo(0.5, 6); // A não foi arrastada
+  });
+
+  it("ANTI-RASTRO: parado sem match em rodada de REALOCAÇÃO sai do desenho (e não volta na seguinte)", () => {
+    // Contraponto do teste de presença: se a det da pessoa apareceu em OUTRO lugar, a caixa
+    // congelada é o próprio RASTRO — o track é REFUTADO e some até re-associar (sem o flag
+    // pegajoso ele voltaria na rodada seguinte: a graça do estacionário é longa).
+    const tk = arrive(createByteTracker(OPTS)); // ESTACIONÁRIO em 0.5
+    expect(tk.update([det(0.9, 0.5, 0.8)], 6 * R).map((t) => t.id)).toEqual([2]); // saltou p/ longe
+    expect(tk.update([det(0.9, 0.5, 0.8)], 7 * R).map((t) => t.id)).toEqual([2]); // não volta
+  });
+
+  it("TETO opcional (stationaryMaxMs): 0 = sem teto (o parado VISTO nunca morre por relógio)", () => {
+    const tk = arrive(createByteTracker(OPTS)); // stationaryMaxMs: 0
+    const out = tk.update([det(0.5, 0.5, 0.8)], 3600_000); // 1h de permanência, re-visto
+    expect(out[0].id).toBe(1);
+    expect(out[0].firstSeen).toBe(R); // a permanência NÃO zera
+  });
+});
+
 describe("createByteTracker — LIMITAÇÃO DECLARADA: sem re-ID", () => {
   it("cruzamento denso: pessoas que trocam de lugar entre rodadas TROCAM de id (geometria, não aparência)", () => {
     // Duas pessoas paradas; entre duas rodadas LENTAS elas trocam de posição. Sem re-ID por

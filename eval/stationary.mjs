@@ -24,33 +24,38 @@
 //   • ghostTimeMs — tempo entre a saída REAL e a 1ª emissão com 0 tracks (CA-2);
 //   • firstVacantMs — quando a zona vira VAZIA com a pessoa AINDA lá (falha C2).
 //
-// ── RÉGUA DO TORNEIO (CA-8 — PINADA A PRIORI, antes de F3/F4 tocarem em knob ──
-// ── ou política de tracker). Mudança só é PROMOVIDA se, nestes cenários:
-//   1. occupancySurvivalPct NÃO CAI em nenhum cenário (baseline medida 2026-07-12:
-//      100 / 100 / 100 / 10 / 100 / 90 — na ordem dos cenários abaixo);
-//   2. ghostTimeMs NÃO SOBE além de PROBE_MS (baseline: 6000ms — anti-ghost, o
-//      carro-fantasma do Frigate não se reproduz);
-//   3. idSwitchesOfStationary NÃO SOBE (baseline: 0 em todos, exceto "2 probes
-//      cegos" = 1 — FALHA CONHECIDA que a F3 zera);
-//   4. maxEmissionGapMs NÃO SOBE além de PROBE_MS nos cenários sem atraso
-//      injetado (baseline: 6000ms).
-// Os asserts abaixo codificam a régua contra a BASELINE MEDIDA HOJE — o CI fica
-// VERDE com o código atual: cenário com FALHA CONHECIDA documenta o número em
-// vez de quebrar o build (comentário aponta a fase da spec que corrige) e trava
-// "não pior que hoje" — o conserto só melhora a métrica (melhorar SEMPRE passa,
-// regredir NUNCA).
+// ── RÉGUA DO TORNEIO (CA-8) — PINADA A PRIORI na F2 e APERTADA pela F3 (2026-07-13),
+// ── que entregou o estado ESTACIONÁRIO no tracker. Mudança só é PROMOVIDA se:
+//   1. occupancySurvivalPct = 100% em TODOS os cenários (a métrica-que-mata: zona
+//      VAZIA com pessoa presente = falso alerta de ociosidade). Era 10% no cenário 4
+//      e 90% no 6 (as duas falhas conhecidas da F2) — a F3 zerou as duas;
+//   2. NENHUMA emissão VAZIA durante o dwell (firstVacantMs == null) — o mesmo em
+//      outra forma: a pessoa parada NUNCA some da zona;
+//   3. idSwitchesOfStationary = 0 em TODOS (era 1 no cenário 6: o track morria por
+//      RELÓGIO e renascia com id novo → o dwell zerava);
+//   4. ghostTimeMs ≤ PROBE_MS (anti-ghost: o carro-fantasma do Frigate não se
+//      reproduz — quem SAI some em ≤ 1 probe);
+//   5. maxEmissionGapMs ≤ PROBE_MS nos cenários sem atraso injetado;
+//   6. ANTI-HIJACK (CA-4, cenário 7): a pessoa NOVA que entra no raio do parado NUNCA
+//      herda o id dele — e o parado mantém o SEU id do início ao fim do dwell.
+// Régua "só melhora": estes asserts são de SUCESSO (não mais baselines de falha).
+// Regredir QUEBRA o build — que é o ponto: a F4 (alinhar o ttl do front) e qualquer
+// mexida futura em knob de tracker passam por aqui.
 //
-// BASELINE HOJE (o que este sensor mediu ao nascer — a linha de base da falha):
-//   • dwell 10min com re-detecção alta JÁ sobrevive como 1 id (a guarda de
-//     nascimento re-associa a re-detecção parada) — a falha visível é o BURACO
-//     de emissão de 6000ms > expireMs 2600 do front (C1/F1);
-//   • probe atrasado a 12s COM re-detecção alta SOBREVIVE (refuta o sub-claim
-//     "morre aos 8s" da spec §0.2 para este caso: o TTL só executa DENTRO de
-//     update(), e a associação roda ANTES da poda) — a morte real exige det
-//     FRACA/AUSENTE na rodada analisada (cenários 4 e 6);
-//   • sentada com score < highScore SEM âncora: morta aos ~11,5s de dwell e a
-//     zona fica VAZIA o resto do tempo (occupancy 10%) — F3 corrige;
-//   • 2 probes sem detecção: morte + ID NOVO na re-detecção (dwell zera) — F3.
+// O QUE A F3 MUDOU (medido por este sensor, antes → depois):
+//   • sentada com score < highScore SEM âncora: morria aos ~11,5s de dwell e a zona
+//     ficava VAZIA o resto do tempo (ocupação 10%) → 100%, 1 id, zero emissão vazia.
+//     Mecanismo: a HIPÓTESE DE PARADA na associação (det em cima da caixa CONGELADA,
+//     não da PREDITA — a predição de caminhada extrapolada por 6s de probe fugia do
+//     frame) + 2ª passada sustentando score baixo;
+//   • 2 probes cegos: morte por RELÓGIO + ID NOVO na re-detecção (dwell zerava;
+//     ocupação 90%) → 100%, 0 id-switch. Mecanismo: o estacionário morre por
+//     EVIDÊNCIA (rodadas ANALISADAS sem match), com o TTL só como PISO;
+//   • o que JÁ passava (dwell 10min, saída limpa, probe atrasado, score baixo com
+//     âncora) segue passando — a F3 não pagou o conserto com regressão.
+// PENDENTE (fora da F3): maxEmissionGapMs = 6000ms > expireMs 2600 do interpolador
+// do front — o track está VIVO no hub e a caixa some do dashboard durante o skip.
+// É o elo C1/F1 (re-emissão coasting), medido aqui e resolvido em pipeline.js.
 //
 // Knobs: DERIVADOS de precision.js (fonte ÚNICA — mesmos do eval/counting.mjs).
 // Determinístico: now sintético (tick × ROUND_MS), zero Date.now() no caminho
@@ -80,6 +85,12 @@ const KNOBS = {
   reassocMaxGapMs: PRECISION.tracker.reassocMaxGapMs,
   lostAfterMisses: PRECISION.tracker.lostAfterMisses,
   ttlMs: trackTtlMs({ roundMs: ROUND_MS, gateOn: true }), // gate LIGADO (é o objeto do sensor) → 8000
+  // Estado ESTACIONÁRIO (F3 — precision.js 23-26): o objeto DESTE sensor. Sem passá-los,
+  // o eval mediria os defaults internos do bytetrack.js em vez do painel (paridade frágil).
+  stationaryTolerance: PRECISION.tracker.stationaryTolerance,
+  stationaryEnterRounds: PRECISION.tracker.stationaryEnterRounds,
+  stationaryMaxMisses: PRECISION.tracker.stationaryMaxMisses,
+  stationaryMaxMs: PRECISION.tracker.stationaryMaxMs,
   minMove: PRECISION.counter.minMove,
   maxDist: PRECISION.counter.maxDist,
   debounceMs: PRECISION.counter.debounceMs,
@@ -93,6 +104,7 @@ const ZONE = { id: "z1", label: "posto", atividade: "picking", x: 0.45, y: 0.3, 
 
 const PERSON = { w: 0.06, h: 0.16 }; // mesma pessoa sintética do counting.mjs
 const FOOT_Y = 0.5;
+const STAND_X = 0.6; // o POSTO: onde o sujeito do dwell para (âncora das métricas de id)
 
 /** Detecção como o worker devolve (espelho do det() de counting.mjs). */
 function det(cx, footY, score) {
@@ -136,6 +148,24 @@ function timeline(...parts) {
   return { ticks, marks };
 }
 
+/**
+ * Cola uma 2ª PESSOA (lane B) sobre a timeline da 1ª, a partir do índice `at` — o
+ * sujeito do dwell continua sendo A (as métricas são dela); B é o VIZINHO que entra
+ * em cena. É o que permite medir o ANTI-HIJACK (CA-4) sob o gate REAL: B só existe
+ * porque se MOVE, e é o movimento dela que faz o gate inferir.
+ * @param {{ticks:object[],marks:object}} tl  timeline de A
+ * @param {number} at  índice do tick em que B aparece
+ * @param {Array<{x:number,score:number|null}>} bTicks  posição/score de B por tick
+ */
+function withNeighbor(tl, at, bTicks) {
+  const ticks = tl.ticks.map((t) => ({ ...t }));
+  bTicks.forEach((b, k) => {
+    const i = at + k;
+    if (i < ticks.length) ticks[i] = { ...ticks[i], neighbor: b };
+  });
+  return { ticks, marks: tl.marks };
+}
+
 // ── Laço FIEL ao engine (tick de ROUND_MS): pool ocupado → nem gate (dispatchReady
 // false); senão mede o "movimento" (a cena mudou vs o último tick GATEADO — o
 // prevLuma do engine atualiza TODO tick gateado, inclusive nos pulos) e decide com
@@ -151,6 +181,10 @@ function runScenario(sc) {
     reassocDist: KNOBS.reassocDist,
     reassocMaxGapMs: KNOBS.reassocMaxGapMs,
     lostAfterMisses: KNOBS.lostAfterMisses,
+    stationaryTolerance: KNOBS.stationaryTolerance,
+    stationaryEnterRounds: KNOBS.stationaryEnterRounds,
+    stationaryMaxMisses: KNOBS.stationaryMaxMisses,
+    stationaryMaxMs: KNOBS.stationaryMaxMs,
   });
   // Sem tripwire: aqui o KPI é OCUPAÇÃO (people na zona), não travessia.
   const counter = createCounter([], {
@@ -189,10 +223,13 @@ function runScenario(sc) {
       gate.busy += 1; // pool saturado: a rodada nem é gateada (dispatchReady false)
       return;
     }
-    // "Thumbnail" da cena = posição visível da pessoa. Pessoa que se moveu/entrou/
-    // saiu muda ~2% do thumbnail (bbox ≈1% do frame ≥ motionRatio 0.005); cena
-    // idêntica = 0. Score do detector NÃO é pixel — não dispara movimento.
-    const scene = tk.pos ? `${tk.pos.x},${tk.pos.y}` : "";
+    // "Thumbnail" da cena = posição visível de QUEM está em cena (a pessoa do dwell +
+    // o vizinho, quando houver). Alguém que se moveu/entrou/saiu muda ~2% do thumbnail
+    // (bbox ≈1% do frame ≥ motionRatio 0.005); cena idêntica = 0. O SCORE do detector
+    // NÃO é pixel: pessoa LÁ que o detector não vê (score null) NÃO muda a cena — é o
+    // que separa "não vi" de "não estava", a base da morte por evidência.
+    const scene =
+      (tk.pos ? `${tk.pos.x},${tk.pos.y}` : "") + (tk.neighbor ? `|${tk.neighbor.x}` : "");
     const dec = gateDecision({
       ratio: scene === prevScene ? 0 : 0.02,
       sinceMs: now - lastInferAt,
@@ -207,7 +244,10 @@ function runScenario(sc) {
     }
     lastInferAt = now;
     gate.infer += 1;
-    const dets = tk.pos && tk.score != null ? [det(tk.pos.x, tk.pos.y, tk.score)] : [];
+    const dets = [];
+    if (tk.pos && tk.score != null) dets.push(det(tk.pos.x, tk.pos.y, tk.score));
+    if (tk.neighbor && tk.neighbor.score != null)
+      dets.push(det(tk.neighbor.x, tk.neighbor.y ?? FOOT_Y, tk.neighbor.score));
     pipeline.processRound(st, dets, now);
   });
   return { emitted, gate, marks: sc.timeline.marks, endMs: sc.timeline.ticks.length * ROUND_MS };
@@ -222,8 +262,6 @@ function measure(res) {
   const inDwell = res.emitted.filter((e) => e.now >= dwellStartMs && e.now <= dwellEndMs);
   const peopleOf = (e) => (e.zones.length ? e.zones[0].people : 0);
   const occupied = inDwell.filter((e) => peopleOf(e) >= 1).length;
-  const ids = new Set();
-  for (const e of inDwell) for (const t of e.tracks) ids.add(t.id);
   // maxGap ancorado na última emissão ANTES do dwell (a chegada andando emite).
   let prev = res.emitted.filter((e) => e.now < dwellStartMs).map((e) => e.now).pop() ?? dwellStartMs;
   let maxEmissionGapMs = 0;
@@ -241,17 +279,29 @@ function measure(res) {
     ghostCleared = !!clear;
     ghostTimeMs = (clear ? clear.now : res.endMs) - exitMs;
   }
+  // Ids emitidos POR LUGAR (dentro do dwell): quem ficou parado em `x` teve 1 id só?
+  // É o que separa "a pessoa parada manteve a IDENTIDADE" de "alguém herdou o id dela"
+  // quando há DUAS pessoas em cena (cenário 7 — anti-hijack). Ancorar no LUGAR é o que
+  // torna a métrica de id-switch do PARADO honesta: o vizinho tem os ids dele, no lugar
+  // dele, e não polui a contagem do sujeito do dwell.
+  const idsNear = (x, tol = 0.02) => {
+    const s = new Set();
+    for (const e of inDwell) for (const t of e.tracks) if (Math.abs(t.cx - x) <= tol) s.add(t.id);
+    return s;
+  };
+  const idsOfStationary = idsNear(STAND_X);
   return {
     gate: res.gate,
     dwellEmissions: inDwell.length,
     occupancySurvivalPct: inDwell.length ? Math.round((occupied / inDwell.length) * 1000) / 10 : 0,
-    idsOfDwell: ids.size,
-    idSwitchesOfStationary: Math.max(0, ids.size - 1),
+    idsOfDwell: idsOfStationary.size,
+    idSwitchesOfStationary: Math.max(0, idsOfStationary.size - 1),
     maxEmissionGapMs,
     firstVacantMs: vacant ? vacant.now - dwellStartMs : null,
     endOccupied: last ? peopleOf(last) >= 1 : false,
     ghostTimeMs,
     ghostCleared,
+    idsNear,
   };
 }
 
@@ -287,9 +337,10 @@ const SCENARIOS = [
       ...(m.ghostTimeMs <= PROBE_MS ? [] : [`ghost ${m.ghostTimeMs}ms > ${PROBE_MS}ms (régua: não sobe)`]),
     ],
     info: (m) => [
-      `HOJE já sobrevive: a guarda de nascimento re-associa a re-detecção parada (mesmo id)`,
-      `FALHA CONHECIDA (C1/F1 corrige): buraco de emissão de ${m.maxEmissionGapMs}ms > expireMs 2600 do ` +
-        `front — a caixa SOME do dashboard com o track VIVO no hub (nada é emitido durante o skip)`,
+      `1 id do início ao fim, ocupação contínua: a queixa-mãe (CA-1) fecha do lado do TRACKER`,
+      `RESIDUAL (fora do tracker): buraco de ${m.maxEmissionGapMs}ms entre emissões de INFERÊNCIA > ` +
+        `expireMs 2600 do interpolador. Quem preenche é a re-emissão coasting do skip (C1/F1, em ` +
+        `pipeline.emitCoasting) — este sensor mede só as rodadas ANALISADAS, por isso o buraco aparece aqui.`,
     ],
   },
   {
@@ -326,9 +377,9 @@ const SCENARIOS = [
       ...(m.occupancySurvivalPct >= 100 ? [] : [`ocupação caiu: ${m.occupancySurvivalPct}% (régua: 100%)`]),
     ],
     info: () => [
-      `MEDIDO: sobrevive HOJE — refuta o "morre aos 8s" da spec §0.2 p/ este caso: o TTL só executa`,
-      `DENTRO de update() e a associação (IoU c/ v=0 → predita = observada) roda ANTES da poda.`,
-      `A morte real exige det FRACA/AUSENTE na rodada analisada — cenários 4 e 6 abaixo.`,
+      `Já sobrevivia na F2 (refuta o "morre aos 8s" da spec §0.2 p/ ESTE caso: o TTL só executa DENTRO`,
+      `de update() e a associação roda ANTES da poda) — a morte real exigia det FRACA/AUSENTE na rodada`,
+      `analisada (cenários 4 e 6). A F3 fecha isso por CONSTRUÇÃO: o parado não tem mais relógio de morte.`,
     ],
   },
   {
@@ -340,21 +391,20 @@ const SCENARIOS = [
       stand(0.6, 120, { score: (k) => (k % 2 ? 0.26 : 0.33) }), // 60s sentada, score sempre < highScore
       mark("dwellEnd"),
     ),
-    // FALHA CONHECIDA (spec §0.2 — F3 "estado estacionário + morte por evidência"
-    // corrige): a predição envelhecida (v de caminhada × 6s de probe) zera o IoU,
-    // a det baixa não aciona 2º estágio nem guarda de nascimento → 2 probes sem
-    // match → TTL mata aos ~11,5s de dwell; score < highScore nunca renasce → a
-    // zona fica VAZIA com a pessoa SENTADA lá o resto do tempo. Régua futura: 100%.
+    // CONSERTADO NA F3 (era a falha nº1 da F2: morria aos ~11,5s de dwell e a zona
+    // ficava VAZIA com a pessoa SENTADA lá — ocupação 10%). A predição envelhecida
+    // (v de caminhada × 6s de probe) zerava o IoU e a det BAIXA não aciona 2º estágio
+    // nem guarda de nascimento → 2 probes sem match → o TTL matava. Agora a HIPÓTESE DE
+    // PARADA casa a det baixa com a caixa CONGELADA (2ª passada sustenta) → 100%.
     checks: (m) => [
-      ...(m.occupancySurvivalPct >= 10 ? [] : [`ocupação piorou: ${m.occupancySurvivalPct}% < baseline 10%`]),
-      ...(m.idsOfDwell <= 1 ? [] : [`ids no dwell: ${m.idsOfDwell} (baseline: 1 — nunca renasce c/ score baixo)`]),
-      ...(m.firstVacantMs == null || m.firstVacantMs >= 11500
+      ...(m.occupancySurvivalPct >= 100 ? [] : [`ocupação caiu: ${m.occupancySurvivalPct}% (régua: 100%)`]),
+      ...(m.idsOfDwell === 1 ? [] : [`id fragmentou no dwell: ${m.idsOfDwell} ids (régua: 1)`]),
+      ...(m.firstVacantMs == null
         ? []
-        : [`zona vazia MAIS CEDO que hoje: ${m.firstVacantMs}ms < baseline 11500ms`]),
+        : [`zona VAZIA com a pessoa sentada lá, aos ${m.firstVacantMs}ms (régua: nunca)`]),
     ],
-    info: (m) => [
-      `FALHA CONHECIDA (F3 corrige): zona VAZIA com a pessoa sentada LÁ aos ${m.firstVacantMs ?? "—"}ms de ` +
-        `dwell; ocupação sobrevive só ${m.occupancySurvivalPct}% (régua futura: 100%)`,
+    info: () => [
+      `F3: a 2ª passada casa a det fraca com a caixa CONGELADA (a PREDITA já tinha saído do frame)`,
     ],
   },
   {
@@ -386,21 +436,66 @@ const SCENARIOS = [
       stand(0.6, 66, { score: 0.8 }), // volta a detectar do probe de 35.5s em diante
       mark("dwellEnd"),
     ),
-    // FALHA CONHECIDA (spec §0.2 — F3 corrige com morte por evidência + estado
-    // estacionário): 2º probe cego excede o TTL (12s > 8s) → morte por RELÓGIO com
-    // a pessoa lá; a re-detecção nasce com ID NOVO (dwell zera) e a zona teve
-    // 1 emissão VAZIA no meio. Régua futura: 0 switches, ocupação 100%.
+    // CONSERTADO NA F3 (era a falha nº2 da F2: o 2º probe cego excedia o TTL — 12s >
+    // 8s — e matava por RELÓGIO com a pessoa LÁ; a re-detecção nascia com ID NOVO, o
+    // dwell zerava e a zona teve 1 emissão VAZIA no meio). Agora o estacionário morre
+    // por EVIDÊNCIA (2 misses ≤ stationaryMaxMisses 3) e segue EMITIDO — o relógio só
+    // conta como PISO, e a re-detecção volta ao MESMO id.
     checks: (m) => [
-      ...(m.idSwitchesOfStationary <= 1 ? [] : [`piorou: ${m.idSwitchesOfStationary} id-switches > baseline 1`]),
-      ...(m.occupancySurvivalPct >= 90 ? [] : [`ocupação piorou: ${m.occupancySurvivalPct}% < baseline 90%`]),
-      ...(m.firstVacantMs == null || m.firstVacantMs >= 23500
+      ...(m.idSwitchesOfStationary === 0
         ? []
-        : [`zona vazia MAIS CEDO que hoje: ${m.firstVacantMs}ms < baseline 23500ms`]),
+        : [`id-switch no dwell: ${m.idSwitchesOfStationary} (régua: 0 — o dwell não pode zerar)`]),
+      ...(m.occupancySurvivalPct >= 100 ? [] : [`ocupação caiu: ${m.occupancySurvivalPct}% (régua: 100%)`]),
+      ...(m.firstVacantMs == null
+        ? []
+        : [`zona VAZIA com a pessoa parada lá, aos ${m.firstVacantMs}ms (régua: nunca)`]),
       ...(m.endOccupied ? [] : [`re-detecção alta não recuperou a ocupação ao fim do dwell`]),
     ],
+    info: () => [
+      `F3: 2 probes cegos são 2 misses (≤ 3) — o parado sobrevive, segue emitido e re-associa no MESMO id`,
+    ],
+  },
+  {
+    name: "vizinho NASCE no raio do parado (anti-hijack)",
+    why: "CA-4 (sentinela): B aparece a 0.12 de A PARADA, na rodada em que o detector está cego em A — B herda o id de A?",
+    // A chega, para no posto (0.60) e vira ESTACIONÁRIA (probes de 11,5s e 17,5s). Na
+    // rodada seguinte o detector fica CEGO em A (alguém passou na frente) e B APARECE
+    // pela 1ª vez a 0.12 dela (0.72) — atrás de um rack até agora. É a receita EXATA do
+    // hijack: track sem par (A), det ALTA sem par (B), gap curto (500ms ≤ 2500) e
+    // distância DENTRO do raio (0.12 ≤ folga 0.12 + |v|·gap, com |v| de A = 0). Sem a
+    // exclusão do estacionário do 2º estágio, o track de A re-associa com a det de B:
+    // B nunca ganha id próprio, a caixa de A é ARRASTADA p/ cima dela e, quando A
+    // reaparece no posto, nasce com id NOVO (o dwell dela zera). A caixa da pessoa
+    // PARADA some justamente por ela estar parada — e o ímã cresce com a persistência
+    // que esta frente adicionou. Esta é a sentinela desse custo.
+    timeline: withNeighbor(
+      timeline(
+        ENTER,
+        mark("dwellStart"),
+        stand(0.6, 24, { score: 0.8 }), // probes de 11,5s e 17,5s → A vira ESTACIONÁRIA
+        mark("neighbor"),
+        stand(0.6, 2, { score: null }), // detector CEGO em A na rodada em que B aparece
+        stand(0.6, 40, { score: 0.8 }), // A volta a ser detectada no posto
+        mark("dwellEnd"),
+      ),
+      11 + 24, // índice do 1º tick de B (= o marco "neighbor")
+      new Array(42).fill({ x: 0.72, score: 0.8 }), // B surge colada em A e fica lá
+    ),
+    checks: (m) => {
+      const a = m.idsNear(0.6); // ids emitidos NO POSTO (onde A está parada)
+      const b = m.idsNear(0.72); // ids emitidos onde B parou
+      const shared = [...a].filter((id) => b.has(id));
+      return [
+        ...(a.size === 1 ? [] : [`A (parada) fragmentou: ${a.size} ids no posto (régua: 1)`]),
+        ...(b.size === 1 ? [] : [`B fragmentou: ${b.size} ids (régua: 1)`]),
+        ...(shared.length === 0 ? [] : [`HIJACK: id ${shared.join(",")} apareceu nos DOIS lugares`]),
+        ...(m.occupancySurvivalPct >= 100 ? [] : [`ocupação caiu: ${m.occupancySurvivalPct}% (régua: 100%)`]),
+        ...(m.firstVacantMs == null ? [] : [`zona VAZIA com A parada lá, aos ${m.firstVacantMs}ms (régua: nunca)`]),
+      ];
+    },
     info: (m) => [
-      `FALHA CONHECIDA (F3 corrige): ${m.idSwitchesOfStationary} id-switch (dwell zera) + zona vazia ` +
-        `aos ${m.firstVacantMs ?? "—"}ms com a pessoa lá; ocupação ${m.occupancySurvivalPct}% (régua futura: 100%, 0 switches)`,
+      `A manteve ${m.idsNear(0.6).size} id no posto; B nasceu com id próprio (${m.idsNear(0.72).size}) — ` +
+        `estacionário FORA do 2º estágio (não é herdável)`,
     ],
   },
 ];

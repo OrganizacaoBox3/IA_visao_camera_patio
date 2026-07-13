@@ -103,7 +103,23 @@ export const APP_CONFIG = {
       // flicker de 1 rodada do detector é comum; segurar a caixa 1 rodada evita presença/
       // ocupação piscando; na falta seguinte o rastro some. Em rodada de REALOCAÇÃO
       // (nascimento/re-associação) a graça é suspensa: o sem-par congelado É o rastro.
+      // Vale p/ o track MÓVEL; o ESTACIONÁRIO tem graça própria (stationaryMaxMisses).
       lostAfterMisses: 1,
+      // ESTADO ESTACIONÁRIO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts ·
+      // espelho F1: server/analysis/precision.js knobs 23-26 · spec-tracking-pessoa-parada §2 C2):
+      // "parado" é ESTADO, não morte — posição estável ⇒ caixa congelada, v=0, ISENTO do ttlMs
+      // (que mataria a pessoa parada em ~3s no front) e morrendo por EVIDÊNCIA (rodadas
+      // ANALISADAS sem match). A POLÍTICA é a mesma dos dois lados; os KNOBS diferem por
+      // cadência (aqui a rodada é ~350ms; no hub, sob o gate, o probe é 6s).
+      // ⚠ WIRING: CameraWorkspace.updateTracks ainda NÃO passa estes 4 no createByteTracker —
+      // o front herda hoje os MESMOS valores pelos DEFAULTS internos de vision/bytetrack.ts.
+      stationaryTolerance: 0.01, // jitter de bbox tolerado (norm.) — mesma noção do counterMinMove
+      stationaryEnterRounds: 3, // observações estáveis p/ entrar no estado (~1s a 3fps). Nunca 1.
+      // Morte do parado = EVIDÊNCIA (estas rodadas ANALISADAS sem match) E o ttlMs como PISO —
+      // um sozinho erra: o relógio mata quem está lá (rodada lenta), a evidência mata quem foi
+      // ocluso N rodadas seguidas. É também a graça de desenho/ocupação do parado.
+      stationaryMaxMisses: 3,
+      stationaryMaxMs: 0, // teto de vida do parado: 0 = SEM teto (relógio não mata quem é visto)
       // Counter de linha (dono: vision/counting.ts · sensor: counting.test.ts + replay):
       counterMinMove: 0.01, // deslocamento mínimo (norm.) p/ avaliar cruzamento — filtra micro-jitter
       counterTtlMs: 1500, // gap sem update além disto = continuidade perdida → re-ancora sem contar

@@ -205,14 +205,14 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     const tk = createByteTracker(OPTS);
     tk.update([det(0.2, 0.5, 0.6)], 0);
     tk.update([det(0.25, 0.5, 0.6)], 500); // v = +0.05/500ms = 1e-4/ms
-    // gap de 2000ms (fonte flaky/probe) e a pessoa DESACELEROU: det em 0.30. A predição
-    // foi a 0.45 → IoU pred×det = 0 (1ª passada falha) e IoU observada×det ≈ 0.33 < 0.55
-    // (guarda de nascimento não pega — ANTES este caso virava id novo). 2º estágio:
-    // dist 0.15 ≤ raio 0.12 + |v|·2000 = 0.32 → re-associa.
-    const out = tk.update([det(0.3, 0.5, 0.6)], 2500);
+    // gap de 2000ms (fonte flaky/probe) e a pessoa DESACELEROU: det em 0.35. A predição
+    // foi a 0.45 → IoU pred×det = 0 (1ª passada falha) e a caixa CONGELADA está em 0.25
+    // → IoU 0 também (a hipótese de parada não alcança: ela ANDOU). 2º estágio:
+    // dist 0.10 ≤ raio 0.12 + |v|·2000 = 0.32 → re-associa.
+    const out = tk.update([det(0.35, 0.5, 0.6)], 2500);
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe(1); // mesma pessoa, mesmo id
-    expect(out[0].cx).toBeCloseTo(0.3, 6); // posição observada aplicada
+    expect(out[0].cx).toBeCloseTo(0.35, 6); // posição observada aplicada
     expect(tk.tracks()).toHaveLength(1); // nada nasceu
     expect(tk.stats().reassociations).toBe(1);
   });
@@ -237,12 +237,12 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     tk.update([det(0.25, 0.5, 0.6)], 500); // v = 1e-4/ms
     expect(tk.update([], 1000)).toHaveLength(1); // 1ª sem match: graça (ainda emitido)
     expect(tk.update([], 1500)).toHaveLength(0); // 2ª sem match: LOST → payload limpo
-    // reaparece 2s após o último match, aquém do previsto (pred 0.45; det 0.30; dist 0.15 ≤ 0.32)
-    const out = tk.update([det(0.3, 0.5, 0.6)], 2500);
+    // reaparece 2s após o último match, aquém do previsto (pred 0.45; det 0.35; dist 0.10 ≤ 0.32)
+    const out = tk.update([det(0.35, 0.5, 0.6)], 2500);
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe(1); // mesmo id — permanência/travessia não reiniciam
     expect(out[0].firstSeen).toBe(0);
-    expect(tk.stats()).toEqual({ reassociations: 1, lost: 0 });
+    expect(tk.stats()).toEqual({ reassociations: 1, lost: 0, stationary: 0 });
   });
 
   it("AMBIGUIDADE nunca troca identidade: 1 det plausível p/ 2 tracks → id NOVO", () => {
@@ -272,13 +272,192 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     const tk = createByteTracker(OPTS);
     tk.update([det(0.2, 0.5, 0.6)], 0);
     tk.update([det(0.25, 0.5, 0.6)], 500);
-    // 4s depois (> 2.5s): extrapolação não é confiável — id novo mesmo "perto";
-    // rodada de realocação → o velho não é emitido (segue interno até o TTL)
-    const out = tk.update([det(0.3, 0.5, 0.6)], 4500);
+    // 4s depois (> 2.5s): extrapolação não é confiável — id novo mesmo "perto" (dist 0.20
+    // do centro previsto 0.65); sem IoU com a predita NEM com a congelada (0.25 → a
+    // hipótese de parada não alcança 0.45); rodada de realocação → o velho não é emitido
+    // (segue interno até o TTL).
+    const out = tk.update([det(0.45, 0.5, 0.6)], 4500);
     expect(out.map((t) => t.id)).toEqual([2]);
-    expect(out[0].cx).toBeCloseTo(0.3, 6);
+    expect(out[0].cx).toBeCloseTo(0.45, 6);
     expect(tk.tracks()).toHaveLength(2);
     expect(tk.stats().reassociations).toBe(0);
+  });
+});
+
+// ── F3 — ESTADO ESTACIONÁRIO (spec-tracking-pessoa-parada §2 C2 / CA-1..CA-7).
+// A POLÍTICA aqui é a MESMA de src/vision/bytetrack.ts (teste espelhado lá — CA-7);
+// os KNOBS diferem por cadência (hub sob o gate: probe de 6s; front: rodada ~350ms).
+// Knobs de produção do hub (precision.js 23-26) explícitos, como no bloco acima.
+describe("createByteTracker — ESTADO ESTACIONÁRIO (parado é estado, não morte)", () => {
+  const OPTS = {
+    highScore: 0.35,
+    iouThreshold: 0.25,
+    ttlMs: 8000, // TTL de RELÓGIO do móvel (gate ligado: probe 6000 + margem 2000)
+    reassocDist: 0.12,
+    reassocMaxGapMs: 2500,
+    lostAfterMisses: 1,
+    stationaryTolerance: 0.01,
+    stationaryEnterRounds: 2,
+    stationaryMaxMisses: 3,
+    stationaryMaxMs: 0,
+  };
+  const PROBE = 6000; // cadência das rodadas ANALISADAS em cena estática (gate de movimento)
+
+  /** Anda até 0.5 (2 observações → velocidade estabelecida, IoU 1/3) e PARA lá. */
+  function arrive(tk) {
+    tk.update([det(0.45, 0.5, 0.8)], 500);
+    tk.update([det(0.5, 0.5, 0.8)], 1000); // v = +0.05/500ms = 1e-4/ms — a caminhada que a predição extrapola
+    return tk;
+  }
+
+  it("HIPÓTESE DE PARADA: det no lugar da última observação sustenta o track, mesmo com a predição envelhecida e score BAIXO", () => {
+    // O caso de campo (eval/stationary cenário 4): a pessoa CHEGA andando e SENTA. O
+    // próximo probe é 6s depois e o detector só dá 0.30 (< highScore). A predição levou a
+    // caixa p/ 0.5 + 1e-4×6000 = 1.1 (fora do frame): IoU 0. Antes: nenhuma passada
+    // casava, a det baixa não nascia nem re-associava (2º estágio só aceita score alto) →
+    // 2 probes sem match → o TTL matava a pessoa SENTADA. Agora a 2ª passada tenta também
+    // a caixa CONGELADA (IoU 1.0) → sustenta.
+    const tk = arrive(createByteTracker(OPTS));
+    const out = tk.update([det(0.5, 0.5, 0.3)], 1000 + PROBE);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1); // MESMO id — o dwell não zera
+    expect(out[0].firstSeen).toBe(500);
+    expect(out[0].score).toBe(0.3); // sustentado pela 2ª passada (score baixo NÃO nasce)
+    expect(tk.tracks()).toHaveLength(1); // nada nasceu
+  });
+
+  it("ENTRA no estado após N observações estáveis e ZERA a velocidade (caixa congelada)", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    expect(tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE)[0].stationary).toBe(false); // 1ª estável
+    const out = tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // 2ª estável → ESTACIONÁRIO
+    expect(out[0].stationary).toBe(true);
+    expect(out[0].vx).toBe(0); // velocidade de caminhada não extrapola mais (OC-SORT)
+    expect(out[0].vy).toBe(0);
+    expect(tk.stats().stationary).toBe(1);
+  });
+
+  it("JITTER de bbox não acorda o estacionário (tolerância medida contra a ÂNCORA)", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO
+    // treme ±0.008 (< 0.01) em torno da âncora: segue parado, sem re-armar o estado
+    expect(tk.update([det(0.508, 0.5, 0.8)], 1000 + 3 * PROBE)[0].stationary).toBe(true);
+    expect(tk.update([det(0.492, 0.5, 0.8)], 1000 + 4 * PROBE)[0].stationary).toBe(true);
+    // …mas ANDAR de verdade (0.03 > tolerância) devolve o track ao regime MÓVEL
+    const out = tk.update([det(0.53, 0.5, 0.8)], 1000 + 5 * PROBE);
+    expect(out[0].stationary).toBe(false);
+    expect(out[0].id).toBe(1);
+  });
+
+  it("CA-3 — morte por EVIDÊNCIA, não por relógio: probe atrasado 12s (1,5× o TTL) NÃO mata o parado", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO
+    // pool saturado: a próxima rodada ANALISADA só cai 12s depois (> ttl 8000). O relógio
+    // não roda p/ o estacionário — e a rodada que não rodou não conta como miss.
+    const out = tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE + 12_000);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1); // sobrevive (antes: morto aos 8s → id novo, dwell zerado)
+    expect(out[0].firstSeen).toBe(500);
+  });
+
+  it("CA-5 — parado sem match segue EMITIDO (presença): a zona fica OCIOSA, nunca VAZIA", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO
+    // detector cego em 3 probes seguidos (pessoa sentada, recall intermitente): a caixa
+    // congelada É a evidência de presença — segue emitida (people ≥ 1 na zona).
+    for (let k = 3; k <= 5; k++) {
+      const out = tk.update([], 1000 + k * PROBE);
+      expect(out).toHaveLength(1);
+      expect(out[0].id).toBe(1);
+      expect(out[0].cx).toBeCloseTo(0.5, 6); // congelada onde foi vista
+    }
+    // …e a re-detecção alta volta ao MESMO id (o dwell nunca zerou)
+    const back = tk.update([det(0.5, 0.5, 0.8)], 1000 + 6 * PROBE);
+    expect(back[0].id).toBe(1);
+    expect(back[0].firstSeen).toBe(500);
+  });
+
+  it("CA-2 — anti-ghost: passadas M rodadas ANALISADAS sem match, o parado MORRE (não coasta por minutos)", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO
+    for (let k = 3; k <= 5; k++) expect(tk.update([], 1000 + k * PROBE)).toHaveLength(1); // 3 misses: graça
+    // 4º probe cego: evidência (4 > 3) E relógio (24s > ttl 8000) → morre. Ghost fica
+    // limitado a ~4 probes; o "carro fantasma rastreado por horas" do Frigate não se reproduz.
+    expect(tk.update([], 1000 + 6 * PROBE)).toHaveLength(0);
+    expect(tk.tracks()).toHaveLength(0); // e some do estado interno (sem fantasma imortal)
+  });
+
+  it("CENA MOVIMENTADA: oclusão de M rodadas ANALISADAS não mata o parado antes do relógio (id sobrevive)", () => {
+    // A razão do PISO de relógio: com outra pessoa/empilhadeira em quadro, o gate NÃO pula
+    // nada — toda rodada é analisada (2fps). Só a evidência mataria a pessoa PARADA em 4
+    // rodadas = 2s (mais cedo que o TTL de hoje, uma REGRESSÃO). Com o piso: ela sai do
+    // overlay (a caixa congelada não fica de enfeite) mas o ID sobrevive até o TTL e a
+    // re-detecção o recupera — o dwell do posto não zera por uma oclusão de 2s.
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    const t0 = 1000 + 2 * PROBE; // ESTACIONÁRIO; último match aqui
+    tk.update([det(0.5, 0.5, 0.8)], t0);
+    for (let k = 1; k <= 6; k++) tk.update([], t0 + k * 500); // 6 rodadas ocluso (3s < ttl 8000)
+    expect(tk.tracks()).toHaveLength(1); // vivo (fora da emissão desde o 4º miss)
+    const back = tk.update([det(0.5, 0.5, 0.8)], t0 + 3500);
+    expect(back).toHaveLength(1);
+    expect(back[0].id).toBe(1); // MESMO id — a permanência não zerou
+    expect(back[0].firstSeen).toBe(500);
+  });
+
+  it("CA-4 — ANTI-HIJACK: pessoa NOVA no raio do 2º estágio não herda o id do parado", () => {
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // A: ESTACIONÁRIO em 0.5
+    // Rodada em que o detector NÃO vê A (sentada/oclusa) e B aparece a 0.12 dela — dentro
+    // do raio do 2º estágio (folga 0.12 + |v|·gap, e |v| = 0). Sem a exclusão, B herdaria o
+    // id de A E arrastaria a caixa de A p/ cima de B: a caixa do parado sumiria por ele
+    // estar parado. Com ela: B nasce com id NOVO.
+    const out = tk.update([det(0.62, 0.5, 0.8)], 1000 + 3 * PROBE);
+    const b = out.find((t) => Math.abs(t.cx - 0.62) < 1e-6);
+    expect(b.id).toBe(2); // id NOVO (não herdou o 1)
+    expect(tk.tracks().find((t) => t.id === 1).cx).toBeCloseTo(0.5, 6); // A não foi arrastada
+    expect(tk.stats().reassociations).toBe(0);
+  });
+
+  it("ANTI-RASTRO: parado sem match em rodada de REALOCAÇÃO sai da emissão (e não volta na seguinte)", () => {
+    // O contraponto do CA-5: se a det da pessoa apareceu em OUTRO lugar (nascimento/re-
+    // associação), a caixa congelada é o próprio RASTRO — o track é REFUTADO e some do
+    // payload até re-associar. Sem o flag pegajoso, ele voltaria a ser emitido na rodada
+    // seguinte (a graça do estacionário é longa) → 2 caixas p/ 1 pessoa.
+    const tk = arrive(createByteTracker(OPTS));
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO em 0.5
+    const r1 = tk.update([det(0.9, 0.5, 0.8)], 1000 + 3 * PROBE); // saltou p/ longe (nasce id 2)
+    expect(r1.map((t) => t.id)).toEqual([2]); // o congelado NÃO é emitido
+    const r2 = tk.update([det(0.9, 0.5, 0.8)], 1000 + 4 * PROBE);
+    expect(r2.map((t) => t.id)).toEqual([2]); // …e NÃO volta na rodada seguinte
+    expect(tk.stats().lost).toBe(1); // vivo internamente (re-associável), fora da emissão
+  });
+
+  it("TETO opcional (stationaryMaxMs): 0 = sem teto (o parado VISTO nunca morre por relógio)", () => {
+    const tk = arrive(createByteTracker(OPTS)); // stationaryMaxMs: 0
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO
+    // 4 horas de dwell (operador no posto): re-confirmado a cada probe → MESMO id.
+    const out = tk.update([det(0.5, 0.5, 0.8)], 4 * 3600_000);
+    expect(out[0].id).toBe(1);
+    expect(out[0].firstSeen).toBe(500); // a permanência NÃO zera no meio do turno
+  });
+
+  it("TETO ligado (escape-hatch): estourado o limite, o parado é aposentado e renasce com id novo", () => {
+    const tk = createByteTracker({ ...OPTS, stationaryMaxMs: 30_000 });
+    arrive(tk);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + PROBE);
+    tk.update([det(0.5, 0.5, 0.8)], 1000 + 2 * PROBE); // ESTACIONÁRIO desde t = 13000
+    expect(tk.update([det(0.5, 0.5, 0.8)], 13_000 + 30_000)).toHaveLength(1); // no limite: vive
+    // Estourou: a poda roda DEPOIS da associação, então a det desta rodada já foi consumida
+    // pelo track aposentado — o payload fica vazio por 1 rodada e a próxima det renasce.
+    expect(tk.update([det(0.5, 0.5, 0.8)], 13_000 + 30_100)).toHaveLength(0);
+    expect(tk.update([det(0.5, 0.5, 0.8)], 13_000 + 30_600).map((t) => t.id)).toEqual([2]);
   });
 });
 
