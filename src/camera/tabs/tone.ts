@@ -11,6 +11,7 @@ export const MODE_TONE: Record<ZoneMode, Tone> = {
   objetos: "warn",
   fadiga: "info",
   exclusao: "info", // supressão (going-gray); Tone não tem neutro, "info" é o mais discreto
+  proibida: "info", // armada quieta é estado NORMAL (going-gray) — saturação só na violação (draw)
 };
 
 export const RISK_TONE: Record<RiskState, Tone> = {

@@ -25,6 +25,7 @@ import {
   withDefaults,
   ZONE_MODE_COLOR,
   ZONE_MODE_LABEL,
+  DEFAULT_PRESENCA_ALERT_MS,
 } from "./zones";
 import { APP_CONFIG } from "./config";
 import { OBJECT_KEYS } from "./objects/catalog";
@@ -174,7 +175,7 @@ describe("zones — utilitários puros", () => {
   });
 
   it("mapas de cor/rótulo cobrem todos os modos", () => {
-    const modos = ["atividade", "leitura", "objetos", "fadiga", "exclusao"] as const;
+    const modos = ["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"] as const;
     for (const modo of modos) {
       expect(ZONE_MODE_COLOR[modo]).toMatch(/^#[0-9a-f]{6}$/i);
       expect(typeof ZONE_MODE_LABEL[modo]).toBe("string");
@@ -203,6 +204,44 @@ describe("zones — utilitários puros", () => {
     const zs = loadZones("cam-ex", "Cam Ex");
     expect(zs).toHaveLength(1);
     expect(zs[0]).toMatchObject({ modo: "exclusao", label: "Grade" });
+    vi.unstubAllGlobals();
+  });
+
+  it("loadZones PRESERVA a zona `proibida` salva com o dwell configurado", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      get length() {
+        return store.size;
+      },
+    } as Storage);
+    store.set(
+      "vp-zones-cam-pr",
+      JSON.stringify([
+        {
+          id: "cam-pr-z1",
+          label: "Cofre",
+          x: 0.1,
+          y: 0.1,
+          w: 0.3,
+          h: 0.3,
+          modo: "proibida",
+          presencaAlertMs: 30_000,
+        },
+      ]),
+    );
+    const zs = loadZones("cam-pr", "Cam Pr");
+    expect(zs).toHaveLength(1);
+    expect(zs[0]).toMatchObject({
+      modo: "proibida",
+      label: "Cofre",
+      presencaAlertMs: 30_000,
+      arming: "sempre",
+    });
     vi.unstubAllGlobals();
   });
 });
@@ -245,11 +284,35 @@ describe("zones — withDefaults (defaults de zona)", () => {
     });
   });
 
-  it("modo: preserva os válidos (inclui exclusao); inválido → atividade", () => {
+  it("modo: preserva os válidos (inclui exclusao e proibida); inválido → atividade", () => {
     expect(withDefaults({ modo: "leitura" }, "c").modo).toBe("leitura");
     expect(withDefaults({ modo: "exclusao" }, "c").modo).toBe("exclusao");
     expect(withDefaults({ modo: "objetos" }, "c").modo).toBe("objetos");
+    expect(withDefaults({ modo: "proibida" }, "c").modo).toBe("proibida");
     expect(withDefaults({ modo: "xpto" as never }, "c").modo).toBe("atividade");
+  });
+
+  // ZONA PROIBIDA (spec alerta-por-atividade E1/E2): dwell com default de 10s + arming "sempre".
+  it("proibida: presencaAlertMs default 10s; explícito preservado; inválido → default", () => {
+    expect(withDefaults({ modo: "proibida" }, "c").presencaAlertMs).toBe(
+      DEFAULT_PRESENCA_ALERT_MS,
+    );
+    expect(withDefaults({ modo: "proibida", presencaAlertMs: 30_000 }, "c").presencaAlertMs).toBe(
+      30_000,
+    );
+    expect(withDefaults({ presencaAlertMs: -5 as never }, "c").presencaAlertMs).toBe(
+      DEFAULT_PRESENCA_ALERT_MS,
+    );
+    expect(withDefaults({ presencaAlertMs: "10" as never }, "c").presencaAlertMs).toBe(
+      DEFAULT_PRESENCA_ALERT_MS,
+    );
+  });
+
+  it("proibida: arming normalizado p/ 'sempre' (único valor desta onda)", () => {
+    expect(withDefaults({ modo: "proibida" }, "c").arming).toBe("sempre");
+    expect(withDefaults({ modo: "proibida", arming: "sempre" }, "c").arming).toBe("sempre");
+    // zonas dos demais modos também carregam o campo plano (padrão da casa) sem quebrar nada
+    expect(withDefaults({ modo: "atividade" }, "c").arming).toBe("sempre");
   });
 
   it("mask só é mantida quando é string; selectedClasses vazio → todas", () => {

@@ -21,6 +21,13 @@ const FADIGA_DETALHE = {
   OK: "Operador normalizado.",
 };
 
+// Título DEFAULT de tipo NOVO ainda sem entrada em settings.tipos — o normalize() de settings.js
+// só conhece os 4 tipos herdados (atividade/fadiga/leitura/objetos), então uma entrada salva p/
+// "presenca" seria descartada lá. Até settings.js ganhar a entrada própria (pendência da spec
+// alerta-por-atividade), o título default do canal vive aqui; instrução/desligamento por tipo
+// ficam indisponíveis p/ ele (o alarme SEMPRE sai — fail-safe p/ violação de área proibida).
+const TIPO_TITULO_DEFAULT = { presenca: "Segurança · Área proibida" };
+
 function formatWhatsApp(text, meta, ts, s = settings.get()) {
   const tcfg = (s.tipos && s.tipos[meta.tipo]) || {};
   let body = String(text || "")
@@ -44,7 +51,7 @@ function formatWhatsApp(text, meta, ts, s = settings.get()) {
     timeZone: "America/Sao_Paulo",
   });
   const linhas = [
-    `${meta.critico ? "🔴" : "🟡"} *${meta.critico ? "ALERTA" : "Aviso"} — ${tcfg.titulo || "Operação"}*`,
+    `${meta.critico ? "🔴" : "🟡"} *${meta.critico ? "ALERTA" : "Aviso"} — ${tcfg.titulo || TIPO_TITULO_DEFAULT[meta.tipo] || "Operação"}*`,
     s.incluirLocal && local ? `📍 ${local}` : null,
     s.incluirHora ? `🕒 ${quando}` : null,
     "",

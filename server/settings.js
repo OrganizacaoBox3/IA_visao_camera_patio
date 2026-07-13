@@ -18,6 +18,7 @@ const DEFAULTS = {
     fadiga: { ativo: true, titulo: "Segurança · Operador", instrucao: "" },
     leitura: { ativo: true, titulo: "Expedição · Leitura", instrucao: "" },
     objetos: { ativo: true, titulo: "Pátio · Objetos", instrucao: "" },
+    presenca: { ativo: true, titulo: "Segurança · Área proibida", instrucao: "" },
   },
 };
 

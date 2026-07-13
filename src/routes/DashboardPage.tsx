@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bell, BellRing, ChevronLeft, ChevronRight, Video } from "lucide-react";
 import { APP_CONFIG } from "../config";
@@ -9,6 +9,7 @@ import { recordFadigaSamples, recordFadigaEvent } from "../report/store";
 import { useAuth } from "../auth";
 import { Button, IconButton, Tooltip, Badge, useToast } from "../ui";
 import { type Camera } from "./dashboard/types";
+import { alertMetaFromText, type AlertEmitMeta } from "../types/alarm";
 import { CameraTile } from "./dashboard/CameraTile";
 import { AlarmDrawer } from "./dashboard/AlarmDrawer";
 import { useFrameRelay } from "./dashboard/useFrameRelay";
@@ -146,12 +147,25 @@ export function DashboardPage() {
 
   const open = openId ? (cameras.find((c) => c.id === openId) ?? null) : null;
 
-  // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado).
+  // Câmeras vivas p/ o handleAlert derivar o cameraId do texto SEM entrar nas deps do
+  // useCallback (identidade estável preservada — mesmo padrão dos refs-espelho da casa).
+  const camerasRef = useRef<Camera[]>([]);
+  useEffect(() => {
+    camerasRef.current = cameras;
+  }, [cameras]);
+
+  // Alerta do painel: mostra o toast E repassa ao hub (andon → webhook externo, se configurado)
+  // com CAMPOS ESTRUTURADOS (armadilha A3 da spec alerta-por-atividade): o emit vira
+  // { text, ts, cameraId?, zona?, tipo? } — ADITIVO, o shape { text, ts } segue aceito e o
+  // servidor prefere os campos ao parse de texto (alarm/keys.js). `meta` explícito (emissores
+  // novos) vence; sem meta, deriva do padrão "⚠ <câmera>[ · <zona>]: …" contra as câmeras vivas
+  // — assim o alerta de INATIVIDADE existente também ganha cameraId estrutural.
   // useCallback: identidade estável p/ não quebrar o memo do CameraTile (`toast` é estável).
   const handleAlert = useCallback(
-    (msg: string) => {
+    (msg: string, meta?: AlertEmitMeta) => {
       toast(msg, msg.includes("⚠") ? "alert" : "default");
-      socketRef.current?.emit("alert", { text: msg, ts: Date.now() });
+      const m = { ...alertMetaFromText(msg, camerasRef.current), ...meta };
+      socketRef.current?.emit("alert", { text: msg, ts: Date.now(), ...m });
     },
     [toast, socketRef],
   );

@@ -88,7 +88,9 @@ function evaluate(p) {
   if (flapSuppress(key, now)) return null;
 
   // 2) Supressão de inundação por câmera (+ priorização já calculada).
-  const decision = applyFlood(cameraId, zona, text, ts, priority, now, meta);
+  // `tipo` explícito do payload vence a heurística de texto TAMBÉM na decisão final (a chave de
+  // dedup/shelve acima já usava `tipo`; sem este spread, flood gravaria meta.tipo da heurística).
+  const decision = applyFlood(cameraId, zona, text, ts, priority, now, { ...meta, tipo });
 
   // 3) Métricas: contabiliza apenas alarmes EMITIDOS (decisão não-nula).
   if (decision) recordEmit(decision.priority, now);

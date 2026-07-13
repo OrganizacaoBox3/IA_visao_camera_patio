@@ -868,7 +868,9 @@ export function CameraWorkspace({
       for (const z of zs) {
         // Exclusão: modo de SUPRESSÃO, sem indicador nem processador (o filtro do pé já rodou na
         // origem). Pula antes de holderFor; a zona segue sendo DESENHADA como máscara.
-        if (z.modo === "exclusao") continue;
+        // Proibida: o PRODUTOR do alerta é o MOTOR DO HUB (presence-alert.js) — sem processador
+        // cliente nesta onda; instanciar o fallback dispararia alerta de INATIVIDADE falso.
+        if (z.modo === "exclusao" || z.modo === "proibida") continue;
         const h = holderFor(z);
         if (z.modo !== "atividade" && mode !== "full") {
           const lastHeavy = lastHeavyAtRef.current.get(z.id) ?? 0;
@@ -1460,9 +1462,10 @@ export function CameraWorkspace({
   // Troca o modo de uma zona PRESERVANDO sua geometria/máscara/parâmetros e reaplica o preset.
   function changeZoneMode(z: Zone, next: ZoneMode) {
     patchZone(z.id, { modo: next });
-    // "exclusao" não é um preset (não tem overlay/confiança/KPIs próprios — só suprime). O narrowing
-    // do `!==` reduz `next` a ModeKey (os 4 modos com preset), então applyPreset segue tipado.
-    if (next !== "exclusao") applyPreset(next);
+    // "exclusao" e "proibida" não são presets (exclusão só suprime; proibida é alarmada pelo MOTOR
+    // do hub). O narrowing do `!==` reduz `next` a ModeKey (os 4 modos com preset) e applyPreset
+    // segue tipado.
+    if (next !== "exclusao" && next !== "proibida") applyPreset(next);
   }
   function removeZone(id: string) {
     holdersRef.current.get(id)?.proc.dispose();

@@ -14,7 +14,11 @@ import { getZones as apiGetZones, saveZones as apiSaveZones } from "./api";
 // falso positivo: grade, placa, janela de van, TV/monitor). Quem itera zonas por indicador
 // (atividade/leitura/objetos/fadiga) simplesmente ignora as zonas "exclusao". Ver CameraWorkspace
 // (filtro local em updateTracks) e a frente do motor (mesma semântica no hub).
-export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga" | "exclusao";
+// "proibida" é o ESPELHO do alerta de inatividade (spec alerta-por-atividade E1): área que deve
+// ficar VAZIA — pessoa presente por ≥ presencaAlertMs dispara alarme tipo "presenca" (critical).
+// O PRODUTOR do alarme é o MOTOR DO HUB (24/7, sem espectador); o cliente cadastra e exibe —
+// sem processador local nesta onda (ver camera/holders.ts).
+export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga" | "exclusao" | "proibida";
 export const DEFAULT_GRID = { cols: 32, rows: 18 };
 // Zona com geometria normalizada (0..1) + modo + config (planos, por modo).
 // `x,y,w,h` = bounding box (recorte/ROI). `mask` (opcional) = células pintadas (área irregular);
@@ -33,7 +37,17 @@ export type Zone = {
   atividade: string; // atividade
   ponto: string; // leitura
   selectedClasses: string[]; // objetos
+  // proibida (spec alerta-por-atividade E2/E4) — OPCIONAIS no tipo (contrato pinado entre as
+  // frentes), mas SEMPRE preenchidos por withDefaults; o motor do hub lê os mesmos campos do
+  // camcfg do servidor (allowlist cleanZone — armadilha A5).
+  presencaAlertMs?: number; // dwell: presença contínua acima disto → alarme (default 10s)
+  arming?: "sempre"; // janela de armamento; só "sempre" nesta onda (turnos = spec irmã)
 };
+
+// Presets do dwell de PRESENÇA (modo proibida) — mesmo padrão dos limitPresetsMs da atividade.
+// Vivem aqui (perto do modelo) porque config.ts é importado por este módulo (evita ciclo).
+export const PRESENCA_ALERT_PRESETS_MS = [5_000, 10_000, 30_000, 60_000, 300_000] as const;
+export const DEFAULT_PRESENCA_ALERT_MS = 10_000;
 
 function key(cameraId: string) {
   return `vp-zones-${cameraId}`;
@@ -59,7 +73,8 @@ export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
       z.modo === "leitura" ||
       z.modo === "objetos" ||
       z.modo === "fadiga" ||
-      z.modo === "exclusao"
+      z.modo === "exclusao" ||
+      z.modo === "proibida"
         ? z.modo
         : "atividade",
     idleAlertMs: z.idleAlertMs ?? APP_CONFIG.zones.defaultIdleAlertMs,
@@ -70,6 +85,15 @@ export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
       Array.isArray(z.selectedClasses) && z.selectedClasses.length
         ? z.selectedClasses
         : [...OBJECT_KEYS],
+    // proibida: dwell normalizado (número finito ≥0; inválido → default 10s) + arming — só
+    // "sempre" nesta onda (o gate por turno chega com a spec irmã e amplia o tipo).
+    presencaAlertMs:
+      typeof z.presencaAlertMs === "number" &&
+      Number.isFinite(z.presencaAlertMs) &&
+      z.presencaAlertMs >= 0
+        ? z.presencaAlertMs
+        : DEFAULT_PRESENCA_ALERT_MS,
+    arming: "sempre",
   };
 }
 
@@ -209,6 +233,7 @@ export const ZONE_MODE_COLOR: Record<ZoneMode, string> = {
   objetos: "#f59e0b",
   fadiga: "#a78bfa",
   exclusao: "#64748b", // going-gray: supressão é operação normal, não anormalidade (base neutra)
+  proibida: "#a85d5d", // vermelho DESSATURADO: armada é estado normal; saturação só na VIOLAÇÃO (E6)
 };
 export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
   atividade: "Atividade",
@@ -216,6 +241,7 @@ export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
   objetos: "Objetos",
   fadiga: "Fadiga",
   exclusao: "Exclusão",
+  proibida: "Proibida",
 };
 
 // Ponto normalizado (0..1) cai dentro da zona? Respeita a MÁSCARA via `contains` (quando a zona

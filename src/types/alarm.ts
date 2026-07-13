@@ -13,8 +13,11 @@ export type AlarmPriority = "advisory" | "high" | "critical";
 /** Ciclo de vida do alarme na fila acionável (acknowledge/forward). */
 export type AlarmState = "new" | "acknowledged" | "forwarded";
 
-/** Classificação da política. Aceita string p/ ser retrocompatível com tipos futuros do backend. */
-export type AlarmTipo = "atividade" | "fadiga" | "leitura" | "objetos" | (string & {});
+/** Classificação da política. Aceita string p/ ser retrocompatível com tipos futuros do backend.
+ *  "presenca" = violação de zona PROIBIDA (spec alerta-por-atividade E1): tipo PRÓPRIO de
+ *  propósito — a chave de dedup do back é `cam|zona|tipo`, então atividade e presença na MESMA
+ *  zona não se suprimem mutuamente (armadilha A3). */
+export type AlarmTipo = "atividade" | "fadiga" | "leitura" | "objetos" | "presenca" | (string & {});
 
 /** Evento de alarme — metadados (§1 de contrato-eventos-alarme.md). */
 export type AlarmEvent = {
@@ -30,6 +33,33 @@ export type AlarmEvent = {
   ackBy?: string; // quem reconheceu/encaminhou
   ackAt?: number; // epoch-ms de quando reconheceu/encaminhou
 };
+
+// ── Emissão ESTRUTURADA do alerta (armadilha A3 da spec alerta-por-atividade) ──────────────────
+// O payload do socket "alert" ganhou campos OPCIONAIS { cameraId?, zona?, tipo? } — aditivo: o
+// servidor já os prefere ao parse de texto (server/alarm/keys.js) e segue parseando quando
+// ausentes. Emissores legados só entregam o TEXTO ("⚠ <câmera>: msg" | "⚠ <câmera> · <zona>: msg");
+// este helper deriva os campos resolvendo o RÓTULO contra as câmeras vivas — CONSERVADOR: sem
+// match EXATO de rótulo devolve {} (o fallback de regex do servidor continua valendo). Puro e
+// testável (alarm.test.ts); consumido pelo handleAlert da central (DashboardPage).
+export type AlertEmitMeta = { cameraId?: string; zona?: string; tipo?: string };
+export function alertMetaFromText(
+  text: string,
+  cameras: ReadonlyArray<{ id: string; label: string }>,
+): AlertEmitMeta {
+  const i = text.indexOf(": ");
+  if (i <= 0 || i > 80) return {};
+  // remove os marcadores iniciais (⚠/✋/emoji/espaços) — tudo antes da 1ª letra/dígito do rótulo
+  const head = text
+    .slice(0, i)
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .trim();
+  const sep = head.indexOf(" · ");
+  const camLabel = (sep >= 0 ? head.slice(0, sep) : head).trim();
+  const zona = sep >= 0 ? head.slice(sep + 3).trim() : "";
+  const cam = cameras.find((c) => c.label === camLabel);
+  if (!cam) return {};
+  return zona ? { cameraId: cam.id, zona } : { cameraId: cam.id };
+}
 
 // ── Apresentação do vocabulário de alarme (fonte única — rótulos pt-BR + tokens de cor) ──
 // Antes replicado em AlarmesPanel, AlarmDrawer e report/csv (com RGB cru no heatmap).

@@ -724,6 +724,40 @@ export function drawTripwireDraft(ctx: CanvasRenderingContext2D, td: DragBox | n
 const TRACK_COVER_IOU = 0.45;
 const TRACK_COVER_CONTAIN = 0.7;
 
+// ── ZONA PROIBIDA (spec alerta-por-atividade E6) ─────────────────────────────
+// Subset ESTRUTURAL da HubZone do payload `analysis-tracks` (types/analysis.ts) + o campo
+// `presenca` — HOOK aditivo p/ o estado do ciclo de vida calculado pelo MOTOR DO HUB
+// ("ARMADA" | "VIOLADA"; a frente do produtor o emite quando fechar). Estrutural de propósito:
+// este módulo não é dono do contrato do payload; só declara o que o desenho precisa.
+export type HubZoneState = { id: string; label: string; people: number; presenca?: string };
+
+// Hachura diagonal SUTIL da zona proibida quieta — identidade visual própria sem croma (E6:
+// "armada" ≠ "em alarme"; o traço/hachura distingue o modo, a cor só entra na violação).
+function drawProibidaHatch(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: string,
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.22;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const step = 14;
+  for (let d = -h; d < w; d += step) {
+    ctx.moveTo(x + d, y + h);
+    ctx.lineTo(x + d + h, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawZoneOverlays(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
@@ -736,12 +770,79 @@ export function drawZoneOverlays(
   // bboxes normalizadas dos TRACKS de pessoa já desenhados por drawTracks (mesma rodada).
   // Opcional/aditivo: ausente → comportamento anterior (todas as dets desenhadas).
   personTrackBoxes: ReadonlyArray<readonly [number, number, number, number]> = [],
+  // zones[] do último payload FRESCO do hub (hubZonesRef) — estado da zona PROIBIDA.
+  // Opcional/aditivo: ausente → proibida desenha sempre ARMADA quieta (sem estado do motor).
+  hubZones?: ReadonlyArray<HubZoneState> | null,
 ) {
   for (const z of zones) {
     const x = cr.x + z.x * cr.w,
       y = cr.y + z.y * cr.h,
       w = z.w * cr.w,
       h = z.h * cr.h;
+
+    // ── PROIBIDA: desenho próprio, fora do caminho padrão (E6) ──
+    // "Armada" ≠ "em alarme": ARMADA quieta = contorno NEUTRO tracejado + hachura sutil + badge
+    // discreto; VIOLADA = --state-critical + fill saturado (going-gray: vermelho SÓ na violação).
+    // O estado vem do MOTOR DO HUB: quando `presenca` existir no payload ele é a AUTORIDADE;
+    // enquanto o produtor não o emite, deriva de people>0 (presença BRUTA, sem dwell —
+    // display-only; o ALARME real nasce no hub, com dwell/off-delay). Sem hub: sempre ARMADA
+    // quieta — limitação conhecida desta onda (câmera sem motor não tem produtor de presença).
+    if (z.modo === "proibida") {
+      const hz = hubZones?.find((zz) => zz.id === z.id || zz.label === z.label);
+      const violada = hz
+        ? hz.presenca != null
+          ? hz.presenca === "VIOLADA"
+          : hz.people > 0
+        : false;
+      const cor = violada
+        ? cssVar("--state-critical", "#ef4444")
+        : cssVar("--state-neutral", "#64748b");
+      const mask = maskOf(z);
+      const hasMask = !!(mask && anySet(mask));
+      if (hasMask && mask && layers.mask) {
+        // área irregular: células pintadas (fill mais denso SÓ na violação)
+        const cw = cr.w / mask.cols,
+          ch = cr.h / mask.rows;
+        ctx.fillStyle = cor + (violada ? "3a" : "14");
+        for (let rr = 0; rr < mask.rows; rr++)
+          for (let cc = 0; cc < mask.cols; cc++)
+            if (mask.bits[rr * mask.cols + cc])
+              ctx.fillRect(cr.x + cc * cw, cr.y + rr * ch, cw + 0.5, ch + 0.5);
+      }
+      if (layers.zones) {
+        if (!hasMask) {
+          if (violada) {
+            ctx.fillStyle = cor + "2e"; // fill saturado da violação
+            ctx.fillRect(x, y, w, h);
+          } else {
+            drawProibidaHatch(ctx, x, y, w, h, cor);
+          }
+        }
+        ctx.setLineDash([6, 4]); // tracejado: identidade da zona proibida mesmo quieta
+        ctx.lineWidth = violada ? 3 : 1.5;
+        ctx.strokeStyle = cor;
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+        // rótulo do modo + badge de estado (ARMADA discreto / VIOLADA saturado)
+        const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
+        const label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;
+        ctx.font = "bold 11px ui-sans-serif, system-ui";
+        const tw = ctx.measureText(label2).width + 10;
+        ctx.fillStyle = scrim;
+        ctx.fillRect(x, y, tw, 17);
+        ctx.fillStyle = cor;
+        ctx.fillText(label2, x + 5, y + 12);
+        const badge = violada ? "VIOLADA" : "ARMADA";
+        ctx.font = "bold 9px ui-sans-serif, system-ui";
+        const bw = ctx.measureText(badge).width + 8;
+        ctx.fillStyle = scrim;
+        ctx.fillRect(x, y + 19, bw, 13);
+        ctx.fillStyle = violada ? cor : cssVar("--state-neutral-dim", "#5b6b7a");
+        ctx.fillText(badge, x + 4, y + 29);
+      }
+      continue;
+    }
+
     const r = results.get(z.id);
     let color = cssVar("--state-neutral", "#64748b");
     let label2 = `${z.label} · ${ZONE_MODE_LABEL[z.modo]}`;

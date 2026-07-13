@@ -10,7 +10,12 @@ import { ACTIVITIES } from "../processors/atividade";
 import { predictAlertsPerDay } from "../report/predict";
 import { type Dataset } from "../report/mock";
 import { OBJECT_CATALOG } from "../objects/catalog";
-import { type Zone, type ZoneMode } from "../zones";
+import {
+  DEFAULT_PRESENCA_ALERT_MS,
+  PRESENCA_ALERT_PRESETS_MS,
+  type Zone,
+  type ZoneMode,
+} from "../zones";
 import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
 
 // Labels são contrato do e2e (option name "Leitura" etc.) — a explicação vai como
@@ -21,6 +26,7 @@ const MODO_OPTS = [
   { value: "objetos", label: "Objetos" },
   { value: "fadiga", label: "Fadiga" },
   { value: "exclusao", label: "Exclusão" },
+  { value: "proibida", label: "Proibida" },
 ];
 
 // 1 linha por modo, visível ao selecionar — o usuário não escolhe mais às cegas.
@@ -31,6 +37,8 @@ const MODO_DESC: Record<ZoneMode, string> = {
   fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use Câmeras → Ajustes desta câmera → Operador (fadiga).",
   exclusao:
     "Ignora detecções de pessoa nesta área — use sobre fontes fixas de falso positivo (grade, placa, janela de van, TV). Não gera indicador.",
+  proibida:
+    "Área que deve ficar VAZIA: pessoa presente acima do limite dispara alarme crítico — o alarme nasce no motor do hub (24/7, sem precisar de painel aberto).",
 };
 
 type Props = {
@@ -209,6 +217,33 @@ export function ConfigZonaDialog({
                   não aparece). Sem parâmetros — use “Pintar área” sobre a fonte fixa de falso
                   positivo.
                 </p>
+              )}
+
+              {/* PROIBIDA (spec alerta-por-atividade E2): dwell por presets — SEM slider de
+                  sensibilidade (armadilha A4: o gatilho é PESSOA detectada, não motion) e SEM o
+                  preview predictAlertsPerDay (a premissa dele é ociosidade — armadilha do preview). */}
+              {z.modo === "proibida" && (
+                <>
+                  <Field
+                    label="Alertar se presença acima de"
+                    hint="Pessoa que permanecer na área por mais que este tempo dispara o alarme; quem só atravessa não dispara."
+                  >
+                    <Select
+                      value={String(z.presencaAlertMs ?? DEFAULT_PRESENCA_ALERT_MS)}
+                      onChange={(v) => patchZone(z.id, { presencaAlertMs: Number(v) })}
+                      options={PRESENCA_ALERT_PRESETS_MS.map((ms) => ({
+                        value: String(ms),
+                        label: fmtLimit(ms),
+                      }))}
+                      ariaLabel="Limite de presença"
+                    />
+                  </Field>
+                  <p className="empty-note">
+                    Armada 24/7 (armar/desarmar por turno chega com a integração de Turnos). O
+                    alarme é produzido pelo motor de análise do hub — câmera sem o motor não gera
+                    este alerta nesta versão.
+                  </p>
+                </>
               )}
             </div>
           );

@@ -66,6 +66,7 @@ const TIPO_LABEL: Record<string, string> = {
   leitura: "Leitura",
   objetos: "Objetos",
   fadiga: "Operador (fadiga)",
+  presenca: "Presença", // violação de zona proibida (spec alerta-por-atividade)
 };
 const TIPO_OPTS = [
   { value: ANY, label: "Qualquer tipo" },

@@ -22,7 +22,12 @@ const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && 
 // Enums espelhados de src/zones.ts (ZoneMode) e src/cameraConfig.ts (CapturePreset).
 // "exclusao": zona que SUPRIME detecções de pessoa (máscara p/ FP de objeto fixo) — sem o
 // modo aqui, cleanZone rebaixaria a zona de exclusão p/ "atividade" ao persistir (calibração).
-const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao"]);
+// "proibida": área que deve ficar VAZIA (spec alerta-por-atividade E1) — o motor do hub produz
+// o alarme tipo "presenca" a partir DESTA config (dwell em presencaAlertMs).
+const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"]);
+// Janela de armamento da zona proibida (E4): só "sempre" nesta onda; "dentro-turnos"/
+// "fora-turnos" entram com o gate de turnos da spec irmã (alarm/shift.js).
+const ARMING_MODES = new Set(["sempre"]);
 const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
 // Transporte de vídeo do tile: "mjpeg" (relé socket.io, default/rollback) ou "webrtc"
 // (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
@@ -75,6 +80,11 @@ function cleanZone(z) {
     atividade: str(z.atividade),
     ponto: str(z.ponto),
     selectedClasses: strList(z.selectedClasses),
+    // proibida (spec alerta-por-atividade E2/E4). INVARIANTE desta allowlist (armadilha A5):
+    // campo NOVO de zona TEM que ser adicionado aqui, senão o save o descarta MUDO e o motor
+    // do hub nunca vê o dwell configurado. Clamp são: 0..24h; inválido → default 10s.
+    presencaAlertMs: Math.min(86_400_000, Math.max(0, num(z.presencaAlertMs, 10_000))),
+    arming: ARMING_MODES.has(z.arming) ? z.arming : "sempre",
   };
   if (typeof z.mask === "string" && z.mask) out.mask = z.mask;
   return out;
@@ -360,4 +370,7 @@ module.exports = {
   saveCamConfig,
   getCalibration,
   saveCalibration,
+  // Exportado SÓ p/ teste (puro, sem I/O): o round-trip da allowlist (CA-7) valida que salvar
+  // e reler uma zona preserva os campos — sem tocar no camcfg.json/Postgres reais.
+  cleanZones,
 };

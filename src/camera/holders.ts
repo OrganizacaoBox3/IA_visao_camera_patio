@@ -1,6 +1,8 @@
 // Ciclo de vida dos PROCESSADORES por zona (Holder). União DISCRIMINADA: o compilador estreita
 // `proc` pelo `modo` no laço quente do rAF — um pareamento errado modo↔processador vira erro de
-// tipo. "exclusao" NÃO instancia processador (o laço pula antes de holderFor) → fora da união.
+// tipo. "exclusao" e "proibida" NÃO instanciam processador (o laço pula antes de holderFor) →
+// fora da união. PROIBIDA: o PRODUTOR do alarme é o MOTOR DO HUB (24/7 — spec alerta-por-
+// atividade F2, diretriz "lógica no back"); um espelho cliente é fase futura.
 import { AtividadeProcessor } from "../processors/atividade";
 import { LeituraProcessor } from "../processors/leitura";
 import { ObjetosProcessor } from "../processors/objetos";
@@ -38,8 +40,12 @@ function makeHolder(modo: Holder["modo"]): Holder {
 
 /**
  * Obtém (ou cria) o processador da zona, mantendo o perfil "longo alcance" em dia. Troca de modo
- * descarta o processador antigo (dispose) e o crop de fadiga associado. Zona "exclusao" nunca
- * chega aqui em regime; o mapeamento p/ atividade preserva o fallback histórico do `else`.
+ * descarta o processador antigo (dispose) e o crop de fadiga associado. Zonas "exclusao" e
+ * "proibida" nunca chegam aqui em regime (o laço pula antes); o mapeamento p/ atividade preserva
+ * o fallback histórico do `else`. PROIBIDA não tem processador cliente NESTA ONDA por decisão de
+ * produto: o produtor do alerta de presença é o MOTOR DO HUB (cobre 24/7 sem espectador) —
+ * LIMITAÇÃO CONHECIDA: câmera sem hub não alerta zona proibida por ora (fallback cliente
+ * espelhado é fase futura, spec alerta-por-atividade F1×F2).
  */
 export function holderFor(
   holders: Map<string, Holder>,
@@ -54,7 +60,7 @@ export function holderFor(
   }
   cur?.proc.dispose();
   if (cur?.modo === "fadiga") crops.delete(z.id);
-  const h = makeHolder(z.modo === "exclusao" ? "atividade" : z.modo);
+  const h = makeHolder(z.modo === "exclusao" || z.modo === "proibida" ? "atividade" : z.modo);
   holders.set(z.id, h);
   applyLongRange(h, longRange); // recém-criado herda o perfil atual da câmera
   return h;
