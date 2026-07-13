@@ -580,3 +580,79 @@ describe("simulateFusionScenario — oclusão estruturada (obstáculos, Fase 2, 
     expect(simulateFusionScenario(opts, 1)).toEqual(simulateFusionScenario(opts, 1));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// MULTI-ANTENA (SimOpts.stations — H4/F5, 2026-07-13): N estações com posição PRÓPRIA, cada tag
+// emitindo uma leitura POR ESTAÇÃO, carimbada com `stationId`. O simulador é o sensor do torneio
+// da 2ª antena (eval/multi-antena.mjs) — se ele mentir, o torneio mente. As duas coisas que
+// PRECISAM ser verdade: (1) o caminho novo NÃO re-sorteia nada (byte-compat do stream de RNG) e
+// (2) as duas estações medem GEOMETRIAS DIFERENTES (senão não há 2ª antena, há eco da 1ª).
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe("multi-antena (stations)", () => {
+  const BASE = { steps: 40, people: 3, tagged: 2, walk: "waypoint" as const };
+  const A = { id: "est-a", world: { x: 0, y: 0 } }; // o canto default (STATION_WORLD)
+  const B = { id: "est-b", world: { x: 8, y: 6 } }; // o canto OPOSTO — outro eixo radial
+
+  it("CONTROLE: 1 estação em `stations` na posição default → RSSI BIT-A-BIT igual ao legado", () => {
+    // A sentinela que prova que o caminho novo não consome RNG a mais nem em ordem diferente:
+    // mesma origem física, mesmo seed → os MESMOS inteiros de RSSI, tick a tick. (A única
+    // diferença permitida é a chave `stationId`, que o mundo de 1 antena nem tem.)
+    const legado = simulateFusionScenario(BASE, 42);
+    const uma = simulateFusionScenario({ ...BASE, stations: [A] }, 42);
+    expect(uma.ticks.length).toBe(legado.ticks.length);
+    for (let i = 0; i < legado.ticks.length; i++) {
+      expect(uma.ticks[i].readings.map((r) => [r.mac, r.rssi])).toEqual(
+        legado.ticks[i].readings.map((r) => [r.mac, r.rssi]),
+      );
+      expect(uma.ticks[i].tracks).toEqual(legado.ticks[i].tracks); // trajetórias intactas
+    }
+    expect(uma.ticks[0].readings.every((r) => r.stationId === "est-a")).toBe(true);
+    expect(legado.ticks[0].readings.every((r) => r.stationId === undefined)).toBe(true);
+  });
+
+  it("2 estações → 2 leituras por tag por tick, cada uma com o SEU stationId", () => {
+    const sc = simulateFusionScenario({ ...BASE, stations: [A, B] }, 42);
+    const t0 = sc.ticks[0];
+    expect(t0.readings.length).toBe(2 * 2); // 2 tags × 2 estações
+    const daTagA = t0.readings.filter((r) => r.mac === "AA:AA");
+    expect(daTagA.map((r) => r.stationId).sort()).toEqual(["est-a", "est-b"]);
+  });
+
+  it("as duas antenas medem RSSI DIFERENTE p/ a mesma tag (eixos radiais distintos)", () => {
+    // Se os dois valores fossem iguais, a "2ª antena" seria um eco — nenhuma informação nova.
+    const sc = simulateFusionScenario({ ...BASE, stations: [A, B] }, 42);
+    let diferentes = 0;
+    for (const t of sc.ticks) {
+      const [a, b] = t.readings.filter((r) => r.mac === "AA:AA");
+      if (a.rssi !== b.rssi) diferentes++;
+    }
+    expect(diferentes).toBeGreaterThan(sc.ticks.length * 0.9);
+  });
+
+  it("exporta stationsPx (o espelho de calibration.stations) e a principal em stationPx", () => {
+    const sc = simulateFusionScenario({ ...BASE, stations: [A, B] }, 42);
+    expect(Object.keys(sc.stationsPx ?? {}).sort()).toEqual(["est-a", "est-b"]);
+    expect(sc.stationsPx!["est-a"]).toEqual(sc.stationPx); // stations[0] É a principal
+    // Round-trip pela homografia REAL: o ponto de imagem volta ao mundo cadastrado.
+    const w = pixelToWorld(sc.H as Matrix3, sc.stationsPx!["est-b"]);
+    expect(w!.x).toBeCloseTo(8, 6);
+    expect(w!.y).toBeCloseTo(6, 6);
+  });
+
+  it("sem `stations` → nem stationsPx nem stationId existem (retrocompat dura)", () => {
+    const sc = simulateFusionScenario(BASE, 42);
+    expect(sc.stationsPx).toBeUndefined();
+    expect("stationsPx" in sc).toBe(false);
+  });
+
+  it("estação que projeta FORA da imagem → erro EXPLÍCITO (nunca NaN mudo)", () => {
+    expect(() =>
+      simulateFusionScenario({ ...BASE, stations: [A, { id: "x", world: { x: 400, y: 900 } }] }, 1),
+    ).toThrow(/est/);
+  });
+
+  it("determinístico: mesmo seed, mesmo cenário multi-antena", () => {
+    const o = { ...BASE, stations: [A, B] };
+    expect(simulateFusionScenario(o, 9)).toEqual(simulateFusionScenario(o, 9));
+  });
+});

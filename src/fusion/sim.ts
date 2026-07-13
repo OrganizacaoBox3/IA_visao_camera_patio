@@ -51,6 +51,10 @@ export type SimTick = {
  *  fit consome como "gabarito". Igual à posição REAL, exceto com SimOpts.anchorPosErrorM (erro de
  *  instalação/cadastro: posAssumed ≠ posReal — a física do RSSI segue usando a real). */
 export type SimAnchor = { mac: string; world: Vec2 };
+/** MULTI-ANTENA (spec F5): uma estação BLE com id e posição de MUNDO (metros). O `id` é o MESMO
+ *  que aparece em `RawReading.stationId` (→ `sourceId` no motor, via frame.ts) e é a chave do
+ *  `stationsPx` exportado (→ `calibration.stations` da produção). */
+export type SimStation = { id: string; world: Vec2 };
 export type SimFusionScenario = {
   ticks: SimTick[];
   H: Matrix3 | null;
@@ -58,6 +62,10 @@ export type SimFusionScenario = {
   /** ADITIVO (v4): posições CADASTRADAS das tags-âncora — presente só com SimOpts.anchors
    *  (= posições reais, salvo erro de instalação via SimOpts.anchorPosErrorM). */
   anchors?: SimAnchor[];
+  /** ADITIVO (multi-antena F5): ponto de IMAGEM (0..1) de CADA estação, indexado pelo id —
+   *  o espelho exato de `calibration.stations` da produção, pronto p/ o `stationsPx` do
+   *  buildFusionFrame. Presente só com SimOpts.stations (mundo de 1 antena → ausente). */
+  stationsPx?: Record<string, Vec2>;
 };
 export type SimWalk = "waypoint" | "parado" | "bloco" | "cruzamento";
 export type SimOpts = {
@@ -86,6 +94,28 @@ export type SimOpts = {
    *  projetar FORA da imagem [0,1]², a mesma guarda da estação do canto lança erro explícito (nunca
    *  NaN mudo) — override deve cair sobre o chão calibrado (área útil do sim está bem dentro dele). */
   stationWorldOverride?: Vec2;
+  /** MULTI-ANTENA (spec F5 — o 2º celular/S24 do campo): N estações BLE com POSIÇÃO PRÓPRIA. Cada
+   *  tag de pessoa passa a emitir UMA leitura POR ESTAÇÃO, com o RSSI medido a partir da posição
+   *  DAQUELA estação (log-distância própria, ruído próprio, viés corporal próprio — o ângulo
+   *  corpo→estação muda com a estação) e carimbada com `stationId` — exatamente o shape que a
+   *  estação real posta e que frame.ts mapeia p/ `sourceId`. O cenário exporta `stationsPx` (o
+   *  espelho de `calibration.stations`).
+   *
+   *  PRECEDÊNCIA (declarada, sem mágica): presente ⇒ a estação PRINCIPAL é `stations[0]` e ela vira
+   *  a origem do `stationPx` exportado e das âncoras; `stationWorldOverride`/`stationAtCamera` são
+   *  IGNORADOS (o chamador escolhe UM modo de instalação — combiná-los não é suportado).
+   *
+   *  RNG / byte-compat: ausente ⇒ ZERO mudança (mesmo consumo de RNG, readings sem a chave
+   *  `stationId` — nem existe). Com UMA estação em `stations` a ordem de consumo do RNG é a MESMA
+   *  do mundo de 1 antena (loop pessoa-externo, estação-interno) ⇒ os RSSIs saem BIT-A-BIT iguais
+   *  aos do cenário legado equivalente (selado em sim.test.ts) — é o controle que prova que o
+   *  caminho novo não re-sorteia nada.
+   *
+   *  LIMITAÇÃO DECLARADA: as tags-ÂNCORA (SimOpts.anchors) seguem sendo ouvidas SÓ pela estação
+   *  PRINCIPAL (ferragem de calibração do path-loss; a 2ª antena não refita modelo neste harness).
+   *  Não é limitação da física — é escopo: o torneio da multi-antena mede IDENTIDADE, e distM/
+   *  gate/blend estão desligados por default desde a revisão adversarial de 2026-07-10. */
+  stations?: readonly SimStation[];
   /** true (v4) = emite 4 tags-âncora ESTÁTICAS nos cantos de um retângulo 2,5×1,2 m ao redor da
    *  estação (espelha o campo real do dono — span ESTREITO de distâncias, regime anchors-offset
    *  do fitPathLoss), com o MESMO modelo log-distância + mesmo ruído das tags de pessoa. */
@@ -577,20 +607,46 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   const calib = computeHomography(FLOOR_PAIRS);
   if (!calib.ok) throw new Error(`simulador: homografia degenerada (${calib.error})`);
   const H = calib.H;
+  // MULTI-ANTENA (ver SimOpts.stations): presente ⇒ a PRINCIPAL é stations[0] e ela manda no
+  // stationPx exportado e na origem das âncoras (precedência declarada sobre override/atCamera).
+  const stations = opts.stations && opts.stations.length > 0 ? opts.stations : null;
   // Ponto EXPORTADO como estação: o canto (0,0) por padrão, ou o override de mundo (Onda 1) quando
   // presente — o `dist` da correlação (frame.ts) mede pessoa→este ponto. Guarda de projeção mantida
   // (vale pro override também: ponto fora da imagem = erro explícito, nunca NaN mudo). Sem override,
   // é worldToPixel(H, STATION_WORLD) — byte-idêntico ao anterior.
-  const stationExportWorld = opts.stationWorldOverride ?? STATION_WORLD;
+  const stationExportWorld = stations
+    ? stations[0].world
+    : (opts.stationWorldOverride ?? STATION_WORLD);
   const stationPx = worldToPixel(H, stationExportWorld);
   if (!stationPx || stationPx.x < 0 || stationPx.x > 1 || stationPx.y < 0 || stationPx.y > 1)
     throw new Error("simulador: estação projeta fora da imagem — geometria fixa inválida");
+  // Espelho de `calibration.stations` (só no mundo multi-antena): MESMA guarda de projeção — uma
+  // estação que cai fora da imagem não tem ponto de chão marcável na produção, então é erro de
+  // cenário, não NaN mudo.
+  let stationsPx: Record<string, Vec2> | undefined;
+  if (stations) {
+    stationsPx = {};
+    for (const s of stations) {
+      const px = worldToPixel(H, s.world);
+      if (!px || px.x < 0 || px.x > 1 || px.y < 0 || px.y > 1)
+        throw new Error(`simulador: estação ${s.id} projeta fora da imagem`);
+      stationsPx[s.id] = px;
+    }
+  }
 
   const rng = lcg(seed);
   const movers = createMovers(walk, people, rng);
-  // Origem física do RSSI: override de mundo (Onda 1, tem precedência) → estação do canto (default)
-  // → junto da câmera (caminho C do frame.ts). Só troca a POSIÇÃO do log-distância; não consome RNG.
-  const rssiOrigin = opts.stationWorldOverride ?? (opts.stationAtCamera ? CAMERA_WORLD : STATION_WORLD);
+  // Origem física do RSSI da PRINCIPAL: stations[0] (multi-antena) → override de mundo (Onda 1) →
+  // estação do canto (default) → junto da câmera (caminho C do frame.ts). Só troca a POSIÇÃO do
+  // log-distância; não consome RNG.
+  const rssiOrigin = stations
+    ? stations[0].world
+    : (opts.stationWorldOverride ?? (opts.stationAtCamera ? CAMERA_WORLD : STATION_WORLD));
+  // ORIGENS de RSSI das tags de PESSOA: uma por estação (multi-antena) ou a única origem física
+  // (mundo de 1 antena — `id: null` ⇒ a leitura sai SEM a chave `stationId`, byte-compat dura).
+  const origins: { id: string | null; world: Vec2 }[] = stations
+    ? stations.map((s) => ({ id: s.id, world: s.world }))
+    : [{ id: null, world: rssiOrigin }];
 
   // Tags-âncora (v4): retângulo 2,5×1,2 m centrado na origem do RSSI. São só emissoras BLE —
   // NÃO viram tracks de câmera (âncora é ferragem fixa, não pessoa) e NÃO entram na verdade
@@ -634,15 +690,19 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   // consome a arma; re-arma quando o par se afasta >1,5 m (no máx. 1 sorteio por evento).
   const armed = new Map<string, boolean>();
 
-  const lastRssi: number[] = new Array<number>(tagged).fill(0);
+  // Estado por (ORIGEM, tag de pessoa): no mundo de 1 antena, origins.length===1 ⇒ é o vetor de
+  // sempre, só com um nível de índice a mais. Cada estação tem o SEU ruído (a atenuação e o
+  // multipath são do CANAL tag→aquela antena — somar o mesmo ε nas duas seria fabricar erro
+  // correlacionado de graça, exatamente o que a Regra 13 manda MEDIR, não presumir).
+  const lastRssi: number[][] = origins.map(() => new Array<number>(tagged).fill(0));
   // Estado do ruído AR(1) por tag de pessoa (ver SimOpts.rssiNoiseTauS). A 1ª atualização de cada
   // tag semeia o estado ESTACIONÁRIO (`noise = ε` puro, var 1) — sem isso, partir de 0 e recursar
   // `ρ·prev + √(1-ρ²)·ε` deixaria o transitório SUB-ruidoso (var[k] = 1-ρ^2k; com τ=32s, var=0,45
   // aos 8s). Corrigido na revisão adversarial de 2026-07-11; mesmo consumo de RNG (o ε da 1ª
   // atualização já era sorteado). Só usado quando o knob está presente; ausente = cada
   // "atualização" reatribui `eps` puro (IID), byte-idêntico ao `randn(rng)` inline de sempre.
-  const rssiNoiseAr1 = new Array<number>(tagged).fill(0);
-  const rssiAr1Seeded = new Array<boolean>(tagged).fill(false);
+  const rssiNoiseAr1 = origins.map(() => new Array<number>(tagged).fill(0));
+  const rssiAr1Seeded = origins.map(() => new Array<boolean>(tagged).fill(false));
   const rssiUpdateDtS = (rssiPeriodTicks * TICK_MS) / 1000;
   const rssiAr1Rho =
     opts.rssiNoiseTauS !== undefined ? Math.exp(-rssiUpdateDtS / opts.rssiNoiseTauS) : null;
@@ -730,53 +790,66 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
     // o último valor — fiel ao snapshot bt-readings da produção. Todas as tags emitem sempre.
     // A origem do RSSI é a estação (0,0) ou a CÂMERA (4,-2) quando stationAtCamera (ver cabeçalho).
     // Viés corporal (personRssiBiasDb) entra SÓ aqui — tag de pessoa é atenuada pelo corpo.
+    // ORDEM DO RNG: pessoa (externo) × origem (interno). Com UMA origem (mundo de 1 antena) é
+    // EXATAMENTE a ordem de sempre ⇒ stream byte-a-byte preservado (os pinos dos FUSION_SCENARIOS
+    // não se mexem). Cada estação sorteia o SEU ε: canais distintos, ruídos distintos.
     const readings: RawReading[] = [];
     for (let p = 0; p < tagged; p++) {
-      if (i % rssiPeriodTicks === 0) {
-        const d = Math.hypot(positions[p].x - rssiOrigin.x, positions[p].y - rssiOrigin.y);
-        // AR(1) (ver SimOpts.rssiNoiseTauS): rho=null → eps puro, IID, byte-idêntico ao
-        // `randn(rng) * rssiNoiseDb` de sempre. rho!=null → 1ª atualização semeia o estado
-        // ESTACIONÁRIO (eps puro, var 1 desde o 1º sample — ver comentário em rssiNoiseAr1);
-        // depois correlaciona com o valor anterior, preservando a MESMA variância (rssiNoiseDb) —
-        // só a mineração das 6h reais mostrou que o ruído de campo não é IID amostra-a-amostra,
-        // e este é o desvio calibrado por isso.
-        const eps = randn(rng);
-        rssiNoiseAr1[p] =
-          rssiAr1Rho === null || !rssiAr1Seeded[p]
-            ? eps
-            : rssiAr1Rho * rssiNoiseAr1[p] + Math.sqrt(1 - rssiAr1Rho * rssiAr1Rho) * eps;
-        rssiAr1Seeded[p] = true;
-        // Offset regional (Fase 2, ver SimOpts.rssiRegions) — 0 sem regiões cadastradas, sem custo.
-        const regionDb = rssiRegions.length ? regionOffsetAt(positions[p], rssiRegions) : 0;
-        // Viés corporal direcional (Fase 2, ver SimOpts.bodyBias) — 0 sem o knob. Coexiste com
-        // personRssiBiasDb (a sentinela achatada do v4) só se o chamador ligar os dois de
-        // propósito; nenhum dos dois desliga o outro automaticamente (decisão do chamador).
-        // bodyBiasDb devolve dB POSITIVOS de ATENUAÇÃO → SUBTRAI do RSSI (mesma convenção do
-        // obstacleDb abaixo). Corrigido na revisão adversarial de 2026-07-11: o original SOMAVA
-        // (sinal invertido — corpo na frente deixava o sinal MAIS forte).
-        const bodyDb = bodyBias
-          ? bodyBiasDb(
-              lastHeading[p],
-              { x: rssiOrigin.x - positions[p].x, y: rssiOrigin.y - positions[p].y },
-              tagPlacement[p] ?? "peito",
-              bodyBias,
-            )
-          : 0;
-        // Oclusão ESTRUTURADA — atenuação de RF (ver SimOpts.obstacles): soma o rfAttenDb de todo
-        // obstáculo cujo segmento pessoa→estação cruza. Independente do bloqueio de visão acima
-        // (uma parede pode existir sem atenuar RF de verdade, ou vice-versa).
-        const obstacleDb = obstacles.length ? rfAttenuationDb(positions[p], rssiOrigin, obstacles) : 0;
-        const rssi =
-          RSSI_1M_DBM -
-          10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
-          personRssiBiasDb +
-          regionDb -
-          bodyDb -
-          obstacleDb +
-          rssiNoiseAr1[p] * rssiNoiseDb;
-        lastRssi[p] = Math.round(rssi);
+      for (let k = 0; k < origins.length; k++) {
+        const org = origins[k].world;
+        if (i % rssiPeriodTicks === 0) {
+          const d = Math.hypot(positions[p].x - org.x, positions[p].y - org.y);
+          // AR(1) (ver SimOpts.rssiNoiseTauS): rho=null → eps puro, IID, byte-idêntico ao
+          // `randn(rng) * rssiNoiseDb` de sempre. rho!=null → 1ª atualização semeia o estado
+          // ESTACIONÁRIO (eps puro, var 1 desde o 1º sample — ver comentário em rssiNoiseAr1);
+          // depois correlaciona com o valor anterior, preservando a MESMA variância (rssiNoiseDb) —
+          // só a mineração das 6h reais mostrou que o ruído de campo não é IID amostra-a-amostra,
+          // e este é o desvio calibrado por isso.
+          const eps = randn(rng);
+          rssiNoiseAr1[k][p] =
+            rssiAr1Rho === null || !rssiAr1Seeded[k][p]
+              ? eps
+              : rssiAr1Rho * rssiNoiseAr1[k][p] + Math.sqrt(1 - rssiAr1Rho * rssiAr1Rho) * eps;
+          rssiAr1Seeded[k][p] = true;
+          // Offset regional (Fase 2, ver SimOpts.rssiRegions) — 0 sem regiões cadastradas, sem custo.
+          // Depende só de ONDE A PESSOA ESTÁ (condição de rádio local) → igual p/ toda estação.
+          const regionDb = rssiRegions.length ? regionOffsetAt(positions[p], rssiRegions) : 0;
+          // Viés corporal direcional (Fase 2, ver SimOpts.bodyBias) — 0 sem o knob. Coexiste com
+          // personRssiBiasDb (a sentinela achatada do v4) só se o chamador ligar os dois de
+          // propósito; nenhum dos dois desliga o outro automaticamente (decisão do chamador).
+          // bodyBiasDb devolve dB POSITIVOS de ATENUAÇÃO → SUBTRAI do RSSI (mesma convenção do
+          // obstacleDb abaixo). Corrigido na revisão adversarial de 2026-07-11: o original SOMAVA
+          // (sinal invertido — corpo na frente deixava o sinal MAIS forte).
+          // MULTI-ANTENA: o ângulo corpo→estação é POR ESTAÇÃO — a mesma pessoa está "de costas"
+          // p/ uma antena e "de frente" p/ a outra. É justamente a assimetria que a 2ª antena
+          // compra (e a fonte de erro CORRELACIONADO que a Regra 13 manda medir, não presumir).
+          const bodyDb = bodyBias
+            ? bodyBiasDb(
+                lastHeading[p],
+                { x: org.x - positions[p].x, y: org.y - positions[p].y },
+                tagPlacement[p] ?? "peito",
+                bodyBias,
+              )
+            : 0;
+          // Oclusão ESTRUTURADA — atenuação de RF (ver SimOpts.obstacles): soma o rfAttenDb de todo
+          // obstáculo cujo segmento pessoa→estação cruza. Independente do bloqueio de visão acima
+          // (uma parede pode existir sem atenuar RF de verdade, ou vice-versa).
+          const obstacleDb = obstacles.length ? rfAttenuationDb(positions[p], org, obstacles) : 0;
+          const rssi =
+            RSSI_1M_DBM -
+            10 * channelN * Math.log10(Math.max(d, MIN_DIST_M)) +
+            personRssiBiasDb +
+            regionDb -
+            bodyDb -
+            obstacleDb +
+            rssiNoiseAr1[k][p] * rssiNoiseDb;
+          lastRssi[k][p] = Math.round(rssi);
+        }
+        const out: RawReading = { mac: MACS[p], rotulo: null, rssi: lastRssi[k][p] };
+        const sid = origins[k].id;
+        if (sid !== null) out.stationId = sid; // mundo de 1 antena → a chave NEM EXISTE
+        readings.push(out);
       }
-      readings.push({ mac: MACS[p], rotulo: null, rssi: lastRssi[p] });
     }
     // Âncoras (v4): MESMO canal (channelN), mesmo ruído, mesma cadência das tags de pessoa —
     // distância FIXA à origem (elas não se movem) e SEM o viés corporal (ferragem fixa não tem
@@ -800,7 +873,10 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
             randn(rng) * rssiNoiseDb;
           lastAnchorRssi[k] = Math.round(rssi);
         }
-        readings.push({ mac: anchors[k].mac, rotulo: null, rssi: lastAnchorRssi[k] });
+        const out: RawReading = { mac: anchors[k].mac, rotulo: null, rssi: lastAnchorRssi[k] };
+        // Multi-antena: só a PRINCIPAL ouve as âncoras (limitação declarada — ver SimOpts.stations).
+        if (stations) out.stationId = stations[0].id;
+        readings.push(out);
       }
     }
 
@@ -816,5 +892,7 @@ export function simulateFusionScenario(opts: SimOpts, seed: number): SimFusionSc
   // Campo ADITIVO — ausente quando o cenário não tem âncoras. Exporta o CADASTRO (com erro de
   // instalação, se anchorPosErrorM), nunca necessariamente a posição real (ver docstring do knob).
   if (anchorsExported) out.anchors = anchorsExported;
+  // Campo ADITIVO — ausente no mundo de 1 antena (o espelho de `calibration.stations`).
+  if (stationsPx) out.stationsPx = stationsPx;
   return out;
 }
