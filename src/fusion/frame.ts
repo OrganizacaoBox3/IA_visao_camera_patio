@@ -9,7 +9,17 @@
 // radialmente confundível (o vizinho que espelha meu perfil de distância à estação A): dois eixos
 // radiais distintos quebram o espelho. Sem stations (mundo de 1 antena) a chave nem existe — o motor
 // segue idêntico ao de hoje (toda fonte contra a `dist` da estação PRINCIPAL).
+//
+// FASE C (H3, 2026-07-13 — a DISTÂNCIA ABSOLUTA): `distM` era um campo que NINGUÉM preenchia no
+// caminho vivo. O tipo existia, o associador sabia consumi-lo, o modelo de path-loss existia
+// (floor-plot.ts) — e a ponte entre eles não. Este arquivo é a ponte: com um `pathLoss` calibrado
+// (pelas ÂNCORAS — tags fixas em posição conhecida), cada leitura ganha a distância tag→estação em
+// METROS, ao lado da distância pista→estação que a câmera já dava. É a evidência que NÃO EXIGE
+// MOVIMENTO — a única que enxerga a pessoa PARADA (41,9% dos episódios do corpus ouro; a
+// correlação é matematicamente indefinida nela). ADITIVO: sem `pathLoss`, nem a chave existe —
+// byte a byte o frame de antes.
 import { pixelToWorld, type Matrix3, type Vec2 } from "../vision/homography";
+import { distFromRssi, type PathLossModel } from "./floor-plot";
 import type { FusionFrame, TagReading, TrackDist } from "./associate";
 
 /** Caixa de pessoa (subset do track do hub): id + bbox [x,y,w,h] normalizado 0..1. */
@@ -72,6 +82,14 @@ function boxProxyDist(bbox: readonly [number, number, number, number]): number {
  *   efeito COM homografia: sem H a `dist` é o proxy 1/bh (tamanho da caixa), que NÃO depende de
  *   onde a estação está — distância por estação não existiria (degradação segura e declarada: o
  *   motor cai na dist principal para toda fonte, exatamente como na Fase A).
+ * @param pathLoss modelo RSSI→distância CALIBRADO pelas âncoras (floor-plot.fitPathLoss, Fase C).
+ *   Presente ⇒ toda leitura SEM `distM` próprio ganha `distM = distFromRssi(model, rssi)` — a
+ *   distância ABSOLUTA tag→estação, evidência que independe de movimento. `distM` que já veio na
+ *   leitura (replay/simulador) TEM PRECEDÊNCIA: o modelo nunca sobrescreve medição declarada.
+ *   ADITIVO: ausente = nenhuma leitura ganha `distM` (retrocompat dura — nem a chave existe).
+ *   HONESTIDADE: o modelo `source:"default"` (sem âncoras suficientes) é CHUTE, não medição — o
+ *   chamador que o passa está declarando um raio de modelo; quem consome (associate.ts) precisa
+ *   do σ medido (distance.ts) para saber se essa distância tem direito de decidir alguma coisa.
  */
 export function buildFusionFrame(
   tracks: readonly DrawTrack[],
@@ -81,6 +99,7 @@ export function buildFusionFrame(
   stationPx: Vec2 = STATION_PX,
   excludeTags?: ReadonlySet<string>,
   stationsPx?: StationPoints,
+  pathLoss?: PathLossModel,
 ): FusionFrame {
   const stationWorld = H ? pixelToWorld(H, stationPx) : null;
   // FASE B: cada estação com ponto calibrado vira uma ORIGEM RADIAL própria no mundo (metros).
@@ -121,7 +140,10 @@ export function buildFusionFrame(
   for (const r of readings) {
     if (excludeTags && excludeTags.has(r.mac.toUpperCase())) continue;
     const out: TagReading = { tag: r.rotulo || r.mac, rssi: r.rssi };
+    // Fase C: distM declarado na leitura VENCE (replay/sim já mediram); senão, o modelo calibrado
+    // o produz a partir do RSSI. Sem modelo, a chave nem existe (retrocompat dura).
     if (r.distM !== undefined) out.distM = r.distM;
+    else if (pathLoss && Number.isFinite(r.rssi)) out.distM = distFromRssi(pathLoss, r.rssi);
     // O ELO stationId→sourceId (spec multi-antena F4): as leituras AO VIVO carregam a fonte em
     // `stationId` e ninguém a mapeava — RssiSample.sourceId chegava vazio e partitionBySource via
     // sempre 1 grupo. sourceId EXPLÍCITO (replay/session-loader) tem precedência; ambos ausentes

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildFusionFrame } from "./frame";
 import { TagTrackAssociator } from "./associate";
 import type { Matrix3 } from "../vision/homography";
+import type { PathLossModel } from "./floor-plot";
 
 const ID: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]; // identidade: pixelToWorld devolve as próprias coords
 
@@ -176,5 +177,100 @@ describe("buildFusionFrame — dist POR estação (spec multi-antena F5, Fase B)
       "est-a": { x: 0.5, y: 1.0 },
     });
     expect(Object.keys(f.tracks[0].distByStation!)).toEqual(["est-a"]); // "est-b" não foi marcada
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// FASE C (H3) — O ELO pathLoss → distM. Contrato entre camadas SEM teste = regressão silenciosa
+// nº 1 (CLAUDE.md §2.4): `distM` existia no tipo, o associador sabia consumi-lo, o modelo existia
+// em floor-plot.ts — e NINGUÉM os ligava. Estes testes travam a ponte.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe("buildFusionFrame — distM pelo path-loss calibrado (Fase C)", () => {
+  const MODEL: PathLossModel = { rssi0: -45, n: 2.2, source: "anchors", samples: 4 };
+  const rssiAt = (d: number) => -45 - 10 * 2.2 * Math.log10(d); // o RSSI que a tag a d m emitiria
+
+  it("SEM modelo: a chave distM nem existe (retrocompat DURA — o frame de antes, byte a byte)", () => {
+    const f = buildFusionFrame([], [{ mac: "AA", rotulo: null, rssi: -60 }], null, 0);
+    expect("distM" in f.readings[0]).toBe(false);
+  });
+
+  it("COM modelo: cada leitura ganha a distância ABSOLUTA tag→estação, em metros", () => {
+    const f = buildFusionFrame(
+      [],
+      [{ mac: "AA", rotulo: null, rssi: rssiAt(3) }],
+      null,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      MODEL,
+    );
+    expect(f.readings[0].distM).toBeCloseTo(3, 5); // é a inversão do modelo, não um proxy
+  });
+
+  it("distM DECLARADO na leitura vence o modelo (replay/sim já mediram — o modelo não sobrescreve)", () => {
+    const f = buildFusionFrame(
+      [],
+      [{ mac: "AA", rotulo: null, rssi: rssiAt(3), distM: 9 }],
+      null,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      MODEL,
+    );
+    expect(f.readings[0].distM).toBe(9);
+  });
+
+  it("a evidência absoluta é INDEPENDENTE de movimento: pessoa PARADA, distM presente e comparável", () => {
+    // O par que a correlação NÃO consegue julgar (distância constante ⇒ pearson indefinida) é
+    // exatamente o que este frame entrega pronto: dist (câmera, métrica) E distM (rádio), ambos em
+    // METROS, no mesmo frame. É o insumo da distance.ts — sem ele, a pessoa parada é invisível.
+    const parada = { id: 1, bbox: [0.4, 0.4, 0.2, 0.1] as const }; // pé (0.5,0.5) → 0.5 m da base
+    const f = buildFusionFrame(
+      [parada],
+      [{ mac: "AA", rotulo: null, rssi: rssiAt(0.5) }],
+      ID,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      MODEL,
+    );
+    expect(f.tracks[0].metric).toBe(true); // câmera em METROS
+    expect(f.tracks[0].dist).toBeCloseTo(0.5, 5);
+    expect(f.readings[0].distM).toBeCloseTo(0.5, 5); // rádio em METROS — comparáveis
+  });
+
+  it("âncora excluída não ganha distM (ela nem chega ao frame — exclusão vem antes)", () => {
+    const f = buildFusionFrame(
+      [],
+      [
+        { mac: "AA", rotulo: null, rssi: -60 },
+        { mac: "BB", rotulo: null, rssi: -60 },
+      ],
+      null,
+      0,
+      undefined,
+      new Set(["BB"]),
+      undefined,
+      MODEL,
+    );
+    expect(f.readings).toHaveLength(1);
+    expect(f.readings[0].tag).toBe("AA");
+  });
+
+  it("rssi não-finito com modelo → sem distM (não se inverte modelo sobre lixo)", () => {
+    const f = buildFusionFrame(
+      [],
+      [{ mac: "AA", rotulo: null, rssi: NaN }],
+      null,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      MODEL,
+    );
+    expect("distM" in f.readings[0]).toBe(false);
   });
 });
