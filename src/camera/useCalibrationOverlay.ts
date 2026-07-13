@@ -17,6 +17,10 @@ export function useCalibrationOverlay(cameraId: string, enabled: boolean) {
   const onRef = useRef(false);
   const dataRef = useRef<CalibData>({ points: [], H: null });
   const [hasCalibration, setHasCalibration] = useState(false);
+  // `rev` re-dispara a carga sem remontar o hook: quem SALVA a calibração agora é o modo do palco
+  // (camera/useCalibrationEditor, spec §1) — sem isto, a malha seguiria desenhando a H ANTIGA até
+  // reabrir a câmera, e o operador acabaria de conferir a nova.
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
     if (!enabled) return;
@@ -31,13 +35,15 @@ export function useCalibrationOverlay(cameraId: string, enabled: boolean) {
     return () => {
       alive = false;
     };
-  }, [cameraId, enabled]);
+  }, [cameraId, enabled, rev]);
 
   // Setter único: espelha o toggle no ref (rAF) e no estado (UI) numa só unidade.
   const setOn = (v: boolean) => {
     onRef.current = v;
     setOnState(v);
   };
+  /** re-lê a calibração do hub (chamada pelo modo do palco logo após salvar). */
+  const refresh = () => setRev((r) => r + 1);
 
-  return { on, setOn, onRef, dataRef, hasCalibration };
+  return { on, setOn, onRef, dataRef, hasCalibration, refresh };
 }

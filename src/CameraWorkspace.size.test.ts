@@ -7,12 +7,17 @@
 // no PR), não uma deriva silenciosa.
 //
 // HONESTIDADE (lição 06.2): o anti-reengorda REAL não é meta de linhas — é fronteira de
-// módulo com dono+teste. RESIDUAL DECLARADO: a extração de useZoneEditor/useCameraPipeline
-// NÃO é seam limpo hoje — os handlers de ponteiro (onDown/onMove/onUp) MULTIPLEXAM 3 editores
-// (pintura + tripwire + retângulo), o estado zones/zonesRef/setZones é usado por toda a
-// componente (render, pipeline, summary) e removeZone toca os holders de processamento.
-// Extrair agora = pass-through com interface ≈ implementação (veto §C do retrofit-2).
-// Precisa de esforço dedicado (spec + fase-1 1:1 com paridade provada), não squeeze oportunista.
+// módulo com dono+teste.
+//
+// RESIDUAL RESOLVIDO (2026-07-13, spec-arquitetura-informacao §1): o residual acima dizia que os
+// handlers de ponteiro NÃO eram seam limpo porque MULTIPLEXAVAM 3 editores. A calibração-como-modo
+// forçou a questão (o 5º editor não cabia nos 3 de folga) e mostrou que o multiplexador ERA a
+// unidade: ./camera/useStageModes.ts tem UMA responsabilidade — traduzir o ponteiro do palco para o
+// editor ativo, na ORDEM certa — e essa ordem virou função PURA com teste (stageTarget), porque é
+// nela que mora o RBAC (o operador MEDE distância; não desenha zona). Os editores com dono próprio
+// (linha/polígono/calibração) são delegados; o rascunho do retângulo e o pincel, que não tinham
+// dono, passaram a ter. O que continua sem seam limpo: zones/zonesRef/setZones (render + pipeline +
+// summary) e removeZone (toca os holders de processamento) — esses seguem no god-file, declarados.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
@@ -27,6 +32,14 @@ import { describe, it, expect } from "vitest";
 //   ./camera/CamKpiBar.tsx  — barra de KPIs do rodapé ("a imagem é soberana": número no painel)
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1994 → 1762 (teto 1765
 // mantém a folga mínima da convenção, ≈3). NÃO medir com `Measure-Object -Line`.
+//
+// APERTADO de novo na CALIBRAÇÃO-COMO-MODO (jul/13), 1765 → 1725: o ratchet fez o que devia pela
+// SEGUNDA vez. O diff PRECISAVA crescer (a rota /calibracao morre e vira o 5º modo do palco: hook +
+// aba + camada SVG) e havia 3 linhas de folga. Em vez de subir o teto, saiu uma responsabilidade:
+//   ./camera/useStageModes.ts — o multiplexador de PONTEIRO do palco (+ rascunho do retângulo e
+//   pincel, que não tinham dono) e a ordem de precedência dos modos, PURA e testada (stageTarget).
+// Contabilidade REAL (método deste teste, que conta linhas vazias): 1762 → 1722 — a fiação da
+// calibração ENTROU e o arquivo ainda ENCOLHEU 40 linhas. NÃO medir com `Measure-Object -Line`.
 //
 // Teto ATUAL (não-ideal). BAIXE ao extrair uma responsabilidade; SUBIR exige justificativa.
 // 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
@@ -45,7 +58,7 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
 // a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
 // vazias e já induziu um falso "coube em 1930" numa revisão).
-const MAX_LINES = 1765;
+const MAX_LINES = 1725;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

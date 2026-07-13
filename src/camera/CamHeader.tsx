@@ -19,6 +19,7 @@ import {
   PenLine,
   Pentagon,
   Play,
+  Ruler,
   Snowflake,
   Undo2,
   X,
@@ -69,6 +70,11 @@ type Props = {
   tripwireMode: boolean;
   toggleTripwireMode: () => void;
   poly: PolyControls;
+  /** modo CALIBRAR do palco (spec §1: a rota /calibracao virou este botão) */
+  calActive: boolean;
+  /** sub-modo corrente da calibração — o rótulo do botão CARREGA o estado (nunca só-por-cor) */
+  calMode: "calibrar" | "medir";
+  toggleCalibration: () => void;
   reviewTip: string | null;
   onClose?: () => void;
 };
@@ -97,6 +103,9 @@ export function CamHeader({
   tripwireMode,
   toggleTripwireMode,
   poly,
+  calActive,
+  calMode,
+  toggleCalibration,
   reviewTip,
   onClose,
 }: Props) {
@@ -263,6 +272,38 @@ export function CamHeader({
               ) : (
                 <>
                   <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden /> Linha
+                </>
+              )}
+            </Toggle>
+          </Tooltip>
+          {/* CALIBRAR — o 5º modo do palco (spec-arquitetura-informacao §1: "capacidade não é
+              lugar"; a rota /calibracao morre). NÃO usa `editDisabled`: MEDIR distância é do
+              OPERADOR (era o que a rota lhe dava). Quem barra o que ele pode MARCAR é o hook
+              (useCalibrationEditor) + a ordem pura do stageTarget — não este botão. Em REVISÃO
+              (cine-loop) fica desabilitado, como todo editor. Estado no TEXTO, nunca só-por-cor. */}
+          <Tooltip
+            content={
+              review
+                ? "Indisponível durante a revisão do cine-loop"
+                : canConfigure
+                  ? "Calibrar a distância no chão (4 cantos de um retângulo + Largura×Comprimento) e medir distâncias reais. Dica: Pausar o vídeo facilita clicar com precisão."
+                  : "Medir distâncias reais no chão (a calibração em si requer perfil de engenharia)"
+            }
+          >
+            <Toggle
+              pressed={calActive}
+              disabled={review}
+              onPressedChange={() => toggleCalibration()}
+            >
+              {calActive ? (
+                calMode === "medir" ? (
+                  "Medindo…"
+                ) : (
+                  "Calibrando…"
+                )
+              ) : (
+                <>
+                  <Ruler size={16} strokeWidth={1.75} aria-hidden /> Calibrar
                 </>
               )}
             </Toggle>

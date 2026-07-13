@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { APP_CONFIG, MODE_PRESETS, type OverlayLayers, type ModeKey } from "./config";
 import { type FrameSource } from "./frame";
@@ -35,8 +35,11 @@ import { ApiError, type BtReading } from "./api";
 import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
 import { useFloorTags } from "./fusion/useFloorTags";
 import { useCalibrationOverlay } from "./camera/useCalibrationOverlay";
+import { useCalibrationEditor } from "./camera/useCalibrationEditor";
+import { CalibrationLayer } from "./camera/CalibrationLayer";
 import { useZoneMasks } from "./camera/useZoneMasks";
 import { usePolygonEditor } from "./camera/usePolygonEditor";
+import { useStageModes } from "./camera/useStageModes";
 import {
   createCounter,
   createOccupancy,
@@ -89,6 +92,7 @@ import { LinhasTab } from "./camera/tabs/LinhasTab";
 import { CamadasTab } from "./camera/tabs/CamadasTab";
 import { TimelineTab, type TimelineItem } from "./camera/tabs/TimelineTab";
 import { PresencaTab } from "./camera/tabs/PresencaTab";
+import { CalibracaoTab } from "./camera/tabs/CalibracaoTab";
 import "./camera/cine.css";
 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
@@ -164,6 +168,11 @@ type Props = {
 
 const C = APP_CONFIG.detection;
 
+// Abas do drawer da câmera aberta. "calibracao" entrou na spec-arquitetura-informacao §1 (a rota
+// /calibracao virou MODO do palco — o painel é o chrome, o palco é o insumo: vídeo REAL, não um
+// JPEG parado).
+type DrawerTab = "zonas" | "linhas" | "timeline" | "presenca" | "camadas" | "calibracao";
+
 export function CameraWorkspace({
   cameraId,
   label,
@@ -230,15 +239,6 @@ export function CameraWorkspace({
   const onCloseRef = useRef(onClose); // estável p/ o handler de ESC (evita re-armar o listener a cada render)
   const fullRef = useRef<HTMLDivElement | null>(null); // raiz do overlay em tela cheia (foco preso)
   const cfgOpenRef = useRef(false); // diálogo de config aberto → deixa o Radix tratar ESC/Tab
-  const drawRef = useRef<{
-    active: boolean;
-    sx: number;
-    sy: number;
-    cx: number;
-    cy: number;
-  } | null>(null);
-  const paintingRef = useRef(false);
-  const eraseRef = useRef(false);
   const tracksRef = useRef<Track[]>([]); // presença (IDs anônimos + permanência)
   // Tracker criado sob demanda no rAF; roda SÓ em rodada NOVA de detecção (detsRev) — realimentar
   // o mesmo resultado stale zeraria a velocidade estimada e mataria a predição em rodadas lentas.
@@ -285,8 +285,6 @@ export function CameraWorkspace({
   // Máscara efetiva por zona (cache + pintura + fábricas de `contains`) — ./camera/useZoneMasks.
   // É a casa da precedência points>mask (P5) e do consumo rasterizado do polígono (P6).
   const zm = useZoneMasks(paintZoneId);
-  const [brush, setBrush] = useState(2);
-  const [erase, setErase] = useState(false);
   const [paused, setPaused] = useState(false);
   const [perf, setPerf] = useState({ fps: 0 });
   // HUD: toggle no estado (UI); o rAF lê o REF (a régua não pode custar re-render por frame).
@@ -301,9 +299,7 @@ export function CameraWorkspace({
   const [detBackend, setDetBackend] = useState<string | null>(null); // null até o worker reportar
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
-  const [drawerTab, setDrawerTab] = useState<
-    "zonas" | "linhas" | "timeline" | "presenca" | "camadas"
-  >("zonas");
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("zonas");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
@@ -376,6 +372,18 @@ export function CameraWorkspace({
   // Toggle opt-in; refs (onRef/dataRef) lidos no rAF/drawScene sem re-armar o laço de desenho.
   const calib = useCalibrationOverlay(cameraId, mode === "full");
 
+  // MODO CALIBRAR do palco (spec-arquitetura-informacao §1 — a rota /calibracao morre): 5º modo, no
+  // molde do usePolygonEditor. O hook é dono de cantos/âncoras/estações/refTag/L×C/H/save; aqui só
+  // a fiação (1 hook + a delegação de ponteiro no useStageModes + a camada SVG + 1 TabsContent).
+  // Salvou → `calib.refresh()`: a malha do rodapé passa a desenhar a H NOVA (sem reabrir a câmera).
+  const cal = useCalibrationEditor({
+    cameraId,
+    canConfigure,
+    viewportRef,
+    currentFrame,
+    onSaved: calib.refresh,
+  });
+
   // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
 
@@ -412,6 +420,7 @@ export function CameraWorkspace({
       setDrawMode(false);
       setPaintZoneId(null);
       poly.cancel(); // editor de linha derruba o rascunho de polígono (modos exclusivos)
+      cal.stop(); // …e a calibração (5º modo — exclusão mútua)
     },
   });
 
@@ -425,12 +434,36 @@ export function CameraWorkspace({
       setDrawMode(false);
       setTripwireMode(false);
       setPaintZoneId(null);
+      cal.stop();
     },
     onCreate: (points) =>
       setZones((p) => persist([...p, withDefaults({ label: `Área ${p.length + 1}`, points }, cameraId)])),
     onLive: (id, patch) => setZones((p) => p.map((z) => (z.id === id ? { ...z, ...patch } : z))),
     onPatch: (id, patch) => patchZone(id, patch),
     onAlert: (m) => onAlertRef.current?.(`⚠ ${label}: ${m}`),
+  });
+
+  // PONTEIRO do palco (./camera/useStageModes): o multiplexador dos 5 modos + o rascunho do
+  // retângulo + o pincel. A ORDEM é pura e testada (stageTarget) — é lá que a calibração fica
+  // ACIMA do corte de `!canConfigure`, para o operador não perder o MEDIR (spec §1, risco 2).
+  const stage = useStageModes({
+    cameraId,
+    mode,
+    canConfigure,
+    viewportRef,
+    currentFrame,
+    reviewRef,
+    zonesRef,
+    zm,
+    poly,
+    cal,
+    paintZoneId,
+    drawMode,
+    tripwireMode,
+    twDrawRef,
+    commitTripwire,
+    onCreateZone: (z) => setZones((p) => persist([...p, z])),
+    patchZone: (id, patch) => patchZone(id, patch),
   });
 
   // Espelhos do transporte WebRTC e do motor do hub vivem em useWebrtcTransport/useHubAnalysis
@@ -1251,7 +1284,7 @@ export function CameraWorkspace({
     );
 
     if (paintZoneId) drawPaintGrid(ctx, cr, DEFAULT_GRID.cols, DEFAULT_GRID.rows); // grade de pintura
-    drawZoneDraft(ctx, drawRef.current); // retângulo de zona em arraste
+    drawZoneDraft(ctx, stage.drawRef.current); // retângulo de zona em arraste
     drawTripwireDraft(ctx, twDrawRef.current); // linha em traçado
     drawPolygonDraft(ctx, cr, poly.draftRef.current); // polígono em desenho (vértices + fecho)
 
@@ -1281,110 +1314,8 @@ export function CameraWorkspace({
     }
   }
 
-  // ── editor de zonas ── (máscara/pintura/contains vivem em ./camera/useZoneMasks — `zm`)
-  // `currentFrame` (fonte da GEOMETRIA do editor, WebRTC × MJPEG) vem de useWebrtcTransport.
-  function vpPoint(e: ReactMouseEvent) {
-    const r = viewportRef.current!.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
-  }
-  function normPoint(e: ReactMouseEvent): { nx: number; ny: number } | null {
-    const f = currentFrame(),
-      viewport = viewportRef.current;
-    if (!f || !viewport) return null;
-    const r = viewport.getBoundingClientRect();
-    const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
-    const nx = (e.clientX - r.left - cr.x) / cr.w,
-      ny = (e.clientY - r.top - cr.y) / cr.h;
-    return nx < 0 || nx > 1 || ny < 0 || ny > 1 ? null : { nx, ny };
-  }
-  function paintAt(e: ReactMouseEvent) {
-    const z = zonesRef.current.find((z) => z.id === paintZoneId);
-    const p = z ? normPoint(e) : null;
-    if (z && p) zm.paintAt(z, p.nx, p.ny, brush - 1, eraseRef.current);
-  }
-  function commitPaint() {
-    const z = zonesRef.current.find((zz) => zz.id === paintZoneId);
-    const patch = z ? zm.commitPaint(z) : null;
-    if (z && patch) patchZone(z.id, patch);
-  }
-  function onDown(e: ReactMouseEvent) {
-    if (mode !== "full" || reviewRef.current) return; // em revisão o palco mostra o buffer — sem edição de zona
-    if (!canConfigure) return; // RBAC: operador não cria/edita/pinta zonas (defensivo; controles já desabilitados)
-
-    if (paintZoneId) {
-      paintingRef.current = true;
-      eraseRef.current = e.altKey || e.button === 2 || erase;
-      paintAt(e);
-      return;
-    }
-    if (tripwireMode) {
-      const p = vpPoint(e);
-      twDrawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y };
-      return;
-    }
-    if (drawMode) {
-      const p = vpPoint(e);
-      drawRef.current = { active: true, sx: p.x, sy: p.y, cx: p.x, cy: p.y };
-      return;
-    }
-    poly.onDown(e); // polígono: vértice do rascunho OU início do arraste de vértice (CA-7)
-  }
-  function onMove(e: ReactMouseEvent) {
-    if (paintingRef.current) {
-      paintAt(e);
-      return;
-    }
-    if (twDrawRef.current?.active) {
-      const p = vpPoint(e);
-      twDrawRef.current.cx = p.x;
-      twDrawRef.current.cy = p.y;
-      return;
-    }
-    if (drawRef.current?.active) {
-      const p = vpPoint(e);
-      drawRef.current.cx = p.x;
-      drawRef.current.cy = p.y;
-      return;
-    }
-    poly.onMove(e); // cursor do rascunho / arraste de vértice ao vivo
-  }
-  function onUp() {
-    if (paintingRef.current) {
-      paintingRef.current = false;
-      commitPaint();
-      return;
-    }
-    if (twDrawRef.current?.active) {
-      commitTripwire();
-      return;
-    }
-    if (poly.onUp()) return; // fim do arraste de vértice (persiste points + bbox derivada)
-    const d = drawRef.current;
-    if (!d?.active) return;
-    drawRef.current = null;
-    const f = currentFrame(),
-      viewport = viewportRef.current;
-    if (!f || !viewport) return;
-    const cr = getContentRect(viewport.clientWidth, viewport.clientHeight, f.w, f.h);
-    const x0 = Math.min(d.sx, d.cx),
-      y0 = Math.min(d.sy, d.cy),
-      w = Math.abs(d.cx - d.sx),
-      h = Math.abs(d.cy - d.sy);
-    if (w < 16 || h < 16) return;
-    // Defaults do modelo via withDefaults (fonte única) — mesmos valores do literal antigo.
-    const nz = withDefaults(
-      {
-        label: `Área ${zonesRef.current.length + 1}`,
-        x: Math.max(0, (x0 - cr.x) / cr.w),
-        y: Math.max(0, (y0 - cr.y) / cr.h),
-        w: Math.min(1, w / cr.w),
-        h: Math.min(1, h / cr.h),
-      },
-      cameraId,
-    );
-    setZones((p) => persist([...p, nz]));
-  }
-  // Modos de edição mutuamente exclusivos (tripwire × zona × polígono × pintura não conflitam).
+  // ── editores do palco ── (ponteiro → ./camera/useStageModes · máscara/pintura → ./camera/useZoneMasks)
+  // Modos de edição mutuamente exclusivos (zona × polígono × linha × pintura × CALIBRAÇÃO).
   function toggleDrawMode() {
     setDrawMode((v) => {
       const nv = !v;
@@ -1392,9 +1323,24 @@ export function CameraWorkspace({
         setTripwireMode(false);
         setPaintZoneId(null);
         poly.cancel();
+        cal.stop();
       }
       return nv;
     });
+  }
+  // CALIBRAR (spec §1): liga o modo no palco e traz a aba junto — o painel é o chrome do editor.
+  // Desligar NÃO descarta o trabalho (o hook segue montado: cantos/L×C sobrevivem).
+  function toggleCalibration() {
+    if (cal.active) {
+      cal.stop();
+      return;
+    }
+    setDrawMode(false);
+    setTripwireMode(false);
+    setPaintZoneId(null);
+    poly.cancel();
+    cal.start();
+    setDrawerTab("calibracao");
   }
 
   // ⚠ NOS TEXTOS DE onAlert É CONTRATO, NÃO DECORAÇÃO (não "limpe" numa varredura de ícones):
@@ -1451,6 +1397,7 @@ export function CameraWorkspace({
     setDrawMode(false);
     setTripwireMode(false);
     poly.cancel();
+    cal.stop();
     zm.ensurePaint(z);
     setPaintZoneId(z.id);
   }
@@ -1458,7 +1405,7 @@ export function CameraWorkspace({
     const z = zonesRef.current.find((zz) => zz.id === paintZoneId);
     if (!z) return;
     zm.clearPaint(z);
-    commitPaint();
+    stage.commitPaint();
   }
   const paintZone = paintZoneId ? (zones.find((z) => z.id === paintZoneId) ?? null) : null;
 
@@ -1566,10 +1513,10 @@ export function CameraWorkspace({
         activePresetDef={activePresetDef}
         presetDirty={presetDirty}
         paintZone={paintZone}
-        erase={erase}
-        setErase={setErase}
-        brush={brush}
-        setBrush={setBrush}
+        erase={stage.erase}
+        setErase={stage.setErase}
+        brush={stage.brush}
+        setBrush={stage.setBrush}
         clearActive={clearActive}
         endPaint={() => setPaintZoneId(null)}
         review={review}
@@ -1582,6 +1529,9 @@ export function CameraWorkspace({
         tripwireMode={tripwireMode}
         toggleTripwireMode={toggleTripwireMode}
         poly={poly}
+        calActive={cal.active}
+        calMode={cal.mode}
+        toggleCalibration={toggleCalibration}
         reviewTip={reviewTip}
         onClose={onClose}
       />
@@ -1590,12 +1540,12 @@ export function CameraWorkspace({
           drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
       <div className="cam-body">
         <div
-          className={`cam-stage ${drawMode || tripwireMode || paintZone || poly.active ? "draw-cursor" : ""}`}
+          className={`cam-stage ${drawMode || tripwireMode || paintZone || poly.active || cal.active ? "draw-cursor" : ""}`}
           ref={viewportRef}
-          onMouseDown={onDown}
-          onMouseMove={onMove}
-          onMouseUp={onUp}
-          onMouseLeave={onUp}
+          onMouseDown={stage.onDown}
+          onMouseMove={stage.onMove}
+          onMouseUp={stage.onUp}
+          onMouseLeave={stage.onUp}
           onContextMenu={(e) => {
             if (paintZone) e.preventDefault();
           }}
@@ -1615,6 +1565,11 @@ export function CameraWorkspace({
             role="img"
             aria-label={`Vídeo ao vivo de ${label} com as marcações de análise (zonas, linhas e pessoas). Os indicadores em texto estão na barra abaixo.`}
           />
+          {/* Marcação da CALIBRAÇÃO → ./camera/CalibrationLayer: SVG IRMÃO do canvas (como a
+              CineBar), posicionado pelo content-rect. Com ⏸ Pausar o rAF retorna ANTES do
+              drawScene — desenhar os cantos no canvas os faria SUMIR justo quando o operador
+              congela a imagem para clicar com precisão (spec §1, risco 1). O rAF fica intocado. */}
+          <CalibrationLayer cal={cal} />
           {/* Barra do cine-loop → ./camera/CineBar (irmã do canvas, nunca ancestral). */}
           {review && (
             <CineBar
@@ -1638,9 +1593,7 @@ export function CameraWorkspace({
           <Tabs
             className="drawer-tabs"
             value={drawerTab}
-            onValueChange={(v) =>
-              setDrawerTab(v as "zonas" | "linhas" | "timeline" | "presenca" | "camadas")
-            }
+            onValueChange={(v) => setDrawerTab(v as DrawerTab)}
             ariaLabel="Aba do painel"
             // Contagens em chip compacto (.dt-n, cine.css) p/ as 5 abas caberem em 1 linha —
             // triggers distribuem por flex + rótulos curtos (fix #14: "Presença"→"Pessoas";
@@ -1665,6 +1618,9 @@ export function CameraWorkspace({
               { value: "camadas", label: "Camadas" },
               { value: "timeline", label: "Timeline" },
               { value: "presenca", label: "Pessoas" },
+              // A 6ª aba (spec §1): a calibração deixou de ser uma ROTA e virou o chrome do modo
+              // do palco. Visível para TODOS — o operador não calibra, mas MEDE distância aqui.
+              { value: "calibracao", label: "Calibrar" },
             ]}
           >
             <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
@@ -1706,6 +1662,10 @@ export function CameraWorkspace({
 
               <TabsContent value="presenca">
                 <PresencaTab presence={presence} paused={paused} />
+              </TabsContent>
+
+              <TabsContent value="calibracao">
+                <CalibracaoTab cal={cal} onActivate={toggleCalibration} />
               </TabsContent>
 
               <TabsContent value="camadas">

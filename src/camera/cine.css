@@ -202,6 +202,19 @@
   background: var(--cam-surface-bg);
 }
 
+/* ── Camada de marcação da CALIBRAÇÃO (CalibrationLayer) — SVG irmão do <canvas> ──
+   Posicionada pelo CONTENT-RECT do vídeo (left/top/width/height vêm do JS: é geometria
+   calculada, não constante de design). Fica ACIMA do canvas e ABAIXO da barra do cine
+   (z-index 6) — e NÃO recebe ponteiro: os cliques são do .cam-stage, que delega ao
+   useCalibrationEditor. Por que SVG e não canvas: com ⏸ Pausar o rAF retorna antes do
+   drawScene e a marcação sumiria justo quando o operador congela p/ clicar (spec §1). */
+.cam-stage .cal-layer {
+  position: absolute;
+  z-index: calc(var(--z-base) + 5);
+  pointer-events: none;
+  overflow: visible;
+}
+
 /* ── Utilitários de espaçamento do drawer (tokens --sp-*) — substituem style inline cru ── */
 .cam-drawer .mt-sp2 {
   margin-top: var(--sp-2);
