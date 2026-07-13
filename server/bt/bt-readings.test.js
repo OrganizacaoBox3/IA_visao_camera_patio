@@ -106,6 +106,54 @@ describe("bt-readings — multi-antena (chave composta estação|MAC)", () => {
       stationId: "solo",
       rssi: -52,
       ts: 500_200,
+      // ADITIVO (2026-07-13): sem `ageMs` na leitura, a MEDIÇÃO é a CHEGADA — o shape ganha o campo,
+      // o valor é o mesmo `ts` de sempre (estação antiga segue byte-compatível no que importa).
+      measuredAt: 500_200,
     });
+  });
+});
+
+// ——— `measuredAt`: QUANDO O RÁDIO MEDIU (bug B1 do laudo de 2026-07-13) ———
+// A estação manda `ageMs` (idade da medição, relógio MONOTÔNICO dela); o hub reconstrói o instante
+// com o RELÓGIO DELE. Sem epoch do device: relógio de parede torto quebraria a poda.
+describe("bt-readings — measuredAt (o instante da MEDIÇÃO, não o da chegada)", () => {
+  it("ageMs vira measuredAt no relógio do HUB (imune a skew do celular)", () => {
+    const [rec] = bt.ingest("m1", [{ mac: "aa:00:00:00:00:01", rssi: -50, ageMs: 2200 }], 100_000);
+    expect(rec.ts).toBe(100_000); // chegada
+    expect(rec.measuredAt).toBe(97_800); // medição: 2,2 s antes (a cadência real da tag)
+  });
+
+  it("sem ageMs (estação antiga) → measuredAt = chegada: retrocompat dura", () => {
+    const [rec] = bt.ingest("m2", [{ mac: "aa:00:00:00:00:02", rssi: -50 }], 100_000);
+    expect(rec.measuredAt).toBe(100_000);
+    expect(bt.snapshot(114_000).some((r) => r.mac === "AA:00:00:00:00:02")).toBe(true);
+    expect(bt.snapshot(116_000).some((r) => r.mac === "AA:00:00:00:00:02")).toBe(false); // poda igual à de sempre
+  });
+
+  it("ageMs inválido/negativo é ignorado (cai na chegada) e o velho demais é clampado ao pool", () => {
+    const [a] = bt.ingest("m3", [{ mac: "aa:00:00:00:00:03", rssi: -50, ageMs: "x" }], 200_000);
+    expect(a.measuredAt).toBe(200_000);
+    const [b] = bt.ingest("m3", [{ mac: "aa:00:00:00:00:04", rssi: -50, ageMs: -5 }], 200_000);
+    expect(b.measuredAt).toBe(200_000);
+    const [c] = bt.ingest("m3", [{ mac: "aa:00:00:00:00:05", rssi: -50, ageMs: 999_999 }], 200_000);
+    expect(c.measuredAt).toBe(200_000 - bt.STALE_MS); // nasce na borda do pool, não no passado remoto
+  });
+
+  it("FANTASMA: a poda é pela idade da MEDIÇÃO — reenviar leitura velha não ressuscita a tag", () => {
+    // A tag saiu de cena às 300_000. Uma estação teimosa (app antigo) segue postando o último RSSI.
+    bt.ingest("m4", [{ mac: "aa:00:00:00:00:06", rssi: -60, ageMs: 0 }], 300_000);
+    // 14 s depois ela reposta a MESMA medição (agora com 14 s de idade): chegada nova, medição velha.
+    bt.ingest("m4", [{ mac: "aa:00:00:00:00:06", rssi: -60, ageMs: 14_000 }], 314_000);
+    // 2 s depois: a medição tem 16 s > STALE_MS → some, mesmo tendo "chegado" há 2 s.
+    expect(bt.snapshot(316_000).some((r) => r.mac === "AA:00:00:00:00:06")).toBe(false);
+  });
+
+  it("colapso por MAC: vence quem MEDIU por último, não quem POSTOU por último", () => {
+    // Estação A mediu agora e postou agora; estação B postou DEPOIS, mas a medição dela é velha.
+    bt.ingest("estA", [{ mac: "aa:00:00:00:00:07", rssi: -40, ageMs: 100 }], 400_000);
+    bt.ingest("estB", [{ mac: "aa:00:00:00:00:07", rssi: -90, ageMs: 9000 }], 400_500);
+    const rec = bt.snapshotLatestByMac(401_000).find((r) => r.mac === "AA:00:00:00:00:07");
+    expect(rec.stationId).toBe("estA");
+    expect(rec.rssi).toBe(-40);
   });
 });

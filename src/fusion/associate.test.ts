@@ -1181,3 +1181,93 @@ describe("TagTrackAssociator — FASE B: dist POR estação (spec multi-antena F
     expect(semGeo[0].tag).toBeNull();
   });
 });
+
+// ——— CONTAGEM HONESTA: o gate mede MEDIÇÕES, não POSTs (bug B3 do laudo de 2026-07-13) ———
+//
+// O celular postava a 2 Hz o mapa INTEIRO de tags e a tag só anuncia a cada ~2,2 s ⇒ 83,3% do que o
+// hub recebe é CÓPIA (medido, n=266.174). O motor via 16 "amostras" numa janela de 8 s quando havia
+// ~4 medições. Aqui a régua vira a da Regra 8 (nº de medições DISTINTAS) por dois caminhos:
+//  (a) EXATO, quando a leitura traz `measuredAt` (o instante em que o RÁDIO mediu — cadeia nova);
+//  (b) PROXY conservador (dedup por valor adjacente) quando não traz — cadeia antiga/simulador.
+describe("contagem honesta — cópia de leitura NÃO é evidência (Regra 8)", () => {
+  const N = 16; // 8 s de janela a 500 ms — o que a produção acumula
+  /** A pessoa ANDA (1→6 m) e o RSSI acompanha, mas o rádio só mede a cada 4 ticks (~2 s): as demais
+   *  são CÓPIAS do último valor — exatamente o sample-and-hold do app. 16 POSTs, 4 medições. */
+  const framesComHold = (stamped: boolean): FusionFrame[] =>
+    makeFrames(N, 1000, 500, (i) => {
+      const medIdx = Math.floor(i / 4); // 0,0,0,0,1,1,1,1,2,… → 4 medições distintas em 16 posts
+      const r: TagReading = { tag: "AA", rssi: -50 - 6 * medIdx };
+      if (stamped) r.measuredAt = 1000 + medIdx * 2000; // instante REAL da medição (borda)
+      return { tracks: [{ trackId: 1, dist: ramp(1, 6, i, N) }], readings: [r] };
+    });
+
+  it("16 POSTs com 4 medições distintas → NÃO fala (o gate antigo falava: contava POSTs)", () => {
+    const a = new TagTrackAssociator();
+    for (const f of framesComHold(false)) a.push(f);
+    expect(a.assign()[0].tag).toBeNull(); // 4 < minSamples(5) MEDIÇÕES — abstenção honesta
+
+    // O funil declara o elo que matou, e o número REAL de medições (aditivo).
+    const funil = a.diagnoseFunnel().find((p) => p.tag === "AA")!;
+    expect(funil.verdict).toBe("rssiSamples<minSamples");
+    expect(funil.rssiSamples).toBe(N); // POSTs: 16 (a mentira)
+    expect(funil.distinctRssiSamples).toBe(4); // medições: 4 (a verdade)
+  });
+
+  it("MESMAS 16 leituras, mas 6 medições distintas → fala (o gate não é mudez cega)", () => {
+    const a = new TagTrackAssociator();
+    for (const f of makeFrames(N, 1000, 500, (i) => {
+      const medIdx = Math.floor(i / 2); // 8 medições distintas
+      return {
+        tracks: [{ trackId: 1, dist: ramp(1, 6, i, N) }],
+        readings: [{ tag: "AA", rssi: -50 - 3 * medIdx }],
+      };
+    }))
+      a.push(f);
+    expect(a.assign()[0].tag).toBe("AA");
+  });
+
+  it("`measuredAt` deduplica a cópia NA ENTRADA — a correlação vê a medição, não o hold (bug B2)", () => {
+    const a = new TagTrackAssociator({ minSamples: 4 }); // 4 medições = o teto físico desta janela
+    for (const f of framesComHold(true)) a.push(f);
+    const funil = a.diagnoseFunnel().find((p) => p.tag === "AA")!;
+    // Com o carimbo de borda, as 12 cópias somem: sobram as 4 leituras físicas (e só elas alinham).
+    expect(funil.rssiSamples).toBe(4);
+    expect(funil.distinctRssiSamples).toBe(4);
+    expect(a.assign()[0].tag).toBe("AA");
+  });
+
+  it("duas medições FRESCAS com o MESMO valor de RSSI contam DUAS (o dedup por valor subconta)", () => {
+    const semCarimbo: TagReading[] = [];
+    const comCarimbo: TagReading[] = [];
+    const a = new TagTrackAssociator({ minSamples: 5 });
+    const b = new TagTrackAssociator({ minSamples: 5 });
+    // 6 leituras FRESCAS (uma por tick), mas o RSSI repete o valor em pares consecutivos: o proxy por
+    // valor conta 3; o carimbo de borda conta 6 (é o que de fato foi medido).
+    for (let i = 0; i < 6; i++) {
+      const rssi = -50 - 4 * Math.floor(i / 2);
+      const track = { trackId: 1, dist: ramp(1, 6, i, 6) };
+      semCarimbo.push({ tag: "AA", rssi });
+      comCarimbo.push({ tag: "AA", rssi, measuredAt: 5000 + i * 500 });
+      a.push({ ts: 5000 + i * 500, readings: [semCarimbo[i]], tracks: [track] });
+      b.push({ ts: 5000 + i * 500, readings: [comCarimbo[i]], tracks: [track] });
+    }
+    expect(a.diagnoseFunnel().find((p) => p.tag === "AA")!.distinctRssiSamples).toBe(3); // proxy: subconta
+    expect(b.diagnoseFunnel().find((p) => p.tag === "AA")!.distinctRssiSamples).toBe(6); // exato
+    expect(a.assign()[0].tag).toBeNull(); // 3 < 5 → cala (conservador, nunca superestima)
+    expect(b.assign()[0].tag).toBe("AA"); // 6 ≥ 5 → fala
+  });
+
+  it("TETO DA REGRA 8: ρ negativo não pode INFLAR n_eff acima do nº de medições distintas", () => {
+    // Série deduplicada por valor tem ρ NEGATIVO por construção (medido no campo: −0,09 a −0,30).
+    // Sem o teto, n_eff = n·(1−ρ)/(1+ρ) com ρ=−0,5 daria 3n — evidência inventada do nada.
+    // Com 5 medições e ρ=−0,5: sem teto n_eff = 15 (passaria minNeff=10); com teto, n_eff = 5 (cala).
+    const gate = { zCrit: 1.96, rho: -0.5, minNeff: 10 };
+    const a = new TagTrackAssociator({ minSamples: 5, significanceGate: gate });
+    for (const f of makeFrames(6, 1000, 500, (i) => ({
+      tracks: [{ trackId: 1, dist: ramp(1, 6, i, 6) }],
+      readings: [{ tag: "AA", rssi: ramp(-50, -80, i, 6), measuredAt: 1000 + i * 500 }],
+    })))
+      a.push(f);
+    expect(a.assign()[0].tag).toBeNull(); // n_eff travado em 6 < minNeff 10 → não fala
+  });
+});

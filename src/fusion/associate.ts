@@ -64,11 +64,65 @@
 // exige o −0,9). Torneio: src/fusion/gates-recalibration.test.ts. Com os três OFF (default) o
 // comportamento é BYTE-IDÊNTICO aos pinos de replay-fusion.test.ts.
 //
+// A CONTAGEM HONESTA (2026-07-13 — bug B3 do laudo `laudo-2026-07-13-por-que-nao-associa.md`):
+// o gate de evidência media a TAXA DE POST do celular, não a taxa de INFORMAÇÃO do rádio. A estação
+// postava a 2 Hz o mapa INTEIRO de tags; a tag só ANUNCIA a cada ~2,2 s ⇒ **83,3% do que o hub
+// recebe é CÓPIA do valor anterior** (medido na gravação real, n = 266.174 leituras; Wilson 95%:
+// 83,1–83,4%). `minSamples: 5` sobre o comprimento CRU passava folgado com 16 amostras/janela quando
+// existiam ~4 medições. Agora TODA régua de amostras conta MEDIÇÕES DISTINTAS (Regra 8 — é CONTAGEM,
+// não modelo; ver distinctMeasurements) e as cópias são deduplicadas NA ENTRADA quando a leitura
+// traz `measuredAt` (ver collectSeries). MEDIDO, antes×depois:
+//   • harness sintético (12 cenários, verdade-terreno): BYTE-NEUTRO — 1507 correct / 556 wrong nos
+//     dois (o simulador atualiza o RSSI a 1 Hz e não sofre o hold do app: Regra 9 — o instrumento
+//     não RESOLVE o fenômeno, então não pode medi-lo). Os 12 pinos seguem verdes por CONSTRUÇÃO.
+//   • campo (3 segmentos com pessoa em cena, 14.119 ticks): as falas caem de 40 para 2
+//     (0,3% [0,2–0,4] → 0,0% [0,0–0,1] dos ticks). **95% do que o sistema dizia no campo estava
+//     apoiado em evidência que não existia** (< 5 medições distintas na janela). PONTO CEGO
+//     DECLARADO (Regra 9/11): sem verdade-terreno de campo NÃO é possível dizer quantas das 38 falas
+//     removidas estavam ERRADAS — o que se pode afirmar é que todas violavam a Regra 8 (com
+//     n_dist ≤ 4 e ρ = 0,4 medido, n_eff ≤ 1,7: o teste de Fisher é INDEFINIDO ali).
+//
+// O ρ = 0,7 DA DOUTRINA ERA ARTEFATO DO HOLD (medido agora, mesma gravação): ρ lag-1 da série CRUA =
+// 0,759; da série DEDUPLICADA = −0,18 (era de POST a 500 ms) e +0,41 (era de POST a 2 s, a única em
+// que cada POST ≈ uma medição — Regra 9: é a única que RESOLVE o ρ). Consequência dura: a correção
+// AR(1) com ρ negativo INFLARIA n_eff acima do nº de medições distintas — por isso passesSignificance
+// agora trava n_eff ≤ n_distinct (teto da Regra 8, não decoração).
+//
+// significanceGate SEGUE DESLIGADO — e agora se sabe POR QUÊ (torneio a priori da casa, medido):
+// na janela de 8 s ele é um INTERRUPTOR DE DESLIGAR, não um gate: cobertura 0,0% em TODA
+// parametrização testada (ρ=0,7/minNeff=5 prescrito; ρ=0,4/minNeff=4 e 5 medidos; z=1,645), tanto no
+// simulador (correct 1507 → 0) quanto no campo (2 → 0 falas em 14.119 ticks). Aritmética: 8 s ×
+// tag de 2,2 s = ~8 medições distintas (sim) / ~4-6 (campo) ⇒ n_eff = 0,43·n_dist ≈ 3,4 ⇒ abaixo do
+// piso de Fisher (n_eff > 3). Pela regra a priori DA CASA (wrong −30%+ MANTENDO correct ≥ 70% do
+// baseline) ele é REPROVADO: derruba correct a 0%.
+//
+// ⚠ O QUE O TORNEIO ELEGERIA (medido, NÃO promovido aqui — é decisão do dono, fora do mandato desta
+// frente): `windowMs: 8000 → 18000` vence a regra a priori com folga e melhora TUDO ao mesmo tempo —
+// precisão média 75,1% → 90,4%, wrong 556 → 172 (−69%), correct 1507 → 2220 (+47%), cobertura
+// 22,0% → 29,4%, `parado` segue MUDO. É a MESMA alavanca que o laudo achou no campo por outro
+// caminho (T < 8 s ⇒ 0% de evidência; T ≥ 18 s ⇒ 92%) — a janela é geometria de câmera. Com a
+// contagem honesta a janela longa é SEGURA: a tag fora do tempo de presença da pessoa não vira
+// evidência (align só conta as medições que casam com a série da pista). No campo, 8 s → 18 s leva
+// as falas de 2 para 61 e o funil passa a ser dominado por `lowMovement` (61,4%) — exatamente o
+// diagnóstico do laudo: a pessoa não anda.
+//
 // Responsabilidade única: só a associação. Sem deps, sem UI, sem socket, sem DOM.
 
 export type TagReading = {
   tag: string; // id da tag (MAC/rótulo)
   rssi: number; // RSSI dBm
+  /** INSTANTE DA MEDIÇÃO NA BORDA (ms, relógio do HUB — derivado do `ageMs` que a estação carimba;
+   *  ver server/bt/bt-readings.js). OPCIONAL/ADITIVO: ausente = cadeia antiga (o único ts era o do
+   *  FRAME, que é quando o navegador LEU o snapshot, não quando o rádio MEDIU).
+   *  POR QUE EXISTE (medido no campo, 2026-07-12, n=266.174 leituras): **83,3% do que o hub recebe é
+   *  CÓPIA** do valor anterior [Wilson 95%: 83,1–83,4%] — o app postava a 500 ms o mapa INTEIRO de
+   *  tags e a tag só anuncia a cada ~2,2 s. Sem este campo, o motor NÃO CONSEGUE distinguir cópia de
+   *  medição fresca e conta POSTs como se fossem evidência (Regra 8: n_eff ≤ nº de medições
+   *  DISTINTAS — é CONTAGEM, não modelo). Com ele, cópias da MESMA medição física colapsam em UMA
+   *  amostra na entrada do motor (ver assign()) e o gate passa a medir taxa de INFORMAÇÃO, não taxa
+   *  de POST. Ausente → o motor cai no proxy conservador (dedup por valor adjacente,
+   *  distinctMeasurements) — degradação segura, nunca superestima evidência. */
+  measuredAt?: number;
   /** Estimativa ABSOLUTA da distância tag→estação (m), via modelo calibrado pelas âncoras
    *  (floor-plot.ts). OPCIONAL — ausente = comportamento pré-v4 intacto (retrocompat dura). */
   distM?: number;
@@ -157,10 +211,16 @@ export type PairFunnel = {
   tag: string;
   /** Amostras de distância da pista na janela. */
   distSamples: number;
-  /** Amostras de RSSI da tag na janela. */
+  /** Amostras de RSSI da tag na janela (CRUAS — inclui as cópias que o app postou; ver
+   *  `distinctRssiSamples`, que é o que o gate de fato exige). */
   rssiSamples: number;
-  /** Amostras alinhadas (pós-align — a série que a correlação de fato consome). */
+  /** Amostras alinhadas (pós-align — o nº de PARES, guiado pela câmera). */
   alignedSamples: number;
+  /** ADITIVO/OPCIONAL (2026-07-13, bug B3): MEDIÇÕES DISTINTAS de rádio de fato usadas na
+   *  correlação — a régua REAL do gate de amostras (Regra 8). `alignedSamples` conta pares (taxa da
+   *  CÂMERA); este conta leituras frescas (taxa da TAG, ~0,45 Hz). É a diferença entre "tenho 16
+   *  amostras" e "tenho 4 medições". Ausente só em PairFunnel construído à mão (testes/UI). */
+  distinctRssiSamples?: number;
   /** Span temporal (ms) coberto pelos samples alinhados (a série de distância é a guia). */
   spanMs: number;
   /** varY do pearson — a variância de distância que o minMovement corta. null = não chegou lá
@@ -289,7 +349,12 @@ type ResolvedConfig = Required<Omit<FusionConfig, "significanceGate">> &
   Pick<FusionConfig, "significanceGate">;
 
 const DEFAULTS: ResolvedConfig = {
+  // 8000: NÃO revalidado — o torneio elegeria 18000 (ver cabeçalho, "o que o torneio elegeria").
+  // Mantido porque mudar a janela é decisão de PRODUTO/geometria do dono, não desta frente.
   windowMs: 8000,
+  // 5 MEDIÇÕES DISTINTAS de rádio na janela (não 5 POSTs — ver cabeçalho, "a contagem honesta").
+  // O NÚMERO não mudou; a RÉGUA mudou. Com a tag anunciando a cada ~2,2 s, 5 medições exigem
+  // ~11 s de presença: é a espec de instalação aparecendo sozinha no gate.
   minSamples: 5,
   minConfidence: 0.5,
   // 0,25 → 0,15 (2026-07-11, PRIMEIRO dado de campo real): o funil de diagnóstico (diagnoseFunnel)
@@ -309,7 +374,11 @@ const DEFAULTS: ResolvedConfig = {
   // os pinos): o torneio em gates-recalibration.test.ts decide promoção, não esta entrega.
   useLogDistance: false,
   minMovementDecades: 0,
-  // significanceGate: AUSENTE por default (desligado) — ver ResolvedConfig.
+  // significanceGate: AUSENTE por default (desligado) — ver ResolvedConfig. MEDIDO em 2026-07-13 e
+  // MANTIDO OFF com evidência (antes era "aguardando torneio"; agora é "reprovado no torneio"): na
+  // janela de 8 s ele zera a cobertura no simulador E no campo, em toda parametrização testada
+  // (ver cabeçalho). Só volta à mesa junto com a janela de 18 s — lá ele vira gate de verdade
+  // (wrong 172 → 14, precisão 90,4% → 90,9%, cobertura 29,4% → 7,1%).
   multiSourceFisher: false, // fusão multi-fonte (Fisher-z) DESLIGADA — knob de pesquisa (ADR-013 item 4)
 };
 
@@ -395,19 +464,23 @@ function distinctConsecutive(xs: readonly number[]): number {
 }
 
 /** Teste de significância da correlação (significanceGate — ver FusionConfig): Fisher
- *  z = atanh(r) com n_eff = n·(1−ρ)/(1+ρ) (correção AR(1); n = amostras alinhadas DISTINTAS de
- *  RSSI, ver distinctConsecutive). Fala exige n_eff ≥ minNeff E |z| ≥ zCrit·√(1/(n_eff−3)).
+ *  z = atanh(r) com n_eff = min(n, n·(1−ρ)/(1+ρ)) (correção AR(1) — `nDistinct` já é o nº de
+ *  MEDIÇÕES DISTINTAS alinhadas, ver distinctMeasurements). Fala exige n_eff ≥ minNeff E
+ *  |z| ≥ zCrit·√(1/(n_eff−3)).
+ *  TETO DA REGRA 8 (o `min` acima, não é decoração): ρ NEGATIVO — que a série deduplicada por VALOR
+ *  produz por construção (medido: ρ = −0,09 a −0,30 no campo, porque o dedup remove exatamente os
+ *  pares "valor igual") — INFLARIA n_eff acima do nº de medições distintas. Não existe mais evidência
+ *  independente do que medições distintas: a correção AR(1) só pode DESCONTAR, nunca criar.
  *  Proteções: n_eff ≤ 3 → false (variância de Fisher 1/(n_eff−3) indefinida/negativa);
  *  r clampado a [−1,1] antes do atanh (erro de ponto flutuante do pearson pode passar de 1 por
  *  ~1e-16; atanh(±1) = ±Infinity, que passa qualquer limiar — correto: correlação perfeita É
  *  significativa quando o n_eff basta). */
 function passesSignificance(
   corr: number,
-  alignedRssi: readonly number[],
+  nDistinct: number,
   gate: { zCrit: number; rho: number; minNeff: number },
 ): boolean {
-  const n = distinctConsecutive(alignedRssi);
-  const nEff = (n * (1 - gate.rho)) / (1 + gate.rho);
+  const nEff = Math.min(nDistinct, (nDistinct * (1 - gate.rho)) / (1 + gate.rho));
   if (nEff <= 3 || nEff < gate.minNeff) return false;
   const z = Math.abs(Math.atanh(Math.max(-1, Math.min(1, corr))));
   return z >= gate.zCrit * Math.sqrt(1 / (nEff - 3));
@@ -422,8 +495,36 @@ type DistSample = {
   metric: boolean;
   byStation?: Readonly<Record<string, number>>;
 };
-/** Amostra de uma tag: RSSI no instante ts (+ distM calibrado e sourceId da fonte, quando há). */
-type RssiSample = { ts: number; value: number; distM?: number; sourceId?: string };
+/** Amostra de uma tag: RSSI no instante ts (+ distM calibrado e sourceId da fonte, quando há).
+ *  `measuredAt` = quando o RÁDIO mediu (borda), não quando o navegador leu o snapshot (`ts`) —
+ *  ver TagReading.measuredAt. É a identidade FÍSICA da medição: duas amostras com o mesmo
+ *  measuredAt (mesma fonte) são a MESMA leitura copiada. */
+type RssiSample = { ts: number; value: number; distM?: number; sourceId?: string; measuredAt?: number };
+
+/**
+ * Nº de MEDIÇÕES DISTINTAS numa série de RSSI — a única contagem que a Regra 8 aceita como
+ * evidência ("n_eff ≤ nº de medições DISTINTAS; é CONTAGEM, não modelo").
+ *  - com `measuredAt` em TODAS as amostras (cadeia nova): conta instantes de medição distintos —
+ *    EXATO. Duas leituras frescas com o MESMO valor de RSSI contam DUAS (o dedup por valor as
+ *    fundiria: subcontagem);
+ *  - sem `measuredAt` (cadeia antiga, simulador, gravação velha): cai no proxy conservador
+ *    `distinctConsecutive` (dedup por valor adjacente). Degradação segura: subestima evidência,
+ *    nunca a superestima.
+ * Série vazia → 0.
+ */
+function distinctMeasurements(samples: readonly RssiSample[]): number {
+  if (samples.length === 0) return 0;
+  let allStamped = true;
+  for (const s of samples)
+    if (s.measuredAt === undefined) {
+      allStamped = false;
+      break;
+    }
+  if (!allStamped) return distinctConsecutive(samples.map((s) => s.value));
+  const seen = new Set<string>();
+  for (const s of samples) seen.add(`${s.sourceId ?? DEFAULT_SOURCE_ID}@${s.measuredAt}`);
+  return seen.size;
+}
 
 /** Fonte implícita das leituras sem `sourceId` (retrocompat: o mundo de 1 estação de hoje). */
 const DEFAULT_SOURCE_ID = "default";
@@ -468,12 +569,23 @@ function median(xs: readonly number[]): number {
 function align(
   distSeries: readonly DistSample[],
   rssiSeries: readonly RssiSample[],
-): { rssi: number[]; dist: number[]; gaps: number[]; logGaps: number[] } {
+): {
+  rssi: number[];
+  dist: number[];
+  gaps: number[];
+  logGaps: number[];
+  /** As AMOSTRAS de RSSI de fato escolhidas (mesma ordem de `rssi`) — a série que a correlação
+   *  consome. Repetições aqui são ESPERADAS (várias amostras de distância caem na mesma leitura de
+   *  rádio, que é 4-5× mais lenta que a câmera); é sobre ELA que se conta a evidência distinta
+   *  (distinctMeasurements), nunca sobre o comprimento. */
+  picked: RssiSample[];
+} {
   const rssi: number[] = [];
   const dist: number[] = [];
   const gaps: number[] = [];
   const logGaps: number[] = [];
-  if (rssiSeries.length === 0) return { rssi, dist, gaps, logGaps };
+  const picked: RssiSample[] = [];
+  if (rssiSeries.length === 0) return { rssi, dist, gaps, logGaps, picked };
   for (const d of distSeries) {
     let best = rssiSeries[0];
     let bestDt = Math.abs(rssiSeries[0].ts - d.ts);
@@ -486,6 +598,7 @@ function align(
     }
     dist.push(d.value);
     rssi.push(best.value);
+    picked.push(best);
     if (d.metric && best.distM !== undefined && Number.isFinite(best.distM)) {
       gaps.push(Math.abs(d.value - best.distM));
       logGaps.push(
@@ -495,7 +608,7 @@ function align(
       );
     }
   }
-  return { rssi, dist, gaps, logGaps };
+  return { rssi, dist, gaps, logGaps, picked };
 }
 
 /** Par escolhido pela atribuição 1-1, como índices na matriz de scores [linha=pista, coluna=tag]. */
@@ -698,7 +811,14 @@ export class TagTrackAssociator {
       useLogDistance,
       significanceGate,
     } = this.cfg;
-    if (distSeries.length < minSamples || rssiSeries.length < minSamples) return NO_EVIDENCE;
+    // GATE DE EVIDÊNCIA — CONTA MEDIÇÕES DISTINTAS, NÃO POSTs (Regra 8; bug B3 do laudo de
+    // 2026-07-13). O comprimento CRU da série de RSSI é a taxa de POST do celular (2 Hz), não a taxa
+    // de INFORMAÇÃO do rádio (~0,45 Hz — a tag anuncia a cada ~2,2 s): das 16 amostras de uma janela
+    // de 8 s, ~83% são CÓPIAS da leitura anterior (medido, n=266.174). O gate antigo (`rssiSeries.
+    // length < minSamples`) passava folgado com 3-5 medições reais e o motor "acreditava ter 16".
+    // A série de DISTÂNCIA segue no comprimento cru: a câmera mede de verdade a cada frame.
+    if (distSeries.length < minSamples || distinctMeasurements(rssiSeries) < minSamples)
+      return NO_EVIDENCE;
     // PESQUISA multiSourceFisher (OFF por default — ver FusionConfig): com ≥2 fontes na janela,
     // a evidência é a combinação de Fisher-z POR FONTE. Com 1 fonte só (ou todas sem sourceId),
     // z_comb = z_1 ⇒ cai no caminho único abaixo, byte-idêntico (a redução, provada em teste).
@@ -706,8 +826,11 @@ export class TagTrackAssociator {
       const groups = partitionBySource(rssiSeries);
       if (groups.size > 1) return this.multiSourceScore(distSeries, groups);
     }
-    const { rssi, dist, gaps, logGaps } = align(distSeries, rssiSeries);
-    if (rssi.length < minSamples) return NO_EVIDENCE;
+    const { rssi, dist, gaps, logGaps, picked } = align(distSeries, rssiSeries);
+    // Pós-align a régua é a MESMA: medições distintas de fato usadas na correlação (não o nº de
+    // pares, que é o da câmera). Ver align().picked / distinctMeasurements.
+    const nDistinct = distinctMeasurements(picked);
+    if (nDistinct < minSamples) return NO_EVIDENCE;
     // PESQUISA useLogDistance (OFF por default): a variável de correlação vira log10(d) — o
     // modelo físico do canal (ver FusionConfig). OFF → ys === dist, caminho byte-idêntico.
     const ys = useLogDistance ? log10Dist(dist) : dist;
@@ -721,7 +844,7 @@ export class TagTrackAssociator {
     // ver passesSignificance). Par insignificante devolve NO_EVIDENCE — mesma semântica dos
     // demais vetos de honestidade (não concorre na guarda; abstenção por falta de evidência).
     // Quando o gate está presente, minConfidence SAI do critério de fala (ver speakBar()).
-    if (significanceGate !== undefined && !passesSignificance(p.corr, rssi, significanceGate))
+    if (significanceGate !== undefined && !passesSignificance(p.corr, nDistinct, significanceGate))
       return NO_EVIDENCE;
     const gateOn = maxDistRatio > 1; // fator ≤ 1 não é limiar físico plausível → desligado
     // Evidência absoluta: exige série métrica suficiente (mesma régua minSamples da correlação).
@@ -803,17 +926,21 @@ export class TagTrackAssociator {
     // ordem de chegada das leituras no buffer.
     for (const src of [...groups.keys()].sort()) {
       const series = groups.get(src)!;
-      if (series.length < minSamples) continue; // gate de amostras cruas, POR fonte
+      if (distinctMeasurements(series) < minSamples) continue; // gate de MEDIÇÕES distintas, POR fonte
       // A GEOMETRIA DA FONTE (Fase B): distância da pista ao ponto DESTA estação; sem ponto
       // calibrado (ou série incompleta) cai na principal — Fase A, declarada.
-      const { rssi, dist } = align(this.stationDistSeries(distSeries, src), series);
-      if (rssi.length < minSamples) continue; // gate de amostras alinhadas, POR fonte
+      const { rssi, dist, picked } = align(this.stationDistSeries(distSeries, src), series);
+      const nDistinct = distinctMeasurements(picked);
+      if (nDistinct < minSamples) continue; // gate de medições alinhadas DISTINTAS, POR fonte
       if (this.movementVetoed(dist)) continue; // parado NO EIXO DESTA estação → não vota
       const p = pearson(rssi, useLogDistance ? log10Dist(dist) : dist);
       if (p === null) continue; // série constante NESTA fonte → a fonte não vota
-      if (significanceGate !== undefined && !passesSignificance(p.corr, rssi, significanceGate))
+      if (significanceGate !== undefined && !passesSignificance(p.corr, nDistinct, significanceGate))
         continue; // fonte individualmente insignificante não vota (ver FusionConfig)
-      const w = rssi.length - 3; // n_i−3 (peso de Fisher; minSamples ≥ 5 ⇒ w ≥ 2)
+      // PESO DE FISHER = n_i−3 sobre as MEDIÇÕES DISTINTAS da fonte (não o nº de pares alinhados —
+      // pares repetidos são a mesma leitura de rádio contada N vezes; Regra 8/13: somar evidência
+      // com peso inflado é somar a MESMA medição, e a soma promete mais do que compra).
+      const w = nDistinct - 3; // n_i−3 (peso de Fisher; minSamples ≥ 5 ⇒ w ≥ 2)
       if (w <= 0) continue; // defensivo p/ minSamples configurado < 4 (variância indefinida)
       const r = Math.max(-FISHER_R_CLAMP, Math.min(FISHER_R_CLAMP, p.corr));
       sumZW += Math.atanh(r) * Math.sqrt(w);
@@ -825,6 +952,61 @@ export class TagTrackAssociator {
     const rComb = voters === 1 ? soloCorr : Math.tanh(sumZW / Math.sqrt(sumW));
     const s = Math.max(0, Math.min(1, -rComb)); // mesma semântica de sempre: score = −corr
     return { score: s, guard: s };
+  }
+
+  /**
+   * Séries por pista e por tag dentro de `frames` — a ENTRADA do motor, deduplicada.
+   *
+   * DEDUP NA ENTRADA (Regra 8: "deduplique ANTES de qualquer estatística"): o navegador reamostra o
+   * snapshot do hub a cada tick (500 ms), mas o rádio só mede a cada ~2,2 s — então a MESMA leitura
+   * física entra 4-5× na janela. Quando a leitura traz `measuredAt` (cadeia nova — ver
+   * TagReading.measuredAt), a cópia é IDENTIFICÁVEL e colapsa: uma leitura física = uma amostra.
+   * Sem `measuredAt` (cadeia antiga/simulador/gravação velha) NADA é descartado — byte-idêntico ao
+   * comportamento anterior; a defesa então é só o gate (distinctMeasurements), que subconta por
+   * valor. Dedup é por (tag, fonte): duas estações medindo a mesma tag são duas medições.
+   *
+   * Por que na ENTRADA e não só no gate: com a cópia dentro da série, a correlação lê "RSSI PARADO
+   * enquanto a distância MUDA" — pontos que empurram |r| PARA BAIXO justamente no par verdadeiro em
+   * movimento (bug B2 do laudo). O gate honesto evita FALAR sem evidência; o dedup na entrada evita
+   * CALAR por evidência fabricada.
+   */
+  private collectSeries(frames: readonly FusionFrame[]): {
+    distByTrack: Map<number, DistSample[]>;
+    rssiByTag: Map<string, RssiSample[]>;
+  } {
+    const distByTrack = new Map<number, DistSample[]>();
+    const rssiByTag = new Map<string, RssiSample[]>();
+    const lastMeasured = new Map<string, number>(); // `${tag}|${fonte}` → measuredAt já ingerido
+    for (const f of frames) {
+      for (const t of f.tracks) {
+        let arr = distByTrack.get(t.trackId);
+        if (!arr) {
+          arr = [];
+          distByTrack.set(t.trackId, arr);
+        }
+        const d: DistSample = { ts: f.ts, value: t.dist, metric: t.metric === true };
+        if (t.distByStation !== undefined) d.byStation = t.distByStation; // geometria por fonte (Fase B)
+        arr.push(d);
+      }
+      for (const r of f.readings) {
+        if (r.measuredAt !== undefined) {
+          const key = `${r.tag}|${r.sourceId ?? DEFAULT_SOURCE_ID}`;
+          if (lastMeasured.get(key) === r.measuredAt) continue; // CÓPIA da mesma medição — não é evidência
+          lastMeasured.set(key, r.measuredAt);
+        }
+        let arr = rssiByTag.get(r.tag);
+        if (!arr) {
+          arr = [];
+          rssiByTag.set(r.tag, arr);
+        }
+        const s: RssiSample = { ts: f.ts, value: r.rssi };
+        if (r.distM !== undefined) s.distM = r.distM;
+        if (r.sourceId !== undefined) s.sourceId = r.sourceId; // multi-fonte (multiSourceFisher)
+        if (r.measuredAt !== undefined) s.measuredAt = r.measuredAt; // identidade física da medição
+        arr.push(s);
+      }
+    }
+    return { distByTrack, rssiByTag };
   }
 
   /** Veto de MOVIMENTO sobre a série ALINHADA de distância CRUA (m ou proxy) — fonte única
@@ -894,33 +1076,10 @@ export class TagTrackAssociator {
     const currentTracks = this.currentTrackIds().sort((a, b) => a - b);
     if (currentTracks.length === 0) return [];
 
-    // Séries por pista e por tag dentro da janela. TODAS as pistas do buffer entram (não só as
-    // correntes): as ausentes do último frame ainda concorrem no scan da guarda (ver docstring).
-    const distByTrack = new Map<number, DistSample[]>();
-    const rssiByTag = new Map<string, RssiSample[]>();
-    for (const f of this.buffer) {
-      for (const t of f.tracks) {
-        let arr = distByTrack.get(t.trackId);
-        if (!arr) {
-          arr = [];
-          distByTrack.set(t.trackId, arr);
-        }
-        const d: DistSample = { ts: f.ts, value: t.dist, metric: t.metric === true };
-        if (t.distByStation !== undefined) d.byStation = t.distByStation; // geometria por fonte (Fase B)
-        arr.push(d);
-      }
-      for (const r of f.readings) {
-        let arr = rssiByTag.get(r.tag);
-        if (!arr) {
-          arr = [];
-          rssiByTag.set(r.tag, arr);
-        }
-        const s: RssiSample = { ts: f.ts, value: r.rssi };
-        if (r.distM !== undefined) s.distM = r.distM;
-        if (r.sourceId !== undefined) s.sourceId = r.sourceId; // multi-fonte (multiSourceFisher)
-        arr.push(s);
-      }
-    }
+    // Séries por pista e por tag dentro da janela (deduplicadas na entrada — ver collectSeries).
+    // TODAS as pistas do buffer entram (não só as correntes): as ausentes do último frame ainda
+    // concorrem no scan da guarda (ver docstring).
+    const { distByTrack, rssiByTag } = this.collectSeries(this.buffer);
 
     // Matrizes COMPLETAS (linha=pista em ordem de trackId, coluna=tag em ordem lex; zeros
     // incluídos): `score` (efetivo — escolha 1-1, confiança, "quão perto chegou" do null) e
@@ -1053,32 +1212,9 @@ export class TagTrackAssociator {
     for (const t of latest.tracks) idSet.add(t.trackId);
     const currentTracks = [...idSet].sort((a, b) => a - b);
 
-    // Séries por pista/tag na janela — MESMA construção do assign() (fantasmas incluídos).
-    const distByTrack = new Map<number, DistSample[]>();
-    const rssiByTag = new Map<string, RssiSample[]>();
-    for (const f of frames) {
-      for (const t of f.tracks) {
-        let arr = distByTrack.get(t.trackId);
-        if (!arr) {
-          arr = [];
-          distByTrack.set(t.trackId, arr);
-        }
-        const d: DistSample = { ts: f.ts, value: t.dist, metric: t.metric === true };
-        if (t.distByStation !== undefined) d.byStation = t.distByStation; // geometria por fonte (Fase B)
-        arr.push(d);
-      }
-      for (const r of f.readings) {
-        let arr = rssiByTag.get(r.tag);
-        if (!arr) {
-          arr = [];
-          rssiByTag.set(r.tag, arr);
-        }
-        const s: RssiSample = { ts: f.ts, value: r.rssi };
-        if (r.distM !== undefined) s.distM = r.distM;
-        if (r.sourceId !== undefined) s.sourceId = r.sourceId; // multi-fonte (multiSourceFisher)
-        arr.push(s);
-      }
-    }
+    // Séries por pista/tag na janela — MESMA construção do assign() (fantasmas incluídos, dedup de
+    // cópias na entrada): fonte única, sem recálculo paralelo.
+    const { distByTrack, rssiByTag } = this.collectSeries(frames);
     const tags = [...rssiByTag.keys()].sort();
     if (tags.length === 0) return [];
 
@@ -1135,6 +1271,7 @@ export class TagTrackAssociator {
         const rssiSeries = rssiByTag.get(tags[j]) ?? [];
         const aligned = align(distSeries, rssiSeries);
         const alignedSamples = aligned.rssi.length;
+        const distinctRssi = distinctMeasurements(aligned.picked); // a régua real do gate (Regra 8)
         let spanMs = 0;
         if (alignedSamples > 0) {
           let tsMin = Infinity;
@@ -1149,10 +1286,15 @@ export class TagTrackAssociator {
         const s = score[i][j];
         const ck = chosenByKey.get(`${i}:${j}`);
         // A cadeia de vetos, na ORDEM exata de pairScore() → chooseGreedy/Optimal → guarda:
+        // NOTA (2026-07-13): "amostras de menos" da TAG agora significa MEDIÇÕES DISTINTAS de menos
+        // (não POSTs de menos) — a semântica do verdict é a mesma, a CONTAGEM é que ficou honesta
+        // (Regra 8). O vocabulário de FunnelVerdict fica INTACTO de propósito (é contrato com a UI
+        // do "por quê"): a tela que diz "falta rádio" continua dizendo a mesma coisa, agora pelo
+        // motivo certo. `distinctRssiSamples` (aditivo) expõe o número real.
         let verdict: FunnelVerdict;
         if (distSeries.length < minSamples) verdict = "distSamples<minSamples";
-        else if (rssiSeries.length < minSamples) verdict = "rssiSamples<minSamples";
-        else if (alignedSamples < minSamples) verdict = "aligned<minSamples";
+        else if (distinctMeasurements(rssiSeries) < minSamples) verdict = "rssiSamples<minSamples";
+        else if (distinctRssi < minSamples) verdict = "aligned<minSamples";
         else if (p === null) verdict = "constantSeries";
         // Veto de movimento: MESMA função do pairScore (movementVetoed — cobre também os knobs
         // de pesquisa useLogDistance/minMovementDecades; default = p.varY < minMovement, igual).
@@ -1165,6 +1307,7 @@ export class TagTrackAssociator {
           distSamples: distSeries.length,
           rssiSamples: rssiSeries.length,
           alignedSamples,
+          distinctRssiSamples: distinctRssi,
           spanMs,
           movVar: p === null ? null : p.varY,
           corr: p === null ? null : p.corr,

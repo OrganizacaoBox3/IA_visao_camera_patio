@@ -94,14 +94,16 @@ public class MainActivity extends Activity {
     static final String HDR_TOKEN = "x-station-token";       // header de auth do ingest (contrato com o hub)
     static final int DISCOVERY_PORT = 41234;      // porta UDP do beacon de descoberta do hub
     static final String DISCOVERY_PROBE = "VISAO_HUB_DISCOVER"; // payload do broadcast (contrato com o hub)
-    // 2000→500ms (2026-07-11, diagnóstico do funil de campo): o scanner já roda LOW_LATENCY
-    // (quase contínuo), mas onScanResult guarda só a ÚLTIMA leitura por MAC e este período de
-    // envio descartava o resto — o associador via ~3,9 leituras DISTINTAS por janela de 8s
-    // (inter-arrival medido: ~2,06s, cravado no POST, não na tag). Com o ruído autocorrelacionado
-    // do campo (ρ~0,7 @2s), isso vale <1 ponto estatisticamente independente por janela — o canal
-    // de identidade ficava no limite físico. 500ms ≈ 4× leituras distintas, custo: +1,5 req/s na
-    // LAN (trivial) e nada de bateria de tag (a tag já anunciava mais rápido que o envio).
-    static final long POST_EVERY_MS = 500;       // envio ao hub
+    // 2000→500ms (2026-07-11) — e o que a MEDIÇÃO disse depois (2026-07-13, gravação real de campo,
+    // n=30.267 intervalos). O comentário antigo prometia "500ms ≈ 4× leituras distintas". É FALSO:
+    // quadruplicar o POST NÃO moveu o Δt entre leituras DISTINTAS (2101 ms → 2303 ms; ganho de 1,4×
+    // em contagem, não 4×). O gargalo é o ADVERTISING DA TAG (~2,2 s), não a estação — o scanner já
+    // roda LOW_LATENCY e vê tudo que existe para ver. O que o POST rápido de fato produziu foi
+    // CÓPIA: 83,3% do que o hub recebia era o valor anterior repetido [Wilson 95%: 83,1–83,4%].
+    // POST_EVERY_MS segue em 500 ms porque agora ele só carrega o que MUDOU (ver buildJson): a
+    // latência de entrega da medição fresca cai para ≤500 ms sem inventar evidência. Aumentar este
+    // número só ATRASA a leitura; diminuí-lo não compra leitura nenhuma — o teto é da tag.
+    static final long POST_EVERY_MS = 500;       // envio ao hub (só o que mudou desde o último 2xx)
     static final long SYNC_NAMES_MS = 15000;     // pull periódico dos nomes do hub (servidor = fonte)
     static final long SAVE_LOCS_EVERY_TICKS = 15; // persiste a réplica de localização a cada N ticks (se mudou)
     static final long REFRESH_MS = 1000;         // refresh da tela (vida)
@@ -174,11 +176,14 @@ public class MainActivity extends Activity {
         return h.toString();
     }
 
-    /** Uma tag vista: nome, último RSSI e quando foi vista (relógio monotônico). */
+    /** Uma tag vista: nome, último RSSI e quando foi vista (relógio monotônico).
+     *  `sentSeen` = o `lastSeen` da última medição que o hub JÁ RECEBEU (confirmada com 2xx).
+     *  lastSeen > sentSeen ⇔ há medição FRESCA para postar. É o que separa medição de cópia. */
     static final class Tag {
         String name;
         int rssi;
         long lastSeen;
+        long sentSeen;
     }
 
     // Bluetooth
@@ -424,9 +429,39 @@ public class MainActivity extends Activity {
 
     // ---------- Hub ----------
 
-    /** Monta o JSON das leituras atuais (contrato: {stationId, readings:[{mac,name,rssi}]}).
-     *  stationId é validado a [a-zA-Z0-9_-] na entrada (isValidStationId) — vai cru, sem escapar. */
-    private String buildJson() {
+    /**
+     * Monta o JSON das leituras NOVAS desde o último POST bem-sucedido
+     * (contrato: {stationId, readings:[{mac,name,rssi,ageMs}]}).
+     *
+     * SÓ O QUE MUDOU (2026-07-13 — bug B1 do laudo `laudo-2026-07-13-por-que-nao-associa.md`): antes
+     * este método serializava o mapa INTEIRO de tags a cada 500 ms e o mapa só era limpo por
+     * `pruneStale` (DROP_MS = 20 s). Duas consequências MEDIDAS na gravação real de campo:
+     *  1. **83,3% do que o hub recebia era CÓPIA** do valor anterior (n = 266.174; Wilson 95%:
+     *     83,1–83,4%) — a tag anuncia a cada ~2,2 s, o POST saía a cada 0,5 s. Cópia não é medição:
+     *     ela infla a contagem de evidência do associador (Regra 8) e, pior, ENTRA na correlação
+     *     como "RSSI parado enquanto a pessoa anda" — empurrando |r| PARA BAIXO justamente no par
+     *     verdadeiro em movimento. Parte do silêncio era FABRICADA aqui.
+     *  2. **FANTASMA**: tag que SAIU DE CENA seguia sendo postada com o último RSSI por até 20 s
+     *     (app) + 15 s (pool do hub) = ~35 s oferecida ao associador como candidata PRESENTE.
+     * Agora a tag só entra no payload quando o scanner a viu DE NOVO (`lastSeen > sentSeen`) — e o
+     * fantasma morre no pool do hub (≤15 s) porque nada o realimenta.
+     *
+     * `ageMs` (ADITIVO, retrocompatível — hub antigo ignora o campo): idade da medição em ms, do
+     * relógio MONOTÔNICO do aparelho. NÃO mandamos epoch de propósito: o relógio de parede do
+     * celular pode estar torto em minutos e o hub reconstrói o instante com o RELÓGIO DELE
+     * (`measuredAt = now − ageMs`, ver server/bt/bt-readings.js) — imune a skew. É o que permite ao
+     * motor distinguir medição fresca de cópia ressuscitada pelo pool (src/fusion/associate.ts).
+     *
+     * POST VAZIO é MANTIDO (nada novo → `readings: []`): é o batimento cardíaco da estação — o hub
+     * usa a chegada do POST para saber que a antena está viva (e é assim que "estação cega" pode
+     * virar alarme). Silenciar o POST inteiro faria a estação parecer morta.
+     *
+     * `sent` (saída): mac → lastSeen de cada leitura incluída — só é COMMITADO em `sentSeen` se o
+     * POST voltar 2xx (ver postOnce). POST que falhou não consome a medição.
+     * stationId é validado a [a-zA-Z0-9_-] na entrada (isValidStationId) — vai cru, sem escapar.
+     */
+    private String buildJson(HashMap<String, Long> sent) {
+        long now = SystemClock.elapsedRealtime();
         StringBuilder j = new StringBuilder("{\"stationId\":\"").append(stationId).append('"');
         // Modelo AirTag: com fix, a posição do aparelho vai no objeto raiz (Double/Float.toString = ponto decimal, sem locale).
         if (hasFix) {
@@ -438,15 +473,35 @@ public class MainActivity extends Activity {
         synchronized (lock) {
             boolean first = true;
             for (Map.Entry<String, Tag> e : tags.entrySet()) {
+                Tag t = e.getValue();
+                if (t.lastSeen <= t.sentSeen) continue; // já postada — cópia não é medição nova
                 if (!first) j.append(',');
                 first = false;
-                String nm = e.getValue().name;
+                String nm = t.name;
                 if (nm == null) nm = "";
+                long age = now - t.lastSeen;
+                if (age < 0) age = 0; // defensivo (o monotônico não anda pra trás, mas custa 1 linha)
                 j.append("{\"mac\":\"").append(e.getKey()).append("\",\"name\":\"").append(nm)
-                        .append("\",\"rssi\":").append(e.getValue().rssi).append('}');
+                        .append("\",\"rssi\":").append(t.rssi)
+                        .append(",\"ageMs\":").append(age).append('}');
+                sent.put(e.getKey(), Long.valueOf(t.lastSeen));
             }
         }
         return j.append("]}").toString();
+    }
+
+    /** Marca como entregues SÓ as medições que o hub confirmou (2xx). POST que falhou NÃO consome a
+     *  leitura — ela vai no próximo envio (senão um 500 do hub apagaria a medição para sempre).
+     *  Compara antes de gravar: uma leitura mais nova chegada DURANTE o POST não pode ser engolida. */
+    private void commitSent(HashMap<String, Long> sent) {
+        synchronized (lock) {
+            for (Map.Entry<String, Long> e : sent.entrySet()) {
+                Tag t = tags.get(e.getKey());
+                if (t == null) continue; // podada no meio do POST (saiu de cena) — nada a marcar
+                long v = e.getValue().longValue();
+                if (t.sentSeen < v) t.sentSeen = v;
+            }
+        }
     }
 
     /** Aplica o token da estação (se houver) na conexão — header x-station-token do hub. Vazio = nada. */
@@ -461,6 +516,10 @@ public class MainActivity extends Activity {
         synchronized (lock) {
             n = tags.size();
         }
+        // Payload montado ANTES de abrir a conexão: `sent` guarda o que foi incluído (só vira
+        // "entregue" com 2xx — ver commitSent). Vazio = nada novo desde o último POST (heartbeat).
+        final HashMap<String, Long> sent = new HashMap<String, Long>();
+        final String payload = buildJson(sent);
         try {
             c = (HttpURLConnection) new URL(hubUrl).openConnection();
             c.setRequestMethod("POST");
@@ -469,16 +528,18 @@ public class MainActivity extends Activity {
             c.setConnectTimeout(3000);
             c.setReadTimeout(3000);
             c.setDoOutput(true);
-            byte[] body = buildJson().getBytes("UTF-8");
+            byte[] body = payload.getBytes("UTF-8");
             OutputStream os = c.getOutputStream();
             os.write(body);
             os.close();
             int code = c.getResponseCode();
             Log.i(TAG, new StringBuilder("POST hub -> ").append(code).toString());
             boolean ok = code >= 200 && code < 300;
+            if (ok) commitSent(sent); // só agora a medição vira "entregue"
             hubState = ok ? 1 : 2;
             hubDetail = new StringBuilder("POST ").append(code)
-                    .append(" · ").append(n).append(" tags").toString();
+                    .append(" · ").append(sent.size()).append(" nova(s) de ")
+                    .append(n).append(" tags").toString();
         } catch (Exception e) {
             hubState = 2;
             hubDetail = new StringBuilder("POST falhou: ").append(e.getMessage()).toString();
