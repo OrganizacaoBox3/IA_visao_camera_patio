@@ -23,6 +23,7 @@ import {
   type BtReading,
   type BtTag,
 } from "../api";
+import { useStationNames } from "../fusion/useStationNames";
 
 // Tela CRUA das tags BLE (Fase 1 do plano — docs/analises/tags-bluetooth/00-avaliacao-e-plano.md §5.1):
 // mostra AO VIVO cada tag vista pelas estações, ordenada por sinal (mais forte primeiro), marcando
@@ -49,6 +50,11 @@ function rssiPct(rssi: number): number {
 export function BtTagsPage() {
   const { token, canConfigure } = useAuth();
   const { toast } = useToast();
+  // QUEM é a fonte: o NOME que o operador deu à estação em /estacoes ("Doca 3"), no lugar do id
+  // técnico cru que o app carimba na leitura. Sem registro (hub antigo/erro) o nome degrada para o
+  // próprio id; leitura sem fonte (fonte única/legada) fica "sem id" — nunca vazio.
+  const { nameOf } = useStationNames();
+  const stationLabel = useCallback((id: string) => nameOf(id) || "sem id", [nameOf]);
   // Chave composta `${stationId}|${MAC}` — cada FONTE mantém sua série (o merge por MAC colidia).
   const [byKey, setByKey] = useState<Record<string, Live>>({});
   const [connected, setConnected] = useState(false);
@@ -254,19 +260,26 @@ export function BtTagsPage() {
             {groups.map((g) => (
               <div key={g.stationId || "estacao"} className="flex flex-col gap-2">
                 {/* Cabeçalho da fonte SÓ com 2+ estações — com uma, o layout de sempre (CA-3).
-                    <h2> via SectionTitle (doutrina regra 7: seção com título é heading). */}
+                    <h2> via SectionTitle (doutrina regra 7: seção com título é heading). O rótulo é
+                    o NOME cadastrado; o id técnico continua ali, discreto (normal-case, sem o negrito
+                    do título) — e some quando é o próprio nome (estação pendente de batismo). */}
                 {groups.length > 1 && (
                   <SectionTitle flush className="flex items-center gap-1.5">
                     <BluetoothSearching size={12} strokeWidth={1.75} aria-hidden />
-                    Estação {g.stationId || "sem id"} · {g.rows.length} leitura
-                    {g.rows.length === 1 ? "" : "s"}
+                    <span>Estação {stationLabel(g.stationId)}</span>
+                    {g.stationId && stationLabel(g.stationId) !== g.stationId && (
+                      <span className="font-normal normal-case tracking-normal">{g.stationId}</span>
+                    )}
+                    <span>
+                      · {g.rows.length} leitura{g.rows.length === 1 ? "" : "s"}
+                    </span>
                   </SectionTitle>
                 )}
                 <ul
                   className="flex flex-col gap-2"
                   aria-label={
                     groups.length > 1
-                      ? `Tags BLE detectadas — estação ${g.stationId || "sem id"}`
+                      ? `Tags BLE detectadas — estação ${stationLabel(g.stationId)}`
                       : "Tags BLE detectadas"
                   }
                 >

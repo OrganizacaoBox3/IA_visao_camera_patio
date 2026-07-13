@@ -22,15 +22,9 @@ import {
   type Matrix3,
   type Vec2,
 } from "../vision/homography";
-import {
-  getCalibration,
-  saveCalibration,
-  getBtStations,
-  ApiError,
-  type CameraCalibration,
-  type BtStation,
-} from "../api";
+import { getCalibration, saveCalibration, ApiError, type CameraCalibration } from "../api";
 import { useStationHealth } from "../fusion/useStationHealth";
+import { useStationNames } from "../fusion/useStationNames";
 import { StationHealthChip } from "../fusion/StationHealthChip";
 import { stationGeometryHints, dominantAxisFromRect } from "../fusion/station-geometry";
 import { useBleReadings } from "./useBleReadings";
@@ -50,15 +44,6 @@ type Mode = "calibrar" | "medir";
 // dentro de "calibrar": marcar os 4 cantos, associar uma tag ÂNCORA a cada canto, o ponto das
 // estações BLE (N — multi-antena) OU a tag fixa de referência
 type CalStep = "cantos" | "ancoras" | "estacao" | "referencia";
-
-/** CONTRATO ADITIVO da multi-antena (spec F3, allowlist do `cleanCalibration` no hub):
- *  `calibration.stations` = o ponto de chão de CADA estação (0..1), indexado pelo `stationId` que
- *  a estação carimba nas leituras — é a chave que casa o RSSI da fonte com a geometria da fonte
- *  no motor (frame.ts → TrackDist.distByStation). O campo legado `station` (singular) PERMANECE
- *  como o ponto da estação PRINCIPAL (retrocompat: hub/motor antigos seguem lendo só ele) — este
- *  painel mantém os dois em sincronia. Extensão local do tipo de `api.ts` (contrato compartilhado
- *  de outra frente nesta onda): some quando `CameraCalibration` declarar o campo. */
-type CalibrationWithStations = CameraCalibration & { stations?: Record<string, Vec2> };
 
 /** Cantos do retângulo em coords de mundo (metros), na ordem de clique: 1→(0,0) 2→(L,0) 3→(L,C) 4→(0,C). */
 function worldCorners(L: number, C: number): Vec2[] {
@@ -95,7 +80,6 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
   const [pts, setPts] = useState<StationPointsState>(EMPTY_STATIONS);
   const { stations, principalId, station } = pts;
   const [selStation, setSelStation] = useState<string>(""); // estação em edição ("" = mundo de 1 antena)
-  const [btStations, setBtStations] = useState<BtStation[]>([]); // registro (id + nome amigável)
   // tag FIXA de referência (âncora de saúde): qual MAC + onde ela está no chão (px 0..1). mac/px marcados
   // em passos separados — `mac` pode estar vazio (só px) e vice-versa; só entra no save quando ambos.
   const [refTag, setRefTag] = useState<{ mac: string; px: Vec2 | null } | null>(null);
@@ -129,8 +113,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     setSavedH(null);
     setMeasurePts([]);
     getCalibration(cameraId)
-      .then((raw) => {
-        const cal = raw as CalibrationWithStations | null;
+      .then((cal) => {
         if (cancelled || !cal) return;
         setSavedH(cal.H);
         if (cal.refTag)
@@ -158,20 +141,12 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     };
   }, [cameraId]);
 
-  // Registro de estações (nomes amigáveis + quem existe) — só quando o passo delas está aberto.
-  // A estação NASCE por auto-descoberta no hub; aqui só se lê. Falha = silêncio (cai nos ids).
-  useEffect(() => {
-    if (mode !== "calibrar" || calStep !== "estacao") return;
-    let cancelled = false;
-    getBtStations()
-      .then((rows) => {
-        if (!cancelled) setBtStations(rows ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, calStep, cameraId]);
+  // Registro de estações (id técnico → NOME amigável + quem existe). Fonte ÚNICA do rótulo nesta
+  // tela: o seletor do passo "Estação BLE", a etiqueta no palco e o chip de saúde do passo "Tag de
+  // referência". Por isso vale para o modo CALIBRAR INTEIRO, e não só para o passo da estação —
+  // antes o registro só era buscado no passo "estacao" e o chip acabava exibindo o id cru.
+  // A estação NASCE por auto-descoberta no hub; aqui só se lê. Falha = silêncio (o nome cai no id).
+  const { stations: btStations, nameOf, labelOf } = useStationNames(mode === "calibrar");
 
   const L = parseFloat(width);
   const C = parseFloat(length);
@@ -230,7 +205,6 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     for (const s of btStations) if (s.id && s.ativo) ids.add(s.id);
     return [...ids].sort();
   }, [stations, btStations]);
-  const stationName = (id: string) => btStations.find((s) => s.id === id)?.nome || id;
   // Estação em edição: a escolhida, se ainda existe; senão a primeira (e "" no mundo de 1 antena).
   const sel = selStation && stationIds.includes(selStation) ? selStation : (stationIds[0] ?? "");
   // Pontos desenháveis: 1 por estação marcada. Sem NENHUMA estação declarada, cai no ponto único
@@ -379,7 +353,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
     setErr(null);
     setNote(null);
     const w = worldCorners(L, C);
-    const payload: CalibrationWithStations = {
+    const payload: CameraCalibration = {
       points: corners.map((px, i) => ({
         px,
         world: w[i],
@@ -482,8 +456,8 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
               <span className="mb-2 text-[12px] text-text-muted">
                 {calStep === "estacao"
                   ? selPx
-                    ? `${sel ? stationName(sel) : "Estação"} marcada — arraste para ajustar`
-                    : `Clique no chão onde fica ${sel ? `a estação ${stationName(sel)}` : "a estação BLE"}`
+                    ? `${sel ? nameOf(sel) : "Estação"} marcada — arraste para ajustar`
+                    : `Clique no chão onde fica ${sel ? `a estação ${nameOf(sel)}` : "a estação BLE"}`
                   : calStep === "referencia"
                     ? refTag?.px
                       ? "Tag de referência marcada — arraste para ajustar"
@@ -513,6 +487,8 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                 <>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-[12px] text-text-muted">Estação:</span>
+                    {/* O botão é o NOME ("Doca 3") — o id técnico vira dica (title), discreto: quem
+                        precisa dele é o suporte, não o operador que marca o ponto no chão. */}
                     {stationIds.map((id) => {
                       const marked = !!stations[id];
                       return (
@@ -521,9 +497,10 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                           size="sm"
                           variant={sel === id ? "primary" : "ghost"}
                           aria-pressed={sel === id}
+                          title={`id técnico: ${id}`}
                           onClick={() => setSelStation(id)}
                         >
-                          {stationName(id)}
+                          {nameOf(id)}
                           {marked ? " ·" : ""}
                           {id === principalId ? " principal" : ""}
                         </Button>
@@ -533,7 +510,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                   <div className="flex flex-wrap items-center gap-1.5">
                     {sel && stations[sel] && sel !== principalId && (
                       <Button size="sm" variant="ghost" onClick={() => makePrincipal(sel)}>
-                        Definir {stationName(sel)} como principal
+                        Definir {nameOf(sel)} como principal
                       </Button>
                     )}
                     {sel && stations[sel] && (
@@ -573,12 +550,16 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[12px] text-text-muted">Tags visíveis agora:</span>
-                {/* 1 chip por estação viva (F2); com uma só, o rótulo da fonte é omitido (CA-3). */}
+                {/* 1 chip por estação viva (F2); com uma só, o rótulo da fonte é omitido (CA-3).
+                    A fonte é nomeada pelo CADASTRO (labelOf → "Doca 3", id técnico discreto no chip);
+                    estação fora do registro degrada para o próprio id (nunca fica vazio). */}
                 {stationsHealth.map((s) => (
                   <StationHealthChip
                     key={s.stationId || "estacao"}
                     health={s}
-                    station={stationsHealth.length > 1 ? s.stationId : undefined}
+                    station={
+                      stationsHealth.length > 1 && s.stationId ? labelOf(s.stationId) : undefined
+                    }
                   />
                 ))}
               </div>
@@ -801,7 +782,7 @@ export function CalibrationPanel({ cameraId, label, canConfigure, snapshotUrl, o
                     fontSize={12}
                     fill="var(--state-warn)"
                   >
-                    {m.id ? stationName(m.id) : "estação"}
+                    {m.id ? nameOf(m.id) : "estação"}
                     {m.id && m.principal ? " ★" : ""}
                   </text>
                 </g>
