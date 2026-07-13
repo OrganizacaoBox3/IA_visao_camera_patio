@@ -35,6 +35,7 @@ server/alarms.json
 # Destinatários de WhatsApp (PII — números/nomes; LGPD) e config de notificações.
 # Fallbacks JSON de runtime criados por recipients.js/settings.js quando o Postgres está off.
 server/recipients.json
+server/shifts.json
 server/notif-settings.json
 
 # Config de câmeras/views compartilhadas (runtime)

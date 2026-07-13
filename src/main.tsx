@@ -8,6 +8,7 @@ import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
 import { ProfilePage } from "./routes/ProfilePage";
 import { AlarmHealthPage } from "./routes/AlarmHealthPage";
+import { TurnosPage } from "./routes/TurnosPage";
 import { BtTagsPage } from "./routes/BtTagsPage";
 import { TagsMapPage } from "./routes/TagsMapPage";
 import { CalibrationPage } from "./routes/CalibrationPage";
@@ -47,6 +48,9 @@ const router = createBrowserRouter([
       // Calibração por câmera (homografia → metros no chão; base da posição por tag BLE).
       { path: "/calibracao", element: <CalibrationPage /> },
       { path: "/alarmes-saude", element: <AlarmHealthPage /> },
+      // Turnos de trabalho (cadastro global — spec-turnos-por-zona F1): o contexto operacional
+      // "quando a área deveria estar trabalhando"; atribuição às zonas vem na F2.
+      { path: "/turnos", element: <TurnosPage /> },
       // Bancada de simulação (docs/cientifica/simulador.md) — player de replay, Fase 0/Trilha P.
       { path: "/replay", element: <ReplayPlayerPage /> },
       { path: "/usuarios", element: <UsersPage /> },

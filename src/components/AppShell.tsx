@@ -10,6 +10,7 @@ import {
   BarChart3,
   BellRing,
   Bluetooth,
+  CalendarClock,
   Cctv,
   ChevronDown,
   CircleUser,
@@ -249,6 +250,9 @@ export function AppShell() {
         ...(canConfigure
           ? [{ to: "/alarmes-saude", icon: BellRing, label: "Saúde alarmes", short: "Saúde" }]
           : []),
+        // Turnos de trabalho (spec-turnos-por-zona F1): cadastro global, mesmo RBAC de
+        // configuração (canConfigure) — a leitura pelo relatório/overlay não passa por aqui.
+        ...(canConfigure ? [{ to: "/turnos", icon: CalendarClock, label: "Turnos" }] : []),
         // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia, mesmo
         // RBAC de Saúde alarmes (canConfigure: engenheiro/superadmin).
         ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Replay (sim)" }] : []),

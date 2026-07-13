@@ -112,6 +112,22 @@ create table if not exists bt_tag_locations (
   ts bigint                       -- epoch-ms da última posição conhecida
 );
 
+-- ── TURNOS DE TRABALHO (cadastro global — contexto operacional das métricas) ──
+-- Entidade GLOBAL nomeada (spec-turnos-por-zona F1): cadastrada 1×, atribuída a N zonas via
+-- cam_zones.data (shiftIds — F2). `dias` = dias da semana em que o turno INICIA (0=dom..6=sáb,
+-- jsonb — D1/D5); `inicio`/`fim` = "HH:MM" wall-clock do site (fim ≤ início ⇒ +1 dia — D2);
+-- `pausas` = [{inicio:"HH:MM", duracaoMin}] dentro da janela (D3). SÓ config (LGPD).
+create table if not exists shifts (
+  id text primary key,
+  nome text not null,
+  dias jsonb not null default '[]'::jsonb,
+  inicio text not null,
+  fim text not null,
+  pausas jsonb not null default '[]'::jsonb,
+  ativo boolean default true,
+  criado_em bigint
+);
+
 -- ── EVENTOS DE ALARME (fila acionável com acknowledge) ───────────────────────
 -- LGPD: SÓ METADADOS — nada de imagens/frames. Campos são texto/ids/timestamps.
 -- priority: advisory | high | critical (calculada pela política em alarmPolicy.js).

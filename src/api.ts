@@ -357,6 +357,41 @@ export const createBtTag = (btName: string, rotulo: string) =>
 export const updateBtTag = (id: string, patch: { rotulo?: string; ativo?: boolean; btName?: string }) =>
   apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
 
+// ── TURNOS de trabalho (cadastro GLOBAL — spec-turnos-por-zona F1) ────────────────────────────
+// Fonte única do "quando a área deveria estar trabalhando". A VALIDAÇÃO DE NEGÓCIO mora no
+// SERVIDOR (duração/dias/pausas — server/shifts.js): o client só transporta e a UI exibe o erro
+// que o hub devolver (400 com mensagem). `dias` = dias da semana em que o turno INICIA
+// (0=dom..6=sáb — D1/D5); `inicio`/`fim` = "HH:MM" wall-clock do site; fim ≤ início ⇒ o turno
+// termina no dia seguinte (D2 — a UI mostra "+1 dia"). GET: qualquer autenticado; escrita:
+// perfil de configuração (canConfigure).
+export type ShiftPausa = { inicio: string; duracaoMin: number };
+export type Shift = {
+  id: string;
+  nome: string;
+  dias: number[];
+  inicio: string;
+  fim: string;
+  pausas: ShiftPausa[];
+  ativo: boolean;
+  criadoEm: number;
+};
+// Corpo do POST (pausas/ativo opcionais). PATCH aceita qualquer subconjunto — o servidor
+// revalida a entidade inteira mesclada (patch inconsistente → 400, estado intacto).
+export type NewShift = {
+  nome: string;
+  dias: number[];
+  inicio: string;
+  fim: string;
+  pausas?: ShiftPausa[];
+  ativo?: boolean;
+};
+export const getShifts = () => apiGet<Shift[]>("/api/shifts");
+export const createShift = (s: NewShift) => apiSend<Shift>("POST", "/api/shifts", s);
+export const updateShift = (id: string, patch: Partial<NewShift>) =>
+  apiSend<Shift>("PATCH", `/api/shifts/${encodeURIComponent(id)}`, patch);
+export const deleteShift = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/shifts/${encodeURIComponent(id)}`);
+
 // ── Câmeras IP/RTSP dinâmicas (superadmin) — contrato-multicamera.md §3 ──────────────────────
 // CRUD das câmeras adicionadas em runtime pela UI (persistidas em server/cameras.json). Após
 // POST/PATCH/DELETE, a grade se atualiza SOZINHA pelos eventos socket `cameras`/`camera-status`
