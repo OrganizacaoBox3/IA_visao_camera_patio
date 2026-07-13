@@ -26,6 +26,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import { type ReactNode } from "react";
 import { Badge, Button, IconButton, Toggle, Tooltip } from "../ui";
 import { type ModeKey, type ModePreset } from "../config";
 import { POLYGON_MIN_POINTS } from "../zones";
@@ -64,6 +65,10 @@ type Props = {
   reviewTip: string | null;
   /** dica do EDITOR de zona (vértice/zona selecionados) — a interação ENSINADA em texto. */
   editTip: string | null;
+  /** popover "Exibição" (config-de-exibição consolidada — spec §3-C). Slot: o pai monta o controle
+   *  (estado/handlers vivem lá), a barra só o posiciona na toolbar. Sempre visível (até em Calibrar:
+   *  o drawScene já gateia as camadas; o operador pode conferir HUD/telemetria). */
+  layersControl?: ReactNode;
   onClose?: () => void;
 };
 
@@ -87,6 +92,7 @@ export function CamHeader({
   toggleCalibration,
   reviewTip,
   editTip,
+  layersControl,
   onClose,
 }: Props) {
   // Um só motivo p/ desabilitar edição na barra (RBAC + revisão) — sem repetir a expressão.
@@ -155,77 +161,84 @@ export function CamHeader({
           saída do modo, com estado ATIVO claro. */}
       {!calActive && (
         <>
-      {/* ÁREA (área-um-botão): UM toggle no lugar de "Zona"+"Polígono" — o GESTO decide a forma.
+          {/* ÁREA (área-um-botão): UM toggle no lugar de "Zona"+"Polígono" — o GESTO decide a forma.
               Rascunho VAZIO: arraste → retângulo de 4 vértices (o caso comum, mesas); clique →
               polígono ponto a ponto. O que nasce é EDITÁVEL: clique na área para selecionar, arraste
               o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir,
               Delete/Alt+clique para remover. Estado nunca só-por-cor: o rótulo carrega o progresso
               ("N vértices" no polígono) e a dica ensina o gesto em TEXTO. */}
-      <Tooltip
-        content={
-          editHint ??
-          "Arraste um retângulo, ou clique para desenhar ponto a ponto. Depois: clique na área para selecionar — arraste o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir; Delete (ou Alt+clique) remove o vértice."
-        }
-      >
-        {/* Nome acessível "Área" (o e2e clica getByRole button name "Área", exact) — vira
+          <Tooltip
+            content={
+              editHint ??
+              "Arraste um retângulo, ou clique para desenhar ponto a ponto. Depois: clique na área para selecionar — arraste o interior para mover, um vértice para ajustar, o ponto claro da aresta para inserir; Delete (ou Alt+clique) remove o vértice."
+            }
+          >
+            {/* Nome acessível "Área" (o e2e clica getByRole button name "Área", exact) — vira
                 "N vértices" só quando o polígono está em curso. */}
-        <Toggle
-          pressed={poly.active}
-          disabled={editDisabled}
-          onPressedChange={(v) => (v ? poly.startArea() : poly.cancel())}
-        >
-          {poly.active && poly.count > 0 ? (
-            `${poly.count} ${poly.count === 1 ? "vértice" : "vértices"}`
-          ) : (
-            <>
-              <Shapes size={16} strokeWidth={1.75} aria-hidden /> Área
-            </>
-          )}
-        </Toggle>
-      </Tooltip>
-      {/* Rascunho POLÍGONO em curso (count>0): Voltar/Concluir. O retângulo fecha no soltar do
+            <Toggle
+              pressed={poly.active}
+              disabled={editDisabled}
+              onPressedChange={(v) => (v ? poly.startArea() : poly.cancel())}
+            >
+              {poly.active && poly.count > 0 ? (
+                `${poly.count} ${poly.count === 1 ? "vértice" : "vértices"}`
+              ) : (
+                <>
+                  <Shapes size={16} strokeWidth={1.75} aria-hidden /> Área
+                </>
+              )}
+            </Toggle>
+          </Tooltip>
+          {/* Rascunho POLÍGONO em curso (count>0): Voltar/Concluir. O retângulo fecha no soltar do
               arraste, então não tem esses controles. Enter conclui, ESC cancela (atalhos do hook);
               botões Radix — foco visível e operáveis sem mouse. */}
-      {poly.active && poly.count > 0 && (
-        <>
-          <IconButton
-            label="Voltar (remover último vértice)"
-            disabled={poly.count === 0}
-            onClick={poly.undo}
-          >
-            <Undo2 size={18} strokeWidth={1.75} aria-hidden />
-          </IconButton>
+          {poly.active && poly.count > 0 && (
+            <>
+              <IconButton
+                label="Voltar (remover último vértice)"
+                disabled={poly.count === 0}
+                onClick={poly.undo}
+              >
+                <Undo2 size={18} strokeWidth={1.75} aria-hidden />
+              </IconButton>
+              <Tooltip
+                content={`Fecha o polígono (mínimo de ${POLYGON_MIN_POINTS} vértices). Atalho: Enter.`}
+              >
+                <Button
+                  active
+                  aria-label="Concluir polígono"
+                  disabled={poly.count < POLYGON_MIN_POINTS}
+                  onClick={poly.close}
+                >
+                  <Check size={16} strokeWidth={1.75} aria-hidden /> Concluir polígono
+                </Button>
+              </Tooltip>
+            </>
+          )}
           <Tooltip
-            content={`Fecha o polígono (mínimo de ${POLYGON_MIN_POINTS} vértices). Atalho: Enter.`}
+            content={editHint ?? "Desenhar uma linha de contagem (clique em A e arraste até B)"}
           >
-            <Button
-              active
-              aria-label="Concluir polígono"
-              disabled={poly.count < POLYGON_MIN_POINTS}
-              onClick={poly.close}
+            <Toggle
+              pressed={tripwireMode}
+              disabled={editDisabled}
+              onPressedChange={() => toggleTripwireMode()}
             >
-              <Check size={16} strokeWidth={1.75} aria-hidden /> Concluir polígono
-            </Button>
+              {tripwireMode ? (
+                "Traçando…"
+              ) : (
+                <>
+                  <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden /> Linha
+                </>
+              )}
+            </Toggle>
           </Tooltip>
         </>
       )}
-      <Tooltip content={editHint ?? "Desenhar uma linha de contagem (clique em A e arraste até B)"}>
-        <Toggle
-          pressed={tripwireMode}
-          disabled={editDisabled}
-          onPressedChange={() => toggleTripwireMode()}
-        >
-          {tripwireMode ? (
-            "Traçando…"
-          ) : (
-            <>
-              <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden /> Linha
-            </>
-          )}
-        </Toggle>
-      </Tooltip>
-        </>
-      )}
+      {/* EXIBIÇÃO (spec §3-C): o popover ÚNICO de "o que mostrar sobre o vídeo" (HUD/Malha/Anéis +
+          Caixas/Máscara/Zonas/Heatmap/Confiança/Preset/Longo alcance). Slot montado pelo pai. Fica
+          FORA do bloco `!calActive`: config-de-exibição vale em qualquer modo (o drawScene gateia
+          as camadas por modo; aqui o operador ainda confere HUD/telemetria). */}
+      {layersControl}
       {/* CALIBRAR — o 5º modo do palco (spec-arquitetura-informacao §1: "capacidade não é
               lugar"; a rota /calibracao morre). NÃO usa `editDisabled`: MEDIR distância é do
               OPERADOR (era o que a rota lhe dava). Quem barra o que ele pode MARCAR é o hook

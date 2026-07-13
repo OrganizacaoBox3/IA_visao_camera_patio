@@ -3,8 +3,12 @@
 // "A imagem é soberana" (ADR-003): NÚMERO vive aqui, no painel — nunca sobre o vídeo.
 // Going-gray: tudo neutro; satura só a anormalidade (detecção em CPU = modo degradado), e nunca
 // só-por-cor — o estado sempre vem com TEXTO + ícone.
-import { Gauge, Grid3x3, Pause, Radar, Timer, TriangleAlert, Users } from "lucide-react";
-import { Toggle, Tooltip } from "../ui";
+//
+// F3 (spec-tela-camera §3-C): os toggles de EXIBIÇÃO (HUD/Malha/Anéis) SAÍRAM daqui — eram a mesma
+// natureza (config-de-exibição) que os da aba "Camadas", partida em dois lugares. Agora vivem todos
+// no popover "Exibição" da toolbar (./ExibicaoPopover). Esta barra volta a ser só LEITURA de números.
+import { Pause, Timer, TriangleAlert, Users } from "lucide-react";
+import { Tooltip } from "../ui";
 import { fmtDuration } from "../format";
 
 type Props = {
@@ -12,42 +16,13 @@ type Props = {
   fps: number;
   /** resumo textual das zonas ("Área 1:ATIVA · …") — truncado por CSS, sem px cru */
   summary: string;
-  hud: boolean;
-  setHud: (v: boolean) => void;
-  /** malha da calibração: só existe quando a câmera foi calibrada */
-  calibAvailable: boolean;
-  calibOn: boolean;
-  setCalibOn: (v: boolean) => void;
-  /** tags no chão: só existe quando há calibração + leituras BLE */
-  floorAvailable: boolean;
-  floorOn: boolean;
-  setFloorOn: (v: boolean) => void;
-  /** modo CALIBRAR ligado → a barra reduz ao essencial (os toggles Malha/Tags/HUD são redundantes:
-   *  a grade de conferência JÁ é a própria calibração viva — spec §3.3). */
-  calActive: boolean;
   analysisEngine: "hub" | "local";
   /** backend do tfjs; null enquanto o worker não reportou */
   detBackend: string | null;
   paused: boolean;
 };
 
-export function CamKpiBar({
-  presence,
-  fps,
-  summary,
-  hud,
-  setHud,
-  calibAvailable,
-  calibOn,
-  setCalibOn,
-  floorAvailable,
-  floorOn,
-  setFloorOn,
-  calActive,
-  analysisEngine,
-  detBackend,
-  paused,
-}: Props) {
+export function CamKpiBar({ presence, fps, summary, analysisEngine, detBackend, paused }: Props) {
   return (
     <div className="cam-kpibar">
       <span className="kb">
@@ -60,45 +35,6 @@ export function CamKpiBar({
       <span className="kb muted">pico {presence.peak}</span>
       <span className="kb muted kb-summary">{summary || "sem zonas"}</span>
       <span className="kb muted">FPS {fps}</span>
-      {/* Em CALIBRAR a barra reduz ao essencial (spec §3.3): os toggles de overlay de OPERAÇÃO —
-          HUD, Malha e Tags — somem, porque a grade de conferência JÁ é a própria calibração viva
-          (e o gate sceneLayers do drawScene não desenharia essas camadas mesmo ligadas). */}
-      {!calActive && (
-        <>
-      {/* Toggle do HUD (going-gray: régua de medição, não anormalidade). O rAF lê o ref espelho. */}
-      <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local), idade do overlay e latência por estágio (OWL-ViT/ZXing/MediaPipe) + fila de inferência">
-        <Toggle aria-label="HUD de telemetria" pressed={hud} onPressedChange={setHud}>
-          <Gauge size={16} strokeWidth={1.75} aria-hidden /> HUD
-        </Toggle>
-      </Tooltip>
-      {/* Malha da calibração: grade do chão (homografia) + pontos cadastrados. Some quando a
-          câmera nunca foi calibrada. Going-gray: conferência de posicionamento, não anormalidade. */}
-      {calibAvailable && (
-        <Tooltip content="Mostrar a malha da calibração sobre o vídeo: grade do chão (via homografia) + os pontos cadastrados — confere o posicionamento da pessoa no piso">
-          <Toggle aria-label="Malha da calibração" pressed={calibOn} onPressedChange={setCalibOn}>
-            <Grid3x3 size={16} strokeWidth={1.75} aria-hidden /> Malha
-          </Toggle>
-        </Tooltip>
-      )}
-      {/* Anéis das antenas (BLE): âncoras (posição exata) + estação + anéis de distância. Default
-          DESLIGADO (decisão do dono: dado de conferência, não a vista do cliente — não poluir a
-          tela por padrão); some quando não há calibração/leituras. Going-gray: estado por TEXTO +
-          ícone + pressed (não só cor). Cores VIVAS no desenho são exceção declarada ao going-gray —
-          overlay sobre vídeo (ver drawFloorTags); o anel tracejado comunica incerteza (é distância,
-          não posição); vermelho só p/ âncora calada (anomalia). */}
-      {floorAvailable && (
-        <Tooltip content="Anéis das antenas BLE: âncoras dos cantos (posição exata), a estação e um anel tracejado de distância p/ cada tag visível ainda não associada a uma pessoa — o anel é DISTÂNCIA (RSSI), não posição. Desligado por padrão; ligue para conferir a cobertura das antenas.">
-          <Toggle
-            aria-label="Anéis das antenas"
-            pressed={floorOn}
-            onPressedChange={setFloorOn}
-          >
-            <Radar size={16} strokeWidth={1.75} aria-hidden /> Anéis
-          </Toggle>
-        </Tooltip>
-      )}
-        </>
-      )}
       {/* Fonte da análise (ADR-009): NEUTRO e só no modo hub; local = nada. No modo hub o worker
           tfjs nem sobe p/ pessoas — o badge de detecção abaixo só aparece se um consumidor local
           (fadiga/celular, engine local) o iniciou. */}

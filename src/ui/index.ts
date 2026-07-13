@@ -21,6 +21,7 @@ export { Table, Th, TableEmpty, type TableColumn } from "./Table";
 export { Tabs, TabsContent, type TabItem } from "./Tabs";
 export { ScrollArea, type ScrollAreaProps } from "./ScrollArea";
 export { DropdownMenu, type DropdownItem } from "./DropdownMenu";
+export { Popover } from "./Popover";
 export {
   AlertDialog,
   ConfirmProvider,

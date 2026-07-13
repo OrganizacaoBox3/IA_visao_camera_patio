@@ -76,6 +76,7 @@ import {
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import { CamHeader } from "./camera/CamHeader";
 import { CamKpiBar } from "./camera/CamKpiBar";
+import { ExibicaoPopover } from "./camera/ExibicaoPopover";
 import { CineBar } from "./camera/CineBar";
 import { useTelemetry } from "./camera/useTelemetry";
 import { useWebrtcTransport } from "./camera/useWebrtcTransport";
@@ -289,6 +290,7 @@ export function CameraWorkspace({
   // vista diária do operador.
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("presenca");
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
+  const [layersOpen, setLayersOpen] = useState(false); // popover Exibição → trap defere ao Radix (cfgOpenRef)
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
   const [conf, setConf] = useState<number>(APP_CONFIG.overlay.confidenceThreshold);
   const [longRange, setLongRange] = useState(false); // perfil por câmera (cameraConfig.longRange)
@@ -492,8 +494,8 @@ export function CameraWorkspace({
     onCloseRef.current = onClose;
   }, [onClose]);
   useEffect(() => {
-    cfgOpenRef.current = !!cfgZoneId;
-  }, [cfgZoneId]);
+    cfgOpenRef.current = !!cfgZoneId || layersOpen; // zona OU exibição aberta → Radix trata ESC/Tab
+  }, [cfgZoneId, layersOpen]);
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
@@ -1547,6 +1549,25 @@ export function CameraWorkspace({
         toggleCalibration={toggleCalibration}
         reviewTip={reviewTip}
         editTip={poly.hint}
+        // EXIBIÇÃO (spec §3-C): o popover ÚNICO de config-de-exibição; reúne o que estava PARTIDO entre a KPI bar e a aba Camadas.
+        layersControl={
+          <ExibicaoPopover
+            open={layersOpen}
+            onOpenChange={setLayersOpen}
+            hud={hud}
+            setHud={setHud}
+            calib={calib}
+            floor={{ available: floorTags.available, on: floorOn, setOn: setFloorOn }}
+            layers={layers}
+            setLayers={setLayers}
+            conf={conf}
+            setConf={setConf}
+            preset={{ active: activePreset, dirty: presetDirty, apply: applyPreset }}
+            canConfigure={canConfigure}
+            longRange={longRange}
+            onLongRangeChange={onLongRangeChange}
+          />
+        }
         onClose={onClose}
       />
 
@@ -1634,19 +1655,6 @@ export function CameraWorkspace({
             invertTripwire,
             removeTripwire,
           }}
-          camadas={{
-            activePresetDef,
-            activePreset,
-            presetDirty,
-            applyPreset,
-            layers,
-            setLayers,
-            conf,
-            setConf,
-            canConfigure,
-            longRange,
-            onLongRangeChange,
-          }}
           timeline={timeline}
           presence={presence}
           paused={paused}
@@ -1662,15 +1670,6 @@ export function CameraWorkspace({
         presence={presence}
         fps={perf.fps}
         summary={summary}
-        hud={hud}
-        setHud={setHud}
-        calibAvailable={calib.hasCalibration}
-        calibOn={calib.on}
-        setCalibOn={calib.setOn}
-        floorAvailable={floorTags.available}
-        floorOn={floorOn}
-        setFloorOn={setFloorOn}
-        calActive={cal.active}
         analysisEngine={analysisEngine}
         detBackend={detBackend}
         paused={paused}

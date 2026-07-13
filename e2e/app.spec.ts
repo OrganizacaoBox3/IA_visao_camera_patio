@@ -207,17 +207,15 @@ test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunc
   await page.locator(".tile[title='Abrir câmera']").first().click();
   await expect(page.locator(".cam-stage")).toBeVisible();
 
-  // F2 (spec-tela-camera-arquitetura §3-B): Pessoas · Por quê · Timeline viraram SUB-ABAS de um
-  // painel de OBSERVAÇÃO único. O nível de cima ("Aba do painel") é Observação × Camadas; "Por quê"
-  // agora mora na sub-tablist "Seção de observação". A câmera abre em Observação (default Pessoas),
-  // então a sub-tablist já está visível.
-  const painel = page.getByRole("tablist", { name: "Aba do painel" });
-  await expect(painel.getByRole("tab", { name: "Observação" })).toBeVisible();
-  // Controle negativo da fusão: as folhas de observação DEIXARAM o nível de cima (viraram sub-abas)
-  // — o topo é só Observação × Camadas. Sem isto, o teste passaria mesmo se a hierarquia não mudasse.
-  await expect(painel.getByRole("tab")).toHaveCount(2);
-  await expect(painel.getByRole("tab", { name: /Pessoas|Por quê|Timeline/ })).toHaveCount(0);
+  // F2/F3 (spec-tela-camera-arquitetura §3-B/§3-C): Pessoas · Por quê · Timeline são SUB-ABAS de um
+  // painel de OBSERVAÇÃO único. A F3 tirou a aba "Camadas" do drawer (virou o popover "Exibição"),
+  // então o nível de cima "Observação × Camadas" SUMIU — sem modo de edição, o painel mostra a
+  // "Seção de observação" DIRETO. Controle negativo: nenhuma "Aba do painel" e nenhuma aba "Camadas".
+  await expect(page.getByRole("tablist", { name: "Aba do painel" })).toHaveCount(0);
   const obs = page.getByRole("tablist", { name: "Seção de observação" });
+  await expect(obs).toBeVisible();
+  await expect(obs.getByRole("tab")).toHaveCount(3);
+  await expect(obs.getByRole("tab", { name: "Camadas" })).toHaveCount(0);
   await obs.getByRole("tab", { name: "Por quê" }).click();
   const panel = page.getByRole("tabpanel", { name: "Por quê" });
   await expect(panel.getByRole("heading", { name: "Por que não identificou?" })).toBeVisible();
@@ -245,7 +243,8 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
 
   const area = page.getByRole("button", { name: "Área", exact: true });
   const linha = page.getByRole("button", { name: "Linha" });
-  const tablist = page.getByRole("tablist", { name: "Aba do painel" });
+  // F3: o painel de observação é DIRETO (a aba "Camadas" saiu p/ o popover; o nível de cima sumiu).
+  const tablist = page.getByRole("tablist", { name: "Seção de observação" });
   await expect(area).toBeVisible(); // operação: os toggles de edição vivem na barra do palco
   await expect(tablist).toBeVisible(); // e o painel tem as abas de OBSERVAÇÃO
   // F1 (spec-tela-camera-arquitetura §3-A): Zona e Linha DEIXARAM de ser abas — viram MODOS do palco
@@ -269,6 +268,38 @@ test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; E
   await expect(area).toBeVisible();
   await expect(linha).toBeVisible();
   await expect(tablist).toBeVisible();
+});
+
+// EXIBIÇÃO É UM POPOVER, NÃO UMA ABA (spec-tela-camera §3-C, F3): a config-de-exibição estava
+// PARTIDA entre a barra de KPIs (HUD/Malha/Anéis) e a aba "Camadas" (Caixas/Máscara/Zonas/Heatmap/
+// Confiança/Preset/Longo alcance) — a MESMA natureza em dois sítios. A F3 consolidou tudo num popover
+// leve na toolbar. Controle negativo: a aba "Camadas" NÃO existe; o botão "Exibição" abre o popover
+// e os toggles vivem LÁ. (Malha/Anéis dependem de calibração/BLE — ausentes no nó webcam do e2e.)
+test("Exibição é um POPOVER na toolbar (não a aba Camadas)", async ({ page, context }) => {
+  test.slow(); // paga conexão do nó + 1º frame no palco
+  await login(page);
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await expect(page.locator(".cam-stage")).toBeVisible();
+
+  // NEGATIVO: a aba "Camadas" saiu do drawer.
+  await expect(page.getByRole("tab", { name: "Camadas" })).toHaveCount(0);
+
+  // O controle único: o botão "Exibição" na toolbar abre o popover (fechado por padrão).
+  const trigger = page.getByRole("button", { name: "Exibição" });
+  await expect(trigger).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Caixas / detecções" })).toHaveCount(0);
+  await trigger.click();
+
+  // POSITIVO: os toggles de exibição vivem no popover (role=switch, going-gray por rótulo).
+  await expect(page.getByRole("switch", { name: "Caixas / detecções" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Máscara (área pintada)" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Zonas (retângulos)" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Heatmap de ocupação" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "HUD (telemetria)" })).toBeVisible();
+  // Confiança (slider) e Longo alcance (admin=canConfigure) também moraram p/ cá — não se perderam.
+  await expect(page.getByRole("slider", { name: "Confiança mínima" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Longo alcance / Panorâmica" })).toBeVisible();
 });
 
 test("axe: câmera ABERTA (console do operador) sem violação séria", async ({ page, context }) => {

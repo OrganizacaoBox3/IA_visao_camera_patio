@@ -51,6 +51,15 @@ import { describe, it, expect } from "vitest";
 // linhas vazias): 1722 → 1687 — o EDITOR que faltava entrou e o arquivo ainda ENCOLHEU 35 linhas.
 // NÃO medir com `Measure-Object -Line`.
 //
+// APERTADO de novo na EXIBIÇÃO-COMO-POPOVER (F3, spec-tela-camera §3-C, jul/13), 1690 → 1689: a
+// config-de-exibição estava PARTIDA em dois lugares (toggles HUD/Malha/Anéis na barra de KPIs +
+// Caixas/Máscara/Zonas/Heatmap/Confiança/Preset/Longo alcance na aba "Camadas"). A F3 os consolidou
+// num POPOVER único na toolbar (./camera/ExibicaoPopover + o wrapper ./ui/Popover), a aba "Camadas"
+// (e o CamadasTab.tsx, DELETADO) saiu do drawer, e o nível "Observação × Camadas" sumiu (o drawer
+// mostra as sub-abas de observação direto). O god-file é quase NEUTRO por natureza (consolidar MOVE
+// os mesmos props de dois sítios para um), mas ainda ENCOLHEU 1 linha — quem encolheu de verdade foi
+// CamKpiBar/CamDrawer + o arquivo extinto. NÃO medir com `Measure-Object -Line`.
+//
 // Teto ATUAL (não-ideal). BAIXE ao extrair uma responsabilidade; SUBIR exige justificativa.
 // 1910→1920 (jul/09): rótulo da TAG BLE na câmera ABERTA (identidade aumentada, caminho C). O GROSSO
 // (carga da homografia + fusão tag↔pessoa) foi EXTRAÍDO p/ src/fusion/useCameraTagLabels.ts — aqui
@@ -68,7 +77,7 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
 // a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
 // vazias e já induziu um falso "coube em 1930" numa revisão).
-const MAX_LINES = 1690;
+const MAX_LINES = 1689;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {
