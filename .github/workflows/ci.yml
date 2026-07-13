@@ -45,6 +45,12 @@ jobs:
       - name: Verify (lint + typecheck + build + test + audit)
         run: npm run verify
 
+      # Ratchet de tokens (spec-padronizacao-interface.md §1): text-[Npx]/#hex em página só podem
+      # DIMINUIR — a baseline vive no próprio script. Passo separado de propósito: verify é o gate
+      # sagrado/rápido local; este sensor é barato mas é política de CI, não de pre-push.
+      - name: Lint de tokens (ratchet text-[/#hex em página)
+        run: npm run lint:tokens
+
   e2e:
     needs: verify
     runs-on: ubuntu-latest
@@ -85,6 +91,12 @@ jobs:
       # no Chromium. Nenhum env extra aqui — se o CI precisar divergir do local, é bug do config.
       - name: E2E (app + mobile)
         run: npx playwright test e2e/app.spec.ts e2e/mobile.spec.ts
+
+      # Gate de a11y (axe-core) nas rotas estáveis — falha em violação critical/serious fora da
+      # allowlist documentada no spec (dívida F1; ratchet: só aperta). Passo separado do E2E acima
+      # p/ o log do CI dizer QUAL sensor barrou (fluxo × a11y).
+      - name: E2E a11y (axe nas rotas estáveis)
+        run: npx playwright test e2e/a11y.spec.ts
 
       # trace: retain-on-failure → só existe artefato quando falha; é o único momento em que
       # ele paga o upload. Retenção curta: trace serve p/ depurar o run, não p/ arquivo.
