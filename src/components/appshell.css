@@ -125,10 +125,7 @@
   background: var(--panel);
   color: var(--text);
 }
-.rail--app .rail-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--ui-focus);
-}
+/* (foco visível: coberto pelo :focus-visible GLOBAL do index.css — G3) */
 
 /* ── Busca (campo + popover de resultados) ──────────────────────────────── */
 .rail--app .rail-search {

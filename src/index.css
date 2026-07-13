@@ -32,16 +32,9 @@
   --fs-title: 14px; /* título de página/dialog                            */
   --fs-hero: 18px; /* destaque de conteúdo                               */
   --fs-kpi: 24px; /* número de KPI — ÚNICO tamanho                      */
-  /* Tokens de estado LEGADOS → agora ALIASES dos --state-* (going-gray R3.1).
-     A FONTE ÚNICA da verdade são os --state-* (definidos abaixo). Estes nomes
-     antigos permanecem APENAS por compatibilidade: ReportPage/FadigaView/UsersPage
-     ainda referenciam var(--ok|--idle|--alert) e não fazem parte desta frente.
-     Sem hex duplicado aqui — cada alias só encaminha para o token semântico.
-     (forward-ref de var() é resolvido no uso, então referenciar --state-* aqui é ok.) */
-  --ok: var(--state-ok);
-  --idle: var(--state-warn);
-  --empty: var(--state-neutral-dim);
-  --alert: var(--state-critical);
+  /* Tokens de estado legados --ok/--idle/--empty/--alert: APOSENTADOS (G7 ·
+     padronização). O último consumidor (FadigaView) migrou p/ --state-*-fg;
+     a fonte única de cor de estado são os --state-* (bloco abaixo). */
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   /* Escala de espaçamento (padronização) */
@@ -52,6 +45,26 @@
   --sp-5: 24px;
   --radius-sm: 6px;
   --radius: 10px;
+  /* ── Escala de z-index (G4 · padronização) — fonte única de EMPILHAMENTO ──
+     Encerra os z-index mágicos dispersos (300/60/10/6/5…). Quatro camadas de
+     app, em ordem crescente:
+       base(0)     fluxo da página; elevações locais (ver nota abaixo)
+       overlay(100) cascas que COBREM a página — Dialog Radix (scrim 100 /
+                    conteúdo 101) e a casca fullscreen da câmera (.cam-overlay)
+       popover(150) flutuantes ANCORADOS — Tooltip/Select/Dropdown Radix (150)
+                    e a busca do rail (appshell.css)
+       toast(200)  avisos flutuantes — Toast Radix (200); o skip-link (ui.css)
+                    fica ACIMA de tudo via calc(var(--z-toast) + 100)
+     Os valores ESPELHAM os já hardcoded nos átomos Radix de src/ui
+     (z-[100]/z-[101]/z-[150]/z-[200]) — migrar os .tsx dos átomos p/ os
+     tokens fica p/ a onda que tocar src/ui.
+     Elevações LOCAIS dentro de um stacking context próprio (palco da câmera,
+     tile de vídeo, barra sticky) usam calc(var(--z-base) + n) com n ≤ 10:
+     ordenam IRMÃOS no mesmo contexto sem inventar camada global nova. */
+  --z-base: 0;
+  --z-overlay: 100;
+  --z-popover: 150;
+  --z-toast: 200;
   --rail-w: 148px;
   /* Safe-area (notch / home-indicator) — requer viewport-fit=cover no index.html.
      Fallback 0px p/ navegadores/dispositivos sem entalhe. */
@@ -106,9 +119,9 @@
    Cada estado tem 3 papéis: «-fg» (texto/ícone/borda saturada · contraste AA
    sobre os fundos escuros --panel / --panel-2), «-bg» (tint de fundo escuro)
    e «-border». Estes --state-* são a FONTE ÚNICA da verdade do design de cor
-   (going-gray R3.1): os tokens legados --ok/--idle/--empty/--alert agora são
-   apenas ALIASES destes (ver topo do arquivo), e os tints hex que antes
-   duplicavam os -bg/-border foram substituídos por var(--state-*) nas classes.
+   (going-gray R3.1): os tokens legados --ok/--idle/--empty/--alert foram
+   APOSENTADOS (G7 — consumidores migrados p/ --state-*), e os tints hex que
+   antes duplicavam os -bg/-border foram substituídos por var(--state-*).
    ════════════════════════════════════════════════════════════════════════ */
 :root {
   /* Hue canônico (dot/borda/realce). Fonte única; --accent permanece à parte. */
@@ -140,6 +153,13 @@
   --state-warn-border: #4d3a09;
   --state-critical-border: #7f1d1d;
 
+  /* Contrast — texto sobre a cor SATURADA do estado usada como FUNDO
+     (badge de contagem de alarmes; par do --accent-contrast). Só os 3
+     pares usados hoje — YAGNI p/ ok/neutral (G8 · padronização). */
+  --state-critical-contrast: #ffffff;
+  --state-warn-contrast: #1a1500;
+  --state-info-contrast: #041018;
+
   /* ── Superfície de CÂMERA AO VIVO (dark theme · "a imagem é soberana") ──
      O palco do vídeo é mais escuro que o app; números vão para o painel
      lateral; sobre o vídeo só geometria + texto de alto contraste. Apenas
@@ -168,6 +188,23 @@ body {
   font-family: var(--sans);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ── Foco visível GLOBAL (G3 · "a11y é contrato" — anel accent em tudo) ────
+   Cobre o que os wrappers de src/ui NÃO cobrem (links crus, tiles, células,
+   inputs fora dos átomos) com o MESMO anel duplo da casa (--ui-focus, definido
+   em src/ui/ui.css). Por ser não-camadada, esta regra também vence as
+   utilities de foco dos átomos — visual idêntico onde já havia o anel duplo
+   (ring-2 + offset-2 ≡ --ui-focus) e unificação onde havia anel simples
+   (Button/Input: ring-2 colado → anel duplo com offset).
+   Exceções (:not): cascas com sombra própria e foco PROGRAMÁTICO — Dialog/
+   AlertDialog Radix e a casca fullscreen da câmera (role dialog/alertdialog),
+   onde o anel substituiria a sombra da casca — e o alvo do skip-link
+   (.shell-main, que já suprime o anel em ui.css). Comportamento delas: o de
+   hoje, inalterado. */
+:focus-visible:not([role="dialog"], [role="alertdialog"], .shell-main) {
+  outline: none;
+  box-shadow: var(--ui-focus);
 }
 
 /* Controles de formulário: o CSS global de select/input/textarea foi REMOVIDO
@@ -733,7 +770,7 @@ label.file input {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: calc(var(--z-base) + 5); /* degrau local: barra sticky acima do conteúdo da página */
 }
 /* .rep-select → átomo Select; .seg/.seg-btn → átomo SegmentedControl */
 /* ── Relatório em abas — CADEIA DE SCROLL (fix runtime 1366/1920) ──────────
@@ -1598,7 +1635,7 @@ button.rail-item {
   border-radius: var(--radius);
   font-size: 13px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-  z-index: 6;
+  z-index: calc(var(--z-base) + 6); /* degrau local dentro da casca da câmera: acima do drawer (+5) */
   animation: toastin 0.2s ease;
 }
 @keyframes toastin {
@@ -1643,7 +1680,7 @@ button.rail-item {
   display: flex;
   flex-direction: column;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
-  z-index: 5;
+  z-index: calc(var(--z-base) + 5); /* degrau local dentro da casca da câmera: acima do palco */
   animation: drawerin 0.18s ease;
 }
 @keyframes drawerin {
@@ -1897,7 +1934,10 @@ button.rail-item {
 .cam-overlay {
   position: absolute;
   inset: 0;
-  z-index: 10;
+  /* camada de app OVERLAY (escala --z-*): a casca fullscreen da câmera cobre a
+     página; Dialogs Radix (101) e popovers (150) seguem acima por valor — e o
+     portal deles, no fim do <body>, vence o empate com o scrim (100). */
+  z-index: var(--z-overlay);
   background: #05080c;
 }
 /* Fix #2 (header duplo): com a câmera aberta, o header da Central some — UM header por
