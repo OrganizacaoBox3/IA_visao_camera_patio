@@ -38,7 +38,7 @@ import { useCalibrationEditor } from "./camera/useCalibrationEditor";
 import { CalibrationLayer } from "./camera/CalibrationLayer";
 import { useZoneMasks } from "./camera/useZoneMasks";
 import { usePolygonEditor } from "./camera/usePolygonEditor";
-import { useStageModes } from "./camera/useStageModes";
+import { useStageModes, sceneLayers } from "./camera/useStageModes";
 import {
   createCounter,
   createOccupancy,
@@ -383,6 +383,14 @@ export function CameraWorkspace({
     currentFrame,
     onSaved: calib.refresh,
   });
+
+  // Espelho de cal.active p/ o rAF/drawScene: o loop de desenho é armado com deps fixas e fecha
+  // sobre um drawScene STALE (cal.active é state, não muda as deps do efeito). O gate de camadas
+  // do MODO (sceneLayers) tem que ler o valor CORRENTE — via ref, o idioma da casa (hudRef/etc.).
+  const calActiveRef = useRef(false);
+  useEffect(() => {
+    calActiveRef.current = cal.active;
+  }, [cal.active]);
 
   // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
@@ -1209,14 +1217,20 @@ export function CameraWorkspace({
       ctx.drawImage(f.el, cr.x, cr.y, cr.w, cr.h);
     }
     const detailed = mode === "full";
+    // GATE DE CAMADAS POR MODO (spec §3.1 — a causa-raiz do "totalmente sobreposto"): em CALIBRAR
+    // TODA camada de operação cai (tracks/zonas/tripwires/floor-tags/malha-SALVA/HUD) e o palco fica
+    // só com o vídeo + a calibração VIVA (CalibrationLayer, SVG irmão). Mata a DUPLA-GRADE (malha
+    // salva no canvas × grade viva no SVG) numa tacada. Decisão PURA e testada (useStageModes).
+    const ov = sceneLayers({ calActive: calActiveRef.current });
 
     // Heatmap de ocupação (camada, sob as geometrias) — grade normalizada da lib counting.ts.
-    if (layersRef.current.heatmap && occRef.current) drawOccupancyHeatmap(ctx, cr, occRef.current);
+    if (ov.heatmap && layersRef.current.heatmap && occRef.current)
+      drawOccupancyHeatmap(ctx, cr, occRef.current);
 
     // Tags no chão (toggle, default LIGADO): âncoras exatas + estação + anéis de distância BLE.
     // Camada de FUNDO — desenha ANTES de caixas/zonas (espelha a grade/TrackOverlay: a geometria
     // de pessoa vence a de chão). O rAF lê os refs; sem calibração/leituras o viewRef é null.
-    if (floorOnRef.current) {
+    if (ov.floorTags && floorOnRef.current) {
       const ft = floorTags.viewRef.current;
       if (ft) drawFloorTags(ctx, cr, ft);
     }
@@ -1247,7 +1261,7 @@ export function CameraWorkspace({
     }
 
     // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
-    if (layersRef.current.boxes)
+    if (ov.tracks && layersRef.current.boxes)
       drawTracks(
         ctx,
         cr,
@@ -1259,37 +1273,40 @@ export function CameraWorkspace({
 
     // Laço por-zona (retângulo/máscara + rótulo + dets + fadiga) → ./camera/draw. Último arg
     // (1 pessoa = 1 caixa): a camada de dets omite a det de pessoa já coberta por um track.
-    drawZoneOverlays(
-      ctx,
-      cr,
-      zonesRef.current,
-      resultsRef.current,
-      layersRef.current,
-      confRef.current,
-      detailed,
-      zm.getMask,
-      layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
-      hubProibidas, // fio VIOLADA (zonesProibidas do motor); null → ARMADA quieta (aditivo)
-    );
+    if (ov.zones)
+      drawZoneOverlays(
+        ctx,
+        cr,
+        zonesRef.current,
+        resultsRef.current,
+        layersRef.current,
+        confRef.current,
+        detailed,
+        zm.getMask,
+        layersRef.current.boxes ? displayTracks.map((t) => t.bbox) : [],
+        hubProibidas, // fio VIOLADA (zonesProibidas do motor); null → ARMADA quieta (aditivo)
+      );
 
-    // Malha da calibração (toggle opt-in): grade do chão via homografia + pontos cadastrados —
-    // feedback do posicionamento no piso. rAF lê os refs; só desenha quando ligado e há pontos.
-    if (calib.onRef.current) {
+    // Malha da calibração SALVA (toggle opt-in): grade do chão via homografia + pontos cadastrados.
+    // ov.calibrationMesh a DESLIGA em Calibrar — senão ela e a grade VIVA do CalibrationLayer (SVG)
+    // são DUAS grades idênticas empilhadas (a causa-raiz medida da queixa "totalmente sobrepostos").
+    if (ov.calibrationMesh && calib.onRef.current) {
       const c = calib.dataRef.current;
       if (c.points.length) drawCalibrationOverlay(ctx, cr, c.points, c.H);
     }
 
-    // Tripwires — SEMPRE visíveis. Modo hub (ADR-009): o "hoje" é SÓ o acumulado do servidor
-    // (somar a sessão local contaria cada cruzamento 2×) e paused=false (o motor conta 24/7);
-    // modo local: base do servidor + sessão corrente, pausado na grade.
-    drawTripwires(
-      ctx,
-      cr,
-      tripwiresRef.current,
-      hubEngine ? EMPTY_TW_COUNTS : twCountsRef.current,
-      !hubEngine && mode !== "full",
-      hubEngine ? hubFlowRef.current : flowBaseRef.current,
-    );
+    // Tripwires — visíveis FORA de Calibrar (ov.tripwires). Modo hub (ADR-009): o "hoje" é SÓ o
+    // acumulado do servidor (somar a sessão local contaria cada cruzamento 2×) e paused=false (o
+    // motor conta 24/7); modo local: base do servidor + sessão corrente, pausado na grade.
+    if (ov.tripwires)
+      drawTripwires(
+        ctx,
+        cr,
+        tripwiresRef.current,
+        hubEngine ? EMPTY_TW_COUNTS : twCountsRef.current,
+        !hubEngine && mode !== "full",
+        hubEngine ? hubFlowRef.current : flowBaseRef.current,
+      );
 
     drawTripwireDraft(ctx, twDrawRef.current); // linha em traçado
     // EDITOR DA ZONA (F3): preset retângulo em arraste · rascunho do polígono · midpoints fantasma
@@ -1299,7 +1316,7 @@ export function CameraWorkspace({
     // HUD de telemetria (toggleável; só na câmera aberta), desenhado por último. overlayAge só
     // faz sentido no modo hub; dropped/recvFps são opcionais do FrameSource (lidos defensivos);
     // estágios dos processadores vêm de stageMsRef e a fila do scheduler de schedulerStats().
-    if (hudRef.current && detailed) {
+    if (ov.hud && hudRef.current && detailed) {
       const eng = analysisEngineRef.current === "hub" ? "hub" : "local";
       const age =
         eng === "hub" && hubTracksTsRef.current > 0 ? Date.now() - hubTracksTsRef.current : null;
@@ -1324,8 +1341,10 @@ export function CameraWorkspace({
 
   // ── editores do palco ── (ponteiro → ./camera/useStageModes · zona → ./camera/usePolygonEditor)
   // Modos de edição mutuamente exclusivos (zona × linha × CALIBRAÇÃO).
-  // CALIBRAR (spec §1): liga o modo no palco e traz a aba junto — o painel é o chrome do editor.
-  // Desligar NÃO descarta o trabalho (o hook segue montado: cantos/L×C sobrevivem).
+  // CALIBRAR (spec §3): liga o modo no palco — e o palco INTEIRO se reconfigura (o gate sceneLayers
+  // apaga as camadas de operação; o header some com Zona/Polígono/Linha; o drawer vira SÓ o passo-a-
+  // passo da calibração; ESC sai). Não há mais 7ª aba espremida: calibrar é MODO, não aba. Desligar
+  // NÃO descarta o trabalho (o hook segue montado: cantos/L×C sobrevivem).
   function toggleCalibration() {
     if (cal.active) {
       cal.stop();
@@ -1334,7 +1353,6 @@ export function CameraWorkspace({
     setTripwireMode(false);
     poly.cancel();
     cal.start();
-    setDrawerTab("calibracao");
   }
 
   // ⚠ NOS TEXTOS DE onAlert É CONTRATO, NÃO DECORAÇÃO (não "limpe" numa varredura de ícones):
@@ -1619,6 +1637,7 @@ export function CameraWorkspace({
         floorAvailable={floorTags.available}
         floorOn={floorOn}
         setFloorOn={setFloorOn}
+        calActive={cal.active}
         analysisEngine={analysisEngine}
         detBackend={detBackend}
         paused={paused}

@@ -47,12 +47,11 @@ async function abrirModoCalibrar(page: Page) {
   await page.locator(".tile[title='Abrir câmera']").first().click();
   await expect(page.locator(".cam-stage")).toBeVisible();
   await page.getByRole("button", { name: "Calibrar", exact: true }).click();
-  // O toggle troca de nome ao ligar (estado no TEXTO, nunca só-por-cor) e a aba do drawer vem junto.
+  // O toggle troca de nome ao ligar (estado no TEXTO, nunca só-por-cor).
   await expect(page.getByRole("button", { name: "Calibrando…" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Calibrar" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  // Calibrar é um MODO, não uma aba: o painel vira O passo-a-passo da calibração (não um TabsContent
+  // entre as abas de operação). O tablist de operação some — coberto em app.spec.ts "Calibrar é um MODO".
+  await expect(page.getByText("Calibração de distância")).toBeVisible();
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(1, { timeout: FRAME_MS });
 }
 
@@ -118,7 +117,7 @@ test("Calibrar é MODO do palco: 4 cantos + L×C sobre o vídeo PAUSADO → salv
   await expect(page.getByText("calibrada", { exact: true })).toBeVisible();
 });
 
-test("Calibrar × os outros modos: exclusão mútua (ligar Zona desarma o palco da calibração)", async ({
+test("Calibrar × os outros modos: a camada SVG monta no modo e some ao SAIR (ESC → operação)", async ({
   page,
   context,
 }) => {
@@ -129,23 +128,27 @@ test("Calibrar × os outros modos: exclusão mútua (ligar Zona desarma o palco 
   await abrirModoCalibrar(page);
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(1);
 
-  // Entrar em outro editor DESARMA a calibração — o palco tem um dono só (senão um clique criaria
-  // um canto E uma zona).
-  await page.getByRole("button", { name: "Zona", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Calibrar", exact: true })).toBeVisible();
+  // Calibrar é um MODO EXCLUSIVO: enquanto ele está ativo os outros editores nem aparecem na barra
+  // (não se misturam dois vocabulários — app.spec.ts "Calibrar é um MODO"). Para chegar a Zona é
+  // preciso SAIR do modo. ESC sai da calibração (não fecha a câmera): a camada some e a operação volta.
+  await page.keyboard.press("Escape");
   await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(0);
+  const zona = page.getByRole("button", { name: "Zona", exact: true });
+  await expect(zona).toBeVisible();
 
-  // E o painel continua legível (não some), oferecendo religar o modo sem sair da aba.
-  await expect(page.getByRole("button", { name: "Ativar modo Calibrar" })).toBeVisible();
+  // Entrar em Zona arma o editor de zona — a camada de calibração NÃO volta (o palco tem um dono só,
+  // senão um clique criaria um canto E uma zona).
+  await zona.click();
+  await expect(page.locator(".cam-stage .cal-layer")).toHaveCount(0);
 });
 
-// O axe da "câmera ABERTA" (app.spec.ts) NÃO enxerga esta tela: o Radix só monta o TabsContent
-// ATIVO, e lá a aba ativa é "Zonas". Superfície nova pede sensor novo — senão a aba entraria no
-// produto sem nunca ter passado pelo gate (a rota /calibracao, aliás, estava explicitamente FORA
-// dele: "entra quando pousar", a11y.spec.ts:13 — pois é aqui que ela pousou).
+// O axe da "câmera ABERTA" (app.spec.ts) NÃO enxerga esta tela: aquele teste varre a câmera em
+// OPERAÇÃO, e o painel do MODO Calibrar (o passo-a-passo que substitui as abas) só existe com
+// cal.active. Superfície nova pede sensor novo — senão o modo entraria no produto sem nunca ter
+// passado pelo gate (a rota /calibracao, aliás, estava explicitamente FORA dele: a11y.spec.ts:13).
 // Mesma régua da casa: falha em critical/serious; `color-contrast` segue como a dívida F1 de TOKEN
 // (--text-muted sobre --panel), que não é desta tela.
-test("axe: a aba Calibrar (drawer da câmera aberta) sem violação séria", async ({
+test("axe: o modo Calibrar (painel do drawer na câmera aberta) sem violação séria", async ({
   page,
   context,
 }) => {

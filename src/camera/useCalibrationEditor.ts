@@ -231,6 +231,24 @@ export function useCalibrationEditor(o: Opts) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  // ESC SAI DO MODO (spec §3.5) — não fecha a câmera. O trap de foco da casca (useFocusTrap) também
+  // ouve ESC e chamaria onClose; ele registra na fase BUBBLE no MOUNT (antes deste hook), então em
+  // bubble ELE rodaria primeiro e fecharia a câmera. Por isso a CAPTURE: precede toda bubble → aqui
+  // marcamos preventDefault + saímos do modo, e o trap (bubble) vê defaultPrevented e NÃO fecha. E
+  // cede a camadas Radix abertas (Select/popover no painel): se ELAS já trataram o ESC
+  // (defaultPrevented antes), aqui não sai do modo — o ESC fecha só a camada de cima. `stop` é
+  // hoisted (declaração de função).
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      stop();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [active]);
+
   const L = parseFloat(width);
   const C = parseFloat(length);
   const dimsOk = Number.isFinite(L) && L > 0 && Number.isFinite(C) && C > 0;

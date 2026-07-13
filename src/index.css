@@ -1610,6 +1610,9 @@ button.rail-item {
   position: relative;
   min-height: 0;
   overflow: hidden;
+  /* stacking context próprio (G4): os z-index locais dos filhos (canvas, cal-layer, cine-bar/flag)
+     ficam CONTIDOS aqui — não vazam p/ o contexto do overlay da casca fullscreen. */
+  isolation: isolate;
 }
 .cam-stage .overlay {
   position: absolute;

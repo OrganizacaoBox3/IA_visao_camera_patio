@@ -588,10 +588,11 @@ export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorT
   ctx.save();
   ctx.font = "10px ui-monospace, monospace";
 
-  // Estação: marcador ciano (ponto + círculo fino) — a referência dos anéis.
-  if (v.station) {
-    const sx = cr.x + v.station.px.x * cr.w,
-      sy = cr.y + v.station.px.y * cr.h;
+  // Estações: marcador ciano (ponto + círculo fino) + NOME — a referência dos anéis. UMA por antena
+  // (multi-antena F5): o operador vê ONDE está cada estação no chão, e cada anel abaixo cerca a SUA.
+  for (const st of v.stations) {
+    const sx = cr.x + st.px.x * cr.w,
+      sy = cr.y + st.px.y * cr.h;
     ctx.fillStyle = FLOOR_RING;
     ctx.beginPath();
     ctx.arc(sx, sy, 2.5, 0, Math.PI * 2);
@@ -601,6 +602,13 @@ export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorT
     ctx.beginPath();
     ctx.arc(sx, sy, 6, 0, Math.PI * 2);
     ctx.stroke();
+    if (st.label) {
+      const tw = floorTextWidth(ctx, st.label) + 6;
+      ctx.fillStyle = FLOOR_SCRIM;
+      ctx.fillRect(sx + 8, sy - 6, tw, 13);
+      ctx.fillStyle = FLOOR_RING;
+      ctx.fillText(st.label, sx + 11, sy + 4);
+    }
   }
 
   // Anéis de distância: tracejado ciano + rótulo "nome · ~X m" no ponto do anel mais BAIXO

@@ -12,7 +12,8 @@
   top: var(--sp-3);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
+  /* escala --z-* (G4): degrau local dentro da casca da câmera, acima do drawer/cal-layer (+5) */
+  z-index: calc(var(--z-base) + 6);
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -40,7 +41,8 @@
   left: var(--sp-3);
   right: var(--sp-3);
   bottom: var(--sp-3);
-  z-index: 6;
+  /* escala --z-* (G4): mesmo degrau do selo REVISÃO — acima do drawer/cal-layer (+5) */
+  z-index: calc(var(--z-base) + 6);
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -142,8 +144,9 @@
   flex: 1;
   min-height: 0;
 }
-/* Abas SEMPRE em 1 linha e SEM corte (#14): 5 triggers distribuem a largura por flex
-   (rótulos curtos: Zonas/Linhas/Camadas/Timeline/Pessoas) + contagem em chip (.dt-n).
+/* Abas SEMPRE em 1 linha e SEM corte (#14): as 6 triggers de OPERAÇÃO distribuem a largura por
+   flex (rótulos curtos: Zonas/Linhas/Camadas/Timeline/Pessoas/Por quê) + contagem em chip (.dt-n).
+   (Calibrar NÃO é aba — é MODO do palco, spec §3.4: ativa, o painel vira só o passo-a-passo dela.)
    font 12px compacta o conjunto p/ caber até no drawer de 280px (tablet); o overflow-x
    fica como válvula de segurança (Radix traz a aba focada à vista). */
 .cam-drawer .drawer-tabs .ui-tablist {

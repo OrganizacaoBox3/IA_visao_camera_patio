@@ -19,11 +19,11 @@ import type { ComponentProps } from "react";
 import type { CalibrationEditor } from "./useCalibrationEditor";
 import type { FunnelDiagnosis } from "../fusion/useFunnelDiagnosis";
 
-/** Abas do drawer da câmera aberta. "calibracao" entrou na spec-arquitetura-informacao §1 (a rota
- *  /calibracao virou MODO do palco); "porque" entrou com a TELA DO PORQUÊ (bug B8 do laudo de
- *  2026-07-13: o diagnóstico do silêncio existia e não tinha consumidor de UI). */
-export type DrawerTab =
-  "zonas" | "linhas" | "timeline" | "presenca" | "porque" | "camadas" | "calibracao";
+/** Abas de OPERAÇÃO do drawer. A calibração NÃO é aba: virou MODO do palco (spec §3.4) — quando
+ *  ativa, o drawer mostra SÓ o passo-a-passo dela (ramo cal.active abaixo), não uma 7ª aba espremida
+ *  entre as de operação. "porque" entrou com a TELA DO PORQUÊ (bug B8 do laudo de 2026-07-13: o
+ *  diagnóstico do silêncio existia e não tinha consumidor de UI). */
+export type DrawerTab = "zonas" | "linhas" | "timeline" | "presenca" | "porque" | "camadas";
 
 type Props = {
   tab: DrawerTab;
@@ -53,6 +53,20 @@ export function CamDrawer({
   onCalibrate,
   diag,
 }: Props) {
+  // MODO CALIBRAR (spec §3.4): o palco inteiro se reconfigura, e o painel também — ele vira SÓ o
+  // passo-a-passo da calibração, não a operação com uma aba de calibração no meio. Sair (ESC/toggle)
+  // volta às abas normais. É o padrão do mercado (Figma Dev Mode troca o painel inteiro, Milestone
+  // Setup substitui a operação): não misturar os vocabulários de dois modos ao mesmo tempo (NN/g).
+  if (cal.active) {
+    return (
+      <aside className="cam-drawer" aria-label="Painel da câmera — calibração">
+        <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
+          <CalibracaoTab cal={cal} onActivate={onCalibrate} />
+        </ScrollArea>
+      </aside>
+    );
+  }
+
   return (
     /* Painel lateral: cor/espaçamento por TOKEN em cine.css (.cam-drawer), não style inline. */
     <aside className="cam-drawer" aria-label="Painel da câmera">
@@ -87,9 +101,8 @@ export function CamDrawer({
           // A aba do PORQUÊ: quando o sistema não identifica alguém, ele deixa de CALAR e diz qual
           // elo barrou (rádio · movimento · evidência · âncora). O produto não é só acertar.
           { value: "porque", label: "Por quê" },
-          // A 6ª aba (spec §1): a calibração deixou de ser uma ROTA e virou o chrome do modo do
-          // palco. Visível para TODOS — o operador não calibra, mas MEDE distância aqui.
-          { value: "calibracao", label: "Calibrar" },
+          // (calibração NÃO é aba — é MODO do palco; entra pelo toggle "Calibrar" do header e ocupa
+          //  o painel inteiro no ramo cal.active acima.)
         ]}
       >
         <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
@@ -111,10 +124,6 @@ export function CamDrawer({
 
           <TabsContent value="porque">
             <PorQueTab diag={diag} />
-          </TabsContent>
-
-          <TabsContent value="calibracao">
-            <CalibracaoTab cal={cal} onActivate={onCalibrate} />
           </TabsContent>
 
           <TabsContent value="camadas">

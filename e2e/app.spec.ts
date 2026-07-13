@@ -206,6 +206,47 @@ test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunc
   ).toBeVisible();
 });
 
+// CALIBRAR É UM MODO, não uma camada empilhada (spec-tela-camera-modos §3): a queixa do dono era
+// "com a junção calibração+câmera os elementos estão TOTALMENTE SOBREPOSTOS". O conserto reconfigura
+// o CHROME ao entrar no modo (padrão Figma Dev Mode / NN/g "não misturar os vocabulários de dois
+// modos"): os toggles de OPERAÇÃO (Zona/Polígono/Linha) somem, o painel vira SÓ o passo-a-passo da
+// calibração (não a 7ª aba espremida), e ESC sai do MODO sem fechar a câmera.
+test("Calibrar é um MODO: entrar esconde os toggles de operação e o painel; ESC volta à operação", async ({
+  page,
+  context,
+}) => {
+  test.slow(); // paga conexão do nó + 1º frame no palco (mesmo orçamento dos demais testes de câmera)
+  await login(page); // admin = superadmin (canConfigure) — calibra de verdade
+  await connectCamera(context, page);
+  await page.locator(".tile[title='Abrir câmera']").first().click();
+  await expect(page.locator(".cam-stage")).toBeVisible();
+
+  const zona = page.getByRole("button", { name: "Zona", exact: true });
+  const linha = page.getByRole("button", { name: "Linha" });
+  const poligono = page.getByRole("button", { name: "Polígono" });
+  const tablist = page.getByRole("tablist", { name: "Aba do painel" });
+  await expect(zona).toBeVisible(); // operação: os toggles de edição vivem na barra do palco
+  await expect(tablist).toBeVisible(); // e o painel tem as abas de operação
+
+  // Entra no 5º modo do palco (o toggle "Calibrar"; antes da ativação há UM só botão com esse nome).
+  await page.getByRole("button", { name: "Calibrar" }).click();
+
+  // Os toggles de OPERAÇÃO somem da barra — não se misturam os dois vocabulários.
+  await expect(zona).toHaveCount(0);
+  await expect(linha).toHaveCount(0);
+  await expect(poligono).toHaveCount(0);
+  // O painel vira SÓ o passo-a-passo da calibração (as abas de operação somem).
+  await expect(page.getByText("Calibração de distância")).toBeVisible();
+  await expect(tablist).toHaveCount(0);
+
+  // ESC sai do MODO — NÃO fecha a câmera — e a operação volta com os toggles e as abas normais.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cam")).toBeVisible(); // a câmera continua aberta (ESC saiu só do modo)
+  await expect(zona).toBeVisible();
+  await expect(linha).toBeVisible();
+  await expect(tablist).toBeVisible();
+});
+
 test("axe: câmera ABERTA (console do operador) sem violação séria", async ({ page, context }) => {
   await login(page);
   await connectCamera(context, page);

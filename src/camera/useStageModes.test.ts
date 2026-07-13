@@ -12,7 +12,7 @@
 // o arraste do botão "Zona" agora é do MESMO editor da zona ("polygon"), que também seleciona,
 // insere e move. Um alvo a menos = uma ordem a menos para errar.
 import { describe, it, expect } from "vitest";
-import { stageTarget, type StageState } from "./useStageModes";
+import { stageTarget, sceneLayers, type StageState } from "./useStageModes";
 
 const base: StageState = {
   mode: "full",
@@ -52,5 +52,21 @@ describe("stageTarget — precedência dos modos do palco", () => {
     // sem modo armado o editor da zona ainda recebe o down: é ele quem SELECIONA a zona, agarra um
     // VÉRTICE, insere pelo MIDPOINT e move a FORMA (spec-zona-unificada F3).
     expect(stageTarget(base)).toBe("polygon");
+  });
+});
+
+// ── O GATE DE CAMADAS (spec §3.1): entrar em Calibrar desliga TODA camada de operação ─────────────
+// Injete a falha (troque `!s.calActive` por `true` no sceneLayers) e o 2º caso fica vermelho: a malha
+// SALVA voltaria a empilhar sobre a grade viva — a dupla-grade da queixa do dono.
+describe("sceneLayers — quais camadas de operação o palco desenha por modo", () => {
+  it("operação (fora de calibrar): TODAS as camadas ligadas", () => {
+    const v = sceneLayers({ calActive: false });
+    expect(Object.values(v).every(Boolean)).toBe(true);
+  });
+
+  it("calibrar: TODA camada de operação cai — inclusive a MALHA SALVA (a 2ª grade)", () => {
+    const v = sceneLayers({ calActive: true });
+    expect(Object.values(v).some(Boolean)).toBe(false);
+    expect(v.calibrationMesh).toBe(false); // explícito: a grade salva NÃO se sobrepõe à viva (SVG)
   });
 });

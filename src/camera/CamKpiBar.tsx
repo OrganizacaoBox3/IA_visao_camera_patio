@@ -22,6 +22,9 @@ type Props = {
   floorAvailable: boolean;
   floorOn: boolean;
   setFloorOn: (v: boolean) => void;
+  /** modo CALIBRAR ligado → a barra reduz ao essencial (os toggles Malha/Tags/HUD são redundantes:
+   *  a grade de conferência JÁ é a própria calibração viva — spec §3.3). */
+  calActive: boolean;
   analysisEngine: "hub" | "local";
   /** backend do tfjs; null enquanto o worker não reportou */
   detBackend: string | null;
@@ -40,6 +43,7 @@ export function CamKpiBar({
   floorAvailable,
   floorOn,
   setFloorOn,
+  calActive,
   analysisEngine,
   detBackend,
   paused,
@@ -56,6 +60,11 @@ export function CamKpiBar({
       <span className="kb muted">pico {presence.peak}</span>
       <span className="kb muted kb-summary">{summary || "sem zonas"}</span>
       <span className="kb muted">FPS {fps}</span>
+      {/* Em CALIBRAR a barra reduz ao essencial (spec §3.3): os toggles de overlay de OPERAÇÃO —
+          HUD, Malha e Tags — somem, porque a grade de conferência JÁ é a própria calibração viva
+          (e o gate sceneLayers do drawScene não desenharia essas camadas mesmo ligadas). */}
+      {!calActive && (
+        <>
       {/* Toggle do HUD (going-gray: régua de medição, não anormalidade). O rAF lê o ref espelho. */}
       <Tooltip content="HUD de telemetria sobre o vídeo: FPS exibido, ms/frame na main-thread, pipeline (hub/local), idade do overlay e latência por estágio (OWL-ViT/ZXing/MediaPipe) + fila de inferência">
         <Toggle aria-label="HUD de telemetria" pressed={hud} onPressedChange={setHud}>
@@ -81,6 +90,8 @@ export function CamKpiBar({
             <Radar size={16} strokeWidth={1.75} aria-hidden /> Tags
           </Toggle>
         </Tooltip>
+      )}
+        </>
       )}
       {/* Fonte da análise (ADR-009): NEUTRO e só no modo hub; local = nada. No modo hub o worker
           tfjs nem sobe p/ pessoas — o badge de detecção abaixo só aparece se um consumidor local

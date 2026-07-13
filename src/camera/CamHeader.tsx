@@ -150,6 +150,13 @@ export function CamHeader({
           )}
         </Toggle>
       </Tooltip>
+      {/* CALIBRAR reconfigura o chrome (spec §3.2 — o padrão Figma Dev Mode / NN/g "não misturar os
+          vocabulários de dois modos"): os toggles de OPERAÇÃO (Zona/Polígono/Linha) SOMEM no modo
+          calibrar. Já são mutuamente exclusivos na lógica (stageTarget) — aqui só somem da UI, para
+          o operador não ver ferramentas que o palco ignora. O toggle "Calibrar" (abaixo) fica como
+          a chave de saída do modo, com estado ATIVO claro. */}
+      {!calActive && (
+        <>
       {/* ZONA = arraste (o PRESET retângulo do polígono — 4 vértices). Mesma gestualidade de
               sempre; o que muda é que o que nasce daqui é EDITÁVEL: clique na zona para selecionar,
               arraste o interior para movê-la, um vértice para ajustá-lo, o ponto claro da aresta
@@ -239,6 +246,8 @@ export function CamHeader({
           )}
         </Toggle>
       </Tooltip>
+        </>
+      )}
       {/* CALIBRAR — o 5º modo do palco (spec-arquitetura-informacao §1: "capacidade não é
               lugar"; a rota /calibracao morre). NÃO usa `editDisabled`: MEDIR distância é do
               OPERADOR (era o que a rota lhe dava). Quem barra o que ele pode MARCAR é o hook
