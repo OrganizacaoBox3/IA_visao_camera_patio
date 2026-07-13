@@ -231,3 +231,60 @@ describe("camcfg — round-trip da zona POLIGONAL (points na allowlist)", () => 
     expect(roundTrip(uma)).toEqual(uma);
   });
 });
+
+// ── CALIBRAÇÃO: o round-trip que NÃO existia (e por isso o hub descartou `stations` calado) ──────
+// A UI da multi-antena salvava `calibration.stations` (o ponto de chão de CADA estação) desde a F3;
+// a allowlist do hub nunca conheceu o campo e o jogava fora. Marcar a 2ª antena, salvar e recarregar
+// → sumiu. É a "regressão silenciosa nº 1" do CLAUDE.md (contrato entre camadas sem teste), literal.
+// A regra da casa é dura por causa disto: allowlist NOVA nasce com round-trip, ou não nasce.
+const { cleanCalibration } = camcfg;
+const calRoundTrip = (c) => cleanCalibration(JSON.parse(JSON.stringify(cleanCalibration(c))));
+
+// Calibração mínima válida: 4 cantos ↔ retângulo de 5×3 m + a homografia (aqui, identidade).
+const BASE = {
+  points: [
+    { px: { x: 0.1, y: 0.9 }, world: { x: 0, y: 0 } },
+    { px: { x: 0.9, y: 0.9 }, world: { x: 5, y: 0 } },
+    { px: { x: 0.9, y: 0.5 }, world: { x: 5, y: 3 } },
+    { px: { x: 0.1, y: 0.5 }, world: { x: 0, y: 3 } },
+  ],
+  H: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  updatedAt: 1_700_000_000_000,
+};
+
+describe("camcfg — round-trip da CALIBRAÇÃO multi-antena (stations na allowlist)", () => {
+  it("preserva os pontos de N estações, indexados pelo stationId", () => {
+    const stations = { "tc22-a1b2": { x: 0.2, y: 0.8 }, "tc22-c3d4": { x: 0.85, y: 0.3 } };
+    const cal = calRoundTrip({ ...BASE, station: stations["tc22-a1b2"], stations });
+    expect(cal.stations).toEqual(stations); // era isto que o hub jogava fora
+  });
+
+  it("mantém `station` (singular) como o ponto da PRINCIPAL — retrocompat do motor antigo", () => {
+    const principal = { x: 0.2, y: 0.8 };
+    const cal = calRoundTrip({
+      ...BASE,
+      station: principal,
+      stations: { "tc22-a1b2": principal, "tc22-c3d4": { x: 0.85, y: 0.3 } },
+    });
+    expect(cal.station).toEqual(principal);
+  });
+
+  it("descarta ponto a ponto: estação torta não invalida a calibração nem as estações boas", () => {
+    const cal = calRoundTrip({
+      ...BASE,
+      stations: {
+        "tc22-ok": { x: 0.5, y: 0.5 },
+        "tc22-fora": { x: 1.7, y: 0.5 }, // px fora de 0..1
+        "tc22-nan": { x: Number.NaN, y: 0.5 },
+        "": { x: 0.5, y: 0.5 }, // id vazio
+      },
+    });
+    expect(cal).not.toBeNull(); // a calibração sobrevive
+    expect(cal.stations).toEqual({ "tc22-ok": { x: 0.5, y: 0.5 } });
+  });
+
+  it("sem estação alguma, o campo é OMITIDO (nunca um objeto vazio mentiroso)", () => {
+    expect(calRoundTrip({ ...BASE, stations: {} }).stations).toBeUndefined();
+    expect(calRoundTrip(BASE).stations).toBeUndefined();
+  });
+});

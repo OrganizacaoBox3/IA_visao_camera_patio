@@ -225,6 +225,23 @@ function cleanCalibration(c) {
   // origem da correlação RSSI×distância. Aditivo: ausente/ inválido = omitido (SÓ números; LGPD).
   const s = c.station;
   if (s && typeof s === "object" && isCoord(s.x) && isCoord(s.y)) out.station = { x: s.x, y: s.y };
+  // stations (opcional, MULTI-ANTENA): o ponto de chão de CADA estação BLE (0..1), indexado pelo
+  // `stationId` que a estação carimba nas leituras — é a chave que casa o RSSI da fonte com a
+  // geometria da fonte no motor. `station` (singular) permanece como o ponto da PRINCIPAL
+  // (retrocompat: motor antigo lê só ele; o cliente mantém os dois em sincronia — station-points.ts).
+  // Aditivo e defensivo: id vazio ou ponto fora de 0..1 é DESCARTADO ponto a ponto (uma estação
+  // torta não invalida a calibração inteira); objeto vazio é omitido. SÓ números/ids curtos (LGPD).
+  const st = c.stations;
+  if (st && typeof st === "object" && !Array.isArray(st)) {
+    const stations = {};
+    for (const [id, p] of Object.entries(st)) {
+      const key = str(id);
+      if (!key || !p || typeof p !== "object") continue;
+      if (!isCoord(p.x) || !isCoord(p.y)) continue;
+      stations[key] = { x: p.x, y: p.y };
+    }
+    if (Object.keys(stations).length) out.stations = stations;
+  }
   // refTag (opcional): tag FIXA de referência num ponto conhecido do chão — âncora p/ heartbeat/drift/
   // RSSI@1m. `mac` = MAC MAIÚSCULO (o mesmo das leituras BLE); `px` = ponto de IMAGEM (normalizado
   // 0..1). Aditivo: ausente/ inválido = omitido (SÓ números/strings curtas; LGPD).
@@ -458,6 +475,9 @@ module.exports = {
   // Exportado SÓ p/ teste (puro, sem I/O): o round-trip da allowlist (CA-7) valida que salvar
   // e reler uma zona preserva os campos — sem tocar no camcfg.json/Postgres reais.
   cleanZones,
+  // Idem, para a calibração. Sem este round-trip, a allowlist descarta campo novo em SILÊNCIO —
+  // foi como `stations` (multi-antena) passou meses sendo salvo pela UI e jogado fora pelo hub.
+  cleanCalibration,
   // Puro (cadastro de turnos por parâmetro): a regra de overlap da grade da zona (CA-4).
   validateZoneShifts,
 };
