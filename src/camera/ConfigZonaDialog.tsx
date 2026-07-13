@@ -4,6 +4,7 @@
 // dono do estado da zona (patchZone/changeZoneMode) e de quando abrir/fechar
 // (cfgZoneId). A carga do histórico p/ a previsão de alertas/dia (histState/
 // histDataset) segue no pai — aqui só a renderização.
+import { useEffect, useState } from "react";
 import { APP_CONFIG } from "../config";
 import { fmtLimit } from "../format";
 import { ACTIVITIES } from "../processors/atividade";
@@ -13,9 +14,13 @@ import { OBJECT_CATALOG } from "../objects/catalog";
 import {
   DEFAULT_PRESENCA_ALERT_MS,
   PRESENCA_ALERT_PRESETS_MS,
+  ZONE_ARMINGS,
+  ZONE_ARMING_LABEL,
   type Zone,
+  type ZoneArming,
   type ZoneMode,
 } from "../zones";
+import { getShifts, type Shift } from "../api";
 import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
 
 // Labels são contrato do e2e (option name "Leitura" etc.) — a explicação vai como
@@ -41,6 +46,66 @@ const MODO_DESC: Record<ZoneMode, string> = {
     "Área que deve ficar VAZIA: pessoa presente acima do limite dispara alarme crítico — o alarme nasce no motor do hub (24/7, sem precisar de painel aberto).",
 };
 
+// ── TURNOS (spec-turnos-por-zona F2) ─────────────────────────────────────────
+// A zona só CADASTRA a atribuição (ids); QUEM RESOLVE turno/pausa/borda é o servidor
+// (shift-clock + alarm/shift) — o front nunca calcula janela. Sem turno selecionado a
+// zona é 24/7 (default seguro = comportamento de hoje). A validação de SOBREPOSIÇÃO
+// também é do servidor (PUT /api/zones rejeita com 400): aqui só se escolhe, e o erro
+// do save vem por toast do CameraWorkspace.
+const DIA_ABREV = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+function fmtJanela(s: Shift): string {
+  const vira = s.fim <= s.inicio ? " +1 dia" : ""; // D2: fim ≤ início ⇒ termina no dia seguinte
+  const dias = [...s.dias].sort((a, b) => a - b).map((d) => DIA_ABREV[d] ?? "?");
+  return `${s.inicio}–${s.fim}${vira} · ${dias.join(", ")}`;
+}
+
+function TurnosField({
+  zone,
+  shifts,
+  state,
+  patchZone,
+  hint,
+}: {
+  zone: Zone;
+  shifts: Shift[];
+  state: "loading" | "ready" | "error";
+  patchZone: (id: string, patch: Partial<Zone>) => void;
+  hint: string;
+}) {
+  return (
+    <Field label="Turnos desta área" hint={hint}>
+      {state === "loading" && <span className="muted">carregando turnos…</span>}
+      {state === "error" && (
+        <span className="muted">turnos indisponíveis — a área segue monitorada 24/7</span>
+      )}
+      {state === "ready" &&
+        (shifts.length === 0 ? (
+          <p className="empty-note">
+            Nenhum turno cadastrado. Cadastre em <b>Turnos</b> (menu de administração) para poder
+            atribuí-los a esta área.
+          </p>
+        ) : (
+          <ToggleGroup
+            type="multiple"
+            className="ws-cfg ws-chips"
+            ariaLabel="Turnos desta área"
+            value={zone.shiftIds ?? []}
+            onValueChange={(vals) => patchZone(zone.id, { shiftIds: vals })}
+            items={shifts.map((s) => ({
+              value: s.id,
+              label: (
+                <>
+                  {s.nome} <span className="muted">{fmtJanela(s)}</span>
+                </>
+              ),
+              ariaLabel: `${s.nome} ${fmtJanela(s)}`,
+            }))}
+          />
+        ))}
+    </Field>
+  );
+}
+
 type Props = {
   zone: Zone | null; // cfgZone (null → diálogo fechado)
   histState: "idle" | "loading" | "ready" | "error";
@@ -58,6 +123,26 @@ export function ConfigZonaDialog({
   patchZone,
   changeZoneMode,
 }: Props) {
+  // Cadastro de turnos (GET /api/shifts) — carga única por câmera aberta; falha degrada para
+  // "indisponível" (a zona segue 24/7, nada quebra).
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [shiftsState, setShiftsState] = useState<"loading" | "ready" | "error">("loading");
+  useEffect(() => {
+    let vivo = true;
+    getShifts()
+      .then((list) => {
+        if (!vivo) return;
+        setShifts(list.filter((s) => s.ativo !== false));
+        setShiftsState("ready");
+      })
+      .catch(() => {
+        if (vivo) setShiftsState("error");
+      });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
   return (
     <Dialog
       open={!!zone}
@@ -168,6 +253,16 @@ export function ConfigZonaDialog({
                         })()}
                     </div>
                   </Field>
+                  {/* GATE DE OCIOSIDADE (spec-turnos-por-zona §4.1): sem turno, a área é
+                      monitorada 24/7 (hoje); com turno, o alerta de parada só dispara DENTRO
+                      dele e FORA das pausas — quem decide é o servidor. */}
+                  <TurnosField
+                    zone={z}
+                    shifts={shifts}
+                    state={shiftsState}
+                    patchZone={patchZone}
+                    hint="O alerta de parada só dispara dentro dos turnos escolhidos (e fora das pausas deles). Sem turno selecionado, a área é monitorada 24/7."
+                  />
                 </>
               )}
 
@@ -238,9 +333,32 @@ export function ConfigZonaDialog({
                       ariaLabel="Limite de presença"
                     />
                   </Field>
+                  {/* ARMAMENTO (E4 / turnos F2): "sempre" = 24/7 (default). "dentro/fora dos
+                      turnos" é o caso "área normal no expediente, proibida à noite" — precisa
+                      dos turnos atribuídos abaixo; sem eles, a zona segue 24/7 (o servidor
+                      nunca cala um alarme por config incompleta). */}
+                  <Field
+                    label="Armada"
+                    hint="Quando esta área é vigiada. Fora da janela armada, a presença não gera alarme."
+                  >
+                    <Select
+                      value={z.arming ?? "sempre"}
+                      onChange={(v) => patchZone(z.id, { arming: v as ZoneArming })}
+                      options={ZONE_ARMINGS.map((a) => ({ value: a, label: ZONE_ARMING_LABEL[a] }))}
+                      ariaLabel="Janela de armamento"
+                    />
+                  </Field>
+                  {(z.arming ?? "sempre") !== "sempre" && (
+                    <TurnosField
+                      zone={z}
+                      shifts={shifts}
+                      state={shiftsState}
+                      patchZone={patchZone}
+                      hint="A janela de armamento é relativa a estes turnos. Sem turno selecionado, a área permanece armada 24/7."
+                    />
+                  )}
                   <p className="empty-note">
-                    Armada 24/7 (armar/desarmar por turno chega com a integração de Turnos). O
-                    alarme é produzido pelo motor de análise do hub — câmera sem o motor não gera
+                    O alarme é produzido pelo motor de análise do hub — câmera sem o motor não gera
                     este alerta nesta versão.
                   </p>
                 </>

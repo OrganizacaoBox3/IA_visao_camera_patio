@@ -35,6 +35,7 @@ import {
   zoneContainsFn,
   maskContainsFn,
   rasterizePolygonMask,
+  sanitizeShiftIds,
   type ZonePoint,
 } from "./zones";
 import { pointInPolygon } from "./fusion/floor-polygon";
@@ -331,11 +332,40 @@ describe("zones — withDefaults (defaults de zona)", () => {
     );
   });
 
-  it("proibida: arming normalizado p/ 'sempre' (único valor desta onda)", () => {
+  // ARMING (E4 + turnos F2): enum ampliado — "sempre" (24/7) | "dentro-turnos" | "fora-turnos".
+  it("proibida: arming preserva o enum válido; ausente/inválido → 'sempre' (24/7)", () => {
     expect(withDefaults({ modo: "proibida" }, "c").arming).toBe("sempre");
-    expect(withDefaults({ modo: "proibida", arming: "sempre" }, "c").arming).toBe("sempre");
+    expect(withDefaults({ modo: "proibida", arming: "dentro-turnos" }, "c").arming).toBe(
+      "dentro-turnos",
+    );
+    expect(withDefaults({ modo: "proibida", arming: "fora-turnos" }, "c").arming).toBe(
+      "fora-turnos",
+    );
+    expect(withDefaults({ modo: "proibida", arming: "quando-der" as never }, "c").arming).toBe(
+      "sempre",
+    );
     // zonas dos demais modos também carregam o campo plano (padrão da casa) sem quebrar nada
     expect(withDefaults({ modo: "atividade" }, "c").arming).toBe("sempre");
+  });
+
+  // TURNOS POR ZONA (spec-turnos-por-zona F2/CA-5): ausente/[] = zona 24/7 = comportamento ATUAL.
+  it("shiftIds: default [] (24/7); saneia strings vazias/duplicadas e tipos errados", () => {
+    expect(withDefaults({}, "c").shiftIds).toEqual([]);
+    expect(withDefaults({ modo: "atividade", shiftIds: ["sh1", "sh2"] }, "c").shiftIds).toEqual([
+      "sh1",
+      "sh2",
+    ]);
+    expect(
+      withDefaults({ shiftIds: ["sh1", "sh1", " sh2 ", "", 7 as never, null as never] }, "c")
+        .shiftIds,
+    ).toEqual(["sh1", "sh2"]); // trim + dedup, ordem preservada
+    expect(withDefaults({ shiftIds: "sh1" as never }, "c").shiftIds).toEqual([]); // não-array → 24/7
+  });
+
+  it("sanitizeShiftIds é o espelho da allowlist do hub (server/camcfg.js cleanZone)", () => {
+    expect(sanitizeShiftIds(undefined)).toEqual([]);
+    expect(sanitizeShiftIds([" a ", "a", "b"])).toEqual(["a", "b"]);
+    expect(sanitizeShiftIds([1, {}, null])).toEqual([]);
   });
 
   it("mask só é mantida quando é string; selectedClasses vazio → todas", () => {

@@ -11,6 +11,11 @@ const db = require("./db");
 // Validação de zona POLIGONAL (spec zonas-poligonais): espelho JS de src/zones.ts vive em
 // analysis/zones.js (mesmo lugar do pointInPolygon que a consome) — fonte única no hub.
 const { sanitizeZonePoints, polygonBBox } = require("./analysis/zones");
+// TURNOS (spec-turnos-por-zona F2): a atribuição zona→turnos viaja NESTE store (campo shiftIds),
+// e a regra "a grade de uma zona não pode ter overlap" (D4/CA-4) é validada no SAVE — servidor,
+// não UI. Só leitura do cadastro (shifts.all()) + o parser puro do relógio.
+const shiftsStore = require("./shifts");
+const { parseHM, durationMin } = require("./shift-clock");
 
 const FILE = path.join(__dirname, "camcfg.json");
 let tripwires = new Map(); // cameraId -> Tripwire[]
@@ -28,9 +33,10 @@ const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && 
 // "proibida": área que deve ficar VAZIA (spec alerta-por-atividade E1) — o motor do hub produz
 // o alarme tipo "presenca" a partir DESTA config (dwell em presencaAlertMs).
 const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"]);
-// Janela de armamento da zona proibida (E4): só "sempre" nesta onda; "dentro-turnos"/
-// "fora-turnos" entram com o gate de turnos da spec irmã (alarm/shift.js).
-const ARMING_MODES = new Set(["sempre"]);
+// Janela de armamento da zona proibida (E4 / turnos F2): "sempre" (24/7, default seguro) ou
+// relativa aos turnos ATRIBUÍDOS à zona (shiftIds). Quem decide é alarm/shift.js (a política);
+// aqui só se PERSISTE o enum — espelho de ZONE_ARMINGS em src/zones.ts.
+const ARMING_MODES = new Set(["sempre", "dentro-turnos", "fora-turnos"]);
 const CAPTURE_PRESETS = new Set(["media", "alta", "maxima"]);
 // Transporte de vídeo do tile: "mjpeg" (relé socket.io, default/rollback) ou "webrtc"
 // (tile <video-stream> servido pelo go2rtc). Aditivo — câmera sem o campo segue MJPEG.
@@ -88,6 +94,12 @@ function cleanZone(z) {
     // do hub nunca vê o dwell configurado. Clamp são: 0..24h; inválido → default 10s.
     presencaAlertMs: Math.min(86_400_000, Math.max(0, num(z.presencaAlertMs, 10_000))),
     arming: ARMING_MODES.has(z.arming) ? z.arming : "sempre",
+    // shiftIds (spec-turnos-por-zona F2): turnos atribuídos à zona. MESMA armadilha A5 — sem o
+    // campo AQUI o save o descartaria MUDO e o gate de turno (alarm/shift.js) nunca veria a
+    // atribuição. Ausente/malformado → [] = zona 24/7 (comportamento atual, CA-5). Ids DANGLING
+    // (turno excluído do cadastro) NÃO são podados aqui: camcfg.init() pode rodar antes de
+    // shifts.init() — o gate resolve isso em runtime (fail-open).
+    shiftIds: [...new Set(strList(z.shiftIds))],
   };
   if (typeof z.mask === "string" && z.mask) out.mask = z.mask;
   // points (zona POLIGONAL, spec zonas-poligonais P2/P4 — armadilha 1: campo NOVO tem que estar
@@ -120,6 +132,56 @@ function cleanZones(arr) {
   }
   return out;
 }
+// ── OVERLAP dos turnos de UMA zona (D4 / CA-4) — a REGRA vive no servidor ────────────────────
+// A grade atribuída a uma zona é uma PARTIÇÃO do tempo: dois turnos da MESMA zona não podem se
+// sobrepor (senão "dentro do turno" vira ambíguo e o gate de ociosidade perde o denominador).
+// Modelo: cada turno vira intervalos em MINUTOS DA SEMANA [início, início+duração) — um por dia
+// em que INICIA (D1); o overnight que passa do domingo 24h volta ao começo da semana (a semana é
+// circular). Duração ∈ (0, 24h) por construção (shifts.validateShift rejeita 0) ⇒ um turno nunca
+// se sobrepõe a si mesmo em dias distintos. Intervalo MEIO-ABERTO: 06–14 e 14–22 na mesma zona
+// são LEGAIS (a borda pertence ao turno que INICIA — D4).
+const WEEK_MIN = 7 * 24 * 60;
+function weekIntervals(s) {
+  const ini = parseHM(s && s.inicio);
+  const fim = parseHM(s && s.fim);
+  if (ini == null || fim == null) return [];
+  const dur = durationMin(ini, fim);
+  if (!(dur > 0)) return [];
+  const out = [];
+  for (const d of Array.isArray(s.dias) ? s.dias : []) {
+    if (!Number.isInteger(d) || d < 0 || d > 6) continue;
+    const start = (d * 24 * 60 + ini) % WEEK_MIN;
+    const end = start + dur;
+    if (end <= WEEK_MIN) out.push([start, end]);
+    else out.push([start, WEEK_MIN], [0, end - WEEK_MIN]); // vira a semana
+  }
+  return out;
+}
+const intervalsOverlap = (a, b) => a[0] < b[1] && b[0] < a[1];
+
+// Valida a atribuição zona→turnos de uma LISTA de zonas (já saneada por cleanZones) contra o
+// cadastro de turnos. Devolve mensagem de erro (string, p/ o 400) ou null quando está tudo certo.
+// Turno DANGLING (id de turno excluído) é IGNORADO aqui — o gate trata em runtime (fail-open);
+// turno INATIVO conta para o overlap (reativá-lo não pode criar uma grade ambígua pelas costas).
+// PURA (recebe o cadastro por parâmetro) — é o que o teste do CA-4 exercita.
+function validateZoneShifts(list, shifts) {
+  const byId = new Map((Array.isArray(shifts) ? shifts : []).map((s) => [s.id, s]));
+  for (const z of list) {
+    const assigned = (z.shiftIds || []).map((id) => byId.get(id)).filter(Boolean);
+    for (let i = 0; i < assigned.length; i++) {
+      const A = weekIntervals(assigned[i]);
+      for (let j = i + 1; j < assigned.length; j++) {
+        const B = weekIntervals(assigned[j]);
+        for (const a of A)
+          for (const b of B)
+            if (intervalsOverlap(a, b))
+              return `zona "${z.label}": os turnos "${assigned[i].nome}" e "${assigned[j].nome}" se sobrepõem — os turnos de uma mesma zona não podem se sobrepor`;
+      }
+    }
+  }
+  return null;
+}
+
 // Config de câmera (src/cameraConfig.ts CameraCfg): modo + ponto de leitura + preset + classes.
 function cleanCamConfig(c) {
   if (!c || typeof c !== "object") return null;
@@ -340,10 +402,15 @@ function getZones(cameraId) {
   return zones.get(str(cameraId)) || [];
 }
 // Substitui as zonas de uma câmera e persiste; devolve a lista salva.
+// REJEITA (throw com badRequest → 400 na rota) a grade com turnos sobrepostos na mesma zona
+// (CA-4): a validação de NEGÓCIO é do servidor; a UI só exibe a mensagem. Nada é mutado antes
+// de validar — save inválido deixa o estado anterior intacto.
 async function saveZones(cameraId, input) {
   const id = str(cameraId);
   if (!id) return [];
   const list = cleanZones(input);
+  const err = validateZoneShifts(list, shiftsStore.all());
+  if (err) throw Object.assign(new Error(err), { badRequest: true });
   if (list.length === 0) zones.delete(id);
   else zones.set(id, list);
   await persistZones(id);
@@ -391,4 +458,6 @@ module.exports = {
   // Exportado SÓ p/ teste (puro, sem I/O): o round-trip da allowlist (CA-7) valida que salvar
   // e reler uma zona preserva os campos — sem tocar no camcfg.json/Postgres reais.
   cleanZones,
+  // Puro (cadastro de turnos por parâmetro): a regra de overlap da grade da zona (CA-4).
+  validateZoneShifts,
 };

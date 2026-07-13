@@ -22,6 +22,20 @@ import { anySet, containsNorm, createMask, type Mask } from "./zoneMask";
 // sem processador local nesta onda (ver camera/holders.ts).
 export type ZoneMode = "atividade" | "leitura" | "objetos" | "fadiga" | "exclusao" | "proibida";
 export const DEFAULT_GRID = { cols: 32, rows: 18 };
+
+// ── JANELA DE ARMAMENTO (spec-turnos-por-zona F2 / spec-alerta-por-atividade E4) ─────────────
+// "sempre" = 24/7 (default seguro, comportamento de hoje). "dentro-turnos"/"fora-turnos" armam
+// a zona PROIBIDA relativamente aos turnos atribuídos a ela (Zone.shiftIds) — é o caso "área
+// normal no expediente, proibida à noite". Quem DECIDE é o servidor (server/alarm/shift.js, na
+// política de alarme); o cliente só cadastra. Sem shiftIds, "dentro/fora" não têm referência e
+// a zona segue 24/7 (fail-open: config incompleta nunca CALA um alarme).
+export type ZoneArming = "sempre" | "dentro-turnos" | "fora-turnos";
+export const ZONE_ARMINGS: readonly ZoneArming[] = ["sempre", "dentro-turnos", "fora-turnos"];
+export const ZONE_ARMING_LABEL: Record<ZoneArming, string> = {
+  sempre: "Sempre (24/7)",
+  "dentro-turnos": "Só dentro dos turnos",
+  "fora-turnos": "Só fora dos turnos",
+};
 // Zona com geometria normalizada (0..1) + modo + config (planos, por modo).
 // `x,y,w,h` = bounding box (recorte/ROI). `mask` (opcional) = células pintadas (área irregular);
 // quando ausente, a zona é o retângulo cheio (retrocompat). `points` (opcional) = POLÍGONO
@@ -48,7 +62,12 @@ export type Zone = {
   // frentes), mas SEMPRE preenchidos por withDefaults; o motor do hub lê os mesmos campos do
   // camcfg do servidor (allowlist cleanZone — armadilha A5).
   presencaAlertMs?: number; // dwell: presença contínua acima disto → alarme (default 10s)
-  arming?: "sempre"; // janela de armamento; só "sempre" nesta onda (turnos = spec irmã)
+  arming?: ZoneArming; // janela de armamento da zona proibida (E4) — decidida no servidor
+  // TURNOS atribuídos à zona (spec-turnos-por-zona F2). Ausente/[] = zona 24/7 = comportamento
+  // ATUAL (CA-5, default seguro). Numa zona de ATIVIDADE eles gateiam o alerta de ociosidade
+  // (só dentro do turno e fora das pausas); numa zona PROIBIDA são a referência do `arming`.
+  // São IDs do cadastro global (/api/shifts) — a resolução do turno é do servidor, NUNCA do front.
+  shiftIds?: string[];
 };
 
 // Presets do dwell de PRESENÇA (modo proibida) — mesmo padrão dos limitPresetsMs da atividade.
@@ -65,6 +84,20 @@ export const POLYGON_MIN_POINTS = 3; // P2: não fecha com menos
 export const POLYGON_MAX_POINTS = 20; // P2: teto do setor (Dahua 20; cobre qualquer zona real)
 
 const clampCoord = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// IDs de turno vindos de fora (backend/localStorage/edição): só strings não-vazias, sem
+// duplicata, ordem preservada. Malformado → [] (= zona 24/7, o default seguro da CA-5).
+// ESPELHO da allowlist do hub (server/camcfg.js cleanZone) — armadilha A5.
+export function sanitizeShiftIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const id = v.trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
 
 // Polígono SIMPLES (ONVIF: "simple non-intersecting polygon") — nenhum par de arestas
 // NÃO-adjacentes se cruza. O(n²) com n≤20 é barato e roda só em validação (nunca por frame).
@@ -222,15 +255,17 @@ export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
       Array.isArray(z.selectedClasses) && z.selectedClasses.length
         ? z.selectedClasses
         : [...OBJECT_KEYS],
-    // proibida: dwell normalizado (número finito ≥0; inválido → default 10s) + arming — só
-    // "sempre" nesta onda (o gate por turno chega com a spec irmã e amplia o tipo).
+    // proibida: dwell normalizado (número finito ≥0; inválido → default 10s) + arming (enum
+    // ZONE_ARMINGS; inválido/ausente → "sempre" = 24/7, o comportamento de hoje).
     presencaAlertMs:
       typeof z.presencaAlertMs === "number" &&
       Number.isFinite(z.presencaAlertMs) &&
       z.presencaAlertMs >= 0
         ? z.presencaAlertMs
         : DEFAULT_PRESENCA_ALERT_MS,
-    arming: "sempre",
+    arming: ZONE_ARMINGS.includes(z.arming as ZoneArming) ? (z.arming as ZoneArming) : "sempre",
+    // turnos atribuídos (F2): campo PLANO como os demais — [] = 24/7 (CA-5).
+    shiftIds: sanitizeShiftIds(z.shiftIds),
   };
 }
 

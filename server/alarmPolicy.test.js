@@ -161,3 +161,71 @@ describe("evaluate — caminhos determinísticos (com tempo controlado)", () => 
     expect(policy.evaluate({ text: "Painel: repetida" })).not.toBeNull(); // volta a passar
   });
 });
+
+// GATE DE TURNO ligado à política (spec-turnos-por-zona F3) — a camada mora em alarm/shift.js
+// (testada em profundidade lá); aqui se verifica a FIAÇÃO: evaluate consulta o gate logo após o
+// shelve, o suprimido NÃO vira emissão e o contador aparece em metrics() (Saúde de Alarmes).
+// As fontes (camcfg/shifts/fuso) são injetadas por deps.shiftSources — nada de disco/Postgres.
+describe("evaluate — gate de turno (F3)", () => {
+  const shiftGate = require("./alarm/shift");
+  const at = (h, m = 0) => Date.UTC(2026, 6, 15, h + 3, m); // quarta 15/07/2026, America/Sao_Paulo
+  const T1 = {
+    id: "sh1",
+    nome: "Turno 1",
+    dias: [1, 2, 3, 4, 5],
+    inicio: "06:00",
+    fim: "14:00",
+    pausas: [],
+    ativo: true,
+  };
+  const shiftSources = {
+    getZones: () => [
+      { id: "z1", label: "Expedição", modo: "atividade", arming: "sempre", shiftIds: ["sh1"] },
+    ],
+    allShifts: () => [T1],
+    tz: () => "America/Sao_Paulo",
+  };
+  const ocioso = {
+    text: "⚠ Doca: Expedição sem movimentação há 11m.",
+    cameraId: "cam-1",
+    zona: "expedição",
+    tipo: "atividade",
+  };
+
+  beforeEach(() => shiftGate._resetMetrics());
+
+  it("DENTRO do turno (10:00) o alerta de ociosidade passa e conta como emitido", () => {
+    vi.setSystemTime(at(10));
+    expect(policy.evaluate({ ...ocioso, ts: at(10) }, { shiftSources })).not.toBeNull();
+    const m = policy.metrics();
+    expect(m.suppressedByShift).toBe(0);
+    expect(m.inWindow).toBe(1);
+  });
+
+  it("FORA do turno (15:00) é suprimido, não conta como emitido e incrementa o contador", () => {
+    vi.setSystemTime(at(15));
+    expect(policy.evaluate({ ...ocioso, ts: at(15) }, { shiftSources })).toBeNull();
+    const m = policy.metrics();
+    expect(m.suppressedByShift).toBe(1);
+    expect(m.suppressedByShiftLastHour).toBe(1);
+    expect(m.suppressedByShiftReasons["fora-do-turno"]).toBe(1);
+    expect(m.inWindow).toBe(0); // suprimido pela janela NÃO é alarme emitido
+  });
+
+  it("o gate não queima a chave de dedup: o alerta passa assim que a janela abre", () => {
+    vi.setSystemTime(at(5, 59));
+    expect(policy.evaluate({ ...ocioso }, { shiftSources })).toBeNull(); // 05:59 → fora do turno
+    vi.setSystemTime(at(6));
+    expect(policy.evaluate({ ...ocioso }, { shiftSources })).not.toBeNull(); // 06:00 → dentro
+  });
+
+  it("zona SEM turnos atribuídos: comportamento IDÊNTICO ao atual, 24/7 (CA-5)", () => {
+    const semTurno = {
+      ...shiftSources,
+      getZones: () => [{ id: "z1", label: "Expedição", modo: "atividade", shiftIds: [] }],
+    };
+    vi.setSystemTime(at(3)); // madrugada, fora de qualquer turno
+    expect(policy.evaluate({ ...ocioso }, { shiftSources: semTurno })).not.toBeNull();
+    expect(policy.metrics().suppressedByShift).toBe(0);
+  });
+});

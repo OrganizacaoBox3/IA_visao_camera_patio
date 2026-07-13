@@ -7,7 +7,8 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { cleanZones } = require("./camcfg");
+const camcfg = require("./camcfg");
+const { cleanZones } = camcfg;
 
 // Simula "salvar e reler": allowlist → serialização JSON (Postgres/arquivo) → allowlist de novo.
 function roundTrip(zones) {
@@ -44,10 +45,10 @@ describe("camcfg — round-trip da zona PROIBIDA (CA-7)", () => {
     expect(semCampos.arming).toBe("sempre");
 
     const [invalido] = roundTrip([
-      { id: "z2", modo: "proibida", presencaAlertMs: "trinta", arming: "fora-turnos" },
+      { id: "z2", modo: "proibida", presencaAlertMs: "trinta", arming: "quando-der" },
     ]);
     expect(invalido.presencaAlertMs).toBe(10_000); // não-número → default
-    expect(invalido.arming).toBe("sempre"); // valor de onda futura → normalizado
+    expect(invalido.arming).toBe("sempre"); // fora do enum → normalizado p/ 24/7
 
     const [negativo] = roundTrip([{ id: "z3", modo: "proibida", presencaAlertMs: -5 }]);
     expect(negativo.presencaAlertMs).toBe(0); // clamp inferior
@@ -82,6 +83,7 @@ describe("camcfg — round-trip da zona PROIBIDA (CA-7)", () => {
     // os campos novos existem com default (aditivo) — nenhum consumidor antigo os lê
     expect(z.presencaAlertMs).toBe(10_000);
     expect(z.arming).toBe("sempre");
+    expect(z.shiftIds).toEqual([]); // [] = zona 24/7 (CA-5 da spec-turnos-por-zona)
   });
 
   it("round-trip é idempotente (limpar 2× = limpar 1×)", () => {
@@ -89,6 +91,79 @@ describe("camcfg — round-trip da zona PROIBIDA (CA-7)", () => {
       { id: "z", modo: "proibida", presencaAlertMs: 5_000, x: 0.5, y: 0.5, w: 0.2, h: 0.2 },
     ]);
     expect(roundTrip(uma)).toEqual(uma);
+  });
+});
+
+// TURNOS POR ZONA (spec-turnos-por-zona F2) — a MESMA armadilha A5: `shiftIds`/`arming` fora da
+// allowlist seriam descartados MUDOS no save e o gate de turno nunca veria a atribuição.
+describe("camcfg — round-trip da atribuição zona→TURNOS (F2)", () => {
+  it("preserva shiftIds e o arming ampliado (dentro-turnos/fora-turnos)", () => {
+    const [z] = roundTrip([
+      {
+        id: "cam-1-z1",
+        label: "Expedição",
+        modo: "atividade",
+        shiftIds: ["sh1", "sh2"],
+      },
+    ]);
+    expect(z.shiftIds).toEqual(["sh1", "sh2"]);
+
+    const [p] = roundTrip([
+      { id: "cam-1-z2", label: "Cofre", modo: "proibida", arming: "fora-turnos", shiftIds: ["sh1"] },
+    ]);
+    expect(p).toMatchObject({ arming: "fora-turnos", shiftIds: ["sh1"] });
+    expect(roundTrip([{ id: "z", modo: "proibida", arming: "dentro-turnos" }])[0].arming).toBe(
+      "dentro-turnos",
+    );
+  });
+
+  it("saneia a lista: não-strings/vazios fora, sem duplicata; malformado → [] (24/7)", () => {
+    const [z] = roundTrip([{ id: "z", shiftIds: ["sh1", "sh1", "", 7, null, " sh2 "] }]);
+    expect(z.shiftIds).toEqual(["sh1", "sh2"]); // trim + dedup, ordem preservada
+    expect(roundTrip([{ id: "z", shiftIds: "sh1" }])[0].shiftIds).toEqual([]);
+    expect(roundTrip([{ id: "z" }])[0].shiftIds).toEqual([]);
+  });
+});
+
+// CA-4 — a grade de uma zona não pode ter turnos SOBREPOSTOS (D4). A regra vive no SERVIDOR
+// (validateZoneShifts, chamada pelo saveZones → 400 na rota); a UI só exibe a mensagem.
+describe("camcfg — validateZoneShifts (CA-4: overlap rejeitado no save)", () => {
+  const SEG_SEX = [1, 2, 3, 4, 5];
+  const T1 = { id: "sh1", nome: "Turno 1", dias: SEG_SEX, inicio: "06:00", fim: "14:00" };
+  const T2 = { id: "sh2", nome: "Turno 2", dias: SEG_SEX, inicio: "14:00", fim: "22:00" };
+  const NOITE = { id: "sh3", nome: "Noite", dias: SEG_SEX, inicio: "22:00", fim: "06:00" }; // overnight
+  const SOBREPOSTO = { id: "sh4", nome: "Meio", dias: [3], inicio: "10:00", fim: "16:00" }; // pega T1 e T2
+  const SABADO = { id: "sh5", nome: "Sábado", dias: [6], inicio: "06:00", fim: "14:00" };
+  const CADASTRO = [T1, T2, NOITE, SOBREPOSTO, SABADO];
+  const zona = (shiftIds) => [{ id: "z1", label: "Expedição", shiftIds }];
+
+  it("turnos ENCOSTADOS (06–14 + 14–22) não são overlap — a borda pertence a quem INICIA (D4)", () => {
+    expect(camcfg.validateZoneShifts(zona(["sh1", "sh2"]), CADASTRO)).toBeNull();
+  });
+
+  it("turnos que se cruzam na MESMA zona → erro claro (com os nomes dos dois turnos)", () => {
+    const err = camcfg.validateZoneShifts(zona(["sh1", "sh4"]), CADASTRO);
+    expect(err).toContain("Expedição");
+    expect(err).toContain("Turno 1");
+    expect(err).toContain("Meio");
+    expect(err).toMatch(/sobrep/i);
+    expect(camcfg.validateZoneShifts(zona(["sh2", "sh4"]), CADASTRO)).not.toBeNull();
+  });
+
+  it("overnight (22–06) não colide com o turno da manhã do dia seguinte (06–14)", () => {
+    expect(camcfg.validateZoneShifts(zona(["sh3", "sh1"]), CADASTRO)).toBeNull();
+    // ...mas colide com um turno que comece 05:00 (ainda dentro da janela da noite)
+    const madruga = { id: "sh6", nome: "Madrugada", dias: [2], inicio: "05:00", fim: "07:00" };
+    expect(
+      camcfg.validateZoneShifts(zona(["sh3", "sh6"]), [...CADASTRO, madruga]),
+    ).not.toBeNull(); // ter 05:00 cai dentro da noite iniciada na seg 22:00
+  });
+
+  it("dias distintos não colidem; zona com 0/1 turno e id órfão nunca são rejeitados", () => {
+    expect(camcfg.validateZoneShifts(zona(["sh1", "sh5"]), CADASTRO)).toBeNull(); // seg-sex × sábado
+    expect(camcfg.validateZoneShifts(zona([]), CADASTRO)).toBeNull();
+    expect(camcfg.validateZoneShifts(zona(["sh4"]), CADASTRO)).toBeNull();
+    expect(camcfg.validateZoneShifts(zona(["sh1", "sh-orfa"]), CADASTRO)).toBeNull(); // dangling ignorado
   });
 });
 

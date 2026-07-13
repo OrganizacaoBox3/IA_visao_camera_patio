@@ -17,7 +17,8 @@ const { applyFlood } = require("./alarm/flood");
 const { flapSuppress } = require("./alarm/flap");
 const { shelveKeyFor, isShelved, shelve, unshelve, listShelved } = require("./alarm/shelve");
 const { init } = require("./alarm/persist");
-const { recordEmit, metrics } = require("./alarm/metrics");
+const { recordEmit, metrics: baseMetrics } = require("./alarm/metrics");
+const { suppressedByShift, shiftMetrics } = require("./alarm/shift");
 
 // Limpeza preguiçosa dos mapas para evitar crescimento ilimitado.
 function gc(now) {
@@ -37,9 +38,11 @@ function gc(now) {
 /**
  * Avalia um alerta e devolve a decisão de envio (ou null se suprimido).
  * @param {{text:string, ts?:number, cameraId?:string, zona?:string, tipo?:string}} p
+ * @param {{shiftSources?:{getZones?:Function, allShifts?:Function, tz?:Function}}} [deps]
+ *        Injeção SÓ para teste (fontes do gate de turno); em produção use os defaults.
  * @returns {null | {text:string, ts:number, priority:string, summary:boolean, cameraId?:string, zona?:string, tipo?:string, critico?:boolean, count?:number}}
  */
-function evaluate(p) {
+function evaluate(p, deps = {}) {
   if (!p) return null;
   const text = String(p.text || "").trim();
   if (!text) return null;
@@ -62,6 +65,14 @@ function evaluate(p) {
     );
     return null;
   }
+
+  // 0b) GATE DE TURNO — janela operacional da ZONA (spec-turnos-por-zona F3).
+  //     Camada IRMÃ do shelve (silêncio por REGRA, não por ação do operador) e no mesmo
+  //     ponto: ANTES do dedup/flood — um alarme que a janela cala não deve nem consumir a
+  //     chave de dedup. Vale mesmo com ALARM_POLICY_ENABLED=0: a janela é config do
+  //     usuário (como o shelve), não racionalização opcional. Fail-open lá dentro; toda
+  //     supressão é contada (metrics().suppressedByShift) e logada.
+  if (suppressedByShift({ cameraId, zona, tipo, text }, now, deps.shiftSources)) return null;
 
   // Política desligada → só classifica e repassa (retrocompatível),
   // contabilizando a emissão para as métricas.
@@ -96,6 +107,23 @@ function evaluate(p) {
   if (decision) recordEmit(decision.priority, now);
 
   return decision;
+}
+
+/**
+ * Saúde do sistema de alarme (GET /api/alarms/metrics) = as métricas de EMISSÃO
+ * (alarm/metrics.js) + os SUPRIMIDOS PELA JANELA de turno (alarm/shift.js). Campos ADITIVOS
+ * (`suppressedByShift`, `suppressedByShiftLastHour`, `suppressedByShiftReasons`): supressão
+ * silenciosa mata a confiança no sistema — quem cala, mostra que calou.
+ */
+function metrics() {
+  const m = baseMetrics();
+  const s = shiftMetrics(m.now);
+  return {
+    ...m,
+    suppressedByShift: s.total,
+    suppressedByShiftLastHour: s.lastHour,
+    suppressedByShiftReasons: s.byReason,
+  };
 }
 
 // Restauração preguiçosa no require — repovoa as shelves persistidas SEM exigir

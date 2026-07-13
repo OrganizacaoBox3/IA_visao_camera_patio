@@ -40,7 +40,19 @@ async function handle(req, res, ctx) {
     if (req.method === "PUT") {
       if (!requireConfigurer(req, res)) return true;
       const body = JSON.parse((await readBody(req, 200_000)) || "{}");
-      const saved = await camcfg.saveZones(cameraId, body && body.zones);
+      // saveZones REJEITA regra de negócio violada (turnos sobrepostos na mesma zona — CA-4 da
+      // spec-turnos-por-zona) com `badRequest`: erro do CLIENTE → 400 com a MENSAGEM do servidor
+      // (a UI só exibe). Qualquer outro erro sobe p/ o catch global (500) como antes.
+      let saved;
+      try {
+        saved = await camcfg.saveZones(cameraId, body && body.zones);
+      } catch (e) {
+        if (e && e.badRequest) {
+          json(res, 400, { error: e.message });
+          return true;
+        }
+        throw e;
+      }
       io.to("dashboards").emit("camcfg-updated", { kind: "zones", cameraId });
       json(res, 200, saved);
       return true;
