@@ -44,13 +44,9 @@ const BASELINE = {
   "src/routes/TurnosPage.tsx": { "text-[": 4 },
   "src/routes/TagsMapPage.tsx": { "text-[": 4 },
   "src/routes/ReplayPlayerPage.tsx": { "text-[": 11, "#hex": 13 }, // hex em canvas 2D (G8: migrar p/ tokens via getComputedStyle)
-  // Telas da varredura F1
+  // Telas da varredura F1 (Dashboard/NotFound zeradas na C1; ReportPage/AlarmesPanel/
+  // AtividadePanel zeradas na C2 — ratchet apertado: text-[11px] → papel text-label)
   "src/routes/AlarmHealthPage.tsx": { "text-[": 3 },
-  "src/routes/DashboardPage.tsx": { "text-[": 1 },
-  "src/routes/NotFoundPage.tsx": { "text-[": 1 }, // 404 com h1 bespoke (spec §2 operacionais #4)
-  "src/routes/ReportPage.tsx": { "text-[": 2 },
-  "src/routes/report/AlarmesPanel.tsx": { "text-[": 2 },
-  "src/routes/report/AtividadePanel.tsx": { "text-[": 1 },
   // Fallback literal do cssVar() p/ canvas (exceção documentada G8 — contraste de canvas);
   // entra na baseline mesmo assim: se a exceção crescer, a revisão precisa ver.
   "src/routes/dashboard/TrackOverlay.tsx": { "#hex": 2 },

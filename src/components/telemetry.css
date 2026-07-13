@@ -1,10 +1,12 @@
 /* Telemetria lateral "nunca número cru" (valor + sparkline + faixa-alvo).
    Importado SÓ por Sparkline.tsx (consumido pela tela de câmera). Usa os tokens da
-   fundação (--state-*, --cam-*, --mono, --text-*); não redefine nada global. */
+   fundação (--state-*, --cam-*, --mono, --text-*); não redefine nada global.
+   Padronização (G8): fallbacks hex removidos dos var() — duplicavam os tokens do
+   index.css (o de --text-muted com valor DIVERGENTE) e nunca se aplicavam. */
 
 .metric {
   padding: 6px 0;
-  border-bottom: 1px solid var(--cam-panel-border, #16202b);
+  border-bottom: 1px solid var(--cam-panel-border);
 }
 .metric:last-child {
   border-bottom: none;
@@ -14,11 +16,11 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--sp-2, 8px);
+  gap: var(--sp-2);
 }
 .metric-label {
   font-size: 10px;
-  color: var(--text-muted, #7d8aa0);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -26,7 +28,7 @@
   font-family: var(--mono);
   font-size: 15px;
   font-weight: 600;
-  color: var(--cam-panel-fg, #e6edf3);
+  color: var(--cam-panel-fg);
   white-space: nowrap;
 }
 .metric-flag {
@@ -36,7 +38,7 @@
 
 /* realce sutil da célula quando o indicador está fora da faixa-alvo (cor reservada ao anormal) */
 .metric.out {
-  border-bottom-color: var(--state-warn-border, #4d3a09);
+  border-bottom-color: var(--state-warn-border);
 }
 
 .metric .spark-svg {
@@ -47,14 +49,14 @@
 }
 .metric-band {
   font-size: 10px;
-  color: var(--text-muted, #7d8aa0);
+  color: var(--text-muted);
   font-family: var(--mono);
   margin-top: 2px;
 }
 
 /* faixa-alvo = banda verde/aceitável (translúcida, sob a linha) */
 .spark-band {
-  fill: var(--state-ok, #22c55e);
+  fill: var(--state-ok);
   opacity: 0.13;
 }
 .spark-dot {

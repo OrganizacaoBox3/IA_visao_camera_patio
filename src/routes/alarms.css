@@ -37,7 +37,10 @@
     opacity: 1;
   }
 }
-/* O corpo do diálogo vira coluna flexível para a lista (ScrollArea) ocupar a altura restante. */
+/* O corpo do diálogo vira coluna flexível para a lista (ScrollArea) ocupar a altura restante.
+   `ui-dialog-body` é MARCADOR restaurado em src/ui/Dialog.tsx (sem regra no ui.css) — este
+   seletor é o consumidor; por ser unlayered, vence o p-[--sp-3]/overflow-auto das utilities
+   (padding zera e os filtros ficam fixos acima da ScrollArea). */
 .ui-dialog:has(.alarm-drawer__list) .ui-dialog-body {
   flex: 1;
   min-height: 0;
@@ -202,14 +205,15 @@
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
-  color: #fff; /* texto de contraste sobre cor saturada — sem token equivalente */
+  /* pares -contrast do index.css (G8): texto sobre a cor SATURADA do estado como fundo */
+  color: var(--state-critical-contrast);
   background: var(--state-critical);
 }
 .alarm-count-badge[data-prio="high"] {
   background: var(--state-warn);
-  color: #1a1500; /* texto de contraste sobre --state-warn — sem token equivalente */
+  color: var(--state-warn-contrast);
 }
 .alarm-count-badge[data-prio="advisory"] {
   background: var(--state-info);
-  color: #041018; /* texto de contraste sobre --state-info — sem token equivalente */
+  color: var(--state-info-contrast);
 }
