@@ -4,7 +4,7 @@ import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
 import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera/whip";
 import { startNodeRelay, type NodeRelay } from "./camera/nodeRelay";
-import { Tooltip, Alert } from "../ui";
+import { Tooltip, Alert, StatusDot } from "../ui";
 
 // O nó transmite vídeo por WebRTC/WHIP ao go2rtc quando disponível; a decisão é em RUNTIME por
 // PROBE. Se o WHIP não estabelecer dentro da janela (go2rtc ausente/timeout/erro), CAI SOZINHO
@@ -206,14 +206,22 @@ export function CameraPage() {
               : transmitting
                 ? "transmitindo ao hub"
                 : "câmera ok · reconectando ao hub…";
+  // Estado da bolinha (going-gray): mesmo mapa do antigo `.dot-status {estado}` → tom de estado.
+  const dotState = status === "on" ? (transmitting ? "on" : "connecting") : status;
+  const dotTone =
+    dotState === "on"
+      ? "ok"
+      : dotState === "connecting"
+        ? "info"
+        : dotState === "denied"
+          ? "warn"
+          : "critical";
   return (
     <div className="cam-node">
       <video ref={videoRef} playsInline muted />
       <canvas ref={canvasRef} className="hidden" />
       <div className="cam-node-badge">
-        <span
-          className={`dot-status ${status === "on" ? (transmitting ? "on" : "connecting") : status}`}
-        />
+        <StatusDot tone={dotTone} label={statusLabel} />
         <b>{name}</b>
         <span className="muted">{statusLabel}</span>
         {profile && (

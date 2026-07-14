@@ -25,4 +25,10 @@ describe("Meter — barra analógica going-gray", () => {
     );
     expect(renderToStaticMarkup(<Meter value={50} ariaLabel="x" muted />)).toContain("var(--border)");
   });
+
+  it("tone='accent' usa a cor de ação --accent (fora da paleta de estado)", () => {
+    const html = renderToStaticMarkup(<Meter value={50} ariaLabel="x" tone="accent" />);
+    expect(html).toContain("var(--accent)");
+    expect(html).not.toContain("var(--state-accent)");
+  });
 });

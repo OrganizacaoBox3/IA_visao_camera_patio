@@ -11,7 +11,7 @@ import { fmtDuration } from "../../format";
 import { sensitivityFactor } from "../../processors/atividade";
 import { objClass } from "../../objects/catalog";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
-import { Badge, HelpTip, SectionTitle, Tooltip } from "../../ui";
+import { Badge, HelpTip, Kpi, Loading, SectionTitle, Tooltip } from "../../ui";
 import { MetricCell } from "../../components/Sparkline";
 import { RISK_LABEL, stateVar, type ZoneResult } from "../draw";
 import {
@@ -51,7 +51,7 @@ export function ZonasTab({
 }: Props) {
   return (
     <>
-      {zonesLoading && <p className="empty-note">Carregando zonas…</p>}
+      {zonesLoading && <Loading label="Carregando zonas" />}
       {/* Prosa >1 linha vira HelpTip (regra de ouro): a tela mostra 1 linha; o resto mora no "?". */}
       {!zonesLoading && zones.length > 0 && canConfigure && (
         <p className="empty-note">
@@ -131,20 +131,17 @@ export function ZonasTab({
                   const activeThr = sensitivityFactor(z.sensitivity) / 6; // limiar ATIVA em unidades de view.motion
                   return (
                     <>
-                      {/* estado/parada: indicadores categóricos/temporais (mantidos como KPI) */}
+                      {/* estado/parada: indicadores categóricos/temporais (átomo Kpi). O estado é
+                          TEXTO longo, não número: mantém o papel `body` (--fs-body, era .kpi-state)
+                          via valueStyle — a única via do átomo p/ ajustar o `.v`; a cor é o token de
+                          estado (stateVar → var(--state-*)). */}
                       <div className="kpis ws-kpis">
-                        <div className="kpi">
-                          {/* cor = token de estado (stateVar → var(--state-*)); o TAMANHO saiu do
-                              `style` inline (13px cru) p/ o papel `body` — .kpi-state em cine.css. */}
-                          <div className="v kpi-state" style={{ color: stateVar(r.view.state) }}>
-                            {r.view.state}
-                          </div>
-                          <div className="l">estado</div>
-                        </div>
-                        <div className="kpi">
-                          <div className="v">{fmtDuration(r.view.idleMs)}</div>
-                          <div className="l">parada</div>
-                        </div>
+                        <Kpi
+                          value={r.view.state}
+                          label="estado"
+                          valueStyle={{ color: stateVar(r.view.state), fontSize: "var(--fs-body)" }}
+                        />
+                        <Kpi value={fmtDuration(r.view.idleMs)} label="parada" />
                       </div>
                       {/* telemetria "nunca número cru": valor + sparkline + faixa-alvo */}
                       <MetricCell
@@ -168,7 +165,19 @@ export function ZonasTab({
                       />
                       <div className="zone-flow">
                         <span>Fluxo</span>
-                        <span className={`flow-chip ${r.view.flowLevel}`}>{r.view.flowLevel}</span>
+                        {/* Badge no lugar do flow-chip estático, preservando a COR ATUAL do nível
+                            (going-gray: Alto=ok/verde, Médio=warn, Baixo=neutro — ver index.css). */}
+                        <Badge
+                          tone={
+                            r.view.flowLevel === "Alto"
+                              ? "ok"
+                              : r.view.flowLevel === "Médio"
+                                ? "warn"
+                                : undefined
+                          }
+                        >
+                          {r.view.flowLevel}
+                        </Badge>
                         <span className="spark">
                           {r.view.flow.map((s, i) => (
                             <i key={i} style={{ height: `${Math.max(6, Math.round(s * 100))}%` }} />

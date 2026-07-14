@@ -321,16 +321,16 @@ export function FadigaView({
           <div className="viewport tile-vp" ref={viewportRef}>
             <canvas ref={canvasRef} />
             <div className="tile-badges">
-              <span className={`tb ${status.cls}`}>● {status.txt}</span>
+              <Badge tone={CLS_TONE[status.cls]}>{status.txt}</Badge>
               {phone && (
-                <span className="tb ALERTA inline-flex items-center">
+                <Badge tone="alert">
                   <Smartphone
                     size={16}
                     strokeWidth={1.75}
                     role="img"
                     aria-label="Celular detectado"
                   />
-                </span>
+                </Badge>
               )}
             </div>
           </div>

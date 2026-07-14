@@ -5,7 +5,7 @@ import {
   PageHeader,
   Badge,
   EmptyState,
-  Spinner,
+  Loading,
   Alert,
   Button,
   Input,
@@ -301,13 +301,7 @@ export function TurnosPage() {
 
         {/* ── Lista ─────────────────────────────────────────────────────── */}
         {loading ? (
-          <div
-            className="flex items-center gap-2 text-body text-text-muted"
-            aria-busy="true"
-            aria-label="Carregando turnos"
-          >
-            <Spinner /> Carregando turnos…
-          </div>
+          <Loading label="Carregando turnos" />
         ) : rows.length === 0 && !form ? (
           <EmptyState>
             <CalendarClock size={22} strokeWidth={1.5} aria-hidden />

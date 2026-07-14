@@ -7,6 +7,7 @@ import {
   CheckboxRow,
   HelpTip,
   Skeleton,
+  StatusDot,
   Table,
   TableEmpty,
   useToast,
@@ -174,7 +175,14 @@ export function NotificacoesTab({
       <section className="panel shrink-0">
         <SectionTitle>
           WhatsApp (andon){" "}
-          {wa && <span className={`wa-dot ${wa.connected ? "on" : wa.enabled ? "wait" : "off"}`} />}
+          {wa && (
+            <StatusDot
+              tone={wa.connected ? "ok" : wa.enabled ? "warn" : "neutral"}
+              label={
+                wa.connected ? "conectado" : wa.enabled ? "aguardando conexão" : "desativado"
+              }
+            />
+          )}
         </SectionTitle>
         {!wa || !wa.enabled ? (
           // Linguagem de PRODUTO na tela (achado #5 da auditoria): env var/systemd/lib são

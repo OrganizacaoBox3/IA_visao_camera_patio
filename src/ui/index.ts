@@ -11,10 +11,14 @@ export { Tooltip, TooltipProvider } from "./Tooltip";
 export { HelpTip } from "./HelpTip";
 export { Dialog } from "./Dialog";
 export { ToastProvider, useToast, type ToastTone } from "./Toast";
-// KPI: o átomo da casa é o Kpi/KpiRow de routes/report/KpiRow.tsx (o antigo KpiCard daqui
-// era duplicata sem consumidor).
+// KPI: o átomo da casa é o Kpi/KpiRow/Delta de ./Kpi (movido de routes/report/KpiRow.tsx, que
+// agora reexporta daqui). O antigo KpiCard duplicado foi removido.
+export { Kpi, KpiRow, Delta } from "./Kpi";
 export { Badge, Spinner, Skeleton, SkeletonText, Alert, EmptyState, type Tone } from "./misc";
 export { Meter } from "./Meter";
+export { Loading } from "./Loading";
+export { StatusDot } from "./StatusDot";
+export { Card } from "./Card";
 export { InlineEdit } from "./InlineEdit";
 export { SectionTitle } from "./SectionTitle";
 export { PageHeader } from "./PageHeader";

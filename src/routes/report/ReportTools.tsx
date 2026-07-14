@@ -18,10 +18,10 @@ import {
   EmptyState,
   Field,
   Input,
+  Loading,
   ScrollArea,
   Select,
   SectionTitle,
-  Spinner,
   Tooltip,
   useToast,
 } from "../../ui";
@@ -219,9 +219,7 @@ export function ReportTools({
         <section className="ah-kpi">
           <SectionTitle flush>Silenciamentos ativos</SectionTitle>
           {shelves == null ? (
-            <div className="ah-foot">
-              <Spinner /> carregando…
-            </div>
+            <Loading label="Carregando silenciamentos" />
           ) : shelves.length === 0 ? (
             <EmptyState>Nenhum alarme silenciado. Os alertas seguem o fluxo normal.</EmptyState>
           ) : (

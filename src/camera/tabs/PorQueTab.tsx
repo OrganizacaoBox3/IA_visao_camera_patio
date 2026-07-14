@@ -27,7 +27,7 @@ import {
   Radio,
   Sigma,
 } from "lucide-react";
-import { Alert, Badge, HelpTip, SectionTitle, type Tone } from "../../ui";
+import { Alert, Badge, HelpTip, Kpi, SectionTitle, type Tone } from "../../ui";
 import type { FunnelVerdict, PairFunnel } from "../../fusion/associate";
 import type { FunnelDiagnosis, PersonFunnel } from "../../fusion/useFunnelDiagnosis";
 
@@ -325,18 +325,9 @@ export function PorQueTab({ diag }: { diag: FunnelDiagnosis }) {
       {running && hubTracks !== null && (
         <>
           <div className="kpis">
-            <div className="kpi">
-              <div className="v">{hubTracks}</div>
-              <div className="l">pessoas em cena</div>
-            </div>
-            <div className="kpi">
-              <div className="v">{tagsHeard}</div>
-              <div className="l">tags no ar</div>
-            </div>
-            <div className="kpi">
-              <div className="v">{Math.round(windowMs / 1000)}s</div>
-              <div className="l">janela</div>
-            </div>
+            <Kpi value={hubTracks} label="pessoas em cena" />
+            <Kpi value={tagsHeard} label="tags no ar" />
+            <Kpi value={`${Math.round(windowMs / 1000)}s`} label="janela" />
           </div>
           {warmingUp && (
             <p className="m-0 text-sec text-text-muted">

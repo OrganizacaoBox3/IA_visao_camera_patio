@@ -1,7 +1,7 @@
 // Aba "Linhas" do drawer da câmera — linhas de contagem (tripwires) + contadores in/out "hoje".
 // Componente puro: recebe estado/handlers já resolvidos pelo CameraWorkspace (edição via hook useTripwires).
 import { ArrowLeftRight, RotateCcw, X } from "lucide-react";
-import { Button, HelpTip, SectionTitle, Tooltip, Badge } from "../../ui";
+import { Button, HelpTip, Kpi, SectionTitle, Tooltip, Badge } from "../../ui";
 import { type Tripwire, type TripwireCounts } from "../../vision/counting";
 
 type Props = {
@@ -134,20 +134,20 @@ export function LinhasTab({
               </span>
             </div>
             <div className="kpis ws-kpis">
+              {/* Tooltip.Trigger é asChild (precisa de ref) e o átomo Kpi é function component
+                  sem ref — o gatilho é este <div> (recebe ref/eventos); o Kpi mora dentro. */}
               <Tooltip content={tipIn}>
-                <div className="kpi">
-                  <div className="v" style={{ color: "var(--state-info)" }}>
-                    {tIn}
-                  </div>
-                  <div className="l">entradas hoje</div>
+                <div>
+                  <Kpi value={tIn} label="entradas hoje" valueStyle={{ color: "var(--state-info)" }} />
                 </div>
               </Tooltip>
               <Tooltip content={tipOut}>
-                <div className="kpi">
-                  <div className="v" style={{ color: "var(--state-neutral)" }}>
-                    {tOut}
-                  </div>
-                  <div className="l">saídas hoje</div>
+                <div>
+                  <Kpi
+                    value={tOut}
+                    label="saídas hoje"
+                    valueStyle={{ color: "var(--state-neutral)" }}
+                  />
                 </div>
               </Tooltip>
             </div>

@@ -29,7 +29,18 @@ import { getShifts, type Shift as ShiftCfg } from "../api";
 import { useAuth } from "../auth";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
 import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/csv";
-import { Alert, Button, IconButton, PageHeader, Select, SegmentedControl, Skeleton } from "../ui";
+import {
+  Alert,
+  Button,
+  IconButton,
+  Kpi,
+  KpiRow,
+  Loading,
+  PageHeader,
+  Select,
+  SegmentedControl,
+  Skeleton,
+} from "../ui";
 import "../report/alarms.css";
 import { type RepTab, type VmView } from "./report/chrome";
 import {
@@ -420,15 +431,12 @@ export function ReportPage() {
       <div className="rep-body">
         {loading && (
           <div className="rep-skeleton" aria-busy="true" aria-label="Carregando relatório">
-            <div className="kpi-row">
+            <KpiRow>
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="kpi big">
-                  <Skeleton w="55%" h={22} />
-                  <Skeleton w="80%" h={11} />
-                </div>
+                <Kpi key={i} value={<Skeleton w="55%" h={22} />} label={<Skeleton w="80%" h={11} />} />
               ))}
-            </div>
-            <Skeleton w="100%" h={240} />
+            </KpiRow>
+            <Loading variant="skeleton" lines={6} label="Carregando gráfico" />
           </div>
         )}
         {!loading && error && <Alert tone="alert">{error}</Alert>}

@@ -6,7 +6,7 @@
 // remontar o canvas mataria o rAF).
 import { type RefObject } from "react";
 import { ChevronLeft, ChevronRight, Download, ImageDown, Pause, Play } from "lucide-react";
-import { Button, IconButton, Slider, Toggle, Tooltip } from "../ui";
+import { Button, IconButton, Slider, StatusDot, Toggle, Tooltip } from "../ui";
 import { type CineBuffer } from "./cineBuffer";
 
 type Props = {
@@ -43,7 +43,7 @@ export function CineBar({
     <>
       {/* Selo de REVISÃO: o ponto é decoração — quem informa é o TEXTO (going-gray). */}
       <div className="cine-flag" role="status">
-        <span className="dot" aria-hidden /> REVISÃO · cine-loop (buffer em memória)
+        <StatusDot tone="warn" label="em revisão" /> REVISÃO · cine-loop (buffer em memória)
       </div>
       <div className="cine-bar" role="group" aria-label="Revisão do cine-loop">
         <IconButton label="Quadro anterior" onClick={() => scrubBy(-1)}>

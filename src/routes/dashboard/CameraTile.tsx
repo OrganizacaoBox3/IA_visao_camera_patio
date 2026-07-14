@@ -8,7 +8,7 @@ import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
-import { Tooltip } from "../../ui";
+import { Tooltip, StatusDot } from "../../ui";
 import { TrackOverlay } from "./TrackOverlay";
 import { type Camera, type CameraStatus } from "./types";
 import "./go2rtc-tile.css";
@@ -359,8 +359,8 @@ export const CameraTile = memo(function CameraTile({
           data-quiet={st.normal ? 1 : 0}
           style={{ borderColor: st.border }}
         >
-          {/* .dot-status dá o formato; cor vem do token de estado (going-gray) via inline. */}
-          <span className="dot-status" aria-hidden="true" style={{ background: st.dot }} />
+          {/* StatusDot: bolinha + rótulo textual sr-only (going-gray); cor por status via override. */}
+          <StatusDot color={st.dot} label={st.text} />
           <span className="cam-status-pill__text">
             {st.text}
             {st.fps != null ? ` · ${st.fps}fps` : ""}

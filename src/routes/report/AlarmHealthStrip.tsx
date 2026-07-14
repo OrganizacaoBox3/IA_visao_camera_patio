@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Sparkline } from "../../components/Sparkline";
-import { Alert, SectionTitle, Spinner, Tooltip } from "../../ui";
+import { Alert, Loading, SectionTitle, StatusDot, Tooltip } from "../../ui";
 import { getAlarmMetrics, type AlarmCounts, type AlarmMetrics } from "../../api";
 import { shiftSuppressionReasonLabel, type AlarmShiftSuppression } from "../../types/alarm";
 import "./health.css";
@@ -29,6 +29,13 @@ const PRIO_LABEL: Record<keyof AlarmCounts, string> = {
   advisory: "Aviso",
   high: "Alta",
   critical: "Crítico",
+};
+// Cor da bolinha por prioridade (going-gray: aviso é neutro, escala p/ warn/critical). Passada ao
+// átomo StatusDot via `color` — advisory usa --state-neutral-fg, fora da paleta de `tone`.
+const PRIO_DOT: Record<keyof AlarmCounts, string> = {
+  advisory: "var(--state-neutral-fg)",
+  high: "var(--state-warn)",
+  critical: "var(--state-critical)",
 };
 
 // A rota devolve os campos do gate de turno ao lado das métricas de emissão (alarmPolicy.metrics()).
@@ -83,9 +90,7 @@ export function AlarmHealthStrip() {
   if (loading && !metrics)
     return (
       <section className="ah-strip" aria-label="Saúde do sistema de alarmes">
-        <div className="ah-foot">
-          <Spinner /> Carregando a saúde do alarme…
-        </div>
+        <Loading label="Carregando a saúde do alarme" />
       </section>
     );
   if (error && !metrics)
@@ -103,7 +108,7 @@ export function AlarmHealthStrip() {
         {/* O CARIMBO DA ESCALA (regra nº 1 acima): esta faixa NÃO obedece ao período do
             relatório — e o diz em texto, não em nota de rodapé. */}
         <span className="ah-strip__now">
-          <span className="ah-foot__dot" aria-hidden /> agora · últimos{" "}
+          <StatusDot color="var(--state-neutral-fg)" label="ao vivo" /> agora · últimos{" "}
           {fmtDuration(metrics.windowMs)} · atualiza a cada {Math.round(REFRESH_MS / 1000)}s
         </span>
       </header>
@@ -259,7 +264,7 @@ function PriorityDist({ counts }: { counts: AlarmCounts }) {
       <div className="ah-dist__legend">
         {PRIOS.map((p) => (
           <span className="ah-dist__key" key={p}>
-            <span className="ah-dist__dot" data-prio={p} aria-hidden />
+            <StatusDot color={PRIO_DOT[p]} label={PRIO_LABEL[p]} />
             {PRIO_LABEL[p]} <span className="ah-dist__num">{counts[p] || 0}</span>
           </span>
         ))}

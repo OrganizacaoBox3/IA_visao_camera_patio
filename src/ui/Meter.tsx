@@ -6,6 +6,7 @@ import { cx } from "./cx";
 //
 // `value` em 0..100 (clampado). `muted` (ex.: leitura velha/sem sinal) esmaece o preenchimento para
 // --border. `tone` escolhe a cor de ESTADO do preenchimento; o trilho é sempre neutro (--panel).
+// `tone="accent"` usa a cor de ação --accent (ex.: barra azul do ranking), fora da paleta de estado.
 // Acessível: role="img" + aria-label obrigatório (o número/rótulo por extenso — nunca só a cor).
 export function Meter({
   value,
@@ -16,12 +17,16 @@ export function Meter({
 }: {
   value: number;
   ariaLabel: string;
-  tone?: "ok" | "warn" | "alert" | "info" | "neutral";
+  tone?: "ok" | "warn" | "alert" | "info" | "neutral" | "accent";
   muted?: boolean;
   className?: string;
 }) {
   const pct = Math.max(0, Math.min(100, value));
-  const fill = muted ? "var(--border)" : `var(--state-${tone})`;
+  const fill = muted
+    ? "var(--border)"
+    : tone === "accent"
+      ? "var(--accent)"
+      : `var(--state-${tone})`;
   return (
     <span
       className={cx("h-1.5 flex-1 overflow-hidden rounded-full bg-panel", className)}

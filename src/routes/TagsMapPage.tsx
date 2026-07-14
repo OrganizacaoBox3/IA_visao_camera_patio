@@ -10,7 +10,7 @@ import {
   Input,
   Alert,
   Button,
-  Skeleton,
+  Loading,
   SectionTitle,
 } from "../ui";
 import { getBtLocations, getBtReadings, type TagLocation, type BtReading } from "../api";
@@ -350,11 +350,7 @@ export function TagsMapPage() {
           </div>
           <ScrollArea className="min-h-0 flex-1">
             {!loaded ? (
-              <div className="flex flex-col gap-2 p-3" aria-busy="true" aria-label="Carregando tags">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} w="100%" h={30} />
-                ))}
-              </div>
+              <Loading variant="skeleton" label="Carregando tags" lines={4} className="p-3" />
             ) : entities.length === 0 ? (
               <div className="p-3">
                 <EmptyState>

@@ -16,6 +16,7 @@ import {
   type ObjectKpis,
   type FadigaKpis,
 } from "../../report/calc";
+import { Card } from "../../ui";
 import { classLabel } from "./ObjetosPanel";
 import { Insight, RepLens, HistoryFooter } from "./chrome";
 import type { Mode } from "./labels";
@@ -61,7 +62,7 @@ export function ResumoPanel({
       <RepLens lens={`Resumo executivo · ${periodLabel} · Turno: ${shiftLabel}`} />
       <div className="rep-resumo">
         {atividade && (
-          <button className="resumo-card" onClick={() => onOpenMode("atividade")}>
+          <Card className="resumo-card" onClick={() => onOpenMode("atividade")}>
             <div className="rc-h">
               Operação <span className="muted">atividade</span>
             </div>
@@ -86,11 +87,11 @@ export function ResumoPanel({
               área mais parada: {atividade.k.topArea} ·{" "}
               {String(atividade.k.peakHour).padStart(2, "0")}h
             </div>
-          </button>
+          </Card>
         )}
 
         {fadiga && (
-          <button className="resumo-card" onClick={() => onOpenMode("fadiga")}>
+          <Card className="resumo-card" onClick={() => onOpenMode("fadiga")}>
             <div className="rc-h">
               Segurança <span className="muted">operador/fadiga</span>
             </div>
@@ -127,11 +128,11 @@ export function ResumoPanel({
             <div className="rc-foot">
               horário crítico: {String(fadiga.fk.peakHour).padStart(2, "0")}h
             </div>
-          </button>
+          </Card>
         )}
 
         {leitura && (
-          <button className="resumo-card" onClick={() => onOpenMode("leitura")}>
+          <Card className="resumo-card" onClick={() => onOpenMode("leitura")}>
             <div className="rc-h">
               Logística <span className="muted">leitura/expedição</span>
             </div>
@@ -164,11 +165,11 @@ export function ResumoPanel({
               </div>
             </div>
             <div className="rc-foot">ponto de maior volume: {leitura.rk.topPonto}</div>
-          </button>
+          </Card>
         )}
 
         {objetos && (
-          <button className="resumo-card" onClick={() => onOpenMode("objetos")}>
+          <Card className="resumo-card" onClick={() => onOpenMode("objetos")}>
             <div className="rc-h">
               Objetos <span className="muted">contagem/presença</span>
             </div>
@@ -189,13 +190,13 @@ export function ResumoPanel({
               </div>
             </div>
             <div className="rc-foot">predominante: {classLabel(objetos.ok.topClasse)}</div>
-          </button>
+          </Card>
         )}
 
         {/* O 5º CARTÃO — Alarmes. A dimensão tinha modo próprio desde sempre e NUNCA aparecia no
             Resumo: o gestor abria a tela e não via se a operação tinha alarmado. */}
         {alarmes && (
-          <button className="resumo-card" onClick={() => onOpenMode("alarmes")}>
+          <Card className="resumo-card" onClick={() => onOpenMode("alarmes")}>
             <div className="rc-h">
               Alarmes <span className="muted">fila de eventos</span>
             </div>
@@ -218,7 +219,7 @@ export function ResumoPanel({
               </div>
             </div>
             <div className="rc-foot">metadados, sem imagens (LGPD)</div>
-          </button>
+          </Card>
         )}
       </div>
       <Insight

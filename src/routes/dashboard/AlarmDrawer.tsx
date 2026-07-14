@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { MapPin } from "lucide-react";
-import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea, Badge, EmptyState, type Tone } from "../../ui";
+import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea, Badge, StatusDot, EmptyState, type Tone } from "../../ui";
 import { type AlarmEvent, type AlarmPriority, type AlarmState } from "../../api";
 // Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts.
 import {
@@ -71,9 +71,9 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
         style={{ borderLeftColor: alarmPriorityBorder(a.priority) }}
       >
         <div className="alarm-drawer__card-top">
-          <span
-            className="alarm-drawer__card-dot"
-            style={{ background: alarmPriorityColor(a.priority) }}
+          <StatusDot
+            color={alarmPriorityColor(a.priority)}
+            label={ALARM_PRIORITY_LABEL[a.priority]}
           />
           <Badge tone={PRIORITY_TONE[a.priority]}>{ALARM_PRIORITY_LABEL[a.priority]}</Badge>
           <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}>

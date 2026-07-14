@@ -11,7 +11,7 @@
 // chão, em ordem, e informa Largura×Comprimento. A homografia sai daí, e a GRADE métrica projetada
 // de volta no palco diz se a calibração "assenta" no chão. Medir = 2 cliques → metros.
 import { Grid3x3, Ruler, Save, Undo2 } from "lucide-react";
-import { Alert, Badge, Button, Field, Input, SegmentedControl } from "../../ui";
+import { Alert, Badge, Button, Field, Input, Loading, SegmentedControl } from "../../ui";
 import { StationHealthChip } from "../../fusion/StationHealthChip";
 import { TagPicker } from "../TagPicker";
 import { takenTags } from "../takenTags";
@@ -311,7 +311,7 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
 
           {/* Estado da homografia + salvar. */}
           <div className="flex flex-col gap-2">
-            {cal.loading && <span className="text-sec text-text-muted">Carregando…</span>}
+            {cal.loading && <Loading label="Carregando" />}
             {cal.liveH && !cal.liveH.ok && <Alert tone="warn">{cal.liveH.error}</Alert>}
             {cal.err && <Alert tone="alert">{cal.err}</Alert>}
             {cal.note && <Alert tone="ok">{cal.note}</Alert>}
