@@ -75,12 +75,22 @@ const MULTI_SOURCE_FISHER_PROMOVIDO = false;
  * sem esperar a flag virar — sem ele, o teste da promoção só poderia ser escrito no dia da
  * promoção, que é quando ninguém escreve teste.
  */
+/** Janela de correlação do call-site VIVO. O torneio elegeu 18 s sobre os 8 s do DEFAULTS de
+ *  associate.ts (precisão média 75%→90%, wrong −69%, cobertura +33% — ver o docstring de DEFAULTS,
+ *  "o que o torneio elegeria") e o dono LIGOU (2026-07-14). Fica AQUI, não no DEFAULTS: os 12 pinos
+ *  de replay-fusion.test.ts seguem em 8 s (byte-idênticos) — a decisão de PRODUTO mora no call-site,
+ *  como a promoção do multiSourceFisher. Sinergia com a persistência (labelMemory): janela mais
+ *  longa ⇒ associação mais precisa ⇒ o hold cavalga MENOS rótulo errado. */
+export const LIVE_WINDOW_MS = 18000;
+
 export function fusionConfigFor(
   stationsPx?: StationPoints,
   promovido: boolean = MULTI_SOURCE_FISHER_PROMOVIDO,
 ): FusionConfig {
   const n = stationsPx ? Object.keys(stationsPx).length : 0;
-  return promovido && n >= MULTI_SOURCE_MIN_STATIONS ? { multiSourceFisher: true } : {};
+  const cfg: FusionConfig = { windowMs: LIVE_WINDOW_MS };
+  if (promovido && n >= MULTI_SOURCE_MIN_STATIONS) cfg.multiSourceFisher = true;
+  return cfg;
 }
 
 export function useTagFusion({
