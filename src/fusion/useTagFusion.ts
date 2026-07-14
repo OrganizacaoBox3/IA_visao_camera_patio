@@ -4,6 +4,7 @@
 // em associate.ts e frame.ts (puros/testados). Desligado (enabled=false / sem readings) → labelFor null.
 import { useEffect, useMemo, useRef } from "react";
 import { TagTrackAssociator, type FusionConfig } from "./associate";
+import { LabelMemory, type FreshObservation } from "./labelMemory";
 import { buildFusionFrame, type RawReading, type StationPoints } from "./frame";
 import type { Matrix3, Vec2 } from "../vision/homography";
 import type { HubAnalysis } from "../types/analysis";
@@ -109,14 +110,28 @@ export function useTagFusion({
       return;
     }
     const a = new TagTrackAssociator(cfg); // novo motor por config/câmera — buffer começa vazio
+    // MEMÓRIA do rótulo (camada ACIMA do assign — associate.ts intacto): segura o rótulo CONFIRMADO
+    // na caixa enquanto o track viver, mesmo com o operador parado (quando o assign devolve null).
+    // Vida atada ao associador: recriado/resetado junto por config/câmera (buffer vazio ⇒ crença
+    // vazia). Ver labelMemory.ts para as travas de honestidade (confirmação, conflito, TTL).
+    const mem = new LabelMemory();
     const id = window.setInterval(() => {
       const hd = getHubAnalysis();
       const readings = getReadings();
       if (!hd || !readings || !readings.length) return;
       const now = performance.now();
       a.push(buildFusionFrame(hd.tracks, readings, H, now, stationPx, excludeTags, stationsPx));
-      const m = new Map<number, string>();
-      for (const as of a.assign(now)) if (as.tag) m.set(as.trackId, as.tag);
+      // Tracks VIVOS no hub AGORA (a autoridade sobre a vida do track — a memória cai quando o
+      // track some daqui) + o que o assign disse neste tick (tags null incluídas: é o "parou").
+      const live = new Set<number>(hd.tracks.map((t) => t.id));
+      const fresh = new Map<number, FreshObservation>();
+      for (const as of a.assign(now))
+        fresh.set(as.trackId, {
+          tag: as.tag,
+          confidence: as.confidence,
+          hadConflict: as.hadConflict,
+        });
+      const m = mem.update(fresh, live, now); // mapa trackId→rótulo A EXIBIR (inclui os segurados)
       labels.current = m;
       assigned.current = new Set(m.values());
     }, TICK_MS);
