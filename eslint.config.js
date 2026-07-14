@@ -67,6 +67,7 @@ export default tseslint.config(
   {
     files: [
       "server/**/*.{js,cjs,mjs}",
+      "control-plane/**/*.{js,cjs,mjs}",
       "scripts/**/*.{js,mjs,cjs}",
       "eval/**/*.{js,mjs,cjs}",
       "e2e/**/*.ts",
@@ -79,7 +80,12 @@ export default tseslint.config(
 
   // JS puro (Node CJS): o hub usa CommonJS (`require`), que é correto aqui.
   {
-    files: ["server/**/*.{js,cjs,mjs}", "scripts/**/*.{js,mjs,cjs}", "*.{js,mjs,cjs}"],
+    files: [
+      "server/**/*.{js,cjs,mjs}",
+      "control-plane/**/*.{js,cjs,mjs}",
+      "scripts/**/*.{js,mjs,cjs}",
+      "*.{js,mjs,cjs}",
+    ],
     rules: {
       // unused vars como warn (o recommended marca como error).
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],

@@ -1,0 +1,30 @@
+# PG local p/ RODAR O GATE DE RLS (control-plane/rls.test.js). Sobe um Postgres, aplica o
+# schema como DONO (postgres) e provisiona o usuário do app cp_app SEM BYPASSRLS — o setup
+# exato do spec §5 (camadas 2 e 3). O FORCE RLS do schema faz a policy valer até p/ o dono.
+#
+# Uso:
+#   cd control-plane && docker compose up -d
+#   CP_DATABASE_URL="postgres://cp_app:cp_app_pw@localhost:55432/control_plane" \
+#     npx vitest run control-plane/rls.test.js --config ../vitest.config.ts
+#   docker compose down -v   # derruba e apaga o volume
+#
+# Porta 55432 no host p/ não colidir com um PG local (5432/5433).
+services:
+  cp-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: control_plane
+    ports:
+      - "55432:5432"
+    volumes:
+      # schema.sql roda como o DONO (postgres) → tabelas de propriedade do superuser; o
+      # FORCE RLS garante que a policy vale mesmo p/ ele. cp_app conecta SEM BYPASSRLS.
+      - ../control-plane/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./init/02-grants.sql:/docker-entrypoint-initdb.d/02-grants.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d control_plane"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

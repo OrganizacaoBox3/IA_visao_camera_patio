@@ -5,7 +5,11 @@ import { defineConfig } from "vitest/config";
 // — senão o vitest tenta rodar `e2e/*.spec.ts` e quebra (test() do Playwright != do Vitest).
 export default defineConfig({
   test: {
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "server/**/*.test.{js,cjs,mjs}"],
+    include: [
+      "src/**/*.{test,spec}.{ts,tsx}",
+      "server/**/*.test.{js,cjs,mjs}",
+      "control-plane/**/*.test.{js,cjs,mjs}",
+    ],
     exclude: ["e2e/**", "node_modules/**", "dist/**", "test-results/**", "playwright-report/**"],
   },
 });

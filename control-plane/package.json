@@ -1,0 +1,11 @@
+{
+  "name": "visao_patio_control_plane",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Control-plane (Pool multi-cliente) — cadastro + metadado agregado + RBAC com escopo. Processo separado do hub.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  }
+}
