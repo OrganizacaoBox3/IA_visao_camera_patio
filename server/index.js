@@ -6,6 +6,7 @@ const rtsp = require("./rtsp");
 const go2rtc = require("./go2rtc");
 const cameraStore = require("./cameras");
 const alerts = require("./alerts");
+const cpForwarder = require("./control-plane-forwarder");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
@@ -311,6 +312,9 @@ io.on("connection", (socket) => {
         : "[whatsapp] desligado (defina WHATSAPP_ENABLED=1 para ligar)",
     );
     whatsapp.init();
+    // Control-plane (spec-control-plane §4): registro do hub silo + heartbeat. Inerte sem
+    // CP_URL/SITE_ID/SITE_KEY (só loga o desligado); o forwardAlarm vive em alarm/pipeline.js.
+    cpForwarder.startHeartbeat();
     // Supervisor do sidecar go2rtc (WebRTC): AUTO-ON pela presença de bin/go2rtc[.exe];
     // GO2RTC_ENABLED=0 força off (ver server/go2rtc.js). getSources espelha o que o rtsp.js
     // ingere: fontes LEGADAS (rtsp.sources.json/env, ids rtsp-N) + DINÂMICAS (cameras.json).

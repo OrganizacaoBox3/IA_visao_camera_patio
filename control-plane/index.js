@@ -6,6 +6,7 @@
 const { createServer } = require("node:http");
 const db = require("./db");
 const auth = require("./auth");
+const routes = require("./routes");
 
 const PORT = Number(process.env.CP_PORT ?? 4100);
 const HOST = process.env.CP_HOST ?? "0.0.0.0";
@@ -75,7 +76,8 @@ const httpServer = createServer(async (req, res) => {
     if (req.url === "/health" && req.method === "GET") {
       return json(res, 200, { ok: true, service: "control-plane", db: db.configured() });
     }
-    // (Fase 1: aqui entram os routes de cadastro, cada um atrás de ctx.requireScope + canAccess.)
+    // Fase 1: login + CRUD do cadastro + ingest/heartbeat (cada um com seu guard em routes.js).
+    if (await routes.handle(req, res, ctx)) return;
   } catch (err) {
     if (err && err.tooLarge) return json(res, 413, { error: "corpo grande demais" });
     if (err instanceof SyntaxError) return json(res, 400, { error: "requisição inválida" });

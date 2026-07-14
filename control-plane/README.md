@@ -1,19 +1,69 @@
-# control-plane — Fase 0 (fundação de segurança)
+# control-plane — Fase 0 + Fase 1 (fundação de segurança + cadastro/login/ingest)
 
 Serviço **separado** do hub (spec: `docs/analises/spec-control-plane.md` §7). Idioma da casa:
-`node:http` + `pg` nativo, sem framework, sem ORM, sem IdP. **Fase 0 = só a fundação segura + os
-gates.** Sem UI, sem cadastro (isso é a Fase 1).
+`node:http` + `pg` nativo, sem framework, sem ORM, sem IdP. **Fase 0** = a fundação segura + os
+gates (schema, RLS, `withTenant`, `canAccess`, token com escopo). **Fase 1** (esta) = cadastro +
+login + o ingest hub→plane. Sem UI ainda (SPA é a Fase 2).
 
 ## Arquivos
 
 | arquivo | o quê |
 |---|---|
-| `schema.sql` | as 6 tabelas (partner→cliente→site, app_user, membership, alarm_event) + **RLS `FORCE` na `alarm_event`**. Idempotente. |
+| `schema.sql` | as 6 tabelas (partner→cliente→site, app_user, membership, alarm_event) + **RLS `FORCE` na `alarm_event`** + (Fase 1, aditivo) `site.site_key_hash`/`site.last_seen`. Idempotente. |
 | `db.js` | `pg.Pool` + **`withTenant(siteId, fn)`** — transação com `set_config('app.current_tenant', …, true)` (transaction-scoped, fail-closed). |
 | `auth.js` | token HMAC com **escopo** (`{id,papel,scope_type,scope_id,exp}`) + **`canAccess(claims, resource, tree)`** puro. |
-| `index.js` | servidor mínimo: `/health` + esqueleto do `ctx` (`json`/`readBody`/`requireScope`). |
-| `auth.test.js` | `canAccess` + token, **roda sempre** (puro, sem banco). |
-| `rls.test.js` | **o GATE de isolamento** — exige Postgres real; SKIP declarado sem ele. |
+| `password.js` | scrypt (`hashPassword`/`verifyPassword`) — **mesmo esquema do hub** (`server/users.js`). |
+| `sitekey.js` | credencial do hub silo: `generateSiteKey` (randomBytes) + hash sha256 + `verifySiteKey` timing-safe. Guardamos só o HASH. |
+| `stores.js` | CRUD (partner/cliente/site/app_user/membership) via `db.query` — cadastro **não** tem RLS de linha (isolamento é `canAccess` no app, spec §5). |
+| `access.js` | monta a fatia da árvore do banco e chama `canAccess` — `guardAccess`/`guardScope`/`scopeInTree`. Todo handler passa por aqui. |
+| `login.js` | `selectScope` puro: >1 membership → o token leva a de **maior privilégio** (platform>partner>cliente>site). |
+| `routes.js` | as rotas da API (login + CRUD + ingest/heartbeat), cada CRUD atrás de `requireScope` + `canAccess`. |
+| `index.js` | servidor: `/health` + `ctx` + dispatch p/ `routes.handle`. |
+| `seed.js` | bootstrap idempotente do platform-admin (`npm run seed`). |
+| `auth.test.js` / `login.test.js` / `access.test.js` / `sitekey.test.js` | **puros, rodam sempre** (sem banco). |
+| `rls.test.js` / `cadastro.pg.test.js` | exigem Postgres real; SKIP declarado sem ele. |
+
+## Bootstrap (o ovo-galinha) — `npm run seed`
+
+Sem nenhum usuário não dá p/ logar. `seed.js` cria (idempotente) um **platform-admin** a partir de
+env, no molde do superadmin do hub:
+
+```bash
+cd control-plane
+CP_DATABASE_URL="postgres://cp_app:cp_app_pw@localhost:55432/control_plane" \
+  CP_ADMIN_EMAIL="admin@voce.com" CP_ADMIN_PASSWORD="troque-isto" \
+  npm run seed
+```
+
+Sem `CP_ADMIN_PASSWORD` ele usa um **default inseguro** (com WARN gritado) — só p/ dev. Reexecutar
+não duplica e **não** sobrescreve a senha de um usuário já existente.
+
+## API (Fase 1)
+
+- `POST /api/login` `{email, senha}` → `{token, user, scope}`. Sem membership → 403.
+- CRUD `/api/partners`, `/api/clientes`, `/api/sites`, `/api/users`, `/api/memberships` (Bearer token;
+  cada um atrás de `canAccess` no recurso/escopo alvo — herança para baixo, spec §3).
+  - **Criar site** devolve a `site_key` **crua UMA vez** (padrão API key); o banco guarda só o hash.
+- `POST /api/ingest/alarm` e `POST /api/site/heartbeat` — **autenticados por site**, não por token de
+  usuário (ver o contrato abaixo).
+
+### Contrato hub → plane (ingest/heartbeat)
+
+Auth por header: **`x-site-id`** + **`x-site-key`** (a chave em texto; o plane compara com o HASH
+guardado, timing-safe). `site inexistente → 404`, `site_key errada → 401`.
+
+```
+POST {CP_URL}/api/ingest/alarm
+  x-site-id: <SITE_ID>   x-site-key: <SITE_KEY>
+  body = evento do hub (events.record): { id, ts, cameraId, cameraLabel, zona, tipo, priority, text, state }
+  → 202. Grava em alarm_event via withTenant(site_id): tipo=body.tipo, ts=body.ts,
+        meta = jsonb do resto ({id,cameraId,cameraLabel,zona,priority,text,state}).
+
+POST {CP_URL}/api/site/heartbeat   (mesma auth) → 200, atualiza site.last_seen.
+```
+
+No **hub** (Frente B), as envs `CP_URL` / `SITE_ID` / `SITE_KEY` regem o forwarder — **ausente →
+inerte** (a disciplina da casa).
 
 ## O usuário `pg` (invariante do §5)
 

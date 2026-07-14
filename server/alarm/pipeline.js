@@ -4,19 +4,22 @@
 //   1) alerts.notify          — webhook Andon;
 //   2) dispatch.dispatchAlert — WhatsApp (filtros por destinatário);
 //   3) events.record          — fila acionável (SÓ METADADOS — LGPD/ADR-002);
-//   4) io "alarm-event"       — painéis ao vivo (contrato ADITIVO).
+//   4) io "alarm-event"       — painéis ao vivo (contrato ADITIVO);
+//   5) control-plane forwarder — encaminha o MESMO ev de metadados ao plane (fail-soft, inerte
+//      sem CP_URL/SITE_ID/SITE_KEY; spec-control-plane §4). Nunca frame, nunca texto cru do Andon.
 // Nenhum canal decide sozinho (ADR-004): dedup/flood/prioridade/shelve moram na política.
 const alarmPolicy = require("../alarmPolicy");
 const alerts = require("../alerts");
 const dispatch = require("../dispatch");
 const events = require("../events");
+const cpForwarder = require("../control-plane-forwarder");
 
 /**
  * Avalia e roteia um alerta. Nunca rejeita: falha de persistência é logada e engolida
  * (o caminho de notificação não pode derrubar o handler de socket).
  * @param {{text:string, ts?:number, cameraId?:string, zona?:string, tipo?:string}} p
  * @param {{cameras: Map<string, {id:string, label?:string}>, io: {to:Function}}} ctx
- * @param {{evaluate?:Function, notify?:Function, dispatchAlert?:Function, record?:Function}} [deps]
+ * @param {{evaluate?:Function, notify?:Function, dispatchAlert?:Function, record?:Function, forwardAlarm?:Function}} [deps]
  *        Injeção SÓ para teste (fakes sem socket); em produção use os defaults.
  * @returns {Promise<object|null>} o evento gravado, ou null quando suprimido/falhou.
  */
@@ -25,6 +28,7 @@ function handleAlert(p, { cameras, io }, deps = {}) {
   const notify = deps.notify || alerts.notify;
   const dispatchAlert = deps.dispatchAlert || dispatch.dispatchAlert;
   const record = deps.record || events.record;
+  const forwardAlarm = deps.forwardAlarm || cpForwarder.forwardAlarm;
 
   const d = evaluate(p);
   if (!d) return Promise.resolve(null);
@@ -41,7 +45,12 @@ function handleAlert(p, { cameras, io }, deps = {}) {
     text: d.text,
   })
     .then((ev) => {
-      if (ev) io.to("dashboards").emit("alarm-event", ev);
+      if (ev) {
+        io.to("dashboards").emit("alarm-event", ev);
+        // Encaminha o MESMO ev de metadados ao control-plane (fire-and-forget: fail-soft e
+        // inerte sem env — nunca atrasa nem derruba o pipeline; spec-control-plane §4).
+        void forwardAlarm(ev);
+      }
       return ev || null;
     })
     .catch((e) => {

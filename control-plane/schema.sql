@@ -54,10 +54,15 @@ create table if not exists site (             -- 1:1 com um hub silo (site_key =
   id text primary key,
   cliente_id text not null references cliente(id) on delete restrict,
   nome text not null,
-  site_key text unique,
+  site_key text unique,                       -- (legado Fase 0; a credencial viva é site_key_hash)
   criado_em bigint not null
 );
 create index if not exists site_cliente_idx on site(cliente_id);
+
+-- Fase 1 (aditivo/idempotente): a credencial do hub vira HASH (nunca guardamos a chave crua) +
+-- o carimbo do último heartbeat. ADD COLUMN IF NOT EXISTS não altera dado existente.
+alter table site add column if not exists site_key_hash text;   -- hash da site_key (sitekey.js)
+alter table site add column if not exists last_seen bigint;      -- epoch-ms do último heartbeat
 
 -- ── CADASTRO: pessoas + o ESCOPO (membership como tabela de junção) ───────────
 create table if not exists app_user (         -- pessoa (senha scrypt, mesmo esquema do hub)
