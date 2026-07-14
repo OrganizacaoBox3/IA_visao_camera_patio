@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { RadioTower } from "lucide-react";
-import { Badge, Button, EmptyState, Field, Input, SectionTitle, Switch, Table } from "../../ui";
+import { Badge, Button, EmptyState, InlineEdit, SectionTitle, Switch, Table } from "../../ui";
 import type { BtStation } from "../../api";
 
 // APRESENTAÇÃO da lista de estações BLE (a aba Estações da tela BLE). Zero rede, zero contexto:
@@ -107,32 +107,15 @@ export function EstacoesList({
               <tr key={s.id} style={{ opacity: s.ativo ? 1 : 0.55 }}>
                 <td>
                   {editando ? (
-                    <div className="flex flex-wrap items-end gap-2">
-                      <Field label="Nome da estação" htmlFor={`est-nome-${s.id}`}>
-                        <Input
-                          id={`est-nome-${s.id}`}
-                          value={editNome}
-                          placeholder='ex.: "Doca 3", "Expedição"'
-                          autoFocus
-                          onChange={(e) => setEditNome(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") salvar(s);
-                            if (e.key === "Escape") setEditId(null);
-                          }}
-                        />
-                      </Field>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={saving || !editNome.trim()}
-                        onClick={() => salvar(s)}
-                      >
-                        {saving ? "Salvando…" : "Salvar"}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditId(null)}>
-                        Cancelar
-                      </Button>
-                    </div>
+                    <InlineEdit
+                      label="Nome da estação"
+                      value={editNome}
+                      onChange={setEditNome}
+                      onSave={() => salvar(s)}
+                      onCancel={() => setEditId(null)}
+                      saving={saving}
+                      placeholder='ex.: "Doca 3", "Expedição"'
+                    />
                   ) : (
                     <div className="flex min-w-0 flex-col">
                       <span className="flex items-center gap-2 text-body font-medium text-text">

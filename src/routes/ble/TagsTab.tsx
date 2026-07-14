@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { BluetoothSearching, Tag } from "lucide-react";
+import { BluetoothSearching } from "lucide-react";
 import { useAuth } from "../../auth";
 import { APP_CONFIG } from "../../config";
-import { Badge, EmptyState, Spinner, Button, Input, Alert, SectionTitle, useToast } from "../../ui";
+import { Alert, Badge, Button, EmptyState, InlineEdit, Meter, Spinner, Table, useToast } from "../../ui";
 import {
   apiGet,
   getBtReadings,
@@ -262,115 +262,75 @@ export function TagsTab({ onVerEstacoes }: { onVerEstacoes?: () => void }) {
           )}
         </EmptyState>
       ) : (
-        <>
-          {groups.map((g) => (
-            <div key={g.stationId || "estacao"} className="flex flex-col gap-2">
-              {/* Cabeçalho da fonte SÓ com 2+ estações — com uma, o layout de sempre (CA-3).
-                  <h2> via SectionTitle (doutrina regra 7: seção com título é heading). O rótulo é
-                  o NOME cadastrado; o id técnico continua ali, discreto (normal-case, sem o negrito
-                  do título) — e some quando é o próprio nome (estação pendente de batismo). */}
-              {groups.length > 1 && (
-                <SectionTitle flush className="flex items-center gap-1.5">
-                  <BluetoothSearching size={12} strokeWidth={1.75} aria-hidden />
-                  <span>Estação {stationLabel(g.stationId)}</span>
-                  {g.stationId && stationLabel(g.stationId) !== g.stationId && (
-                    <span className="font-normal normal-case tracking-normal">{g.stationId}</span>
+        // Mesma apresentação da aba Estações: o átomo <Table> da casa (semântica th scope + rolagem
+        // interna). A coluna "Estação" só aparece com 2+ estações (multi-antena) — com uma, é a
+        // tabela de sempre. O sinal é o átomo <Meter>; a edição de nome, a molécula <InlineEdit> — as
+        // MESMAS das Estações (atomic design + DRY). `entries` já vem ordenado por estação e sinal.
+        <Table
+          ariaLabel="Tags BLE detectadas"
+          className="flex-1"
+          columns={[
+            { label: "Tag", className: "w-full" },
+            ...(groups.length > 1 ? [{ label: "Estação", className: "whitespace-nowrap" }] : []),
+            { label: "Sinal", className: "whitespace-nowrap" },
+            ...(canConfigure
+              ? [{ label: "Ações", className: "whitespace-nowrap text-right" }]
+              : []),
+          ]}
+        >
+          <tbody>
+            {entries.map((r) => {
+              const key = `${r.stationId}|${r.mac}`;
+              const stale = now - r.ts > STALE_MS;
+              const pct = rssiPct(r.rssi);
+              const reg = tagByMac[r.mac]; // MAC já é maiúsculo (mergeReadings)
+              const name = reg?.rotulo ?? r.rotulo ?? null; // registro local → enriquecido → nada
+              const editing = editKey === key;
+              return (
+                <tr key={key} style={{ opacity: stale ? 0.45 : 1 }}>
+                  <td>
+                    {editing ? (
+                      <InlineEdit
+                        value={editName}
+                        onChange={setEditName}
+                        onSave={() => saveName(r.mac)}
+                        onCancel={() => setEditKey(null)}
+                        saving={savingMac === r.mac}
+                        placeholder="Nome da pessoa"
+                        ariaLabel={`Nome da pessoa da tag ${r.mac}`}
+                      />
+                    ) : (
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate text-body font-medium text-text">
+                          {name ?? r.mac}
+                        </span>
+                        <span className="text-micro text-text-muted">
+                          {name ? r.mac : "sem nome"}
+                          {stale && " · sem sinal recente"}
+                        </span>
+                      </div>
+                    )}
+                  </td>
+                  {groups.length > 1 && (
+                    <td className="whitespace-nowrap text-label text-text-dim">
+                      {stationLabel(r.stationId)}
+                    </td>
                   )}
-                  <span>
-                    · {g.rows.length} leitura{g.rows.length === 1 ? "" : "s"}
-                  </span>
-                </SectionTitle>
-              )}
-              <ul
-                className="flex flex-col gap-2"
-                aria-label={
-                  groups.length > 1
-                    ? `Tags BLE detectadas — estação ${stationLabel(g.stationId)}`
-                    : "Tags BLE detectadas"
-                }
-              >
-                {g.rows.map((r) => {
-                  const key = `${r.stationId}|${r.mac}`;
-                  const stale = now - r.ts > STALE_MS;
-                  const pct = rssiPct(r.rssi);
-                  const reg = tagByMac[r.mac]; // MAC já é maiúsculo (mergeReadings)
-                  const name = reg?.rotulo ?? r.rotulo ?? null; // registro local (fresco) → enriquecido → nada
-                  const editing = editKey === key;
-                  return (
-                    <li
-                      key={key}
-                      className="flex items-center gap-3 rounded-sm border border-border bg-panel-2 px-3 py-2 transition-opacity"
-                      style={{ opacity: stale ? 0.45 : 1 }}
-                    >
-                      <span
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-panel text-text-dim"
-                        aria-hidden
-                      >
-                        <Tag size={15} strokeWidth={1.75} />
+                  <td className="whitespace-nowrap">
+                    {/* Barra de sinal (átomo Meter) + valor cru (going-gray: nunca só número). */}
+                    <div className="flex w-40 items-center gap-2">
+                      <Meter value={pct} muted={stale} ariaLabel={`sinal ${pct}%`} />
+                      <span className="w-16 text-right text-sec tabular-nums text-text-dim">
+                        {r.rssi} dBm
                       </span>
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        {editing ? (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Input
-                              value={editName}
-                              onChange={(e) => setEditName(e.target.value)}
-                              placeholder="Nome da pessoa"
-                              aria-label={`Nome da pessoa da tag ${r.mac}`}
-                              className="w-48"
-                              autoFocus
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") saveName(r.mac);
-                                if (e.key === "Escape") setEditKey(null);
-                              }}
-                            />
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              disabled={savingMac === r.mac || !editName.trim()}
-                              onClick={() => saveName(r.mac)}
-                            >
-                              {savingMac === r.mac ? "…" : "Salvar"}
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditKey(null)}>
-                              Cancelar
-                            </Button>
-                          </div>
-                        ) : (
-                          <>
-                            <span className="truncate text-title font-medium text-text">
-                              {name ?? r.mac}
-                            </span>
-                            <span className="text-label text-text-muted">
-                              {name ? r.mac : "sem nome"}
-                              {stale && " · sem sinal recente"}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      {/* Barra de sinal analógica + valor cru (going-gray: neutro; nunca só número). */}
-                      <div className="flex w-40 shrink-0 items-center gap-2">
-                        <span
-                          className="h-1.5 flex-1 overflow-hidden rounded-full bg-panel"
-                          role="img"
-                          aria-label={`sinal ${pct}%`}
-                        >
-                          <span
-                            className="block h-full rounded-full"
-                            style={{
-                              width: `${pct}%`,
-                              background: stale ? "var(--border)" : "var(--state-ok)",
-                            }}
-                          />
-                        </span>
-                        <span className="w-16 text-right text-sec tabular-nums text-text-dim">
-                          {r.rssi} dBm
-                        </span>
-                      </div>
-                      {canConfigure && !editing && (
+                    </div>
+                  </td>
+                  {canConfigure && (
+                    <td className="whitespace-nowrap text-right">
+                      {!editing && (
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="shrink-0"
                           onClick={() => {
                             setEditKey(key);
                             setEditName(name ?? "");
@@ -379,13 +339,13 @@ export function TagsTab({ onVerEstacoes }: { onVerEstacoes?: () => void }) {
                           {name ? "editar" : "nomear"}
                         </Button>
                       )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-        </>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
       )}
     </div>
   );

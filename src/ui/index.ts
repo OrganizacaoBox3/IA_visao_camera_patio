@@ -14,6 +14,8 @@ export { ToastProvider, useToast, type ToastTone } from "./Toast";
 // KPI: o átomo da casa é o Kpi/KpiRow de routes/report/KpiRow.tsx (o antigo KpiCard daqui
 // era duplicata sem consumidor).
 export { Badge, Spinner, Skeleton, SkeletonText, Alert, EmptyState, type Tone } from "./misc";
+export { Meter } from "./Meter";
+export { InlineEdit } from "./InlineEdit";
 export { SectionTitle } from "./SectionTitle";
 export { PageHeader } from "./PageHeader";
 export { Panel } from "./Panel";
