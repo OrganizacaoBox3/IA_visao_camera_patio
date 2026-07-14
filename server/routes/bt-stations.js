@@ -22,14 +22,17 @@ async function handle(req, res, ctx) {
     if (req.method === "PATCH") {
       if (!requireConfigurer(req, res)) return true;
       const r = await stations.update(id, JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, r.error === "estação não encontrada" ? 404 : 400, r);
+      // r.status (503 na falha de persistência) tem prioridade; senão 404 (inexistente) ou 400.
+      if (r.error) json(res, r.status || (r.error === "estação não encontrada" ? 404 : 400), r);
       else json(res, 200, r.station);
       return true;
     }
     if (req.method === "DELETE") {
       if (!requireConfigurer(req, res)) return true;
-      await stations.remove(id);
-      json(res, 200, { ok: true });
+      // Falha de persistência não vira 200 silencioso (a estação voltaria no restart) — surface o 503.
+      const r = await stations.remove(id);
+      if (r.error) json(res, r.status || 500, r);
+      else json(res, 200, { ok: true });
       return true;
     }
   }

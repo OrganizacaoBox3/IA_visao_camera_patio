@@ -107,13 +107,17 @@ function constantTimeEqual(a, b) {
 }
 
 // ── persistência (PG ou JSON) ─────────────────────────────────────────────────
+// LANÇA em falha — de propósito: o CRUD (create/update/remove/updateProfile) trata e FAZ ROLLBACK da
+// memória (contra "persistência falsa": o usuário/papel que muda na tela e reverte no restart).
+// MESMO padrão de shifts.js. O bootstrap do superadmin em init() envolve em try/catch (best-effort).
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(users, null, 2));
-  } catch (e) {
-    console.error("[users] falha ao salvar:", e.message);
-  }
+  fs.writeFileSync(FILE, JSON.stringify(users, null, 2));
 }
+// Erro de persistência padronizado — a rota usa .status para o 503.
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} o usuário — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
 async function persist(u) {
   if (!usingPg) return saveFile();
   await db.query(
@@ -184,7 +188,13 @@ async function init() {
   }
   if (!users.length) {
     users.push(newSuperadmin());
-    saveFile();
+    // Bootstrap é best-effort: se o disco recusar, o superadmin fica só em memória neste boot (a UI
+    // ainda funciona p/ a 1ª sessão) e é recriado no próximo — não vale derrubar o serviço aqui.
+    try {
+      saveFile();
+    } catch (e) {
+      console.error("[users] falha ao gravar superadmin de bootstrap (segue em memória):", e.message);
+    }
     console.log("[users] superadmin criado em users.json (bootstrap) — TROQUE a senha.");
   }
 }
@@ -225,7 +235,13 @@ async function createUser({ usuario, senha, papel }) {
     criadoEm: Date.now(),
   };
   users.push(u);
-  await persist(u);
+  try {
+    await persist(u);
+  } catch (e) {
+    users = users.filter((x) => x !== u); // rollback: remove exatamente o que entrou
+    console.error("[users] FALHA ao criar usuário (persistência):", e.message);
+    return PERSIST_ERROR("criar");
+  }
   return { user: publicUser(u) };
 }
 async function updateUser(id, patch) {
@@ -239,20 +255,34 @@ async function updateUser(id, patch) {
   ).length;
   if (otherSupers + (willPapel === "superadmin" && willActive ? 1 : 0) < 1)
     return { error: "precisa de ao menos 1 superadmin ativo" };
+  const before = { ...u }; // snapshot p/ rollback
   if (typeof patch.ativo === "boolean") u.ativo = patch.ativo;
   u.papel = willPapel;
   if (patch.senha) u.senhaHash = hashPassword(patch.senha);
-  await persist(u);
+  try {
+    await persist(u);
+  } catch (e) {
+    Object.assign(u, before); // rollback: papel/ativo/senha voltam ao anterior
+    console.error("[users] FALHA ao editar usuário (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { user: publicUser(u) };
 }
 async function removeUser(id) {
   const u = getById(id);
   if (!u) return { error: "usuário não encontrado" };
+  const idx = users.findIndex((x) => x.id === id);
   const rest = users.filter((x) => x.id !== id);
   if (!rest.some((x) => x.papel === "superadmin" && x.ativo))
     return { error: "não pode remover o último superadmin ativo" };
-  users = rest;
-  await persistDelete(id);
+  const [removed] = users.splice(idx, 1); // remoção otimista (preserva a ordem p/ rollback)
+  try {
+    await persistDelete(id);
+  } catch (e) {
+    users.splice(idx, 0, removed); // rollback: re-insere na posição original
+    console.error("[users] FALHA ao remover usuário (persistência):", e.message);
+    return PERSIST_ERROR("remover");
+  }
   return { ok: true };
 }
 
@@ -267,6 +297,7 @@ function getProfile(id) {
 async function updateProfile(id, patch) {
   const u = getById(id);
   if (!u) return { error: "usuário não encontrado" };
+  const before = { ...u }; // snapshot p/ rollback
   if (typeof patch.whatsapp === "string") u.whatsapp = normalizePhone(patch.whatsapp);
   if (patch.filtros && typeof patch.filtros === "object")
     u.filtros = {
@@ -275,7 +306,13 @@ async function updateProfile(id, patch) {
       tipos: Array.isArray(patch.filtros.tipos) ? patch.filtros.tipos : [],
     };
   if (typeof patch.optIn === "boolean") u.optInEm = patch.optIn ? u.optInEm || Date.now() : null;
-  await persist(u);
+  try {
+    await persist(u);
+  } catch (e) {
+    Object.assign(u, before); // rollback: preferências voltam ao anterior
+    console.error("[users] FALHA ao salvar perfil (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { user: publicUser(u) };
 }
 

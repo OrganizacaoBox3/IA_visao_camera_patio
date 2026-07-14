@@ -54,12 +54,11 @@ function build(e) {
 }
 
 // ── Persistência ──────────────────────────────────────────────────────────
+// LANÇA em falha — de propósito: record/ack/forward tratam e FAZEM ROLLBACK da memória (contra
+// "persistência falsa": o alarme que aparece na fila e some no restart). MESMO padrão de shifts.js.
+// A RETENÇÃO (housekeeping) é a exceção: envolve seu saveFile em try/catch (best-effort, retenta).
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-  } catch (e) {
-    log.error({ err: e.message }, "[alarm-events] falha ao salvar JSON");
-  }
+  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 async function persist(ev) {
   if (!usingPg) return saveFile();
@@ -91,7 +90,15 @@ async function enforceRetention() {
   if (cutoff) list = list.filter((e) => e.ts >= cutoff);
   if (list.length > RETENTION) list = list.slice(0, RETENTION);
   if (!usingPg) {
-    if (list.length !== before) saveFile();
+    // Best-effort: a retenção é housekeeping (o evento novo JÁ está durável via record→persist). Uma
+    // falha aqui não pode fazer rollback nem lançar — só loga e a poda ocorre no próximo ciclo.
+    if (list.length !== before) {
+      try {
+        saveFile();
+      } catch (e) {
+        log.error({ err: e.message }, "[alarm-events] falha ao salvar JSON (retenção, retenta)");
+      }
+    }
     return;
   }
   try {
@@ -138,10 +145,23 @@ async function init() {
 
 // ── API do store ────────────────────────────────────────────────────────────
 // Grava um novo evento de alarme (metadados). Retorna o evento criado.
+// Erro de persistência padronizado (ack/forward usam .status p/ o 503 na rota; record LANÇA, e o
+// pipeline já trata com .catch — ver alarm/pipeline.js — então um alarme não-durável não é emitido).
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} o alarme — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
+
 async function record(e) {
   const ev = build({ ...e, id: undefined, state: "new", ackBy: undefined, ackAt: undefined });
-  list.unshift(ev);
-  await persist(ev);
+  list.unshift(ev); // otimista
+  try {
+    await persist(ev);
+  } catch (err) {
+    list = list.filter((x) => x !== ev); // rollback: nada de alarme-fantasma na fila
+    log.error({ err: err.message }, "[alarm-events] FALHA ao gravar alarme (rollback)");
+    throw err; // o pipeline (.catch) não emite o evento — memória fica coerente com o durável
+  }
   await enforceRetention();
   log.info(
     { id: ev.id, cameraId: ev.cameraId, tipo: ev.tipo, priority: ev.priority, state: ev.state },
@@ -154,10 +174,17 @@ async function record(e) {
 async function ack(id, by) {
   const ev = list.find((x) => x.id === id);
   if (!ev) return { error: "alarme não encontrado" };
+  const before = { ...ev }; // snapshot p/ rollback
   ev.state = "acknowledged";
   ev.ackBy = clean(by) || ev.ackBy || "—";
   ev.ackAt = Date.now();
-  await persist(ev);
+  try {
+    await persist(ev);
+  } catch (e) {
+    Object.assign(ev, before); // rollback: o ack não gravou → estado volta ao anterior
+    log.error({ err: e.message }, "[alarm-events] FALHA no ack (persistência)");
+    return PERSIST_ERROR("reconhecer");
+  }
   log.info(
     { id: ev.id, ackBy: ev.ackBy, state: ev.state },
     "[alarm-events] alarme reconhecido (ack)",
@@ -169,10 +196,17 @@ async function ack(id, by) {
 async function forward(id, by) {
   const ev = list.find((x) => x.id === id);
   if (!ev) return { error: "alarme não encontrado" };
+  const before = { ...ev }; // snapshot p/ rollback
   ev.state = "forwarded";
   if (clean(by)) ev.ackBy = clean(by);
   if (!ev.ackAt) ev.ackAt = Date.now();
-  await persist(ev);
+  try {
+    await persist(ev);
+  } catch (e) {
+    Object.assign(ev, before); // rollback: o forward não gravou → estado volta ao anterior
+    log.error({ err: e.message }, "[alarm-events] FALHA no forward (persistência)");
+    return PERSIST_ERROR("encaminhar");
+  }
   log.info(
     { id: ev.id, by: ev.ackBy, state: ev.state },
     "[alarm-events] alarme encaminhado (forward)",

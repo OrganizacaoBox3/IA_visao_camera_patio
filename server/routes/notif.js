@@ -19,7 +19,8 @@ async function handle(req, res, ctx) {
     if (req.method === "POST") {
       if (!requireSuper(req, res)) return true;
       const r = await recipients.create(JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      // r.status (503 na falha de persistência) tem prioridade; senão 400 (validação).
+      if (r.error) json(res, r.status || 400, r);
       else json(res, 201, r.recipient);
       return true;
     }
@@ -30,14 +31,16 @@ async function handle(req, res, ctx) {
     if (req.method === "PATCH") {
       if (!requireSuper(req, res)) return true;
       const r = await recipients.update(id, JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      if (r.error) json(res, r.status || 400, r);
       else json(res, 200, r.recipient);
       return true;
     }
     if (req.method === "DELETE") {
       if (!requireSuper(req, res)) return true;
-      await recipients.remove(id);
-      json(res, 200, { ok: true });
+      // Falha de persistência não vira 200 silencioso (o destinatário voltaria no restart) — 503.
+      const r = await recipients.remove(id);
+      if (r.error) json(res, r.status || 500, r);
+      else json(res, 200, { ok: true });
       return true;
     }
   }

@@ -31,7 +31,7 @@ async function handle(req, res, ctx) {
     const body = JSON.parse((await readBody(req)) || "{}");
     const r = await events.ack(mAck[1], body.by || me.usuario || me.id);
     if (r.error) {
-      json(res, 404, r);
+      json(res, r.status || 404, r); // r.status (503) tem prioridade sobre o 404
       return true;
     }
     io.to("dashboards").emit("alarm-update", r.event);
@@ -46,7 +46,7 @@ async function handle(req, res, ctx) {
     const body = JSON.parse((await readBody(req)) || "{}");
     const r = await events.forward(mFwd[1], body.by || me.usuario || me.id);
     if (r.error) {
-      json(res, 404, r);
+      json(res, r.status || 404, r); // r.status (503) tem prioridade sobre o 404
       return true;
     }
     io.to("dashboards").emit("alarm-update", r.event);

@@ -34,12 +34,12 @@ const lastPersist = new Map(); // id -> epoch-ms da última gravação de ultima
 
 const norm = (s) => String(s ?? "").trim();
 
+// LANÇA em falha — de propósito: o CRUD do operador (update/remove) e o registro de estação NOVA em
+// `seen` tratam e FAZEM ROLLBACK da memória (contra "persistência falsa"). MESMO padrão de shifts.js.
+// A gravação ESPAÇADA do `ultimaVezEm` (write-behind) é a ÚNICA exceção: lá o erro é engolido e
+// retenta no próximo tick (o valor é barato e reconstruído a cada leitura).
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-  } catch (e) {
-    console.error("[bt-stations] falha ao salvar:", e.message);
-  }
+  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 async function persist(s) {
   if (!usingPg) return saveFile();
@@ -90,26 +90,48 @@ async function seen(id, now = Date.now()) {
   if (!ID_RE.test(key)) return { error: "id de estação inválido" };
   const existente = list.find((s) => s.id === key);
   if (existente) {
-    existente.ultimaVezEm = now;
-    // Gravação espaçada (SEEN_PERSIST_MS): a memória já está fresca p/ o GET.
+    existente.ultimaVezEm = now; // write-behind: a memória já está fresca p/ o GET
+    // Gravação ESPAÇADA (SEEN_PERSIST_MS), BEST-EFFORT: o `ultimaVezEm` é barato e reconstruído a
+    // cada leitura — uma falha aqui não vira "persistência falsa" (o dado JÁ existe no disco), então
+    // só loga e retenta no próximo tick, sem derrubar a leitura. `lastPersist` só avança se gravou.
     if (now - (lastPersist.get(key) ?? 0) >= SEEN_PERSIST_MS) {
-      lastPersist.set(key, now);
-      await persist(existente);
+      try {
+        await persist(existente);
+        lastPersist.set(key, now);
+      } catch (e) {
+        console.error("[bt-stations] falha ao gravar ultimaVezEm (write-behind, retenta):", e.message);
+      }
     }
     return { station: existente, criada: false };
   }
+  // Estação NOVA = um CREATE: durável-primeiro com rollback. Sem isso, uma falha de escrita deixaria
+  // uma estação-fantasma na tela /estacoes que sumiria no restart. Rollback ⇒ ela reaparece no próximo
+  // POST de leitura (a estação posta a ~1–2 Hz). A rota (bt-station.js) é fail-safe e ignora o retorno.
   const s = { id: key, nome: key, ativo: true, primeiraVezEm: now, ultimaVezEm: now };
   list.push(s);
+  try {
+    await persist(s);
+  } catch (e) {
+    list = list.filter((x) => x !== s); // rollback: nenhuma estação-fantasma
+    console.error("[bt-stations] FALHA ao registrar estação nova (rollback):", e.message);
+    return { error: "falha ao registrar estação — persistência indisponível", status: 503 };
+  }
   lastPersist.set(key, now);
-  await persist(s);
   console.log(`[bt-stations] estação NOVA descoberta: ${key} (pendente de nome)`);
   return { station: s, criada: true };
 }
+
+// DURÁVEL-PRIMEIRO com ROLLBACK (mesma garantia de shifts.js): a falha vira 503 que a rota faz surface.
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} a estação — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
 
 /** PATCH parcial do operador: renomear e/ou (des)ativar. Validação no SERVIDOR. */
 async function update(id, patch = {}) {
   const s = list.find((x) => x.id === id);
   if (!s) return { error: "estação não encontrada" };
+  const before = { ...s }; // snapshot p/ rollback
   if (patch.nome !== undefined) {
     const nome = norm(patch.nome);
     if (!nome) return { error: "nome da estação é obrigatório" };
@@ -120,16 +142,30 @@ async function update(id, patch = {}) {
     if (typeof patch.ativo !== "boolean") return { error: "ativo deve ser booleano" };
     s.ativo = patch.ativo;
   }
-  await persist(s);
+  try {
+    await persist(s);
+  } catch (e) {
+    Object.assign(s, before); // rollback: a edição não gravou → memória volta ao anterior
+    console.error("[bt-stations] FALHA ao editar estação (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { station: s };
 }
 
 async function remove(id) {
-  const n = list.length;
-  list = list.filter((x) => x.id !== id);
-  if (list.length === n) return { ok: true, removida: false };
+  const idx = list.findIndex((x) => x.id === id);
+  if (idx === -1) return { ok: true, removida: false };
+  const [removed] = list.splice(idx, 1); // remoção otimista
+  const hadPersist = lastPersist.get(id);
   lastPersist.delete(id);
-  await persistDelete(id);
+  try {
+    await persistDelete(id);
+  } catch (e) {
+    list.splice(idx, 0, removed); // rollback: re-insere na posição original
+    if (hadPersist !== undefined) lastPersist.set(id, hadPersist);
+    console.error("[bt-stations] FALHA ao remover estação (persistência):", e.message);
+    return PERSIST_ERROR("remover");
+  }
   return { ok: true, removida: true };
 }
 

@@ -15,7 +15,8 @@ async function handle(req, res, ctx) {
     if (req.method === "POST") {
       if (!requireConfigurer(req, res)) return true;
       const r = await btTags.create(JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      // r.status (503 na falha de persistência) tem prioridade; senão 400 (validação).
+      if (r.error) json(res, r.status || 400, r);
       else json(res, 201, r.tag);
       return true;
     }
@@ -27,14 +28,17 @@ async function handle(req, res, ctx) {
     if (req.method === "PATCH") {
       if (!requireConfigurer(req, res)) return true;
       const r = await btTags.update(id, JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      if (r.error) json(res, r.status || 400, r);
       else json(res, 200, r.tag);
       return true;
     }
     if (req.method === "DELETE") {
       if (!requireConfigurer(req, res)) return true;
-      await btTags.remove(id);
-      json(res, 200, { ok: true });
+      // A falha de persistência não pode virar 200 silencioso (a tag seguiria na tela, mas voltaria
+      // no restart) — surface o 503.
+      const r = await btTags.remove(id);
+      if (r.error) json(res, r.status || 500, r);
+      else json(res, 200, { ok: true });
       return true;
     }
   }

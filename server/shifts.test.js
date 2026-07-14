@@ -2,7 +2,7 @@
 // SERVIDOR (diretriz: a regra mora no back; a UI só exibe o erro) — CA-7 (duração 0 / 24h),
 // D3 (pausas dentro da janela, sem sobreposição), D5 (dias 0..6 não-vazio) — e no CRUD.
 // Efeito colateral: create/remove escrevem server/shifts.json (runtime) → limpo no afterAll.
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -109,5 +109,48 @@ describe("shifts — remove", () => {
     const r = await shifts.create({ ...base, nome: "Remover" });
     await shifts.remove(r.shift.id);
     expect(shifts.all().some((s) => s.id === r.shift.id)).toBe(false);
+  });
+});
+
+// GATE ANTI-"PERSISTÊNCIA FALSA" (o impedimento que o dono reportou nos turnos): se a escrita
+// durável falha (PG fora/drift OU disco), o turno NÃO pode "aparecer" na tela para sumir no
+// restart. A memória tem de ficar INTOCADA e o chamador receber erro claro (status 503). Simula-se
+// a falha no caminho JSON (o teste roda sem PG) forçando o writeFileSync a lançar — o try/catch de
+// create/update/remove é o MESMO nos dois backends, então o PG está coberto por construção.
+describe("shifts — persistência atômica (durável-primeiro, com rollback)", () => {
+  it("create: escrita falha → memória INTOCADA + erro 503 (nunca persistência falsa)", async () => {
+    const antes = shifts.all().length;
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw new Error("SIMULADO: disco cheio");
+    });
+    const r = await shifts.create({ ...base, nome: "NaoDeveraPersistir" });
+    spy.mockRestore();
+    expect(r.error).toMatch(/persistência|salvar/i);
+    expect(r.status).toBe(503);
+    expect(shifts.all().length).toBe(antes); // memória não cresceu
+    expect(shifts.all().some((s) => s.nome === "NaoDeveraPersistir")).toBe(false);
+  });
+
+  it("update: escrita falha → a edição faz ROLLBACK (o valor antigo permanece)", async () => {
+    const r = await shifts.create({ ...base, nome: "Original" });
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw new Error("SIMULADO: disco cheio");
+    });
+    const bad = await shifts.update(r.shift.id, { nome: "Editado" });
+    spy.mockRestore();
+    expect(bad.status).toBe(503);
+    expect(shifts.all().find((s) => s.id === r.shift.id).nome).toBe("Original"); // não mudou
+  });
+
+  it("remove: escrita falha → o turno PERMANECE na lista (rollback) + erro 503", async () => {
+    const r = await shifts.create({ ...base, nome: "NaoRemovivel" });
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw new Error("SIMULADO: disco cheio");
+    });
+    const bad = await shifts.remove(r.shift.id);
+    spy.mockRestore();
+    expect(bad.status).toBe(503);
+    expect(shifts.all().some((s) => s.id === r.shift.id)).toBe(true); // ainda lá
+    await shifts.remove(r.shift.id); // limpeza (agora sem o spy, grava de verdade)
   });
 });

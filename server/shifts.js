@@ -14,12 +14,11 @@ const FILE = path.join(__dirname, "shifts.json");
 let list = [];
 let usingPg = false;
 
+// LANÇA em falha (disco cheio/permissão) — de propósito: quem chama (create/update/remove) trata e
+// FAZ ROLLBACK da memória. Engolir aqui recriaria a "persistência falsa" (a UI mostra o que o disco
+// recusou). Escreve a lista INTEIRA, então o chamador já mutou a memória ANTES de chamar.
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-  } catch (e) {
-    console.error("[shifts] falha ao salvar:", e.message);
-  }
+  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 async function persist(t) {
   if (!usingPg) return saveFile();
@@ -123,6 +122,16 @@ function validateShift(input) {
   };
 }
 
+// DURÁVEL-PRIMEIRO com ROLLBACK — a garantia contra "persistência falsa" (o turno que aparece na
+// tela e some no restart, provado em shifts.test.js): aplica-se otimista à memória, persiste, e
+// DESFAZ a memória se a escrita falhar. Um `{ shift }` só retorna quando o dado está DURÁVEL; a
+// falha volta a memória ao estado anterior e devolve erro claro (status 503) — o operador nunca é
+// enganado por um save que não gravou. Vale p/ PG (upsert) E JSON (saveFile lança).
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} o turno — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
+
 async function create(input) {
   const v = validateShift(input || {});
   if (v.error) return { error: v.error };
@@ -132,7 +141,13 @@ async function create(input) {
     criadoEm: Date.now(),
   };
   list.push(t);
-  await persist(t);
+  try {
+    await persist(t);
+  } catch (e) {
+    list = list.filter((x) => x !== t); // rollback: remove exatamente o que entrou
+    console.error("[shifts] FALHA ao salvar turno (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { shift: t };
 }
 
@@ -151,15 +166,29 @@ async function update(id, patch = {}) {
   };
   const v = validateShift(candidato);
   if (v.error) return { error: v.error };
+  const before = { ...t }; // snapshot p/ rollback
   Object.assign(t, v.value);
-  await persist(t);
+  try {
+    await persist(t);
+  } catch (e) {
+    Object.assign(t, before); // rollback: a edição não gravou → memória volta ao estado anterior
+    console.error("[shifts] FALHA ao editar turno (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { shift: t };
 }
 
 async function remove(id) {
-  const n = list.length;
-  list = list.filter((x) => x.id !== id);
-  if (list.length !== n) await persistDelete(id);
+  const idx = list.findIndex((x) => x.id === id);
+  if (idx === -1) return { ok: true }; // idempotente: nada a remover
+  const [removed] = list.splice(idx, 1); // remoção otimista
+  try {
+    await persistDelete(id);
+  } catch (e) {
+    list.splice(idx, 0, removed); // rollback: re-insere na posição original
+    console.error("[shifts] FALHA ao remover turno (persistência):", e.message);
+    return PERSIST_ERROR("remover");
+  }
   return { ok: true };
 }
 

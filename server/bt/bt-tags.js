@@ -16,12 +16,11 @@ let usingPg = false;
 const norm = (s) => String(s || "").trim();
 const key = (s) => norm(s).toUpperCase();
 
+// LANÇA em falha (disco/permissão) — de propósito: quem chama (create/update/remove/upsert) trata e
+// FAZ ROLLBACK da memória. Engolir aqui recriaria a "persistência falsa" (a UI mostra a tag que o
+// disco recusou, some no restart). MESMO padrão de shifts.js.
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-  } catch (e) {
-    console.error("[bt-tags] falha ao salvar:", e.message);
-  }
+  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 async function persist(t) {
   if (!usingPg) return saveFile();
@@ -59,6 +58,14 @@ async function init() {
   }
 }
 
+// DURÁVEL-PRIMEIRO com ROLLBACK (mesma garantia de shifts.js contra "persistência falsa"): aplica-se
+// otimista à memória, persiste, e DESFAZ a memória se a escrita falhar — o `{ tag }` só volta quando o
+// dado está DURÁVEL. A falha devolve erro claro (status 503) que a rota faz surface. Vale p/ PG e JSON.
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} a tag — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
+
 async function create({ btName, rotulo }) {
   const n = norm(btName);
   if (!n) return { error: "nome do Bluetooth obrigatório" };
@@ -71,26 +78,47 @@ async function create({ btName, rotulo }) {
     criadoEm: Date.now(),
   };
   list.push(t);
-  await persist(t);
+  try {
+    await persist(t);
+  } catch (e) {
+    list = list.filter((x) => x !== t); // rollback: remove exatamente o que entrou
+    console.error("[bt-tags] FALHA ao salvar tag (persistência):", e.message);
+    return PERSIST_ERROR("cadastrar");
+  }
   return { tag: t };
 }
 async function update(id, patch) {
   const t = list.find((x) => x.id === id);
   if (!t) return { error: "tag não encontrada" };
-  if (typeof patch.ativo === "boolean") t.ativo = patch.ativo;
-  if (typeof patch.rotulo === "string") t.rotulo = norm(patch.rotulo);
+  // Valida o dup de bt_name ANTES de tocar o estado (sem mutar-e-abortar).
   if (typeof patch.btName === "string" && norm(patch.btName)) {
     const nk = key(patch.btName);
     if (list.some((x) => x.id !== id && key(x.btName) === nk)) return { error: "bt_name já cadastrado" };
-    t.btName = norm(patch.btName);
   }
-  await persist(t);
+  const before = { ...t }; // snapshot p/ rollback
+  if (typeof patch.ativo === "boolean") t.ativo = patch.ativo;
+  if (typeof patch.rotulo === "string") t.rotulo = norm(patch.rotulo);
+  if (typeof patch.btName === "string" && norm(patch.btName)) t.btName = norm(patch.btName);
+  try {
+    await persist(t);
+  } catch (e) {
+    Object.assign(t, before); // rollback: a edição não gravou → memória volta ao estado anterior
+    console.error("[bt-tags] FALHA ao editar tag (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { tag: t };
 }
 async function remove(id) {
-  const n = list.length;
-  list = list.filter((x) => x.id !== id);
-  if (list.length !== n) await persistDelete(id);
+  const idx = list.findIndex((x) => x.id === id);
+  if (idx === -1) return { ok: true }; // idempotente: nada a remover
+  const [removed] = list.splice(idx, 1); // remoção otimista
+  try {
+    await persistDelete(id);
+  } catch (e) {
+    list.splice(idx, 0, removed); // rollback: re-insere na posição original
+    console.error("[bt-tags] FALHA ao remover tag (persistência):", e.message);
+    return PERSIST_ERROR("remover");
+  }
   return { ok: true };
 }
 
@@ -107,8 +135,15 @@ async function upsertByMac(mac, rotulo) {
   if (!m) return { error: "mac obrigatório" };
   const existente = list.find((t) => key(t.btName) === m);
   if (existente) {
+    const beforeRotulo = existente.rotulo; // snapshot p/ rollback
     existente.rotulo = norm(rotulo) || existente.rotulo;
-    await persist(existente);
+    try {
+      await persist(existente);
+    } catch (e) {
+      existente.rotulo = beforeRotulo; // rollback do rótulo
+      console.error("[bt-tags] FALHA ao renomear tag (persistência):", e.message);
+      return PERSIST_ERROR("renomear");
+    }
     return { tag: existente };
   }
   const t = {
@@ -119,7 +154,13 @@ async function upsertByMac(mac, rotulo) {
     criadoEm: Date.now(),
   };
   list.push(t);
-  await persist(t);
+  try {
+    await persist(t);
+  } catch (e) {
+    list = list.filter((x) => x !== t); // rollback: remove exatamente o que entrou
+    console.error("[bt-tags] FALHA ao cadastrar tag por MAC (persistência):", e.message);
+    return PERSIST_ERROR("cadastrar");
+  }
   return { tag: t };
 }
 

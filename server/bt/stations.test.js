@@ -1,7 +1,7 @@
 // Testes do registro de ESTAÇÕES BLE (stations.js) — sem Postgres (fallback JSON). Foco na lógica
 // NOVA: AUTO-DESCOBERTA (seen), validação de id/nome NO SERVIDOR e o PATCH do operador.
 // Efeito colateral: seen/update/remove escrevem server/bt/stations.json (gitignored) → limpo no afterAll.
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -94,5 +94,45 @@ describe("stations — remove + nameOf", () => {
     await stations.update("est-nome", { nome: "Portaria" });
     expect(stations.nameOf("est-nome")).toBe("Portaria");
     expect(stations.nameOf("desconhecida")).toBe("desconhecida"); // nunca fica vazio
+  });
+});
+
+// GATE ANTI-"PERSISTÊNCIA FALSA": falha de escrita durável não pode deixar estação/edição só em
+// memória (some no restart). update/remove viram 503 (a rota faz surface); a estação NOVA em `seen`
+// faz rollback (sem estação-fantasma) — o write-behind do ultimaVezEm é a única exceção (best-effort).
+describe("stations — persistência atômica (durável-primeiro, com rollback)", () => {
+  const failWrite = () =>
+    vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw new Error("SIMULADO: disco cheio");
+    });
+
+  it("seen (estação NOVA): escrita falha → NENHUMA estação-fantasma + erro 503", async () => {
+    const antes = stations.all().length;
+    const spy = failWrite();
+    const r = await stations.seen("est-fantasma", 1000);
+    spy.mockRestore();
+    expect(r.status).toBe(503);
+    expect(stations.get("est-fantasma")).toBeNull();
+    expect(stations.all().length).toBe(antes);
+  });
+
+  it("update: escrita falha → ROLLBACK (o nome antigo permanece) + 503", async () => {
+    await stations.seen("est-upd-fail", 1000);
+    await stations.update("est-upd-fail", { nome: "Doca 9" });
+    const spy = failWrite();
+    const bad = await stations.update("est-upd-fail", { nome: "Editado" });
+    spy.mockRestore();
+    expect(bad.status).toBe(503);
+    expect(stations.get("est-upd-fail").nome).toBe("Doca 9");
+  });
+
+  it("remove: escrita falha → a estação PERMANECE (rollback) + 503", async () => {
+    await stations.seen("est-rm-fail", 1000);
+    const spy = failWrite();
+    const bad = await stations.remove("est-rm-fail");
+    spy.mockRestore();
+    expect(bad.status).toBe(503);
+    expect(stations.get("est-rm-fail")).toBeTruthy();
+    await stations.remove("est-rm-fail"); // limpeza (grava de verdade)
   });
 });

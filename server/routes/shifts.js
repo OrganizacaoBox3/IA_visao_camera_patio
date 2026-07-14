@@ -16,7 +16,8 @@ async function handle(req, res, ctx) {
     if (req.method === "POST") {
       if (!requireConfigurer(req, res)) return true;
       const r = await shifts.create(JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      // r.status (ex.: 503 na falha de persistência) tem prioridade; senão 400 (validação).
+      if (r.error) json(res, r.status || 400, r);
       else json(res, 201, r.shift);
       return true;
     }
@@ -28,14 +29,18 @@ async function handle(req, res, ctx) {
     if (req.method === "PATCH") {
       if (!requireConfigurer(req, res)) return true;
       const r = await shifts.update(id, JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, r.error === "turno não encontrado" ? 404 : 400, r);
+      // r.status (503 na falha de persistência) tem prioridade; senão 404 (inexistente) ou 400.
+      if (r.error) json(res, r.status || (r.error === "turno não encontrado" ? 404 : 400), r);
       else json(res, 200, r.shift);
       return true;
     }
     if (req.method === "DELETE") {
       if (!requireConfigurer(req, res)) return true;
-      await shifts.remove(id);
-      json(res, 200, { ok: true });
+      const r = await shifts.remove(id);
+      // A falha de persistência não pode virar 200 silencioso (o turno seguiria na tela do próximo
+      // que abrir, mas voltaria no restart) — surface o 503.
+      if (r.error) json(res, r.status || 500, r);
+      else json(res, 200, { ok: true });
       return true;
     }
   }

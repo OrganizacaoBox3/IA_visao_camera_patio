@@ -10,12 +10,10 @@ let list = [];
 let usingPg = false;
 
 const norm = (s) => String(s || "").replace(/\D/g, "");
+// LANÇA em falha — de propósito: quem chama trata e FAZ ROLLBACK da memória (contra "persistência
+// falsa": o destinatário que aparece na tela e some no restart). MESMO padrão de shifts.js.
 function saveFile() {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-  } catch (e) {
-    console.error("[recipients] falha ao salvar:", e.message);
-  }
+  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
 }
 async function persist(r) {
   if (!usingPg) return saveFile();
@@ -62,6 +60,13 @@ async function init() {
   }
 }
 
+// DURÁVEL-PRIMEIRO com ROLLBACK (mesma garantia de shifts.js): aplica otimista, persiste e DESFAZ a
+// memória na falha — o `{ recipient }` só volta quando o dado está DURÁVEL; a falha vira 503 na rota.
+const PERSIST_ERROR = (acao) => ({
+  error: `falha ao ${acao} o destinatário — a persistência está indisponível; tente novamente`,
+  status: 503,
+});
+
 async function create({ nome, numero, somenteCriticos, tipos }) {
   const n = norm(numero);
   if (n.length < 10) return { error: "número inválido (use DDI+DDD, ex.: 5584999999999)" };
@@ -76,24 +81,44 @@ async function create({ nome, numero, somenteCriticos, tipos }) {
     criadoEm: Date.now(),
   };
   list.push(r);
-  await persist(r);
+  try {
+    await persist(r);
+  } catch (e) {
+    list = list.filter((x) => x !== r); // rollback: remove exatamente o que entrou
+    console.error("[recipients] FALHA ao salvar destinatário (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { recipient: r };
 }
 async function update(id, patch) {
   const r = list.find((x) => x.id === id);
   if (!r) return { error: "destinatário não encontrado" };
+  const before = { ...r }; // snapshot p/ rollback
   if (typeof patch.ativo === "boolean") r.ativo = patch.ativo;
   if (typeof patch.nome === "string") r.nome = patch.nome.trim();
   if (typeof patch.numero === "string") r.numero = norm(patch.numero);
   if (typeof patch.somenteCriticos === "boolean") r.somenteCriticos = patch.somenteCriticos;
   if (Array.isArray(patch.tipos)) r.tipos = patch.tipos;
-  await persist(r);
+  try {
+    await persist(r);
+  } catch (e) {
+    Object.assign(r, before); // rollback: a edição não gravou → memória volta ao anterior
+    console.error("[recipients] FALHA ao editar destinatário (persistência):", e.message);
+    return PERSIST_ERROR("salvar");
+  }
   return { recipient: r };
 }
 async function remove(id) {
-  const n = list.length;
-  list = list.filter((x) => x.id !== id);
-  if (list.length !== n) await persistDelete(id);
+  const idx = list.findIndex((x) => x.id === id);
+  if (idx === -1) return { ok: true }; // idempotente: nada a remover
+  const [removed] = list.splice(idx, 1); // remoção otimista
+  try {
+    await persistDelete(id);
+  } catch (e) {
+    list.splice(idx, 0, removed); // rollback: re-insere na posição original
+    console.error("[recipients] FALHA ao remover destinatário (persistência):", e.message);
+    return PERSIST_ERROR("remover");
+  }
   return { ok: true };
 }
 

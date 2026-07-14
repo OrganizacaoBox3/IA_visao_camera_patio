@@ -51,7 +51,7 @@ async function handle(req, res, ctx) {
     }
     if (req.method === "PATCH" || req.method === "PUT") {
       const r = await users.updateProfile(me.id, JSON.parse((await readBody(req)) || "{}"));
-      if (r.error) json(res, 400, r);
+      if (r.error) json(res, r.status || 400, r); // r.status (503) tem prioridade sobre o 400
       else json(res, 200, r.user);
       return true;
     }
