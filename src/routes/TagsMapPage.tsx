@@ -310,7 +310,7 @@ export function TagsMapPage() {
 
       {/* ERRO de página (DoD §3 "Estados"): um Alert com retry — não um badge mudo. */}
       {error && (
-        <div className="px-3 pt-3">
+        <div className="px-4 pt-4">
           <Alert tone="alert">
             <span className="flex-1">
               Sem conexão com o hub — mostrando a última posição conhecida.

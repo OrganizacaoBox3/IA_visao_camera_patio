@@ -1,15 +1,28 @@
 import { useMemo, useState } from "react";
 import { MapPin } from "lucide-react";
-import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea } from "../../ui";
+import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea, Badge, EmptyState, type Tone } from "../../ui";
 import { type AlarmEvent, type AlarmPriority, type AlarmState } from "../../api";
-// Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts (o CSS do card
-// uppercasa os rótulos — .alarm-drawer__card-prio/-state).
+// Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts.
 import {
   ALARM_PRIORITY_LABEL,
   ALARM_STATE_LABEL,
   alarmPriorityColor,
   alarmPriorityBorder,
 } from "../../types/alarm";
+
+// Tom do <Badge> por prioridade/estado — MESMO mapa do contrato (bate com o AlarmesPanel do
+// Relatório e preserva as cores do CSS antigo: critical=crítico, high=warn, advisory/forwarded=info,
+// acknowledged=ok, new=neutro/default). Going-gray: cor só onde há anormalidade.
+const PRIORITY_TONE: Record<AlarmPriority, Tone> = {
+  critical: "alert",
+  high: "warn",
+  advisory: "info",
+};
+const STATE_TONE: Record<AlarmState, Tone | undefined> = {
+  new: undefined, // neutro (default) — estado normal de entrada na fila
+  acknowledged: "ok",
+  forwarded: "info",
+};
 
 type AlarmDrawerProps = {
   open: boolean;
@@ -62,9 +75,7 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
             className="alarm-drawer__card-dot"
             style={{ background: alarmPriorityColor(a.priority) }}
           />
-          <span className="alarm-drawer__card-prio" style={{ color: alarmPriorityColor(a.priority) }}>
-            {ALARM_PRIORITY_LABEL[a.priority]}
-          </span>
+          <Badge tone={PRIORITY_TONE[a.priority]}>{ALARM_PRIORITY_LABEL[a.priority]}</Badge>
           <Tooltip content={new Date(a.ts).toLocaleString("pt-BR")}>
             <span className="alarm-drawer__card-time">{when}</span>
           </Tooltip>
@@ -79,10 +90,10 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
             </span>
           )}
           <span>{a.tipo}</span>
-          <span className="alarm-drawer__card-state">
+          <Badge tone={STATE_TONE[a.state]}>
             {ALARM_STATE_LABEL[a.state]}
             {a.ackBy ? ` · ${a.ackBy}` : ""}
-          </span>
+          </Badge>
         </div>
         {!done && (
           <div className="alarm-drawer__card-actions">
@@ -153,11 +164,11 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
       <ScrollArea className="alarm-drawer__scroll">
         <div className="alarm-drawer__list">
           {visibleAlarms.length === 0 ? (
-            <p className="alarm-drawer__empty">
+            <EmptyState>
               {alarms.length === 0
                 ? "Nenhum alarme registrado."
                 : "Nenhum alarme para os filtros atuais."}
-            </p>
+            </EmptyState>
           ) : (
             visibleAlarms.map(renderAlarmCard)
           )}

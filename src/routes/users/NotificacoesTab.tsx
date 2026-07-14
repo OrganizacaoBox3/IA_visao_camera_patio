@@ -6,6 +6,7 @@ import {
   Switch,
   CheckboxRow,
   HelpTip,
+  Skeleton,
   Table,
   TableEmpty,
   useToast,
@@ -40,6 +41,7 @@ type Props = {
   setWaNum: Dispatch<SetStateAction<string>>;
   dests: Recipient[];
   setDests: Dispatch<SetStateAction<Recipient[]>>;
+  loading: boolean;
   novoDest: NovoDest;
   setNovoDest: Dispatch<SetStateAction<NovoDest>>;
   notif: NotifSettings | null;
@@ -56,6 +58,7 @@ export function NotificacoesTab({
   setWaNum,
   dests,
   setDests,
+  loading,
   novoDest,
   setNovoDest,
   notif,
@@ -307,8 +310,10 @@ export function NotificacoesTab({
         </section>
       )}
 
-      {/* Lista de destinatários cresce com a viewport (flex-fill; sem max-h fixo). */}
-      <section className="panel flex flex-1 flex-col">
+      {/* Lista de destinatários cresce com a viewport (flex-fill; sem max-h fixo).
+          panel-events (como a lista irmã de Usuários) tira o cap de 320px do .rtable-wrap
+          para a lista crescer de fato; aria-busy espelha o loader de Skeleton. */}
+      <section className="panel panel-events flex flex-1 flex-col" aria-busy={loading}>
         <SectionTitle>Destinatários do WhatsApp ({dests.length})</SectionTitle>
         {/* Prosa >1 linha vira tooltip (regra de ouro): a tela fica com 1 linha essencial. */}
         <p className="meta-text muted">
@@ -396,7 +401,15 @@ export function NotificacoesTab({
                 </td>
               </tr>
             ))}
-            {dests.length === 0 && (
+            {loading &&
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  <td colSpan={5}>
+                    <Skeleton w="100%" h={16} />
+                  </td>
+                </tr>
+              ))}
+            {!loading && dests.length === 0 && (
               <TableEmpty colSpan={5}>Nenhum destinatário avulso.</TableEmpty>
             )}
           </tbody>

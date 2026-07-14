@@ -52,7 +52,7 @@ export function LeituraPanel({
   return (
     <>
       <RepLens lens={lens} />
-      <KpiRow>
+      <KpiRow fit>
         <Kpi
           value={rk.boxes.toLocaleString("pt-BR")}
           label={

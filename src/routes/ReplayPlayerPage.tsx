@@ -64,7 +64,13 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 // mudam) + o nome do arquivo, só pra UI/nome do export.
 type LoadedSession = { fileName: string; data: LoadedFusionSession };
 
-function worldToCanvas(x: number, y: number, d: WorldDomain, w: number, h: number): [number, number] {
+function worldToCanvas(
+  x: number,
+  y: number,
+  d: WorldDomain,
+  w: number,
+  h: number,
+): [number, number] {
   return [((x - d.minX) / (d.maxX - d.minX)) * w, h - ((y - d.minY) / (d.maxY - d.minY)) * h];
 }
 
@@ -158,7 +164,11 @@ function drawPlanta(
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = p.label;
-    ctx.fillText(truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`, x + 8, y - 8);
+    ctx.fillText(
+      truth ? `${t.id} · ${truth}` : annotated ? `${t.id} · sem tag` : `${t.id}`,
+      x + 8,
+      y - 8,
+    );
   }
 }
 
@@ -253,10 +263,7 @@ export function ReplayPlayerPage() {
     [session],
   );
 
-  const trackIds = useMemo(
-    () => (session ? collectTrackIds(session.data.ticks) : []),
-    [session],
-  );
+  const trackIds = useMemo(() => (session ? collectTrackIds(session.data.ticks) : []), [session]);
   const summary = annotationSummary(annotation);
 
   const [playback, setPlayback] = useState<PlaybackState>(initialPlaybackState);
@@ -334,7 +341,9 @@ export function ReplayPlayerPage() {
     try {
       const truth = parseSessionTruthJson(await file.text());
       if (truth === null) {
-        setNotice(`"${file.name}" não é um SessionTruth válido (JSON objeto trackId → MAC | null).`);
+        setNotice(
+          `"${file.name}" não é um SessionTruth válido (JSON objeto trackId → MAC | null).`,
+        );
         return;
       }
       // annotation.ts fica puro/agnóstico; a PÁGINA (que conhece a gravação carregada) filtra
@@ -367,195 +376,200 @@ export function ReplayPlayerPage() {
   const diag = session?.data.diag ?? null;
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="page">
       <PageHeader
         title="Bancada de simulação — player de replay"
         subtitle="docs/cientifica/simulador.md §5–6 — cenários sintéticos e gravação real (.jsonl); anotação de verdade-terreno em gravação real"
       />
-      <div className="flex flex-wrap items-center gap-3">
-        <Select
-          value={session ? "" : scenarioName}
-          onChange={selectScenario}
-          options={FUSION_SCENARIOS.map((s) => ({ value: s.name, label: s.name }))}
-          placeholder={session ? "(gravação real aberta)" : undefined}
-          ariaLabel="Cenário"
-        />
-        <Button onClick={() => openFileRef.current?.click()}>Abrir gravação (.jsonl)</Button>
-        <input
-          ref={openFileRef}
-          type="file"
-          accept=".jsonl"
-          className="hidden"
-          onChange={onOpenSession}
-          aria-label="Arquivo de gravação (.jsonl)"
-        />
-        {session && (
-          <span className="inline-flex items-center gap-1 text-sec text-text">
-            {session.fileName}
-            <IconButton label="Fechar gravação" onClick={() => selectScenario(scenarioName)}>
-              <X size={16} strokeWidth={1.75} aria-hidden />
-            </IconButton>
+      {/* Corpo rolável canônico (laudo §1): o ÚNICO com overflow+flex-1 min-h-0 e padding --sp-4;
+          o scroll sai do fluxo do documento para cá — o PageHeader fica fixo acima. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <Select
+            value={session ? "" : scenarioName}
+            onChange={selectScenario}
+            options={FUSION_SCENARIOS.map((s) => ({ value: s.name, label: s.name }))}
+            placeholder={session ? "(gravação real aberta)" : undefined}
+            ariaLabel="Cenário"
+          />
+          <Button onClick={() => openFileRef.current?.click()}>Abrir gravação (.jsonl)</Button>
+          <input
+            ref={openFileRef}
+            type="file"
+            accept=".jsonl"
+            className="hidden"
+            onChange={onOpenSession}
+            aria-label="Arquivo de gravação (.jsonl)"
+          />
+          {session && (
+            <span className="inline-flex items-center gap-1 text-sec text-text">
+              {session.fileName}
+              <IconButton label="Fechar gravação" onClick={() => selectScenario(scenarioName)}>
+                <X size={16} strokeWidth={1.75} aria-hidden />
+              </IconButton>
+            </span>
+          )}
+          <Button onClick={() => setPlayback((s) => (s.playing ? pause(s) : play(s)))}>
+            {playback.playing ? (
+              <Pause size={16} strokeWidth={1.75} aria-hidden />
+            ) : (
+              <Play size={16} strokeWidth={1.75} aria-hidden />
+            )}
+            {playback.playing ? "Pausar" : "Tocar"}
+          </Button>
+          {/* Ícones Lucide (regra 11) no lugar dos glyphs ◀▶ — o nome acessível é o mesmo de antes. */}
+          <IconButton
+            label="Passo anterior"
+            onClick={() => setPlayback((s) => stepBy(s, -1, totalTicks))}
+          >
+            <ChevronLeft size={16} strokeWidth={1.75} aria-hidden />
+          </IconButton>
+          <IconButton
+            label="Próximo passo"
+            onClick={() => setPlayback((s) => stepBy(s, 1, totalTicks))}
+          >
+            <ChevronRight size={16} strokeWidth={1.75} aria-hidden />
+          </IconButton>
+          <Select
+            value={String(playback.speed)}
+            onChange={(v) => setPlayback((s) => setSpeed(s, Number(v)))}
+            options={SPEEDS.map((sp) => ({ value: String(sp), label: `${sp}×` }))}
+            ariaLabel="Velocidade"
+          />
+          <span className="text-sec text-text-muted" aria-live="polite">
+            tick {totalTicks ? playback.currentIdx + 1 : 0}/{totalTicks} · ts {currentTick?.ts ?? 0}{" "}
+            ms
+          </span>
+        </div>
+        {diag && (
+          <span className="text-sec text-text-muted">
+            diagnóstico do parse: {diag.linesTotal} linha(s) · {diag.linesDropped} descartada(s) ·
+            câmeras: {Object.keys(diag.cameras).join(", ") || "nenhuma"} · {totalTicks} tick(s)
+            {session?.data.H === null && " · sem calibração (H) — planta sem posições"}
           </span>
         )}
-        <Button onClick={() => setPlayback((s) => (s.playing ? pause(s) : play(s)))}>
-          {playback.playing ? (
-            <Pause size={16} strokeWidth={1.75} aria-hidden />
-          ) : (
-            <Play size={16} strokeWidth={1.75} aria-hidden />
-          )}
-          {playback.playing ? "Pausar" : "Tocar"}
-        </Button>
-        {/* Ícones Lucide (regra 11) no lugar dos glyphs ◀▶ — o nome acessível é o mesmo de antes. */}
-        <IconButton
-          label="Passo anterior"
-          onClick={() => setPlayback((s) => stepBy(s, -1, totalTicks))}
-        >
-          <ChevronLeft size={16} strokeWidth={1.75} aria-hidden />
-        </IconButton>
-        <IconButton
-          label="Próximo passo"
-          onClick={() => setPlayback((s) => stepBy(s, 1, totalTicks))}
-        >
-          <ChevronRight size={16} strokeWidth={1.75} aria-hidden />
-        </IconButton>
-        <Select
-          value={String(playback.speed)}
-          onChange={(v) => setPlayback((s) => setSpeed(s, Number(v)))}
-          options={SPEEDS.map((sp) => ({ value: String(sp), label: `${sp}×` }))}
-          ariaLabel="Velocidade"
+        {/* ERRO de página no padrão único (DoD §3): Alert com role=alert — não um span vermelho. */}
+        {notice && <Alert tone="alert">{notice}</Alert>}
+        <Slider
+          value={playback.currentIdx}
+          onChange={(v) => setPlayback((s) => scrubTo(s, v, totalTicks))}
+          min={0}
+          max={Math.max(0, totalTicks - 1)}
+          step={1}
+          ariaLabel="Posição na gravação"
         />
-        <span className="text-sec text-text-muted" aria-live="polite">
-          tick {totalTicks ? playback.currentIdx + 1 : 0}/{totalTicks} · ts {currentTick?.ts ?? 0} ms
-        </span>
-      </div>
-      {diag && (
-        <span className="text-sec text-text-muted">
-          diagnóstico do parse: {diag.linesTotal} linha(s) · {diag.linesDropped} descartada(s) ·
-          câmeras: {Object.keys(diag.cameras).join(", ") || "nenhuma"} · {totalTicks} tick(s)
-          {session?.data.H === null && " · sem calibração (H) — planta sem posições"}
-        </span>
-      )}
-      {/* ERRO de página no padrão único (DoD §3): Alert com role=alert — não um span vermelho. */}
-      {notice && <Alert tone="alert">{notice}</Alert>}
-      <Slider
-        value={playback.currentIdx}
-        onChange={(v) => setPlayback((s) => scrubTo(s, v, totalTicks))}
-        min={0}
-        max={Math.max(0, totalTicks - 1)}
-        step={1}
-        ariaLabel="Posição na gravação"
-      />
-      <div className="flex flex-wrap gap-4">
-        {/* VAZIO (DoD §3): gravação sem nenhum tick reproduzível — canvas preto não explica nada. */}
-        {totalTicks === 0 ? (
-          <EmptyState>
-            Nada reproduzível neste arquivo: nenhum tick com pistas de câmera. Abra outra gravação
-            (.jsonl) ou escolha um cenário sintético no seletor acima.
-          </EmptyState>
-        ) : (
-          <>
-            <div>
-              <SectionTitle className="mb-1">Planta (top-down)</SectionTitle>
-              {/* Canvas é OPACO p/ leitor de tela → role=img + descrição textual do tick (a11y). */}
-              <canvas
-                ref={plantaRef}
-                width={480}
-                height={360}
-                role="img"
-                aria-label={plantaAlt}
-                className="max-w-full rounded border border-border"
-              />
-            </div>
-            <div>
-              <SectionTitle className="mb-1">Vista-câmera</SectionTitle>
-              <canvas
-                ref={cameraRef}
-                width={480}
-                height={360}
-                role="img"
-                aria-label={cameraAlt}
-                className="max-w-full rounded border border-border"
-              />
-            </div>
-          </>
-        )}
-        {session ? (
-          <div className="flex w-[420px] max-w-full flex-col gap-2">
-            <SectionTitle flush>Anotação (verdade-terreno, §6)</SectionTitle>
-            <span className="text-sec text-text-muted" aria-live="polite">
-              {summary.withTag} com tag · {summary.withoutTag} sem tag · {summary.total}/
-              {trackIds.length} track(s) anotado(s)
-            </span>
-            {trackIds.length === 0 ? (
-              <span className="text-sec text-text-muted">
-                Nenhum track visto na gravação — nada a anotar.
+        <div className="flex flex-wrap gap-4">
+          {/* VAZIO (DoD §3): gravação sem nenhum tick reproduzível — canvas preto não explica nada. */}
+          {totalTicks === 0 ? (
+            <EmptyState>
+              Nada reproduzível neste arquivo: nenhum tick com pistas de câmera. Abra outra gravação
+              (.jsonl) ou escolha um cenário sintético no seletor acima.
+            </EmptyState>
+          ) : (
+            <>
+              <div>
+                <SectionTitle className="mb-1">Planta (top-down)</SectionTitle>
+                {/* Canvas é OPACO p/ leitor de tela → role=img + descrição textual do tick (a11y). */}
+                <canvas
+                  ref={plantaRef}
+                  width={480}
+                  height={360}
+                  role="img"
+                  aria-label={plantaAlt}
+                  className="max-w-full rounded border border-border"
+                />
+              </div>
+              <div>
+                <SectionTitle className="mb-1">Vista-câmera</SectionTitle>
+                <canvas
+                  ref={cameraRef}
+                  width={480}
+                  height={360}
+                  role="img"
+                  aria-label={cameraAlt}
+                  className="max-w-full rounded border border-border"
+                />
+              </div>
+            </>
+          )}
+          {session ? (
+            <div className="flex w-[420px] max-w-full flex-col gap-2">
+              <SectionTitle flush>Anotação (verdade-terreno, §6)</SectionTitle>
+              <span className="text-sec text-text-muted" aria-live="polite">
+                {summary.withTag} com tag · {summary.withoutTag} sem tag · {summary.total}/
+                {trackIds.length} track(s) anotado(s)
               </span>
-            ) : (
-              <ScrollArea className="max-h-[300px] rounded border border-border">
-                <div className="flex flex-col gap-1 p-2">
-                  {trackIds.map((id) => {
-                    const val = annotation.assignments[id]; // string | null | undefined
-                    return (
-                      <div key={id} className="flex items-center gap-2">
-                        <span className="w-10 shrink-0 font-mono text-sec text-text">{id}</span>
-                        <Input
-                          value={val ?? ""}
-                          placeholder={val === null ? "sem tag" : "MAC da tag"}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            // Campo esvaziado = desfaz (ausente ≠ "sem tag" — annotation.ts).
-                            setAnnotation((s) =>
-                              v.trim() === "" ? clearAssignment(s, id) : assignTag(s, id, v),
-                            );
-                          }}
-                          aria-label={`MAC da tag do track ${id}`}
-                        />
-                        <Button
-                          size="sm"
-                          active={val === null}
-                          onClick={() => setAnnotation((s) => assignTag(s, id, null))}
-                        >
-                          sem tag
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={val === undefined}
-                          onClick={() => setAnnotation((s) => clearAssignment(s, id))}
-                        >
-                          limpar
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </ScrollArea>
-            )}
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="primary" onClick={exportTruth}>
-                Exportar SessionTruth
-              </Button>
-              <Button onClick={() => importFileRef.current?.click()}>Importar</Button>
-              <input
-                ref={importFileRef}
-                type="file"
-                accept=".json"
-                className="hidden"
-                onChange={onImportTruth}
-                aria-label="Arquivo de SessionTruth (.json)"
-              />
+              {trackIds.length === 0 ? (
+                <span className="text-sec text-text-muted">
+                  Nenhum track visto na gravação — nada a anotar.
+                </span>
+              ) : (
+                <ScrollArea className="max-h-[300px] rounded border border-border">
+                  <div className="flex flex-col gap-1 p-2">
+                    {trackIds.map((id) => {
+                      const val = annotation.assignments[id]; // string | null | undefined
+                      return (
+                        <div key={id} className="flex items-center gap-2">
+                          <span className="w-10 shrink-0 font-mono text-sec text-text">{id}</span>
+                          <Input
+                            value={val ?? ""}
+                            placeholder={val === null ? "sem tag" : "MAC da tag"}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              // Campo esvaziado = desfaz (ausente ≠ "sem tag" — annotation.ts).
+                              setAnnotation((s) =>
+                                v.trim() === "" ? clearAssignment(s, id) : assignTag(s, id, v),
+                              );
+                            }}
+                            aria-label={`MAC da tag do track ${id}`}
+                          />
+                          <Button
+                            size="sm"
+                            active={val === null}
+                            onClick={() => setAnnotation((s) => assignTag(s, id, null))}
+                          >
+                            sem tag
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={val === undefined}
+                            onClick={() => setAnnotation((s) => clearAssignment(s, id))}
+                          >
+                            limpar
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="primary" onClick={exportTruth}>
+                  Exportar SessionTruth
+                </Button>
+                <Button onClick={() => importFileRef.current?.click()}>Importar</Button>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={onImportTruth}
+                  aria-label="Arquivo de SessionTruth (.json)"
+                />
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <SectionTitle flush>Anotação</SectionTitle>
-            <Tooltip content="A verdade-terreno sintética já nasce pronta no cenário (truthTagByTrack) — o modo anotação só faz sentido com uma gravação real aberta.">
-              <span className="inline-flex" tabIndex={0}>
-                <Button disabled>Modo anotação</Button>
-              </span>
-            </Tooltip>
-          </div>
-        )}
+          ) : (
+            <div className="flex flex-col gap-2">
+              <SectionTitle flush>Anotação</SectionTitle>
+              <Tooltip content="A verdade-terreno sintética já nasce pronta no cenário (truthTagByTrack) — o modo anotação só faz sentido com uma gravação real aberta.">
+                <span className="inline-flex" tabIndex={0}>
+                  <Button disabled>Modo anotação</Button>
+                </span>
+              </Tooltip>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

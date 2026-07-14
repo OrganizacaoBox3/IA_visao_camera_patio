@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RadioTower } from "lucide-react";
 import { useAuth } from "../../auth";
-import { Alert, Badge, Spinner, useConfirm } from "../../ui";
+import { Alert, Badge, Button, Spinner, useConfirm } from "../../ui";
 import { getBtStations, updateBtStation, deleteBtStation, type BtStation } from "../../api";
 import { EstacoesList, estacaoViva } from "./EstacoesList";
 
@@ -103,21 +103,30 @@ export function EstacoesTab() {
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
       {/* Faixa de status do painel (o Badge que morava no PageHeader — a tela unificada tem UM
           header só, e ele não pode falar por duas abas). */}
-      {rows.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 text-sec text-text-muted">
-          <Badge tone={vivas > 0 ? "ok" : "warn"}>
-            <RadioTower size={12} strokeWidth={1.75} aria-hidden />
-            {vivas} de {rows.length} viva{vivas === 1 ? "" : "s"}
-          </Badge>
+      <div className="flex flex-wrap items-center gap-3 text-sec text-text-muted">
+        <Badge tone={vivas > 0 ? "ok" : "warn"}>
+          <RadioTower size={12} strokeWidth={1.75} aria-hidden />
+          {rows.length > 0
+            ? `${vivas} de ${rows.length} viva${vivas === 1 ? "" : "s"}`
+            : "sem estações"}
+        </Badge>
+        {rows.length > 0 && (
           <span>as leituras destas estações são as tags da aba ao lado</span>
-        </div>
-      )}
+        )}
+      </div>
 
-      {err && <Alert tone="alert">{err}</Alert>}
+      {err && (
+        <Alert tone="alert">
+          <span className="flex-1">{err}</span>
+          <Button size="sm" onClick={refresh}>
+            Tentar novamente
+          </Button>
+        </Alert>
+      )}
 
       {loading ? (
         <div
-          className="flex items-center gap-2 text-sec text-text-muted"
+          className="flex items-center gap-2 text-body text-text-muted"
           aria-busy="true"
           aria-label="Carregando estações"
         >

@@ -29,7 +29,7 @@ import { getShifts, type Shift as ShiftCfg } from "../api";
 import { useAuth } from "../auth";
 import { type AlarmPriority, type AlarmState } from "../types/alarm";
 import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/csv";
-import { Button, IconButton, PageHeader, Select, SegmentedControl, Skeleton } from "../ui";
+import { Alert, Button, IconButton, PageHeader, Select, SegmentedControl, Skeleton } from "../ui";
 import "../report/alarms.css";
 import { type RepTab, type VmView } from "./report/chrome";
 import {
@@ -431,19 +431,7 @@ export function ReportPage() {
             <Skeleton w="100%" h={240} />
           </div>
         )}
-        {!loading && error && (
-          <div className="dash-empty" role="alert">
-            <p>
-              <b>Não foi possível carregar o histórico.</b>
-            </p>
-            <p className="muted">{error}</p>
-            <p className="mt-[var(--sp-3)]">
-              <Button variant="primary" onClick={refresh}>
-                Tentar novamente
-              </Button>
-            </p>
-          </div>
-        )}
+        {!loading && error && <Alert tone="alert">{error}</Alert>}
         {noData && <EmptyHistory mode={mode} dataSource={dataSource} />}
 
         {/* N2 — Resumo: só as dimensões COM DADO (o gate das 4 morreu) + o cartão de Alarmes. */}
@@ -613,7 +601,6 @@ export function ReportPage() {
               pickHour={al.pickHour}
               pickAlarm={al.pickAlarm}
               clearAlarmSel={al.clearAlarmSel}
-              onRefresh={refresh}
             />
           </>
         )}

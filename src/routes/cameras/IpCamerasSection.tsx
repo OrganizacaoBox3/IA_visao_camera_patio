@@ -16,6 +16,7 @@ import {
   Badge,
   Alert,
   EmptyState,
+  Spinner,
   Tooltip,
   HelpTip,
   useToast,
@@ -307,7 +308,15 @@ export function CamerasList() {
         </HelpTip>
       </div>
 
-      {loading && <p className="empty-note">Carregando…</p>}
+      {loading && (
+        <div
+          className="flex items-center gap-2 text-body text-text-muted"
+          aria-busy="true"
+          aria-label="Carregando câmeras"
+        >
+          <Spinner /> Carregando…
+        </div>
+      )}
       {!loading && loadErr && (
         <Alert tone="alert">
           {loadErr}{" "}

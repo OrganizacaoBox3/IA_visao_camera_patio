@@ -4,7 +4,7 @@ import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
 import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera/whip";
 import { startNodeRelay, type NodeRelay } from "./camera/nodeRelay";
-import { Tooltip } from "../ui";
+import { Tooltip, Alert } from "../ui";
 
 // O nó transmite vídeo por WebRTC/WHIP ao go2rtc quando disponível; a decisão é em RUNTIME por
 // PROBE. Se o WHIP não estabelecer dentro da janela (go2rtc ausente/timeout/erro), CAI SOZINHO
@@ -228,7 +228,7 @@ export function CameraPage() {
           Sem HTTPS: a câmera pode ser bloqueada fora de localhost. Use HTTPS para acesso externo.
         </div>
       )}
-      {error && <div className="cam-node-err">{error}</div>}
+      {error && <Alert tone="alert">{error}</Alert>}
     </div>
   );
 }

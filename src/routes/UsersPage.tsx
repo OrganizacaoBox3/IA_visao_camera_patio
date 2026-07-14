@@ -43,6 +43,7 @@ export function UsersPage() {
   const [wa, setWa] = useState<WaStatus | null>(null);
   const [waNum, setWaNum] = useState("");
   const [dests, setDests] = useState<Recipient[]>([]);
+  const [destsLoading, setDestsLoading] = useState(true);
   const [novoDest, setNovoDest] = useState({ nome: "", numero: "", somenteCriticos: true });
   const [notif, setNotif] = useState<NotifSettings | null>(null);
   const [preview, setPreview] = useState<Record<string, string> | null>(null);
@@ -70,7 +71,8 @@ export function UsersPage() {
       .catch(() => {});
     listRecipients()
       .then(setDests)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setDestsLoading(false));
     getNotifSettings()
       .then(setNotif)
       .catch(() => {});
@@ -129,7 +131,10 @@ export function UsersPage() {
           onValueChange={(v) => setSecao(v as typeof secao)}
           ariaLabel="Seção de administração"
         >
-          <TabsContent value="cameras" className="pt-[var(--sp-4)]">
+          <TabsContent
+            value="cameras"
+            className="flex min-h-0 flex-1 flex-col gap-[var(--sp-4)] pt-[var(--sp-4)]"
+          >
             <CamerasTab camToken={camToken} />
           </TabsContent>
 
@@ -143,6 +148,7 @@ export function UsersPage() {
               setWaNum={setWaNum}
               dests={dests}
               setDests={setDests}
+              loading={destsLoading}
               novoDest={novoDest}
               setNovoDest={setNovoDest}
               notif={notif}

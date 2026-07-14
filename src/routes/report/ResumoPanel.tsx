@@ -17,7 +17,7 @@ import {
   type FadigaKpis,
 } from "../../report/calc";
 import { classLabel } from "./ObjetosPanel";
-import { Insight } from "./chrome";
+import { Insight, RepLens, HistoryFooter } from "./chrome";
 import type { Mode } from "./labels";
 
 export type ResumoAtividade = { k: Kpis; tips: string[] };
@@ -58,9 +58,7 @@ export function ResumoPanel({
   ].filter(Boolean);
   return (
     <>
-      <div className="rep-lens">
-        Resumo executivo · <b>{periodLabel}</b> · Turno: {shiftLabel}
-      </div>
+      <RepLens lens={`Resumo executivo · ${periodLabel} · Turno: ${shiftLabel}`} />
       <div className="rep-resumo">
         {atividade && (
           <button className="resumo-card" onClick={() => onOpenMode("atividade")}>
@@ -227,9 +225,7 @@ export function ResumoPanel({
         label="Destaques"
         tips={[tips.join(" · ") || "Sem ocorrências relevantes no período."]}
       />
-      <p className="rep-foot">
-        Clique num cartão para abrir o detalhe · indicadores agregados, sem imagens (LGPD).
-      </p>
+      <HistoryFooter />
     </>
   );
 }

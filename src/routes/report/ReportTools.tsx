@@ -217,7 +217,7 @@ export function ReportTools({
       <SectionTitle>Ferramentas — engenharia</SectionTitle>
       <div className="ah-cols">
         <section className="ah-kpi">
-          <h3 className="ah-kpi__label">Silenciamentos ativos</h3>
+          <SectionTitle flush>Silenciamentos ativos</SectionTitle>
           {shelves == null ? (
             <div className="ah-foot">
               <Spinner /> carregando…
@@ -263,7 +263,7 @@ export function ReportTools({
         </section>
 
         <form className="ah-kpi ah-form" onSubmit={onCreate}>
-          <h3 className="ah-kpi__label">Silenciar alertas temporariamente</h3>
+          <SectionTitle flush>Silenciar alertas temporariamente</SectionTitle>
           <Field label="Câmera">
             <Select
               ariaLabel="Câmera"

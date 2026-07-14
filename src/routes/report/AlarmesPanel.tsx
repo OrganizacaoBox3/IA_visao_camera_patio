@@ -9,8 +9,8 @@ import {
   type AlarmPriority,
   type AlarmState,
 } from "../../types/alarm";
-import { ScrollArea } from "../../ui";
-import { Insight, SectionTitle } from "./chrome";
+import { Badge, EmptyState, ScrollArea, type Tone } from "../../ui";
+import { RepLens, HistoryFooter, Insight, SectionTitle } from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
 import { TrendSection } from "./TrendChart";
@@ -22,6 +22,20 @@ function alarmHeatColor(priority: AlarmPriority, v: number, max: number): string
   const t = 0.18 + Math.min(1, v / max) * 0.82;
   return `color-mix(in srgb, ${alarmPriorityColor(priority)} ${Math.round(t * 100)}%, transparent)`;
 }
+
+// Badge do padrão da casa em vez dos spans .alarm-badge (contrato compartilhado do laudo).
+// Mapa preserva a leitura de cor atual do CSS: crítico→critical, alta→warn, informativo→info;
+// estado novo→neutro (default), reconhecido→ok, encaminhado→info.
+const PRIO_TONE: Record<AlarmPriority, Tone> = {
+  critical: "alert",
+  high: "warn",
+  advisory: "info",
+};
+const STATE_TONE: Record<AlarmState, Tone | undefined> = {
+  new: undefined, // neutro → tom default do Badge
+  acknowledged: "ok",
+  forwarded: "info",
+};
 
 export function AlarmesPanel({
   periodLabel,
@@ -43,7 +57,6 @@ export function AlarmesPanel({
   pickHour,
   pickAlarm,
   clearAlarmSel,
-  onRefresh,
 }: {
   periodLabel: string;
   alarmPriority: AlarmPriority | "Todas";
@@ -64,28 +77,25 @@ export function AlarmesPanel({
   pickHour: (h: number) => void;
   pickAlarm: (id: string) => void;
   clearAlarmSel: () => void;
-  onRefresh: () => void;
 }) {
+  const lens =
+    `Alarmes · ${periodLabel}` +
+    (alarmPriority !== "Todas" ? ` · ${ALARM_PRIORITY_LABEL[alarmPriority]}` : "") +
+    (alarmState !== "Todos" ? ` · ${ALARM_STATE_LABEL[alarmState]}` : "");
   return (
     <>
-      <div className="rep-lens">
-        Alarmes · <b>{periodLabel}</b>
-        {alarmPriority !== "Todas" ? <> · {ALARM_PRIORITY_LABEL[alarmPriority]}</> : null}
-        {alarmState !== "Todos" ? <> · {ALARM_STATE_LABEL[alarmState]}</> : null}
-      </div>
+      <RepLens lens={lens} />
       {alarms.length === 0 ? (
-        <div className="dash-empty">
-          <p>
-            <b>Sem alarmes registrados.</b>
-          </p>
+        <EmptyState>
+          <b>Sem alarmes registrados.</b>
           <p>A fila de alarmes aparece aqui conforme a política dispara eventos na Central.</p>
           <p className="muted">
             Apenas metadados (hora, câmera/zona, tipo, prioridade, estado) — sem imagens (LGPD).
           </p>
-        </div>
+        </EmptyState>
       ) : (
         <>
-          <KpiRow>
+          <KpiRow fit>
             <Kpi value={ak.total} label="alarmes no período" />
             <Kpi
               value={ak.critical}
@@ -195,28 +205,20 @@ export function AlarmesPanel({
                       </span>
                     </span>
                     <span className="alarm-badges">
-                      <span className={`alarm-badge b-${e.priority}`}>
+                      <Badge tone={PRIO_TONE[e.priority]}>
                         {ALARM_PRIORITY_LABEL[e.priority]}
-                      </span>
-                      <span className={`alarm-badge s-${e.state}`}>
-                        {ALARM_STATE_LABEL[e.state]}
-                      </span>
+                      </Badge>
+                      <Badge tone={STATE_TONE[e.state]}>{ALARM_STATE_LABEL[e.state]}</Badge>
                     </span>
                   </button>
                 ))}
                 {alarmsView.length === 0 && (
-                  <p className="empty-note">Nenhum alarme com os filtros atuais.</p>
+                  <EmptyState>Nenhum alarme com os filtros atuais.</EmptyState>
                 )}
               </div>
             </ScrollArea>
           </section>
-          <div className="rep-foot">
-            {/* "(B1)" era nome de contrato interno — jargão não renderiza (achado 7.4) */}
-            Eventos de alarme · só metadados, sem imagens (LGPD) ·{" "}
-            <button onClick={onRefresh} className="linkbtn">
-              recarregar
-            </button>
-          </div>
+          <HistoryFooter />
         </>
       )}
     </>

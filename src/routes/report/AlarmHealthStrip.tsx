@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Sparkline } from "../../components/Sparkline";
-import { Alert, Spinner, Tooltip } from "../../ui";
+import { Alert, SectionTitle, Spinner, Tooltip } from "../../ui";
 import { getAlarmMetrics, type AlarmCounts, type AlarmMetrics } from "../../api";
 import { shiftSuppressionReasonLabel, type AlarmShiftSuppression } from "../../types/alarm";
 import "./health.css";
@@ -99,7 +99,7 @@ export function AlarmHealthStrip() {
   return (
     <section className="ah-strip" aria-label="Saúde do sistema de alarmes">
       <header className="ah-strip__head">
-        <h2 className="ah-strip__title">O detector está confiável?</h2>
+        <SectionTitle flush>O detector está confiável?</SectionTitle>
         {/* O CARIMBO DA ESCALA (regra nº 1 acima): esta faixa NÃO obedece ao período do
             relatório — e o diz em texto, não em nota de rodapé. */}
         <span className="ah-strip__now">
@@ -175,7 +175,7 @@ export function AlarmHealthStrip() {
             Ela vive AQUI, ao lado dos KPIs de 10 min, porque é o MESMO relógio — nunca no corpo
             histórico (onde estaria sob o filtro de período, dizendo outra verdade). */}
         <div className="ah-kpi">
-          <h3 className="ah-kpi__label">Por prioridade — na janela</h3>
+          <SectionTitle flush>Por prioridade — na janela</SectionTitle>
           <PriorityDist counts={metrics.byPriorityWindow} />
         </div>
       </div>

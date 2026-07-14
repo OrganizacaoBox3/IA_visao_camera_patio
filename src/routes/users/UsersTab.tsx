@@ -215,10 +215,11 @@ export function UsersTab({
 
       {/* Lista cresce com a viewport (flex-1 + min-h-0 na cadeia; scroll interno na ScrollArea)
           — nada de max-h fixo em conteúdo (plano de padronização visual). */}
-      <section className="panel panel-events flex flex-1 flex-col">
-        {/* Pluralização real no lugar de "(s)" (achado 8.3). */}
+      <section className="panel panel-events flex flex-1 flex-col" aria-busy={loading}>
+        {/* Sinal ÚNICO de carregamento (laudo Onda 3): o Skeleton+aria-busy é o loader;
+            o título não duplica com "Carregando…". Pluralização real no lugar de "(s)". */}
         <SectionTitle>
-          {loading ? "Carregando…" : `${rows.length} ${rows.length === 1 ? "usuário" : "usuários"}`}
+          {rows.length} {rows.length === 1 ? "usuário" : "usuários"}
         </SectionTitle>
         {/* Átomo Table da casa: th scope="col" por construção + rolagem interna (regra A12). */}
         <Table

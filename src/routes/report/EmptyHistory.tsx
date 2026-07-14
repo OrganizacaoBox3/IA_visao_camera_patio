@@ -2,6 +2,7 @@
 // (Central, desenhar zona com a ferramenta Zona, "Configurar zona", escolher o Modo) e, com a
 // persistência confirmada pelo hub, afirma que é falta de dados no período (não banco ausente)
 // — vazio honesto. Prosa em linguagem de produto, sem glifo de ícone (acabamento da simplificação).
+import { EmptyState } from "../../ui";
 import type { DataPersistence } from "../../api";
 import type { Mode } from "./labels";
 
@@ -13,7 +14,7 @@ export function EmptyHistory({
   dataSource: DataPersistence | null; // null = hub antigo sem /api/data/status → texto genérico
 }) {
   return (
-    <div className="dash-empty">
+    <EmptyState>
       <p>
         <b>
           Sem histórico de{" "}
@@ -58,6 +59,6 @@ export function EmptyHistory({
             }.`
           : "Os dados aparecem automaticamente conforme as câmeras operam."}
       </p>
-    </div>
+    </EmptyState>
   );
 }
