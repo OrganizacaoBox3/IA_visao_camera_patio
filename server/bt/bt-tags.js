@@ -169,4 +169,14 @@ function listForDevice() {
   return list.filter((t) => t.ativo !== false).map((t) => ({ mac: key(t.btName), rotulo: t.rotulo }));
 }
 
-module.exports = { init, create, update, remove, match, upsertByMac, listForDevice, all: () => list };
+module.exports = {
+  init,
+  create,
+  update,
+  remove,
+  match,
+  upsertByMac,
+  listForDevice,
+  all: () => list,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
+};

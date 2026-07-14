@@ -186,4 +186,5 @@ module.exports = {
   ID_RE,
   NOME_MAX,
   STALE_MS, // mesma janela de staleness das leituras (bt-readings) — a UI deriva VIVA/SEM SINAL dela
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
 };

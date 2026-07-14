@@ -14,6 +14,7 @@ const btTags = require("./bt/bt-tags");
 const btStations = require("./bt/stations");
 const btLocations = require("./bt/bt-locations");
 const shifts = require("./shifts");
+const persistenceHealth = require("./persistence-health");
 const camcfg = require("./camcfg");
 const events = require("./events");
 const db = require("./db");
@@ -256,6 +257,20 @@ io.on("connection", (socket) => {
     btLocations.init(), // última localização por tag (modelo AirTag) — persistida, sobrevive a restart
     shifts.init(), // turnos de trabalho (cadastro global — spec-turnos-por-zona F1)
   ]);
+  // GUARDIÃO DE PERSISTÊNCIA (persistence-health.js): se o PG está configurado mas algum store caiu
+  // no fallback JSON, GRITA no boot — foi a armadilha que fez os turnos do dono sumirem (um .json não
+  // sobrevive a um redeploy sem volume persistente). btLocations tem forma própria (AirTag) e fica
+  // fora do resumo.
+  persistenceHealth.report(db.configured(), {
+    users: users.persistence(),
+    recipients: recipients.persistence(),
+    settings: settings.persistence(),
+    events: events.persistence(),
+    camcfg: camcfg.persistence(),
+    "bt-tags": btTags.persistence(),
+    "bt-stations": btStations.persistence(),
+    shifts: shifts.persistence(),
+  });
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
   // produção, ABORTA SÓ pelo AUTH_SECRET default (catastrófico + corrigível por env, sem deadlock).
   // A senha default 'admin@box3' NÃO derruba — só se troca pela UI (hub de pé), então é AVISO

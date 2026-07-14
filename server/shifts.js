@@ -192,4 +192,12 @@ async function remove(id) {
   return { ok: true };
 }
 
-module.exports = { init, create, update, remove, validateShift, all: () => list };
+module.exports = {
+  init,
+  create,
+  update,
+  remove,
+  validateShift,
+  all: () => list,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
+};

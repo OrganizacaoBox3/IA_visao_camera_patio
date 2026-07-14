@@ -518,4 +518,5 @@ module.exports = {
   cleanCalibration,
   // Puro (cadastro de turnos por parâmetro): a regra de overlap da grade da zona (CA-4).
   validateZoneShifts,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
 };

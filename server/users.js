@@ -332,6 +332,7 @@ module.exports = {
   genId,
   getById,
   all: () => users,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
   publicList: () => users.map(publicUser),
   ROLES,
   normalizeRole,

@@ -233,4 +233,13 @@ function get(id) {
   return list.find((x) => x.id === id) || null;
 }
 
-module.exports = { init, record, ack, forward, query, get, all: () => list };
+module.exports = {
+  init,
+  record,
+  ack,
+  forward,
+  query,
+  get,
+  all: () => list,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
+};

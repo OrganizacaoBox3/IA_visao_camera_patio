@@ -94,4 +94,11 @@ async function update(patch) {
   return cur;
 }
 
-module.exports = { init, get, update, normalize, DEFAULTS };
+module.exports = {
+  init,
+  get,
+  update,
+  normalize,
+  DEFAULTS,
+  persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
+};
