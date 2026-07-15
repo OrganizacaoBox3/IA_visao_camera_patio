@@ -221,9 +221,11 @@ async function handle(req, res, ctx) {
     const claims = requireScope(req, res);
     if (!claims) return true;
 
-    // ── GET /api/sites/:id/alarms?limit=&since= — drill-down dos alarmes (Fase 2) ──
+    // ── GET /api/sites/:id/alarms?limit=&since=&before= — drill-down dos alarmes (Fase 2) ──
     // canAccess(site) decide o QUÊ; withTenant(site) isola a LEITURA (RLS). Precede o
     // handler de site singular abaixo (que também casaria id+GET). limit default 50, teto 500.
+    // Cursor: `since` é o PISO (ts >= since); `before` é o cursor p/ TRÁS (ts < before), correto no
+    // order by ts desc — a SPA passa before = ts do ÚLTIMO alarme carregado p/ pedir a próxima página.
     if (id && seg[3] === "alarms" && method === "GET") {
       if (!(await access.guardAccess(claims, { type: "site", id }))) {
         json(res, 403, { error: "sem acesso a este site" });
@@ -232,11 +234,19 @@ async function handle(req, res, ctx) {
       const q = new URL(req.url, "http://x").searchParams;
       const limit = Math.min(Math.max(Number(q.get("limit")) || 50, 1), 500);
       const since = Number(q.get("since")) || 0;
+      const beforeRaw = q.get("before");
+      const before = beforeRaw !== null && beforeRaw !== "" && Number.isFinite(Number(beforeRaw)) ? Number(beforeRaw) : null;
+      // where parametrizado (SQL-injection: valores só por $n). `before` só entra se veio válido.
+      const conds = ["ts >= $1"];
+      const params = [since];
+      if (before !== null) {
+        params.push(before);
+        conds.push(`ts < $${params.length}`);
+      }
+      params.push(limit);
+      const sql = `select id, tipo, ts, meta from alarm_event where ${conds.join(" and ")} order by ts desc limit $${params.length}`;
       const alarms = await db.withTenant(id, async (cl) => {
-        const r = await cl.query(
-          "select id, tipo, ts, meta from alarm_event where ts >= $1 order by ts desc limit $2",
-          [since, limit],
-        );
+        const r = await cl.query(sql, params);
         return r.rows;
       });
       json(res, 200, { alarms });

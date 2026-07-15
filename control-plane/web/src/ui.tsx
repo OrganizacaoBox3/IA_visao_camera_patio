@@ -1,5 +1,10 @@
 // Átomos MÍNIMOS locais do portal (não é o src/ui do hub). Radix/monorepo fica p/ depois.
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+} from "react";
 
 export function Button({
   variant = "default",
@@ -15,6 +20,10 @@ export function Button({
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input className="cp-input" {...props} />;
+}
+
+export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className="cp-input cp-select" {...props} />;
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {

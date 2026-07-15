@@ -178,6 +178,48 @@ describe.skipIf(!HAVE_PG)("Fase 2 — overview + alarms drill-down (Postgres rea
     expect(r.json.alarms.length).toBe(1);
   });
 
+  it("alarms: before é cursor p/ TRÁS (ts < before) — pula o mais recente", async () => {
+    // siteA: a1 ts=now-1000 (queda), a2 ts=now-2000 (fumaca), a3 ts=now-25h (antigo).
+    // before entre a1 e a2 → devolve a2 e a3 (não a1), desc.
+    const now = Date.now();
+    const r = await call("GET", `/api/sites/${siteA}/alarms?since=0&before=${now - 1500}`, { token: platformToken });
+    expect(r.status).toBe(200);
+    const tipos = r.json.alarms.map((a) => a.tipo);
+    expect(tipos).not.toContain("queda"); // a1 (mais novo que o cursor) foi pulado
+    expect(tipos).toEqual(["fumaca", "antigo"]); // desc por ts
+  });
+
+  it("alarms: paginação por before (carregar-mais) percorre TODOS e termina em 0", async () => {
+    // Emula a SPA: pede limit=1 e usa o ts do último como `before` da próxima página.
+    const seen = [];
+    let before = null;
+    for (let i = 0; i < 10; i++) {
+      const qs = `since=0&limit=1${before !== null ? `&before=${before}` : ""}`;
+      const r = await call("GET", `/api/sites/${siteA}/alarms?${qs}`, { token: platformToken });
+      expect(r.status).toBe(200);
+      if (r.json.alarms.length === 0) break; // "fim" quando volta 0
+      const a = r.json.alarms[0];
+      seen.push(a.tipo);
+      before = a.ts;
+    }
+    // percorreu os 3 de A em ordem desc, sem repetir, e parou.
+    expect(seen).toEqual(["queda", "fumaca", "antigo"]);
+  });
+
+  it("alarms: before combina com since (só a janela E antes do cursor)", async () => {
+    const now = Date.now();
+    const since = now - 24 * 3600 * 1000; // exclui o antigo (25h)
+    const r = await call("GET", `/api/sites/${siteA}/alarms?since=${since}&before=${now - 1500}`, { token: platformToken });
+    // since tira o antigo; before tira o mais novo (queda) → sobra só fumaca.
+    expect(r.json.alarms.map((a) => a.tipo)).toEqual(["fumaca"]);
+  });
+
+  it("alarms: before inválido/ausente é ignorado (volta ao comportamento sem cursor)", async () => {
+    const r = await call("GET", `/api/sites/${siteA}/alarms?since=0&before=abc`, { token: platformToken });
+    expect(r.status).toBe(200);
+    expect(r.json.alarms.length).toBe(3); // before=abc não filtra nada
+  });
+
   it("alarms (partner-admin de B em site de A): 403 fora do escopo", async () => {
     const r = await call("GET", `/api/sites/${siteA}/alarms`, { token: partnerBToken });
     expect(r.status).toBe(403);

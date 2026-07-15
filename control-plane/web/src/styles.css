@@ -296,3 +296,159 @@ a {
   font: inherit;
   margin-bottom: var(--sp-4);
 }
+
+/* ── select (mesmo molde do input) ── */
+.cp-select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: var(--sp-5);
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: right 12px top 55%, right 7px top 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* ── navegação de topo (Frota / Gerenciar) ── */
+.cp-nav {
+  display: flex;
+  gap: var(--sp-2);
+}
+.cp-nav__item {
+  font: inherit;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  padding: var(--sp-1) var(--sp-1);
+  cursor: pointer;
+}
+.cp-nav__item:hover {
+  color: var(--text);
+}
+.cp-nav__item[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── sub-abas do Gerenciar ── */
+.cp-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-5);
+}
+.cp-subtab {
+  font: inherit;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-muted);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+}
+.cp-subtab:hover {
+  color: var(--text);
+}
+.cp-subtab[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── seção do Gerenciar: form de criar + lista ── */
+.cp-section h2 {
+  font-size: 1.05rem;
+  margin: 0 0 var(--sp-4);
+}
+.cp-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.cp-create .cp-field {
+  margin-bottom: 0;
+  flex: 1 1 180px;
+}
+.cp-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--sp-4);
+}
+
+.cp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.cp-list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.cp-list__row:last-child {
+  border-bottom: none;
+}
+.cp-list__main {
+  flex: 1;
+  min-width: 0;
+}
+.cp-list__name {
+  font-weight: 550;
+}
+.cp-list__sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.cp-mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+/* ── banner da site_key (a credencial do hub — mostrada UMA vez) ── */
+.cp-sitekey {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--state-online-bg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+.cp-sitekey__title {
+  font-weight: 650;
+  margin: 0 0 var(--sp-2);
+}
+.cp-sitekey__key {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin: var(--sp-2) 0;
+}
+.cp-sitekey__value {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+.cp-sitekey__warn {
+  color: var(--state-alarm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: var(--sp-2) 0 0;
+}

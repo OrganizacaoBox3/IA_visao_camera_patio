@@ -4,55 +4,60 @@ import type { Alarm, Site } from "../types";
 import { Badge, Button, EmptyState, ErrorState, Loading } from "../ui";
 import { cameraZona, formatTs } from "../format";
 
-// O contrato é `where ts >= since order by ts DESC limit N` (teto 500). Com essa forma,
-// `since` é um PISO — não serve de cursor "para trás". A paginação honesta que o contrato
-// permite é AUMENTAR o limit: um limit maior revela alarmes mais ANTIGOS (a cauda do desc).
-// "Carregar mais" cresce o limit em passos de PAGE até o teto; re-busca com since=0.
+// Paginação por CURSOR real: a próxima página pede `before` = ts do ÚLTIMO alarme já carregado.
+// A lista vem em ordem desc (ts), então o último é o mais ANTIGO; o backend traduz em
+// `where ts < before`. "Fim" quando a página volta com menos que PAGE (0 inclusive → fim).
 const PAGE = 50;
-const MAX = 500;
 
 export function SiteView({ site, onBack }: { site: Site; onBack: () => void }) {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
-  const [limit, setLimit] = useState(PAGE);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [reachedEnd, setReachedEnd] = useState(false);
 
+  // 1ª página: sem cursor. Recarrega do zero ao trocar de site.
   useEffect(() => {
     let alive = true;
-    const first = limit === PAGE;
-    if (first) setStatus("loading");
-    else setLoadingMore(true);
+    setStatus("loading");
     setError(null);
+    setAlarms([]);
+    setReachedEnd(false);
 
-    getSiteAlarms(site.id, { limit, since: 0 })
+    getSiteAlarms(site.id, { limit: PAGE })
       .then(({ alarms: page }) => {
         if (!alive) return;
         setAlarms(page);
-        // Fim se veio menos que o pedido, ou se batemos o teto do contrato.
-        setReachedEnd(page.length < limit || limit >= MAX);
+        setReachedEnd(page.length < PAGE);
         setStatus("ready");
       })
       .catch((err) => {
         if (!alive) return;
         if (err instanceof ApiError && err.status === 401) return; // api.ts volta ao login
-        const msg = err instanceof ApiError ? err.message : "falha ao carregar alarmes";
-        if (first) setStatus("error");
-        setError(msg);
-      })
-      .finally(() => {
-        if (alive) setLoadingMore(false);
+        setStatus("error");
+        setError(err instanceof ApiError ? err.message : "falha ao carregar alarmes");
       });
 
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [site.id, limit]);
+  }, [site.id]);
 
-  function loadMore() {
-    setLimit((n) => Math.min(n + PAGE, MAX));
+  async function loadMore() {
+    const last = alarms[alarms.length - 1];
+    if (!last) return; // sem cursor de onde continuar
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const { alarms: page } = await getSiteAlarms(site.id, { limit: PAGE, before: last.ts });
+      setAlarms((prev) => [...prev, ...page]);
+      if (page.length < PAGE) setReachedEnd(true); // veio 0 (ou menos que a página) → fim
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return;
+      setError(err instanceof ApiError ? err.message : "falha ao carregar mais");
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   return (
@@ -99,9 +104,7 @@ export function SiteView({ site, onBack }: { site: Site; onBack: () => void }) {
             <div style={{ marginTop: 16, textAlign: "center" }}>
               {reachedEnd ? (
                 <span className="cp-scope">
-                  {limit >= MAX
-                    ? `Mostrando os ${alarms.length} mais recentes (teto de ${MAX}).`
-                    : `Fim da lista (${alarms.length} alarme${alarms.length === 1 ? "" : "s"}).`}
+                  Fim da lista ({alarms.length} alarme{alarms.length === 1 ? "" : "s"}).
                 </span>
               ) : (
                 <Button onClick={loadMore} disabled={loadingMore}>

@@ -7,6 +7,7 @@ const { createServer } = require("node:http");
 const db = require("./db");
 const auth = require("./auth");
 const routes = require("./routes");
+const { serveStatic } = require("./static");
 
 const PORT = Number(process.env.CP_PORT ?? 4100);
 const HOST = process.env.CP_HOST ?? "0.0.0.0";
@@ -78,6 +79,12 @@ const httpServer = createServer(async (req, res) => {
     }
     // Fase 1: login + CRUD do cadastro + ingest/heartbeat (cada um com seu guard em routes.js).
     if (await routes.handle(req, res, ctx)) return;
+    // Fase 2 (1 deploy só): o que NÃO é API nem /health é a SPA buildada (control-plane/web/dist),
+    // com SPA-fallback p/ client routing e guarda contra path traversal (ver static.js).
+    const pathname = new URL(req.url, "http://x").pathname;
+    if (!pathname.startsWith("/api/") && pathname !== "/health") {
+      if (serveStatic(req, res)) return;
+    }
   } catch (err) {
     if (err && err.tooLarge) return json(res, 413, { error: "corpo grande demais" });
     if (err instanceof SyntaxError) return json(res, 400, { error: "requisição inválida" });

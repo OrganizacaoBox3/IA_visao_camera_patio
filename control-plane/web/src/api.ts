@@ -4,10 +4,17 @@
 // 401 → limpa a sessão e avisa quem escuta (App volta ao login).
 
 import type {
+  AdminSite,
+  AdminUser,
   AlarmsResponse,
+  Cliente,
   LoginResponse,
+  Membership,
   Overview,
+  Partner,
   Scope,
+  ScopeType,
+  SiteCreated,
 } from "./types";
 
 const BASE = import.meta.env.VITE_CP_API ?? "";
@@ -117,10 +124,77 @@ export function getOverview(): Promise<Overview> {
 
 export function getSiteAlarms(
   siteId: string,
-  opts: { limit?: number; since?: number } = {},
+  opts: { limit?: number; since?: number; before?: number } = {},
 ): Promise<AlarmsResponse> {
-  const limit = opts.limit ?? 50;
-  const since = opts.since ?? 0;
-  const qs = new URLSearchParams({ limit: String(limit), since: String(since) });
+  const qs = new URLSearchParams({
+    limit: String(opts.limit ?? 50),
+    since: String(opts.since ?? 0),
+  });
+  // Cursor real (para trás no desc): pede alarmes com ts < before. Omitido na 1ª página.
+  if (opts.before != null) qs.set("before", String(opts.before));
   return request<AlarmsResponse>(`/api/sites/${encodeURIComponent(siteId)}/alarms?${qs}`);
+}
+
+// ── cadastro (GERENCIAR) ──
+// As listas vêm SCOPED por canAccess no backend; o gate real de criação é a API (403).
+
+export function listPartners(): Promise<Partner[]> {
+  return request<Partner[]>("/api/partners");
+}
+export function createPartner(nome: string): Promise<Partner> {
+  return request<Partner>("/api/partners", {
+    method: "POST",
+    body: JSON.stringify({ nome }),
+  });
+}
+
+export function listClientes(): Promise<Cliente[]> {
+  return request<Cliente[]>("/api/clientes");
+}
+export function createCliente(partner_id: string, nome: string): Promise<Cliente> {
+  return request<Cliente>("/api/clientes", {
+    method: "POST",
+    body: JSON.stringify({ partner_id, nome }),
+  });
+}
+
+export function listSites(): Promise<AdminSite[]> {
+  return request<AdminSite[]>("/api/sites");
+}
+// Devolve a site_key CRUA (a credencial do hub) — mostrar UMA vez, não é reversível.
+export function createSite(cliente_id: string, nome: string): Promise<SiteCreated> {
+  return request<SiteCreated>("/api/sites", {
+    method: "POST",
+    body: JSON.stringify({ cliente_id, nome }),
+  });
+}
+
+export function listUsers(): Promise<AdminUser[]> {
+  return request<AdminUser[]>("/api/users");
+}
+export function createUser(email: string, senha: string): Promise<AdminUser> {
+  return request<AdminUser>("/api/users", {
+    method: "POST",
+    body: JSON.stringify({ email, senha }),
+  });
+}
+
+export function listMemberships(): Promise<Membership[]> {
+  return request<Membership[]>("/api/memberships");
+}
+export function createMembership(input: {
+  user_id: string;
+  scope_type: ScopeType;
+  scope_id: string | null;
+  role: string;
+}): Promise<Membership> {
+  return request<Membership>("/api/memberships", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+export function deleteMembership(id: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>(`/api/memberships/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
