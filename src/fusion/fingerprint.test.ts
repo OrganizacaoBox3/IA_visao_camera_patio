@@ -83,4 +83,24 @@ describe("classify", () => {
     const r = classify({ a: -42, b: -73, c: -80 }, db);
     expect(r.best?.id).toBe("1");
   });
+
+  it("uma zona só + vivo PERTO dela → MÉDIA (nunca alta: não há 2º p/ comparar)", () => {
+    const uma = [fp("1", "Doca A", { A: -40, B: -75, C: -78 })];
+    const r = classify({ A: -41, B: -74, C: -79 }, uma); // bate bem
+    expect(r.best?.label).toBe("Doca A");
+    expect(r.confidence).toBe("media"); // NÃO "alta" — bug corrigido
+  });
+
+  it("uma zona só + vivo LONGE dela → BAIXA (tag noutro lugar, não na zona)", () => {
+    const uma = [fp("1", "Doca A", { A: -40, B: -75, C: -78 })]; // A forte
+    const r = classify({ A: -78, B: -75, C: -40 }, uma); // agora C é que está forte → outra zona
+    expect(r.confidence).toBe("baixa");
+  });
+
+  it("longe de TODAS as zonas conhecidas → BAIXA mesmo com margem (ajuste absoluto ruim)", () => {
+    // vivo que não se parece com nenhuma das 3 (todas as antenas ~-90)
+    const r = classify({ A: -90, B: -90, C: -90 }, db);
+    expect(r.best?.dist).toBeGreaterThan(18);
+    expect(r.confidence).toBe("baixa");
+  });
 });

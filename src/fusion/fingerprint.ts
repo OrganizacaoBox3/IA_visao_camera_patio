@@ -80,6 +80,13 @@ export type ClassifyOpts = {
   /** Margem (dB) p/ confiança ALTA / MÉDIA (default 6 / 3). Abaixo de baixa>0. */
   altaDb?: number;
   mediaDb?: number;
+  /** AJUSTE ABSOLUTO (RMS dB): o vivo tem de estar PERTO da assinatura, não só ser o menos pior.
+   *  <= nearFitDb = bate bem (candidato a ALTA); > farFitDb = NÃO bate com nenhuma zona (→ BAIXA).
+   *  Sem isso, um vivo LONGE de tudo classificaria "alto" só por ser o único/menos ruim (bug real:
+   *  uma tag noutra zona batia "alta" na única zona calibrada). Medido: em-zona ~5-9 dB (ruído de
+   *  13 dB entre tags coladas); entre-zonas ~30-40 dB. Defaults 10 / 18. */
+  nearFitDb?: number;
+  farFitDb?: number;
 };
 
 /**
@@ -111,6 +118,8 @@ export function classify(live: LiveVec, db: readonly Fingerprint[], opts: Classi
   const minShared = opts.minShared ?? 2;
   const altaDb = opts.altaDb ?? 6;
   const mediaDb = opts.mediaDb ?? 3;
+  const nearFitDb = opts.nearFitDb ?? 10;
+  const farFitDb = opts.farFitDb ?? 18;
 
   const ranked: Match[] = [];
   for (const fp of Array.isArray(db) ? db : []) {
@@ -124,8 +133,19 @@ export function classify(live: LiveVec, db: readonly Fingerprint[], opts: Classi
 
   const best = ranked[0] ?? null;
   const margin = ranked.length >= 2 ? ranked[1].dist - ranked[0].dist : Infinity;
+  // Confiança = AJUSTE ABSOLUTO (o vivo bate com a assinatura?) × MARGEM (ganha do 2º com folga?).
+  //  · fit > farFitDb → não bate com NENHUMA zona conhecida (tag noutro lugar) → BAIXA;
+  //  · uma zona só (sem 2º p/ comparar) → no máximo MÉDIA, e só se o ajuste for bom (nunca ALTA);
+  //  · ALTA exige ajuste bom E margem clara sobre o 2º.
   let confidence: Confidence = "nenhuma";
-  if (best) confidence = margin >= altaDb ? "alta" : margin >= mediaDb ? "media" : "baixa";
+  if (best) {
+    const fit = best.dist;
+    if (fit > farFitDb) confidence = "baixa";
+    else if (ranked.length < 2) confidence = fit <= nearFitDb ? "media" : "baixa";
+    else if (margin >= altaDb && fit <= nearFitDb) confidence = "alta";
+    else if (margin >= mediaDb && fit <= farFitDb) confidence = "media";
+    else confidence = "baixa";
+  }
 
   // WKNN: média das posições dos top-k COM coordenada, peso 1/(dist²+ε) (mais perto pesa mais).
   const withPos = ranked.slice(0, Math.max(1, k)).filter((m) => isFiniteNum(m.x) && isFiniteNum(m.y));
