@@ -83,6 +83,8 @@ server/bt/bt-locations.json
 server/bt/stations.json
 # Planta baixa do local (fallback JSON de runtime) — dimensões em metros + posição das estações BLE.
 server/bt/floorplan.json
+# Fingerprints de RSSI (fallback JSON de runtime) — survey de localização indoor; só metadados.
+server/bt/fingerprints.json
 # Gravação event-sourcing OPT-IN das leituras BLE (BT_RECORD) — só metadados, matéria-prima do replay.
 server/bt/bt-recording.jsonl
 # Gravação OPT-IN da sessão de fusão indoor câmera+BLE (FUSION_RECORD) — só metadados (tracks/MAC/RSSI/H).

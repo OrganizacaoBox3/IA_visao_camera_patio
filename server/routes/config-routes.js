@@ -5,6 +5,9 @@ const camcfg = require("../camcfg");
 // PLANTA BAIXA (floorplan): config GLOBAL do local (não por câmera) — dimensões em metros +
 // posição das estações BLE. Emite "floorplan-updated" (evento NOVO, aditivo) aos painéis.
 const floorplan = require("../bt/floorplan");
+// FINGERPRINTS de RSSI (survey de localização indoor): LISTA de assinaturas RSSI por ponto conhecido.
+// GET = qualquer autenticado; POST/DELETE = requireConfigurer. Emite "fingerprints-updated" (aditivo).
+const fingerprints = require("../bt/fingerprints");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireConfigurer, io } = ctx;
@@ -144,6 +147,57 @@ async function handle(req, res, ctx) {
       json(res, 200, saved);
       return true;
     }
+  }
+
+  // ── FINGERPRINTS de RSSI (survey de localização) — LISTA global (NÃO por câmera) ─────
+  // GET (qualquer autenticado) lê a lista; POST/DELETE exigem perfil de configuração. Validação
+  // inválida → 400 (badRequest); falha de persistência → 503 (add/remove fazem rollback e propagam).
+  if (path0 === "/api/fingerprints") {
+    if (req.method === "GET") {
+      if (!requireAuth(req, res)) return true;
+      json(res, 200, fingerprints.list());
+      return true;
+    }
+    if (req.method === "POST") {
+      if (!requireConfigurer(req, res)) return true;
+      const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+      let saved;
+      try {
+        saved = await fingerprints.add(body && body.fingerprint);
+      } catch (e) {
+        if (e && e.badRequest) {
+          json(res, 400, { error: e.message });
+          return true;
+        }
+        if (e && e.status === 503) {
+          json(res, 503, { error: e.message });
+          return true;
+        }
+        throw e;
+      }
+      io.to("dashboards").emit("fingerprints-updated", {});
+      json(res, 200, saved);
+      return true;
+    }
+  }
+
+  // DELETE /api/fingerprints/:id — id gerado pelo server (ex.: "fp-<uuid>").
+  const fpMatch = path0.match(/^\/api\/fingerprints\/([\w-]+)$/);
+  if (fpMatch && req.method === "DELETE") {
+    if (!requireConfigurer(req, res)) return true;
+    let r;
+    try {
+      r = await fingerprints.remove(fpMatch[1]);
+    } catch (e) {
+      if (e && e.status === 503) {
+        json(res, 503, { error: e.message });
+        return true;
+      }
+      throw e;
+    }
+    io.to("dashboards").emit("fingerprints-updated", {});
+    json(res, 200, r);
+    return true;
   }
 
   return false;

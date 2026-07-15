@@ -14,6 +14,7 @@ const recipients = require("./recipients");
 const btTags = require("./bt/bt-tags");
 const btStations = require("./bt/stations");
 const floorplan = require("./bt/floorplan"); // planta baixa do local (dimensões + posição das estações BLE)
+const fingerprints = require("./bt/fingerprints"); // survey de RSSI por ponto conhecido (localização indoor)
 const btLocations = require("./bt/bt-locations");
 const shifts = require("./shifts");
 const persistenceHealth = require("./persistence-health");
@@ -257,6 +258,7 @@ io.on("connection", (socket) => {
     btTags.init(),
     btStations.init(), // registro das estações BLE (nome amigável); a estação se AUTO-DESCOBRE ao postar
     floorplan.init(), // planta baixa do local (dimensões em metros + posição X,Y das estações BLE)
+    fingerprints.init(), // survey de RSSI: assinatura das antenas por ponto conhecido (localização indoor)
     btLocations.init(), // última localização por tag (modelo AirTag) — persistida, sobrevive a restart
     shifts.init(), // turnos de trabalho (cadastro global — spec-turnos-por-zona F1)
   ]);
@@ -273,6 +275,7 @@ io.on("connection", (socket) => {
     "bt-tags": btTags.persistence(),
     "bt-stations": btStations.persistence(),
     floorplan: floorplan.persistence(),
+    fingerprints: fingerprints.persistence(),
     shifts: shifts.persistence(),
   });
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em

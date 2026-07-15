@@ -108,4 +108,28 @@ describe("worldToCanvas — enquadramento", () => {
   it("bboxOf: sem ponto válido → null", () => {
     expect(bboxOf([])).toBeNull();
   });
+
+  it("unproject é a INVERSA de project: round-trip mundo→canvas→mundo (erro < 1e-6)", () => {
+    // bbox e canvas assimétricos (aspecto ≠ 1, com margem) — o caso que pega troca de eixo/origem.
+    const tf = worldToCanvas({ minX: 2, minY: -3, maxX: 22, maxY: 7 }, { w: 300, h: 180 }, 24);
+    const pts = [
+      { x: 2, y: -3 },
+      { x: 22, y: 7 },
+      { x: 12, y: 2 },
+      { x: 0, y: 0 },
+      { x: 5.5, y: -1.25 },
+    ];
+    for (const w of pts) {
+      const back = tf.unproject(tf.project(w));
+      expect(back.x).toBeCloseTo(w.x, 6);
+      expect(back.y).toBeCloseTo(w.y, 6);
+    }
+  });
+
+  it("unproject é robusto a bbox degenerado (scale=1 px/m) — sem NaN/Infinity", () => {
+    const tf = worldToCanvas({ minX: 3, minY: 3, maxX: 3, maxY: 3 }, { w: 100, h: 100 }, 0);
+    const w = tf.unproject({ x: 50, y: 50 });
+    expect(Number.isFinite(w.x) && Number.isFinite(w.y)).toBe(true);
+    expect(tf.unproject(tf.project({ x: 3, y: 3 }))).toEqual({ x: 3, y: 3 });
+  });
 });

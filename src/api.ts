@@ -401,6 +401,22 @@ export const getFloorplan = () => apiGet<Floorplan | null>("/api/floorplan");
 export const saveFloorplan = (floorplan: Floorplan) =>
   apiPut<Floorplan>("/api/floorplan", { floorplan });
 
+// ── FINGERPRINTS de RSSI (survey de localização por assinatura) ─────────────────────────────────
+// Cada fingerprint é a ASSINATURA RSSI das antenas num ponto conhecido (o operador encosta tags no
+// ponto e captura). O classificador (src/fusion/fingerprint.ts) casa o vivo contra o banco → zona +
+// confiança. Persistido no hub (server/bt/fingerprints.js), SÓ números/metadado (LGPD). O id é
+// gerado no server; o front manda {label, x?, y?, vec, createdAt}.
+import type { Fingerprint } from "./fusion/fingerprint";
+export type { Fingerprint } from "./fusion/fingerprint";
+// GET /api/fingerprints → Fingerprint[] (o survey atual; [] se nunca salvo). Auth: qualquer autenticado.
+export const getFingerprints = () => apiGet<Fingerprint[]>("/api/fingerprints");
+// POST /api/fingerprints {fingerprint} → valida, gera id, persiste; responde o item salvo. Auth: canConfigure.
+export const saveFingerprint = (fp: Omit<Fingerprint, "id">) =>
+  apiSend<Fingerprint>("POST", "/api/fingerprints", { fingerprint: fp });
+// DELETE /api/fingerprints/:id → remove um ponto do survey. Auth: canConfigure.
+export const deleteFingerprint = (id: string) =>
+  apiSend<{ ok: true }>("DELETE", `/api/fingerprints/${encodeURIComponent(id)}`);
+
 // ── TURNOS de trabalho (cadastro GLOBAL — spec-turnos-por-zona F1) ────────────────────────────
 // Fonte única do "quando a área deveria estar trabalhando". A VALIDAÇÃO DE NEGÓCIO mora no
 // SERVIDOR (duração/dias/pausas — server/shifts.js): o client só transporta e a UI exibe o erro

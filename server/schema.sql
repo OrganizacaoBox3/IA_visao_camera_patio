@@ -135,6 +135,17 @@ create table if not exists bt_floorplan (
   data jsonb not null
 );
 
+-- ── FINGERPRINTS de RSSI (survey de localização indoor por Bluetooth) — LISTA jsonb ──────────────
+-- Cada linha é a assinatura RSSI das antenas num PONTO CONHECIDO da planta (rótulo + posição em
+-- metros + estatísticas mean/std/n por antena). É a base de referência que um classificador usa p/
+-- inferir onde uma tag está. LISTA (várias amostras por ponto), ao contrário do bt_floorplan
+-- (singleton). SÓ NÚMEROS/METADADO (nenhuma imagem/PII). O store cria idempotentemente no boot
+-- também (server/bt/fingerprints.js); aqui é o lugar canônico.
+create table if not exists bt_fingerprints (
+  id text primary key,
+  data jsonb not null
+);
+
 -- ── LOCALIZAÇÃO last-known por tag (modelo AirTag: TC22 móvel congela a última posição) ──
 -- UMA linha por tag (last-wins, sem trilha/histórico). Só metadado: lat/lon/acc/ts — nunca imagem (LGPD).
 create table if not exists bt_tag_locations (

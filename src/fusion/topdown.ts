@@ -169,7 +169,15 @@ export function deriveTopdownView(args: TopdownArgs): TopdownView {
 // ── Enquadramento no canvas (fit do bbox de mundo, com margem, Y para baixo) ──
 
 export type TopdownBbox = { minX: number; minY: number; maxX: number; maxY: number };
-export type TopdownTransform = { scale: number; project: (w: Vec2) => Vec2 };
+export type TopdownTransform = {
+  scale: number;
+  /** Mundo (metros) → canvas (px). */
+  project: (w: Vec2) => Vec2;
+  /** Canvas (px) → mundo (metros) — a INVERSA exata de `project` (mesmo scale/origem). É o análogo
+   *  do `toNorm` da calibração, mas em METROS: o editor de arraste converte o ponteiro de volta ao
+   *  chão. Robusta pelo mesmo motivo de `project`: scale nunca é 0 (worldToCanvas garante ≥ 1). */
+  unproject: (c: Vec2) => Vec2;
+};
 
 /** Bbox de um conjunto de pontos de mundo. null se não há ponto válido. */
 export function bboxOf(points: readonly Vec2[]): TopdownBbox | null {
@@ -237,5 +245,6 @@ export function worldToCanvas(
   const ox = m + (availW - drawnW) / 2 - minX * scale;
   const oy = m + (availH - drawnH) / 2 - minY * scale;
   const project = (w: Vec2): Vec2 => ({ x: ox + w.x * scale, y: oy + w.y * scale });
-  return { scale, project };
+  const unproject = (c: Vec2): Vec2 => ({ x: (c.x - ox) / scale, y: (c.y - oy) / scale });
+  return { scale, project, unproject };
 }
