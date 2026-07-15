@@ -1632,6 +1632,7 @@ export function CameraWorkspace({
           })}
           tab={drawerTab}
           onTab={setDrawerTab}
+          cameraId={cameraId}
           zonas={{
             zonesLoading,
             zones,

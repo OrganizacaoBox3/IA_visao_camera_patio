@@ -87,6 +87,7 @@ describe("CamDrawer — a aba 'Camadas' saiu; observação vira o painel direto"
     timeline: [],
     presence: { now: 0, peak: 0, dwell: 0 },
     paused: false,
+    cameraId: "cam-teste",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     cal: {} as any,
     onCalibrate: () => {},

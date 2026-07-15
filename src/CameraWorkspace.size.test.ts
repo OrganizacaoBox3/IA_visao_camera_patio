@@ -77,7 +77,13 @@ import { describe, it, expect } from "vitest";
 // Contabilidade REAL (método deste teste, que conta linhas vazias): 1952 → 1995; teto 2000 mantém
 // a folga mínima da convenção (≈5, como 1952/1960). NÃO medir com `Measure-Object -Line` (ignora
 // vazias e já induziu um falso "coube em 1930" numa revisão).
-const MAX_LINES = 1689;
+// 1689→1690 (jul/14): aba "Vista 2D" (vista superior top-down do chão + o beacon MAIS PRÓXIMO por
+// tag, para o teste SÓ-Bluetooth sem câmera). O GROSSO foi EXTRAÍDO — geometria de mundo em
+// src/fusion/topdown.ts (pura, testada), o desenho em src/camera/drawTopdown.ts (folha), e a aba em
+// src/camera/tabs/Vista2DTab.tsx (carrega a própria calibração/BLE); aqui sobrou 1 LINHA de fiação:
+// o prop cameraId ao CamDrawer (a nova aba resolve a própria calibração por ele). NÃO medir com
+// `Measure-Object -Line`.
+const MAX_LINES = 1690;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {
