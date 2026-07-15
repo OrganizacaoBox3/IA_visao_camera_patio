@@ -11,6 +11,7 @@ const stores = require("./stores");
 const password = require("./password");
 const sitekey = require("./sitekey");
 const login = require("./login");
+const overview = require("./overview");
 const db = require("./db");
 
 async function readJson(req, ctx) {
@@ -108,6 +109,16 @@ async function handle(req, res, ctx) {
   // ── daqui p/ baixo: tudo exige token de usuário (verifyToken) ─────────────────
   const collection = seg[1];
   const id = seg[2];
+
+  // ═══ GET /api/overview — a FROTA do escopo do chamador (Fase 2) ════════════════
+  // Uma chamada: partners/clientes/sites ACESSÍVEIS (mesmo filtro canAccess do CRUD) +
+  // online (now-last_seen<10min) + alarms24h por site (contado via withTenant, RLS-safe).
+  if (collection === "overview" && !id && method === "GET") {
+    const claims = requireScope(req, res);
+    if (!claims) return true;
+    json(res, 200, await overview.buildOverview(claims));
+    return true;
+  }
 
   // ═══ /api/partners ════════════════════════════════════════════════════════════
   if (collection === "partners") {
@@ -209,6 +220,28 @@ async function handle(req, res, ctx) {
   if (collection === "sites") {
     const claims = requireScope(req, res);
     if (!claims) return true;
+
+    // ── GET /api/sites/:id/alarms?limit=&since= — drill-down dos alarmes (Fase 2) ──
+    // canAccess(site) decide o QUÊ; withTenant(site) isola a LEITURA (RLS). Precede o
+    // handler de site singular abaixo (que também casaria id+GET). limit default 50, teto 500.
+    if (id && seg[3] === "alarms" && method === "GET") {
+      if (!(await access.guardAccess(claims, { type: "site", id }))) {
+        json(res, 403, { error: "sem acesso a este site" });
+        return true;
+      }
+      const q = new URL(req.url, "http://x").searchParams;
+      const limit = Math.min(Math.max(Number(q.get("limit")) || 50, 1), 500);
+      const since = Number(q.get("since")) || 0;
+      const alarms = await db.withTenant(id, async (cl) => {
+        const r = await cl.query(
+          "select id, tipo, ts, meta from alarm_event where ts >= $1 order by ts desc limit $2",
+          [since, limit],
+        );
+        return r.rows;
+      });
+      json(res, 200, { alarms });
+      return true;
+    }
 
     if (!id && method === "GET") {
       const tree = await access.buildFullTree();

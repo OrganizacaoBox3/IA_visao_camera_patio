@@ -1,0 +1,298 @@
+/* Tokens + átomos MÍNIMOS do portal. NÃO é o src/ui do hub (outro app; compartilhar via
+   monorepo fica p/ depois). Doutrina "going-gray": base neutra, saturado só p/ anormalidade —
+   e cor NUNCA sozinha, sempre com TEXTO (ver Badge). */
+
+:root {
+  color-scheme: light dark;
+
+  /* base neutra */
+  --bg: #f6f7f9;
+  --bg-panel: #ffffff;
+  --bg-subtle: #f0f2f5;
+  --border: #d9dde3;
+  --text: #1a1d21;
+  --text-muted: #5b6472;
+
+  /* estados (saturado só onde há sinal) */
+  --state-online: #1f883d;
+  --state-online-bg: #e6f4ea;
+  --state-offline: #6b7280;   /* offline é neutro/cinza — ausência de sinal, não alarme */
+  --state-offline-bg: #eceef1;
+  --state-alarm: #b3261e;
+  --state-alarm-bg: #fbe9e7;
+  --accent: #1f5fb3;
+
+  --radius: 8px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171b;
+    --bg-panel: #1c2025;
+    --bg-subtle: #23282e;
+    --border: #333a42;
+    --text: #e6e9ee;
+    --text-muted: #9aa4b2;
+
+    --state-online: #4ac26b;
+    --state-online-bg: #16301f;
+    --state-offline: #8b93a1;
+    --state-offline-bg: #262b31;
+    --state-alarm: #f2685e;
+    --state-alarm-bg: #351a18;
+    --accent: #5b9be8;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: var(--accent);
+}
+
+/* ── layout ── */
+.cp-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.cp-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.cp-topbar h1 {
+  font-size: 1.05rem;
+  margin: 0;
+  font-weight: 650;
+}
+
+.cp-topbar .spacer {
+  flex: 1;
+}
+
+.cp-scope {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.cp-main {
+  flex: 1;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--sp-5);
+}
+
+.cp-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+}
+
+/* ── átomos ── */
+.cp-btn {
+  font: inherit;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  cursor: pointer;
+}
+.cp-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.cp-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.cp-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.cp-btn--ghost {
+  background: transparent;
+}
+
+.cp-input {
+  font: inherit;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.cp-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cp-field {
+  display: block;
+  margin-bottom: var(--sp-4);
+}
+.cp-field > span {
+  display: block;
+  margin-bottom: var(--sp-1);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.cp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.cp-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.cp-badge--online {
+  color: var(--state-online);
+  background: var(--state-online-bg);
+}
+.cp-badge--offline {
+  color: var(--state-offline);
+  background: var(--state-offline-bg);
+}
+.cp-badge--alarm {
+  color: var(--state-alarm);
+  background: var(--state-alarm-bg);
+}
+.cp-badge--neutral {
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+}
+
+.cp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.cp-table th,
+.cp-table td {
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.cp-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cp-table-wrap {
+  overflow-x: auto;
+}
+
+/* ── estados (carregando/erro/vazio) ── */
+.cp-state {
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  color: var(--text-muted);
+}
+.cp-state--error {
+  color: var(--state-alarm);
+}
+.cp-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cp-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: var(--sp-2);
+}
+@keyframes cp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── árvore da frota ── */
+.cp-tree-partner {
+  margin-bottom: var(--sp-5);
+}
+.cp-tree-partner > h2 {
+  font-size: 0.95rem;
+  margin: 0 0 var(--sp-2);
+}
+.cp-tree-cliente {
+  margin: 0 0 var(--sp-3) var(--sp-4);
+}
+.cp-tree-cliente > h3 {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 0 0 var(--sp-2);
+}
+.cp-site-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  margin-left: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--text);
+  cursor: pointer;
+  margin-bottom: var(--sp-2);
+}
+.cp-site-row:hover {
+  border-color: var(--accent);
+}
+.cp-site-row__name {
+  font-weight: 550;
+  flex: 1;
+}
+
+.cp-back {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  margin-bottom: var(--sp-4);
+}
