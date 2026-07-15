@@ -58,6 +58,25 @@ function label(
   ctx.fillText(txt, x + 3, y + 3);
 }
 
+/** Rótulo ANCORADO a um ponto (px,py), consciente da borda: por padrão à direita do ponto; se
+ *  estourasse a borda direita do canvas, vira para a ESQUERDA (marcador na beira do galpão não pode
+ *  ter o nome cortado — é o que acontece com a antena em x=largura). */
+function labelNear(
+  ctx: CanvasRenderingContext2D,
+  txt: string,
+  px: number,
+  py: number,
+  fg: string,
+  scrim: string,
+  canvasW: number,
+) {
+  const w = ctx.measureText(txt).width + 6;
+  let x = px + 8;
+  if (x + w > canvasW - 2) x = px - 8 - w; // não cabe à direita → à esquerda do ponto
+  if (x < 2) x = 2; // nem à esquerda (ponto colado na borda esquerda) → gruda na margem
+  label(ctx, txt, x, py, fg, scrim);
+}
+
 /** Marcador de ÂNCORA: triângulo ▲ preenchido apontando para cima, centrado no ponto projetado. */
 function anchorMarker(ctx: CanvasRenderingContext2D, p: Vec2, col: string) {
   const s = 6;
@@ -129,7 +148,7 @@ export function drawFloorplan(
     const sy = tickStep(h);
     for (let tx = 0; tx <= w + 1e-6; tx += sx) {
       const p = tf.project({ x: tx, y: 0 });
-      label(ctx, tx === 0 ? "0" : `${tx} m`, p.x + 2, p.y - 6, neutralDim, scrim);
+      labelNear(ctx, tx === 0 ? "0" : `${tx} m`, p.x - 6, p.y - 6, neutralDim, scrim, canvas.w);
     }
     for (let ty = sy; ty <= h + 1e-6; ty += sy) {
       const p = tf.project({ x: 0, y: ty });
@@ -161,14 +180,14 @@ export function drawFloorplan(
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
       ctx.stroke();
-      label(ctx, `≈ ${t.label} ${coord}`, p.x + 8, p.y - 2, warn, scrim);
+      labelNear(ctx, `≈ ${t.label} ${coord}`, p.x, p.y - 2, warn, scrim, canvas.w);
     } else {
       // fix "ok": ponto sólido, coordenada firme.
       ctx.fillStyle = info;
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
       ctx.fill();
-      label(ctx, `${t.label} ${coord}`, p.x + 8, p.y - 2, info, scrim);
+      labelNear(ctx, `${t.label} ${coord}`, p.x, p.y - 2, info, scrim, canvas.w);
     }
   }
 
@@ -178,7 +197,7 @@ export function drawFloorplan(
     const p = tf.project(s.pos);
     const col = s.live ? info : neutralDim;
     anchorMarker(ctx, p, col);
-    label(ctx, s.live ? s.label : `${s.label} · sem sinal`, p.x + 9, p.y - 2, col, scrim);
+    labelNear(ctx, s.live ? s.label : `${s.label} · sem sinal`, p.x, p.y - 2, col, scrim, canvas.w);
   }
 
   // ── Legenda curta ──
