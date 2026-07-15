@@ -334,7 +334,12 @@ export const saveCalibration = (cameraId: string, calibration: CameraCalibration
 // nunca persistido. `rotulo` = nome da pessoa/tag cadastrada, ou null se a tag não é conhecida.
 export type BtReading = { mac: string; rotulo: string | null; rssi: number; stationId?: string };
 // GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
+// COLAPSADO por MAC (a estação mais fresca vence): 1 leitura por tag — bom para "quem está visível".
 export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
+// GET /api/bt/readings?all=1 → BtReading[] com UMA linha por (estação, tag): preserva o RSSI de CADA
+// estação para a MESMA tag. É o que a Planta BLE (multilateração X,Y) precisa — o colapsado acima
+// jogaria fora todas as antenas menos uma. Mesma efemeridade/LGPD do getBtReadings.
+export const getBtReadingsAll = () => apiGet<BtReading[]>("/api/bt/readings?all=1");
 
 // ── Última localização por tag (estilo AirTag) — mapa OpenStreetMap ──────────────────────────
 // O TC22 é MÓVEL: a última localização de cada tag = onde o celular estava quando a viu por
@@ -382,6 +387,19 @@ export const updateBtStation = (id: string, patch: { nome?: string; ativo?: bool
   apiSend<BtStation>("PATCH", `/api/bt-stations/${encodeURIComponent(id)}`, patch);
 export const deleteBtStation = (id: string) =>
   apiSend<{ ok: true }>("DELETE", `/api/bt-stations/${encodeURIComponent(id)}`);
+
+// ── PLANTA BAIXA (floorplan) — a geometria da instalação SEM câmera ────────────────────────────
+// A tela "Planta BLE" precisa de uma geometria que NÃO vem de câmera nenhuma (na fábrica ainda não
+// há câmeras). O operador informa as dimensões do local (metros) e a posição X,Y (metros) de cada
+// estação/antena; as tags aparecem por multilateração. Config GLOBAL (uma planta por instalação),
+// persistida no hub (server/bt/floorplan.js), SÓ números (LGPD). `stations` indexa pelo mesmo
+// `stationId` do registro/leituras. widthM=0 (default) = "nunca configurada" → a UI pede o setup.
+export type Floorplan = { widthM: number; heightM: number; stations: Record<string, Vec2> };
+// GET /api/floorplan → Floorplan (widthM:0 quando nunca salva). Auth: qualquer autenticado.
+export const getFloorplan = () => apiGet<Floorplan | null>("/api/floorplan");
+// PUT /api/floorplan {floorplan} → valida no hub e persiste; responde a planta salva. Auth: canConfigure.
+export const saveFloorplan = (floorplan: Floorplan) =>
+  apiPut<Floorplan>("/api/floorplan", { floorplan });
 
 // ── TURNOS de trabalho (cadastro GLOBAL — spec-turnos-por-zona F1) ────────────────────────────
 // Fonte única do "quando a área deveria estar trabalhando". A VALIDAÇÃO DE NEGÓCIO mora no

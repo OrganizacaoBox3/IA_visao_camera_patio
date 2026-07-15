@@ -125,6 +125,16 @@ create table if not exists bt_stations (
   ultima_vez_em bigint            -- epoch-ms do último POST (grava espaçado; memória é a fonte viva)
 );
 
+-- ── PLANTA BAIXA BLE (a geometria da instalação SEM câmera) — singleton jsonb ─────────────────
+-- A tela "Planta BLE" precisa de uma geometria que NÃO vem de câmera (na fábrica ainda não há
+-- câmeras): dimensões do local (metros) + posição X,Y (metros) de cada estação. Config GLOBAL —
+-- UMA linha (id='default'), no padrão app_settings. SÓ NÚMEROS/METADADO (nenhuma imagem/leitura).
+-- O store cria idempotentemente no boot também (server/bt/floorplan.js); aqui é o lugar canônico.
+create table if not exists bt_floorplan (
+  id text primary key,
+  data jsonb not null
+);
+
 -- ── LOCALIZAÇÃO last-known por tag (modelo AirTag: TC22 móvel congela a última posição) ──
 -- UMA linha por tag (last-wins, sem trilha/histórico). Só metadado: lat/lon/acc/ts — nunca imagem (LGPD).
 create table if not exists bt_tag_locations (

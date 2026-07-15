@@ -15,6 +15,7 @@ import {
   CircleUser,
   LayoutDashboard,
   LogOut,
+  Map,
   MapPin,
   PanelLeftClose,
   PanelLeftOpen,
@@ -241,6 +242,9 @@ export function AppShell() {
         // mesmo domínio, partido ao meio. "A estação está viva?" é a resposta de "por que a tag
         // sumiu?": é diagnóstico, não configuração. spec-arquitetura-informacao §3.
         { to: "/tags-ble", icon: Bluetooth, label: "BLE" },
+        // Planta BLE: mapa 2D do local por Bluetooth (sem câmera) — visível a TODOS (o operador vê o
+        // mapa); a EDIÇÃO do setup é gateada dentro da tela por canConfigure. spec Planta BLE.
+        { to: "/planta-ble", icon: Map, label: "Planta" },
         // Relatório: o histórico E a saúde do alarme (a faixa do topo, que precede a leitura — se o
         // alarme está inundando, todo número abaixo é suspeito). Absorveu a /alarmes-saude (§2).
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },

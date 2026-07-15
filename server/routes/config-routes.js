@@ -2,6 +2,9 @@
 // câmera. GET = qualquer autenticado; PUT = requireConfigurer (por câmera).
 // Emite "camcfg-updated" aos painéis via io a cada gravação.
 const camcfg = require("../camcfg");
+// PLANTA BAIXA (floorplan): config GLOBAL do local (não por câmera) — dimensões em metros +
+// posição das estações BLE. Emite "floorplan-updated" (evento NOVO, aditivo) aos painéis.
+const floorplan = require("../bt/floorplan");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireConfigurer, io } = ctx;
@@ -105,6 +108,39 @@ async function handle(req, res, ctx) {
       }
       // Novo kind ADITIVO: o engine ignora kinds desconhecidos (onCamcfgUpdated) — contrato intacto.
       io.to("dashboards").emit("camcfg-updated", { kind: "calibration", cameraId });
+      json(res, 200, saved);
+      return true;
+    }
+  }
+
+  // ── PLANTA BAIXA (floorplan) — config GLOBAL do local (NÃO por câmera) ─────
+  // GET (qualquer autenticado) lê a planta (vazio { widthM:0,... } se nunca salva → front usa
+  // defaults); PUT exige perfil de configuração. Dimensões inválidas → 400 (badRequest); falha de
+  // persistência → 503 (o save faz rollback e propaga).
+  if (path0 === "/api/floorplan") {
+    if (req.method === "GET") {
+      if (!requireAuth(req, res)) return true;
+      json(res, 200, floorplan.get());
+      return true;
+    }
+    if (req.method === "PUT") {
+      if (!requireConfigurer(req, res)) return true;
+      const body = JSON.parse((await readBody(req, 200_000)) || "{}");
+      let saved;
+      try {
+        saved = await floorplan.save(body && body.floorplan);
+      } catch (e) {
+        if (e && e.badRequest) {
+          json(res, 400, { error: e.message });
+          return true;
+        }
+        if (e && e.status === 503) {
+          json(res, 503, { error: e.message });
+          return true;
+        }
+        throw e;
+      }
+      io.to("dashboards").emit("floorplan-updated", {});
       json(res, 200, saved);
       return true;
     }

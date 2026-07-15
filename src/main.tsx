@@ -10,6 +10,7 @@ import { ProfilePage } from "./routes/ProfilePage";
 import { TurnosPage } from "./routes/TurnosPage";
 import { BlePage } from "./routes/ble/BlePage";
 import { TagsMapPage } from "./routes/TagsMapPage";
+import { PlantaBlePage } from "./routes/PlantaBlePage";
 import { ReplayPlayerPage } from "./routes/ReplayPlayerPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { AuthProvider } from "./auth";
@@ -50,6 +51,9 @@ const router = createBrowserRouter([
       // Turnos de trabalho (cadastro global — spec-turnos-por-zona F1): o contexto operacional
       // "quando a área deveria estar trabalhando".
       { path: "/turnos", element: <TurnosPage /> },
+      // Planta BLE: vista 2D do local por Bluetooth (sem câmera) — ponto X,Y de cada tag em relação
+      // às antenas. Leitura livre; a edição do setup (dimensões + antenas) é gateada dentro da página.
+      { path: "/planta-ble", element: <PlantaBlePage /> },
       // ── Redirects de cortesia (rotas que MORRERAM; o favorito antigo não leva a 404) ──────────
       // A calibração virou MODO do palco da câmera (não tem mais tela): manda para a Central, que
       // é de onde se abre a câmera e se calibra. A Saúde de alarmes virou a faixa do topo do
