@@ -283,11 +283,26 @@ export function useCalibrationEditor(o: Opts) {
   // ── MULTI-ANTENA: as N estações, seus pontos e a guia de instalação ──────────────────────────
   // Ids conhecidos = os do REGISTRO do hub (auto-descobertos) ∪ os que já têm ponto salvo (estação
   // que morreu não some da calibração). Vazio = mundo de 1 antena → o ponto único legado.
+  // ESTAÇÃO VIVA = postou dentro da janela de staleness (RÉPLICA do STALE_MS de
+  // server/bt/bt-readings.js, 15 s — o mesmo critério da aba Estações). Só as CONECTADAS entram no
+  // seletor; estação órfã/desligada (ex.: rota-a, rota-b registradas mas sem sinal) não polui a
+  // calibração. ultimaVezEm ausente/0 → NaN/enorme → cai fora (fail-safe).
+  const STATION_STALE_MS = 15_000;
+  const liveStationIds = useMemo(() => {
+    const now = Date.now();
+    return new Set(
+      btStations
+        .filter((s) => s.id && s.ativo && now - s.ultimaVezEm <= STATION_STALE_MS)
+        .map((s) => s.id),
+    );
+  }, [btStations]);
+  // Ids no seletor = quem tem PONTO salvo (nunca some — calibrada-mas-offline segue removível) ∪ as
+  // VIVAS agora. A que tem ponto mas caiu é marcada "sem sinal" na UI (via liveStationIds).
   const stationIds = useMemo(() => {
     const ids = new Set<string>(Object.keys(stations));
-    for (const s of btStations) if (s.id && s.ativo) ids.add(s.id);
+    for (const id of liveStationIds) ids.add(id);
     return [...ids].sort();
-  }, [stations, btStations]);
+  }, [stations, liveStationIds]);
   const sel = selStation && stationIds.includes(selStation) ? selStation : (stationIds[0] ?? "");
   const stationMarks = useMemo(() => {
     const marks = Object.entries(stations)
@@ -523,6 +538,7 @@ export function useCalibrationEditor(o: Opts) {
     grid,
     // estações BLE (multi-antena)
     stationIds,
+    liveStationIds, // as CONECTADAS agora (a UI marca "sem sinal" quem tem ponto mas caiu)
     stations,
     principalId,
     sel,

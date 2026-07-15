@@ -11,7 +11,7 @@
 // chão, em ordem, e informa Largura×Comprimento. A homografia sai daí, e a GRADE métrica projetada
 // de volta no palco diz se a calibração "assenta" no chão. Medir = 2 cliques → metros.
 import { Grid3x3, Ruler, Save, Undo2 } from "lucide-react";
-import { Alert, Badge, Button, Field, Input, Loading, SegmentedControl } from "../../ui";
+import { Alert, Badge, Button, Field, HelpTip, Input, Loading, SegmentedControl } from "../../ui";
 import { StationHealthChip } from "../../fusion/StationHealthChip";
 import { TagPicker } from "../TagPicker";
 import { takenTags } from "../takenTags";
@@ -28,6 +28,15 @@ type Props = {
   onActivate: () => void;
 };
 
+// Os 4 passos, com rótulos CURTOS: "Estação BLE"/"Tag de referência" estouravam o segmentado no
+// drawer estreito. Renderizados num toggle que QUEBRA em 2 linhas (não clipam).
+const CAL_STEPS: [CalStep, string][] = [
+  ["cantos", "Cantos"],
+  ["ancoras", "Âncoras"],
+  ["estacao", "Estação"],
+  ["referencia", "Tag ref."],
+];
+
 export function CalibracaoTab({ cal, onActivate }: Props) {
   const {
     active,
@@ -42,6 +51,7 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
     selPx,
     stations,
     stationIds,
+    liveStationIds,
     principalId,
     nameOf,
     labelOf,
@@ -52,6 +62,16 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
       <div className="flex items-center gap-2">
         <Ruler size={16} strokeWidth={1.75} aria-hidden />
         <b className="text-body">Calibração de distância</b>
+        <HelpTip label="Como calibrar">
+          Marque os 4 CANTOS de um retângulo real no chão (área demarcada, pallet, ladrilhos) em
+          ORDEM e informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros — a homografia
+          sai daí; arraste um canto para ajustar. Passos: Cantos (o retângulo) · Âncoras (uma tag por
+          canto, opcional) · Estação (onde fica a antena BLE) · Tag ref. (uma tag fixa para aferir o
+          sinal). Dica: fixe a estação BLE bem perto da câmera — ajuda a reconhecer quem é quem
+          enquanto a câmera ainda não está calibrada. Com várias estações, a “principal” é a
+          referência de distância quando só ela está calibrada. A grade de conferência (1 m/linha)
+          deve assentar no chão.
+        </HelpTip>
         {cal.savedH && <Badge tone="ok">calibrada</Badge>}
       </div>
 
@@ -83,24 +103,32 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
 
       {mode === "calibrar" ? (
         <>
-          <p className="m-0 text-sec text-text-muted">
-            {canConfigure
-              ? "Escolha um RETÂNGULO no chão (área demarcada, pallet, ladrilhos) e clique os 4 cantos EM ORDEM — arraste um canto para ajustar. Depois informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros."
-              : "A calibração requer perfil de engenharia. Você pode usar o modo Medir."}
-          </p>
+          {!canConfigure && (
+            <p className="m-0 text-sec text-text-muted">
+              A calibração requer perfil de engenharia. Você pode usar o modo Medir.
+            </p>
+          )}
           {canConfigure && (
             <>
-              <SegmentedControl<CalStep>
-                value={calStep}
-                onChange={cal.setCalStep}
-                ariaLabel="O que marcar no chão"
-                options={[
-                  { value: "cantos", label: "Cantos" },
-                  { value: "ancoras", label: "Âncoras" },
-                  { value: "estacao", label: "Estação BLE" },
-                  { value: "referencia", label: "Tag de referência" },
-                ]}
-              />
+              {/* Passos — toggle que QUEBRA em 2 linhas no drawer estreito (o segmentado de linha
+                  única clipava os 4 rótulos). Mesmo idioma dos seletores de estação/canto abaixo. */}
+              <div
+                role="group"
+                aria-label="O que marcar no chão"
+                className="flex flex-wrap gap-1.5"
+              >
+                {CAL_STEPS.map(([value, label]) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={calStep === value ? "primary" : "ghost"}
+                    aria-pressed={calStep === value}
+                    onClick={() => cal.setCalStep(value)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
               {/* htmlFor/id: o painel ANTIGO não ligava o <label> ao <input> — os dois campos que
                   DEFINEM a escala do mundo (L×C) não tinham nome acessível. Passava despercebido
                   porque a rota /calibracao estava FORA do gate de axe; aqui dentro da câmera ela
@@ -176,8 +204,8 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
                         onClick={() => cal.setSelStation(id)}
                       >
                         {nameOf(id)}
-                        {stations[id] ? " ·" : ""}
-                        {id === principalId ? " principal" : ""}
+                        {id === principalId ? " · principal" : ""}
+                        {!liveStationIds.has(id) ? " · sem sinal" : ""}
                       </Button>
                     ))}
                   </div>
@@ -193,24 +221,14 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
                       </Button>
                     )}
                     <span className="text-sec text-text-muted">
-                      {Object.keys(stations).length} de {stationIds.length} estação(ões) com ponto
-                      marcado. A principal é a referência de distância quando só ela está calibrada.
+                      {Object.keys(stations).length} de {stationIds.length} com ponto marcado.
                     </span>
                   </div>
                 </>
               )}
-              {/*
-               * Dica de instalação (going-gray, sem alarme): MEDIDO no harness de replay que estação
-               * JUNTO da câmera vs. distante vale +27 pontos de precisão (71,8% vs 44,5%) — ver
-               * docs/cientifica/harness-associacao-indoor.md. Isso vale para o modo SEM homografia
-               * calibrada; com a câmera calibrada, o ganho vem de marcar o ponto certo da estação
-               * acima. Por isso o texto não generaliza.
-               */}
-              <Alert tone="info">
-                Sempre que possível, fixe a estação BLE bem perto da câmera. Isso ajuda o sistema a
-                reconhecer quem é quem enquanto esta câmera ainda não estiver calibrada.
-              </Alert>
-              {/* Guia de geometria da instalação: AVISO, nunca bloqueio (o save segue liberado). */}
+              {/* Guia de geometria da instalação: AVISO, nunca bloqueio (o save segue liberado).
+                  A dica geral "fixe a estação perto da câmera" saiu daqui para o "?" do título — era
+                  texto permanente no meio da UI (hierarquia de ajuda: label→placeholder→"?"). */}
               {cal.geomHints.map((h) => (
                 <Alert key={h.code} tone="info">
                   {h.text}
