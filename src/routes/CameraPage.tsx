@@ -3,6 +3,7 @@ import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../config";
 import { acquireCameraStream, isSecureCameraContext, CameraAcquireError } from "../camera/acquire";
 import { publishWebcamWhip, type WhipPublisher, type WhipState } from "../camera/whip";
+import { getVideoTicket } from "../video/ticket";
 import { startNodeRelay, type NodeRelay } from "./camera/nodeRelay";
 import { Tooltip, Alert, StatusDot } from "../ui";
 
@@ -129,6 +130,10 @@ export function CameraPage() {
             baseUrl: APP_CONFIG.go2rtc.baseUrl,
             maxBitrateKbps: APP_CONFIG.webcam.whip.maxBitrateKbps,
             maxFramerate: APP_CONFIG.webcam.whip.maxFramerate,
+            // Ticket p/ o proxy /go2rtc/* gateado. GERAL (sem src): as URLs do WHIP usam o param
+            // `src`/`dst` do go2rtc, incompatível com um ticket específico. Autentica pelo token do
+            // nó (cameraToken: ?key=CAMERA_TOKEN de dispositivo OU sessão de humano logado).
+            getTicket: () => getVideoTicket(undefined, cameraToken()),
             onState: (s) => {
               if (!alive) return;
               setWhipState(s); // badge acompanha (no probe E depois, no reconnect do publisher)

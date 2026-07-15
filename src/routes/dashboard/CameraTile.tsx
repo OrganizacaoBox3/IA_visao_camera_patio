@@ -7,6 +7,7 @@ import { useFloorTags } from "../../fusion/useFloorTags";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
+import { getVideoTicket } from "../../video/ticket";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import { Tooltip, StatusDot } from "../../ui";
 import { TrackOverlay } from "./TrackOverlay";
@@ -79,7 +80,6 @@ function Go2rtcVideoTile({
     // Captura o nó já no corpo do efeito (React já atribuiu o ref no commit) p/ usar no cleanup
     // sem reler `ref.current` lá — o elemento é estável por toda a vida do componente.
     const node = ref.current;
-    const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(camId)}`;
     // Sucesso: o <video> interno recebeu quadro (dimensões conhecidas) → NÃO é fonte caída. Cancela
     // o timer p/ nunca reportar falha. `loadeddata`/`resize` cobrem MSE, HLS e WebRTC.
     let onVideoReady: (() => void) | undefined;
@@ -98,7 +98,7 @@ function Go2rtcVideoTile({
     };
     ensureVideoStreamRegistered()
       .then(() => customElements.whenDefined("video-stream"))
-      .then(() => {
+      .then(async () => {
         if (cancelled || !node) return;
         const el = node;
         // Ordem importa: config ANTES de `src` (o setter de src dispara a conexão).
@@ -123,7 +123,15 @@ function Go2rtcVideoTile({
           // videoWidth > 0 ⇒ vídeo estabeleceu (WebRTC/MSE/HLS); só reporta se seguir zerado.
           if ((el.video?.videoWidth ?? 0) === 0) reportFail();
         }, WEBRTC_ESTABLISH_MS);
-        el.src = src;
+        // O proxy /go2rtc/* exige ticket: passe ESPECÍFICO desta câmera na URL do WS de sinalização.
+        // Falha ao obter (deslogado/hub fora) → reporta e cai p/ MJPEG (mesmo caminho de fonte caída).
+        const ticket = await getVideoTicket(camId).catch(() => null);
+        if (cancelled || fired) return;
+        if (!ticket) {
+          reportFail();
+          return;
+        }
+        el.src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(camId)}&ticket=${encodeURIComponent(ticket)}`;
       })
       .catch(() => {
         // go2rtc indisponível (falha ao registrar/definir o componente) → também é fonte

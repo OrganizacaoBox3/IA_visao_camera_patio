@@ -9,6 +9,7 @@
 import { useEffect, useRef } from "react";
 import { APP_CONFIG } from "../config";
 import { type FrameSource } from "../frame";
+import { getVideoTicket } from "../video/ticket";
 import type { VideoStreamElement } from "../vendor/go2rtc/go2rtc";
 
 let videoStreamModule: Promise<unknown> | null = null;
@@ -78,7 +79,6 @@ export function useWebrtcTransport({
     let reported = false;
     let failTimer: ReturnType<typeof setTimeout> | null = null;
     const node = videoStreamRef.current; // estável por toda a vida do elemento (captura p/ cleanup)
-    const src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(cameraId)}`;
     const failNow = () => {
       if (reported || cancelled) return;
       reported = true;
@@ -86,14 +86,22 @@ export function useWebrtcTransport({
     };
     ensureVideoStreamRegistered()
       .then(() => customElements.whenDefined("video-stream"))
-      .then(() => {
+      .then(async () => {
         if (cancelled || !node) return;
         const el = node;
         el.mode = "webrtc,mse,hls,mjpeg"; // ordem importa: config ANTES de src (o setter de src conecta)
         el.media = "video"; // vigilância silenciosa: sem áudio
         el.background = false; // solta o stream quando a aba/tela sai de vista
         if (el.video) el.video.controls = false; // sem controles nativos (o palco trata a interação)
-        el.src = src;
+        // O proxy /go2rtc/* exige ticket: passe ESPECÍFICO desta câmera na URL do WS de sinalização.
+        // Falha ao obter (deslogado/hub fora) → cai p/ MJPEG, como uma fonte inalcançável.
+        const ticket = await getVideoTicket(cameraId).catch(() => null);
+        if (cancelled) return;
+        if (!ticket) {
+          failNow();
+          return;
+        }
+        el.src = `${APP_CONFIG.go2rtc.baseUrl}/api/ws?src=${encodeURIComponent(cameraId)}&ticket=${encodeURIComponent(ticket)}`;
         // Reforço: erro nativo do <video> interno derruba pro MJPEG já (não espera o prazo). O timer
         // continua sendo o mecanismo primário — o <video> pode nem existir/emitir erro numa fonte caída.
         el.video?.addEventListener("error", failNow);

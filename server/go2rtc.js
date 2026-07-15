@@ -26,6 +26,7 @@ const http = require("node:http");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
+const videoTicket = require("./video-ticket");
 
 // ── Configuração por ambiente (default seguro; AUTO-ON pela PRESENÇA do binário empacotado) ────
 // GO2RTC_ENABLED=0 (ou false/off/no) = escape hatch que FORÇA off. Ausente/qualquer-outro valor =
@@ -289,6 +290,14 @@ function proxyRequest(req, res) {
     res.end("go2rtc desligado");
     return;
   }
+  // GATE de segurança: /go2rtc/* exige um TICKET HMAC de curta duração (?ticket=), emitido só a
+  // usuários autenticados por GET /api/video-ticket. Sem isto o proxy servia vídeo ao vivo de TODAS
+  // as câmeras SEM auth (contido só pela LAN). Ticket com ?src= só abre aquele stream.
+  if (!videoTicket.verifyRequestUrl(upstreamPath(req.url))) {
+    res.writeHead(401, { "content-type": "text/plain" });
+    res.end("ticket de vídeo inválido ou ausente");
+    return;
+  }
   const up = http.request(
     {
       host: API_HOST,
@@ -312,6 +321,14 @@ function proxyRequest(req, res) {
 /** Proxy do upgrade WebSocket (/go2rtc/api/ws — sinalização WebRTC). Túnel TCP cru. */
 function proxyUpgrade(req, socket, head) {
   if (!enabled()) {
+    socket.destroy();
+    return;
+  }
+  // GATE de segurança (mesmo do proxyRequest): o WS de sinalização /api/ws?src= carrega o vídeo
+  // (inclui o MJPEG-sobre-WS do fallback interno), então exige o ticket antes do upgrade. Responde
+  // um 401 HTTP cru e fecha — o WebSocket nunca chega a abrir sem passe válido.
+  if (!videoTicket.verifyRequestUrl(upstreamPath(req.url))) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
   }

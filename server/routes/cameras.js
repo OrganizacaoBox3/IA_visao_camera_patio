@@ -3,6 +3,9 @@
 // O CRUD reflete em runtime no ffmpeg (rtsp) sem reiniciar o hub. Persistido em cameras.json.
 const cameraStore = require("../cameras");
 const rtsp = require("../rtsp");
+const users = require("../users");
+const { bearer } = require("../http-auth");
+const videoTicket = require("../video-ticket");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireSuper, cameraList } = ctx;
@@ -11,6 +14,30 @@ async function handle(req, res, ctx) {
   if (req.url === "/api/camera-enroll" && req.method === "GET") {
     if (!requireSuper(req, res)) return true;
     json(res, 200, { token: process.env.CAMERA_TOKEN || null });
+    return true;
+  }
+
+  // Ticket de vídeo p/ o proxy /go2rtc/* (fecha o buraco "vídeo sem auth"). Emite um passe HMAC de
+  // curta duração (server/video-ticket.js); o front injeta ?ticket= nas URLs de vídeo. Com ?src=
+  // o ticket é ESPECÍFICO daquela câmera; sem src é GERAL (p/ /api/streams). Aceita QUALQUER
+  // credencial válida do produto: sessão de usuário (requireAuth) OU o CAMERA_TOKEN de dispositivo
+  // — este último p/ o nó de webcam seguir PUBLICANDO por WHIP (que também passa pelo proxy gateado).
+  if (req.url && req.url.startsWith("/api/video-ticket") && req.method === "GET") {
+    const t = bearer(req);
+    const user = users.verifyToken(t);
+    const isDevice =
+      !!process.env.CAMERA_TOKEN && users.constantTimeEqual(t, process.env.CAMERA_TOKEN);
+    if (!user && !isDevice) {
+      json(res, 401, { error: "não autenticado" });
+      return true;
+    }
+    let src;
+    try {
+      src = new URL(req.url, "http://localhost").searchParams.get("src") || undefined;
+    } catch {
+      src = undefined;
+    }
+    json(res, 200, { ticket: videoTicket.signTicket({ src }) });
     return true;
   }
 

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_CONFIG } from "../../config";
 import { type CameraCfg } from "../../cameraConfig";
 import { transportOf as resolveTransport } from "./transport";
+import { getVideoTicket } from "../../video/ticket";
 
 // Auto-fallback WebRTC→MJPEG (transportOf): quando um tile/full REPORTA que o <video-stream> não
 // estabeleceu vídeo, a câmera fica em cooldown no relé MJPEG por este período. Ao expirar, transportOf
@@ -44,7 +45,12 @@ export function useVideoTransport(cfgOf: (id: string) => CameraCfg): VideoTransp
     async function refresh() {
       let ids: string[] = [];
       try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        // O proxy /go2rtc/* exige ticket (fecha o "vídeo sem auth"): passe GERAL p/ /api/streams.
+        // Falha ao obter (deslogado/hub fora) cai no catch → Set vazio → "auto" resolve MJPEG.
+        const ticket = await getVideoTicket();
+        const res = await fetch(`${url}?ticket=${encodeURIComponent(ticket)}`, {
+          signal: AbortSignal.timeout(3000),
+        });
         if (res.ok) {
           const data: unknown = await res.json();
           if (data && typeof data === "object")

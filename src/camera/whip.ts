@@ -44,6 +44,12 @@ export interface WhipOptions {
   iceServers?: RTCIceServer[];
   /** Callback de estado da conexão (para status/badge na UI). */
   onState?: (state: WhipState) => void;
+  /**
+   * Provedor do TICKET de vídeo (o proxy /go2rtc/* passou a exigi-lo). Deve devolver um ticket
+   * GERAL (sem src) — as URLs do WHIP usam o param `src`/`dst` do PRÓPRIO go2rtc, que colide com o
+   * `src` do gate, então um ticket específico não casaria. Ausente = não injeta (compat/legado).
+   */
+  getTicket?: () => Promise<string | null>;
 }
 
 const RECONNECT_BASE_MS = 2000;
@@ -62,10 +68,26 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
     maxFramerate = 30,
     iceServers = [],
     onState,
+    getTicket,
   } = opts;
 
   const base = baseUrl.replace(/\/+$/, ""); // sem barra final
   const enc = encodeURIComponent(streamName);
+
+  // Anexa o ticket de vídeo (?ticket=) à URL do go2rtc — o proxy /go2rtc/* o exige. Best-effort:
+  // sem provider/ticket, segue sem (compat com hub antigo sem gate; o proxy novo responderá 401 e o
+  // publish cai no reconnect). Não lança.
+  async function withTicket(u: string): Promise<string> {
+    if (!getTicket) return u;
+    let t: string | null;
+    try {
+      t = await getTicket();
+    } catch {
+      t = null;
+    }
+    if (!t) return u;
+    return `${u}${u.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(t)}`;
+  }
   let pc: RTCPeerConnection | null = null;
   let stopped = false;
   let attempt = 0;
@@ -79,7 +101,7 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
   async function ensureStream(): Promise<void> {
     try {
       // src=webrtc: é um produtor-placeholder aceito pelo go2rtc (New()) e inerte até o WHIP entrar.
-      await fetch(`${base}/api/streams?name=${enc}&src=webrtc:`, { method: "PUT" });
+      await fetch(await withTicket(`${base}/api/streams?name=${enc}&src=webrtc:`), { method: "PUT" });
     } catch {
       // Stream pode já existir (declarado no yaml) ou o go2rtc estar reiniciando — segue p/ o WHIP,
       // que retorna 404 se o stream faltar e cai no reconnect.
@@ -176,7 +198,7 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
       await waitIceGathering(peer);
       if (stopped || peer !== pc) return;
 
-      const resp = await fetch(`${base}/api/webrtc?dst=${enc}`, {
+      const resp = await fetch(await withTicket(`${base}/api/webrtc?dst=${enc}`), {
         method: "POST",
         headers: { "Content-Type": "application/sdp" },
         body: peer.localDescription?.sdp ?? offer.sdp ?? "",
@@ -219,7 +241,9 @@ export function publishWebcamWhip(opts: WhipOptions): WhipPublisher {
       }
       // Limpeza best-effort do stream dinâmico no go2rtc (não bloqueia; ignora erro).
       try {
-        void fetch(`${base}/api/streams?src=${enc}`, { method: "DELETE" });
+        void withTicket(`${base}/api/streams?src=${enc}`).then((u) =>
+          fetch(u, { method: "DELETE" }),
+        );
       } catch {
         /* go2rtc pode estar fora — sem problema */
       }
