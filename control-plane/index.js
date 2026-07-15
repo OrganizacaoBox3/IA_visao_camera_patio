@@ -8,6 +8,7 @@ const db = require("./db");
 const auth = require("./auth");
 const routes = require("./routes");
 const { serveStatic } = require("./static");
+const { siteLink } = require("./site-link");
 
 const PORT = Number(process.env.CP_PORT ?? 4100);
 const HOST = process.env.CP_HOST ?? "0.0.0.0";
@@ -94,6 +95,18 @@ const httpServer = createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end();
+});
+
+// CANAL DE SINALIZAÇÃO REVERSO (Fase 3): o hub silo DISCA um WS persistente p/ /api/site-link
+// (está atrás de NAT — sem inbound). Autentica por x-site-id/x-site-key no site-link.js; qualquer
+// outro path de upgrade é recusado. Falha aqui NÃO derruba o http (o canal é aditivo/fail-soft).
+httpServer.on("upgrade", (req, socket, head) => {
+  const pathname = new URL(req.url, "http://x").pathname;
+  if (pathname === "/api/site-link") {
+    void siteLink.handleUpgrade(req, socket, head);
+    return;
+  }
+  socket.destroy();
 });
 
 async function start() {

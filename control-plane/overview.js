@@ -10,6 +10,9 @@ const auth = require("./auth");
 const access = require("./access");
 const stores = require("./stores");
 const db = require("./db");
+// site-link é require LAZY (dentro de buildOverview): há um ciclo de load site-link→routes→overview,
+// e site-link reatribui module.exports no fim — pegá-lo no topo daqui capturaria o exports VAZIO do
+// meio do ciclo. Em call-time o módulo já está completo (o require cache devolve o singleton pronto).
 
 const ONLINE_MS = 600_000; // 10 min = 2× o intervalo de heartbeat (spec §Fase2)
 const WINDOW_24H_MS = 24 * 3600 * 1000;
@@ -26,6 +29,7 @@ async function countAlarmsSince(siteId, since) {
 
 // Monta o overview do escopo do chamador. nowMs injetável para teste determinístico da janela.
 async function buildOverview(claims, nowMs = Date.now()) {
+  const { siteLink } = require("./site-link"); // lazy — ver nota no topo (ciclo de load)
   const tree = await access.buildFullTree();
   const [ps, cs, ss] = await Promise.all([
     stores.partners.list(),
@@ -60,6 +64,10 @@ async function buildOverview(claims, nowMs = Date.now()) {
     nome: s.nome,
     last_seen: s.last_seen ?? null,
     online: s.last_seen != null && nowMs - s.last_seen < ONLINE_MS,
+    // `linked`: canal de sinalização reverso VIVO agora (WS aberto) — a verdade MAIS FORTE de
+    // presença. `online` é o eco do ÚLTIMO POST (heartbeat, até 10min de folga); `linked` é o
+    // canal em tempo real. Podem divergir (linked=true, online ainda false entre heartbeats).
+    linked: siteLink.isLinked(s.id),
     alarms24h: counts.has(s.id) ? counts.get(s.id) : null,
   }));
 
