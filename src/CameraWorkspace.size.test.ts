@@ -83,7 +83,13 @@ import { describe, it, expect } from "vitest";
 // src/camera/tabs/Vista2DTab.tsx (carrega a própria calibração/BLE); aqui sobrou 1 LINHA de fiação:
 // o prop cameraId ao CamDrawer (a nova aba resolve a própria calibração por ele). NÃO medir com
 // `Measure-Object -Line`.
-const MAX_LINES = 1690;
+// 1690→1700 (jul/14): a Vista 2D vira "Mapa 2D" em TELA CHEIA (decisão do dono: botão no cabeçalho →
+// o mapa cobre o palco+drawer; o vídeo NÃO é substituído, o Sair volta). O GROSSO foi EXTRAÍDO —
+// camera/Vista2DStage.tsx (a tela cheia), camera/useTopdownView.ts (a fiação de dados) e
+// camera/TopdownCanvas.tsx (o canvas responsivo), TODOS compartilhados com a aba pequena (DRY). Aqui
+// sobrou só a fiação: estado mapaOpen + 2 props ao CamHeader (o toggle) + o overlay condicional na
+// cam-body (que virou `relative`). ~9 linhas de wiring, zero lógica. NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1700;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

@@ -18,6 +18,7 @@ import {
   ArrowLeftRight,
   Check,
   Lock,
+  Map,
   Pause,
   Play,
   Ruler,
@@ -69,6 +70,10 @@ type Props = {
    *  (estado/handlers vivem lá), a barra só o posiciona na toolbar. Sempre visível (até em Calibrar:
    *  o drawScene já gateia as camadas; o operador pode conferir HUD/telemetria). */
   layersControl?: ReactNode;
+  /** "Mapa 2D": abre a vista superior 2D em tela cheia sobre o palco (visão alternativa só-BLE; o
+   *  vídeo volta ao Sair). Estado no rótulo, nunca só-por-cor. */
+  mapaOpen: boolean;
+  onToggleMapa: () => void;
   onClose?: () => void;
 };
 
@@ -93,6 +98,8 @@ export function CamHeader({
   reviewTip,
   editTip,
   layersControl,
+  mapaOpen,
+  onToggleMapa,
   onClose,
 }: Props) {
   // Um só motivo p/ desabilitar edição na barra (RBAC + revisão) — sem repetir a expressão.
@@ -263,6 +270,20 @@ export function CamHeader({
           ) : (
             <>
               <Ruler size={16} strokeWidth={1.75} aria-hidden /> Calibrar
+            </>
+          )}
+        </Toggle>
+      </Tooltip>
+      {/* MAPA 2D — a vista superior do chão só por Bluetooth, em tela cheia sobre o palco. VISÃO
+          ALTERNATIVA para operar a área sem a câmera (não substitui o vídeo — o Sair volta). Estado
+          no rótulo, nunca só-por-cor. */}
+      <Tooltip content="Mapa 2D: a vista superior do chão só por Bluetooth (o beacon mais próximo de cada tag) — uma visão alternativa para operar a área sem a câmera. O vídeo volta ao Sair.">
+        <Toggle pressed={mapaOpen} onPressedChange={() => onToggleMapa()}>
+          {mapaOpen ? (
+            "No mapa…"
+          ) : (
+            <>
+              <Map size={16} strokeWidth={1.75} aria-hidden /> Mapa 2D
             </>
           )}
         </Toggle>

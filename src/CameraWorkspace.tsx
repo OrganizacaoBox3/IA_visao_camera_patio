@@ -75,6 +75,7 @@ import {
 } from "./camera/draw";
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import { CamHeader } from "./camera/CamHeader";
+import { Vista2DStage } from "./camera/Vista2DStage";
 import { CamKpiBar } from "./camera/CamKpiBar";
 import { ExibicaoPopover } from "./camera/ExibicaoPopover";
 import { CineBar } from "./camera/CineBar";
@@ -289,6 +290,9 @@ export function CameraWorkspace({
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
   // vista diária do operador.
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("presenca");
+  // "Mapa 2D": vista superior 2D em tela cheia sobre o palco (visão alternativa só-BLE; o vídeo segue
+  // vivo atrás, o Sair volta). O GROSSO vive em camera/Vista2DStage + useTopdownView + topdown.ts.
+  const [mapaOpen, setMapaOpen] = useState(false);
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
   const [layersOpen, setLayersOpen] = useState(false); // popover Exibição → trap defere ao Radix (cfgOpenRef)
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
@@ -1531,6 +1535,8 @@ export function CameraWorkspace({
       {/* Barra de ferramentas do palco → ./camera/CamHeader (JSX puro; nenhum canvas/rAF lá). */}
       <CamHeader
         label={label}
+        mapaOpen={mapaOpen}
+        onToggleMapa={() => setMapaOpen((v) => !v)}
         zonesCount={zones.length}
         canConfigure={canConfigure}
         activePreset={activePreset}
@@ -1573,7 +1579,7 @@ export function CameraWorkspace({
 
       {/* Palco + drawer lado a lado (.cam-body, cine.css): o palco encolhe quando o
           drawer está aberto e o drawScene re-letterboxa (fit) — nada de crop. */}
-      <div className="cam-body">
+      <div className="cam-body relative">
         <div
           className={`cam-stage ${poly.active || tripwireMode || cal.active ? "draw-cursor" : ""}`}
           ref={viewportRef}
@@ -1663,6 +1669,10 @@ export function CameraWorkspace({
           onCalibrate={toggleCalibration}
           diag={funnelDiag}
         />
+        {/* MAPA 2D em tela cheia SOBRE o palco: o vídeo + drawer seguem MONTADOS atrás (o <video> não
+            remonta — ADR-007), só cobertos; o "Sair" (ou o toggle do cabeçalho) volta. z-20 sobre a
+            cam-body (relative). Só quando ligado no cabeçalho. */}
+        {mapaOpen && <Vista2DStage cameraId={cameraId} onClose={() => setMapaOpen(false)} />}
       </div>
 
       {/* Barra de KPIs (rodapé) → ./camera/CamKpiBar. "A imagem é soberana" (ADR-003): o número
