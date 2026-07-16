@@ -179,9 +179,28 @@ function currentSources() {
 }
 
 // ── (b) Supervisão do processo ───────────────────────────────────────────────────────────────
+/** Observador de TODAS as linhas do log do go2rtc (o console acima mostra só a última do chunk).
+ *  Consumidor único hoje: o auto-cadastro RTMP (rtmp-auto-enroll via index.js), que reage ao
+ *  "stream not found". Falha do observador nunca derruba a supervisão. */
+let logObserver = null;
+function onLogLine(cb) {
+  logObserver = typeof cb === "function" ? cb : null;
+}
+
 function logChunk(prefix, d) {
   const line = String(d).trim();
   if (line) console.log(`[go2rtc]${prefix} ${line.split(/\r?\n/).slice(-1)[0]}`);
+  if (logObserver && line) {
+    for (const l of line.split(/\r?\n/)) {
+      const t = l.trim();
+      if (!t) continue;
+      try {
+        logObserver(t);
+      } catch {
+        /* observador nunca derruba a supervisão */
+      }
+    }
+  }
 }
 
 function scheduleUptimeReset(child) {
@@ -417,5 +436,6 @@ module.exports = {
   proxyRequest,
   proxyUpgrade,
   generateYaml, // exportado p/ teste/unit
+  onLogLine, // observador do log do sidecar (auto-cadastro RTMP)
   isRunning: () => Boolean(proc),
 };

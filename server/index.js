@@ -3,6 +3,7 @@
 const { createServer } = require("node:http");
 const { Server } = require("socket.io");
 const rtsp = require("./rtsp");
+const { createAutoEnroll } = require("./rtmp-auto-enroll");
 const go2rtc = require("./go2rtc");
 const cameraStore = require("./cameras");
 const alerts = require("./alerts");
@@ -321,6 +322,26 @@ io.on("connection", (socket) => {
         return [...legacy, ...dynamic];
       },
     });
+    // AUTO-CADASTRO de canais RTMP (rtmp-auto-enroll.js): publisher que bate num canal
+    // inexistente ("stream not found" no log do go2rtc) vira câmera cadastrada sozinho —
+    // o mesmo espírito da auto-descoberta de estações BLE. RTMP_AUTO_ENROLL=0 desliga.
+    const autoEnroll = createAutoEnroll({
+      enabled: process.env.RTMP_AUTO_ENROLL !== "0",
+      hasChannel: (name) =>
+        cameraStore.all().some((c) => c && typeof c.url === "string" && c.url.endsWith(`:8554/${name}`)),
+      register: (name) => {
+        const r = cameraStore.create({
+          label: `${name} (auto)`,
+          url: `rtsp://127.0.0.1:8554/${name}`,
+        });
+        if (r.error) {
+          console.warn(`[rtmp-auto] cadastro de "${name}" falhou: ${r.error}`);
+          return;
+        }
+        rtsp.addSource(r.camera); // sobe o ffmpeg e dispara broadcast() → go2rtc.sync()
+      },
+    });
+    go2rtc.onLogLine(autoEnroll.onLogLine);
     // Câmeras IP/RTSP (via ffmpeg → frames JPEG), tratadas como câmeras comuns.
     // Legadas: rtsp.sources.json/env (retrocompat). Dinâmicas: cameras.json (CRUD em runtime).
     // io = ioAnalysis (tee): o motor de análise observa os frames JPEG que o rtsp.js emite
