@@ -43,6 +43,13 @@ JPEG real capturado. A rede: PC e câmera no mesmo `/24` (`192.168.1.0/24`), pus
 
 ## Pendente
 
+0. **Ruído de WRN no journal (canal sem publisher):** o loop on-demand (hub puxa → go2rtc
+   spawna exec:ffmpeg → relay responde 404 → re-tenta) loga um WRN a cada ~2-3s POR CANAL sem
+   publisher ativo (visto jul/16: 8 canais órfãos ≈ flood). Risco conhecido: rate-limit do
+   journald suprime linhas de boot. Melhorias candidatas: backoff maior no rtsp.js para canais
+   de ingest sem publisher, ou o relay responder 200 com FLV vazio + fechar (silencia o WRN),
+   ou GO2RTC_LOG_LEVEL=warn→error. Não bloqueia operação.
+
 1. **Endurecer o firewall da 1935** (P1 de segurança): hoje a 1935 aceitou conexão do mundo
    (o publish RTMP é **SEM auth** — vale para o relay do ADR-019 igual valia pro go2rtc; com
    auto-cadastro ligado, quem alcança a porta cria câmera no painel → o firewall é o gate).
