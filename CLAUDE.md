@@ -6,7 +6,11 @@
 
 ## 1. O que é este projeto
 
-Inteligência operacional por câmeras para o CD da Grendene. A **análise de indicadores roda no HUB**
+Inteligência operacional por câmeras para o CD da Grendene — **VISÃO PURA** desde 2026-07-16
+(ADR-018): TODO o domínio BLE (tags/estações/fingerprint/planta 2D/mapa) e TODA a fusão
+câmera+BLE migraram para o repo irmão **`../mvp_trilateracao_BLE`** (porta 4001; tag
+`pre-separacao-2026-07-16` preserva o estado fundido nos dois históricos). A **análise de
+indicadores roda no HUB**
 (pessoas/atividade/fluxo — motor **D-FINE-S** em worker process, `server/analysis/`, 24/7 sem espectador; configurável por `ANALYSIS_MODEL=n|s|m` — N mais leve, S/M mais recall; ADR-009);
 o **navegador é espelho** (vídeo por **WebRTC** quando o gateway **go2rtc** está no ar — binário **empacotado no release** e auto-ligado pela **presença** de `bin/go2rtc[.exe]`, sem flag; **fallback MJPEG** automático por câmera; overlays servidos via `analysis-tracks`) e roda os **modos
 especializados** no cliente (Fadiga/MediaPipe, Leitura/ZXing, Objetos/OWL-ViT). O **hub Node** (`server/`)
@@ -36,16 +40,19 @@ de implementação: `docs/analises/implementacao-changelog.md`.
 - **Contratos socket aditivos:** `frame`, `cameras`, `capture`, `alert`, `camera-status`,
   `alarm-event`/`alarm-update`, `camcfg-updated`, `analysis-status`, `analysis-tracks` são contrato.
   Adicione eventos novos; não quebre os existentes. (`set-capture` e `bt-locations` removidos por
-  órfãos na faxina de 2026-07-12 — o `capture` hub→nó segue vivo via shed; o mapa BLE usa polling HTTP. ADR-016.)
-- **Endpoints da estação BLE** (`POST /api/bt/reading`, `POST /api/bt/tag-name`, `GET /api/bt/tags`)
-  **exigem `BT_STATION_TOKEN` em produção** (503 explicativo se ausente; dev segue aberto com warn no boot). (ADR-016)
+  órfãos na faxina de 2026-07-12 — o `capture` hub→nó segue vivo via shed; ADR-016. **`bt-readings`
+  deixou de existir na visão** na separação de domínios — ADR-018.)
+- ~~Endpoints da estação BLE / `BT_STATION_TOKEN` (ADR-016)~~ — **migrado para
+  `mvp_trilateracao_BLE` (ADR-018)**; o invariante segue valendo LÁ.
 - **Casca fullscreen da câmera NÃO vira Radix Dialog** (Portal/scroll-lock remontaria o `<canvas>` e quebraria o rAF/editor). Trap de foco manual permanece. (ADR-007)
 - **Radix é a camada de UI.** Todo controle interativo usa primitiva Radix via wrappers de `src/ui/`. (ADR-003, ADR-007)
 - **"Going gray":** cor é informação. Base neutra (tokens `--state-*`); saturada só para anormalidade.
-- **A caixa da PESSOA nunca exibe NÚMERO** — nem id de track, nem contagem. Sem tag BLE associada, o
-  rótulo é o genérico **"Pessoa"**. O id do tracker é detalhe interno (muda a cada re-associação) e
-  não significa nada para o operador; **contagem vive no PAINEL, nunca sobre a imagem** ("a imagem é
-  soberana", ADR-003). Gate: `src/camera/drawTracks.test.ts` quebra o build se um dígito voltar.
+- **A caixa da PESSOA nunca exibe NÚMERO** — nem id de track, nem contagem. O rótulo é o genérico
+  **"Pessoa"** (`personLabel(undefined, id)`; a fusão de tag BLE que podia dar nome migrou de repo —
+  ADR-018 — e `drawTracks` mantém o parâmetro opcional `labelFor` como contrato do fallback). O id
+  do tracker é detalhe interno (muda a cada re-associação) e não significa nada para o operador;
+  **contagem vive no PAINEL, nunca sobre a imagem** ("a imagem é soberana", ADR-003). Gate:
+  `src/camera/drawTracks.test.ts` quebra o build se um dígito voltar.
 - **Gravação de campo é artefato imutável e append-only.** Nenhum agente (nem humano, em modo automático) tem
   poder de deleção sobre sessões de gravação real (`server/bt/fusion-session*.jsonl` e afins). Nasceu de um
   incidente (2026-07-10): um `rm -f` num arquivo sob escrita ativa apagou ~7h de dado de campo irrecuperável.
@@ -54,11 +61,12 @@ de implementação: `docs/analises/implementacao-changelog.md`.
   gravador — ele ainda segura o handle do arquivo e pode salvar o que resta; encerrar/reiniciar é o que perde
   os dados de vez. Isto é Windows: não existe o truque `/proc/PID/fd/` do Linux — a recuperação depende de
   ferramenta de undelete NTFS (ex. TestDisk) rodada **antes** de qualquer nova escrita no volume; sem garantia.
+  *Nota (ADR-018): os artefatos históricos (`server/bt/*.jsonl`) seguem no disco deste repo (nunca
+  foram versionados) e têm CÓPIAS em `../gravacoes-campo-ble/` e no repo `mvp_trilateracao_BLE` —
+  o invariante de não-deleção continua valendo para os originais daqui.*
 - **SQL/persistência:** queries parametrizadas; SIAG é **read-only**; `schema.sql` idempotente (aditivo, sem alterar tabelas existentes).
-- **Planta BLE sem encaixe:** zona provável, posição X,Y e área física são contratos independentes.
-  Fingerprint é a fonte primária quando qualificado; multilateração só é fallback após gate de
-  geometria/residual. É proibido transformar solução externa em posição válida por clamp ou mover a
-  tag para uma zona/mesa. Precisão métrica exige holdout de campo. (ADR-017)
+- ~~Planta BLE sem encaixe (ADR-017)~~ — **migrado para `mvp_trilateracao_BLE` (ADR-018)**; o
+  invariante segue valendo LÁ (o ADR-017 permanece aqui como registro histórico da decisão).
 
 ## 4. Stack & padrão da casa
 
@@ -171,6 +179,7 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 | Onde                 | O quê                                                                                                               |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `../agentes/`        | Doutrina completa: manifesto, práticas, política de IA, pesquisa de autonomia, glossário                            |
+| `../mvp_trilateracao_BLE/` | O repo irmão: TODO o domínio BLE + a fusão câmera+BLE (ADR-018; tag `pre-separacao-2026-07-16` nos dois lados) |
 | `docs/arquitetura/`   | Documentação técnica da arquitetura (gerada do código)                                                              |
 | `docs/analises/decisoes/` | ADRs (decisões com Contexto→Decisão→Consequências)                                                                  |
 | `docs/analises/`          | Planos, benchmarks de UI, changelog de implementação                                                                |
