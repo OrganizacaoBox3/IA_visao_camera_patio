@@ -20,3 +20,7 @@ Contexto → Decisão → Consequências. Status: aceito salvo indicação.
 
 > Convenção: novas decisões de peso ganham um ADR aqui. Mudanças que revertem um ADR
 > criam um novo ADR com status "substitui ADR-XXX".
+
+> **Numeração compartilhada:** os ADRs 001–018 nasceram no repo original (pré-separação, ADR-018).
+> Os do arco BLE (012, 013, 014, 017) vivem no repo irmão `../mvp_trilateracao_BLE/`; a numeração é
+> única entre os dois repositórios — não reutilizar números.
