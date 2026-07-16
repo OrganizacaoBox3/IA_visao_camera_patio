@@ -7,6 +7,8 @@ import { distFromRssi, type PathLossModel } from "./floor-plot";
 const MODEL: PathLossModel = { rssi0: -45, n: 2.2, source: "default", samples: 0 };
 /** rssi que, pelo MODEL, o distFromRssi devolve como distância `d` (inverso do path-loss). */
 const rssiForDist = (d: number): number => MODEL.rssi0 - 10 * MODEL.n * Math.log10(d);
+const rssiForModelDist = (model: PathLossModel, d: number): number =>
+  model.rssi0 - 10 * model.n * Math.log10(d);
 
 describe("multilaterate — mínimos quadrados linearizados", () => {
   it("3 antenas, ponto-verdade (3,4) SEM ruído → recupera (3,4) com erro < 1e-6", () => {
@@ -83,8 +85,8 @@ const readingsAt = (mac: string, truth: { x: number; y: number }, ids: string[],
     return { stationId: id, mac, rssi: rssiForDist(Math.hypot(s.pos.x - truth.x, s.pos.y - truth.y)), rotulo };
   });
 
-describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
-  it("3 antenas vivas ouvindo 1 tag → fix ok, pos dentro do retângulo, nStations 3", () => {
+describe("deriveFloorplanView — a Planta BLE (estimativa validada antes de publicar)", () => {
+  it("3 antenas com modelo global default e geometria coerente → pos contínua, mas fix weak declarado", () => {
     const truth = { x: 3, y: 4 };
     const view = deriveFloorplanView({
       widthM: WIDTH,
@@ -95,14 +97,55 @@ describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
     });
     expect(view.tags).toHaveLength(1);
     const t = view.tags[0];
-    expect(t.fix).toBe("ok");
+    expect(t.fix).toBe("weak");
     expect(t.nStations).toBe(3);
+    expect(t.quality).toBe("estimated");
+    expect(t.source).toBe("multilateration");
+    expect(t.modelSource).toBe("default");
+    expect(t.residualM).not.toBeNull();
+    expect(t.residualM!).toBeLessThan(1e-3);
     expect(t.pos).not.toBeNull();
     expect(t.pos!.x).toBeGreaterThanOrEqual(0);
     expect(t.pos!.x).toBeLessThanOrEqual(WIDTH);
     expect(t.pos!.y).toBeGreaterThanOrEqual(0);
     expect(t.pos!.y).toBeLessThanOrEqual(HEIGHT);
     // Sem ruído a estimativa bate no verdade (o modelo inverteu exato).
+    expect(Math.hypot(t.pos!.x - truth.x, t.pos!.y - truth.y)).toBeLessThan(1e-3);
+  });
+
+  it("usa o modelo calibrado de CADA estação e só então publica fix ok", () => {
+    const truth = { x: 3, y: 4 };
+    const stationModels: Record<string, PathLossModel> = {
+      a: { rssi0: -51, n: 1.8, source: "anchors", samples: 8 },
+      b: { rssi0: -58, n: 2.7, source: "anchors", samples: 9 },
+      c: { rssi0: -62, n: 3.1, source: "anchors", samples: 7 },
+    };
+    const readings = ["A", "B", "C"].map((stationId) => {
+      const station = STATIONS.find((candidate) => candidate.id === stationId)!;
+      const model = stationModels[stationId.toLowerCase()];
+      const distanceM = Math.hypot(station.pos.x - truth.x, station.pos.y - truth.y);
+      return {
+        stationId,
+        mac: "AA:BB:CC:DD:22:33",
+        rssi: rssiForModelDist(model, distanceM),
+      };
+    });
+    const view = deriveFloorplanView({
+      widthM: WIDTH,
+      heightM: HEIGHT,
+      stations: STATIONS,
+      readings,
+      model: MODEL,
+      stationModels,
+    });
+    const t = view.tags[0];
+    expect(t.fix).toBe("ok");
+    expect(t.quality).toBe("good");
+    expect(t.modelSource).toBe("anchors");
+    expect(t.source).toBe("multilateration");
+    expect(t.residualM).not.toBeNull();
+    expect(t.residualM!).toBeLessThan(1e-3);
+    expect(t.pos).not.toBeNull();
     expect(Math.hypot(t.pos!.x - truth.x, t.pos!.y - truth.y)).toBeLessThan(1e-3);
   });
 
@@ -119,6 +162,9 @@ describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
     const t = view.tags[0];
     expect(t.fix).toBe("weak");
     expect(t.nStations).toBe(2);
+    expect(t.quality).toBe("estimated");
+    expect(t.source).toBe("two-circle");
+    expect(t.residualM).not.toBeNull();
     expect(t.pos).not.toBeNull();
     expect(t.pos!.x).toBeGreaterThanOrEqual(0);
     expect(t.pos!.x).toBeLessThanOrEqual(WIDTH);
@@ -138,6 +184,9 @@ describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
     const t = view.tags[0];
     expect(t.fix).toBe("none");
     expect(t.nStations).toBe(1);
+    expect(t.quality).toBe("unavailable");
+    expect(t.source).toBe("none");
+    expect(t.residualM).toBeNull();
     expect(t.pos).toBeNull();
     expect(t.nearest).not.toBeNull();
     expect(t.nearest!.stationId).toBe("A");
@@ -163,8 +212,9 @@ describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
     expect(t.nearest!.stationId).not.toBe("B");
   });
 
-  it("clamp: config que multilateraria FORA do retângulo → pos grampeada às bordas", () => {
-    // Ponto-verdade FORA do galpão (x=-5,y=-5): a multilateração acha ~(-5,-5), o grampo puxa p/ (0,0).
+  it("posição resolvida FORA do retângulo é rejeitada antes do clamp — nunca vira canto firme", () => {
+    // Ponto-verdade FORA do galpão (x=-5,y=-5): a multilateração acha ~(-5,-5).
+    // O contrato novo preserva o diagnóstico e cala a coordenada, em vez de fabricar (0,0).
     const truth = { x: -5, y: -5 };
     const view = deriveFloorplanView({
       widthM: WIDTH,
@@ -174,13 +224,88 @@ describe("deriveFloorplanView — a Planta BLE (estimativa grampeada)", () => {
       model: MODEL,
     });
     const t = view.tags[0];
-    expect(t.fix).toBe("ok");
-    expect(t.pos).not.toBeNull();
-    // Grampeado: dentro do retângulo, e nesta config específica cai no canto (0,0).
-    expect(t.pos!.x).toBeGreaterThanOrEqual(0);
-    expect(t.pos!.y).toBeGreaterThanOrEqual(0);
-    expect(t.pos!.x).toBe(0);
-    expect(t.pos!.y).toBe(0);
+    expect(t.fix).toBe("none");
+    expect(t.quality).toBe("invalid");
+    expect(t.source).toBe("multilateration");
+    expect(t.pos).toBeNull();
+    expect(t.residualM).not.toBeNull();
+  });
+
+  it("gate de residual: solução interna que briga com os três raios não é publicada", () => {
+    // Três raios de 1 m em antenas separadas por 8–10 m são impossíveis. A solução linear cai
+    // dentro da planta, portanto este cenário isola o gate de residual do gate de borda.
+    const readings = ["A", "B", "C"].map((stationId) => ({
+      stationId,
+      mac: "AA:00:00:00:00:01",
+      rssi: rssiForDist(1),
+    }));
+    const view = deriveFloorplanView({
+      widthM: WIDTH,
+      heightM: HEIGHT,
+      stations: STATIONS,
+      readings,
+      model: MODEL,
+    });
+    const t = view.tags[0];
+    expect(t.nStations).toBe(3);
+    expect(t.source).toBe("multilateration");
+    expect(t.residualM).not.toBeNull();
+    expect(t.residualM!).toBeGreaterThan(3);
+    expect(t.quality).toBe("invalid");
+    expect(t.fix).toBe("none");
+    expect(t.pos).toBeNull();
+  });
+
+  it("fixture real da Mesa serigrafia no centro: RSSIs incompatíveis não viram canto (3,0)", () => {
+    const stations: FloorplanStation[] = [
+      st("tc22", 1.4347258485639685, 5),
+      st("tc22-0963", 3, 0),
+      st("tc22-70a3", 0, 0),
+    ];
+    const view = deriveFloorplanView({
+      widthM: 3,
+      heightM: 5,
+      stations,
+      readings: [
+        { stationId: "TC22", mac: "CE:00:00:00:00:01", rssi: -90.0357 },
+        { stationId: "TC22-70A3", mac: "CE:00:00:00:00:01", rssi: -79.2857 },
+        { stationId: "TC22-0963", mac: "CE:00:00:00:00:01", rssi: -78.0357 },
+      ],
+      model: MODEL,
+    });
+    const t = view.tags[0];
+    expect(t.nStations).toBe(3);
+    expect(t.source).toBe("multilateration");
+    expect(t.residualM).not.toBeNull();
+    expect(t.residualM!).toBeGreaterThan(100);
+    expect(t.quality).toBe("invalid");
+    expect(t.fix).toBe("none");
+    expect(t.pos).toBeNull();
+  });
+
+  it("os quatro vetores vivos do baseline não são clampados nas bordas", () => {
+    const stations: FloorplanStation[] = [
+      { id: "TC22", label: "TC22", pos: { x: 1.4347258485639685, y: 5 }, live: true },
+      { id: "TC22-0963", label: "TC22-0963", pos: { x: 3, y: 0 }, live: true },
+      { id: "TC22-70A3", label: "TC22-70A3", pos: { x: 0, y: 0 }, live: true },
+    ];
+    const signals = [
+      { mac: "CE3C", values: [-85, -94, -79] },
+      { mac: "CE5C", values: [-91, -83, -81] },
+      { mac: "CE89", values: [-95, -83, -79] },
+      { mac: "CE8B", values: [-96, -84, -82] },
+    ];
+    const readings = signals.flatMap(({ mac, values }) =>
+      stations.map((station, index) => ({ stationId: station.id, mac, rssi: values[index] })),
+    );
+    const view = deriveFloorplanView({ widthM: 3, heightM: 5, stations, readings });
+    expect(view.tags).toHaveLength(4);
+    for (const tag of view.tags) {
+      expect(tag.rawPos).not.toBeNull();
+      expect(tag.pos).toBeNull();
+      expect(tag.fix).toBe("none");
+      expect(tag.quality).toBe("invalid");
+    }
   });
 
   it("tag ouvida SÓ por antena morta → não aparece (nada honesto a mostrar)", () => {

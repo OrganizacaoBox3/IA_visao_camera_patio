@@ -19,7 +19,7 @@ const ROW_ID = "default";
 const ID_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 
 // Estado padrão VAZIO: "nunca configurado". O front trata widthM=0 como "aplique defaults".
-const EMPTY = () => ({ widthM: 0, heightM: 0, stations: {} });
+const EMPTY = () => ({ widthM: 0, heightM: 0, stations: {}, workAreas: [] });
 
 let current = EMPTY();
 let usingPg = false;
@@ -46,10 +46,116 @@ function cleanStations(input) {
   return out;
 }
 
+const AREA_MIN_POINTS = 3;
+const AREA_MAX_POINTS = 20;
+const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+const onSegment = (p, q, r) =>
+  Math.min(p.x, r.x) <= q.x &&
+  q.x <= Math.max(p.x, r.x) &&
+  Math.min(p.y, r.y) <= q.y &&
+  q.y <= Math.max(p.y, r.y);
+function segmentsIntersect(a, b, c, d) {
+  const d1 = cross(c, d, a),
+    d2 = cross(c, d, b),
+    d3 = cross(a, b, c),
+    d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+    return true;
+  return (
+    (d1 === 0 && onSegment(c, a, d)) ||
+    (d2 === 0 && onSegment(c, b, d)) ||
+    (d3 === 0 && onSegment(a, c, b)) ||
+    (d4 === 0 && onSegment(a, d, b))
+  );
+}
+function isSimplePolygon(points) {
+  for (let i = 0; i < points.length; i++)
+    for (let j = i + 1; j < points.length; j++) {
+      if (j === i + 1 || (i === 0 && j === points.length - 1)) continue;
+      if (
+        segmentsIntersect(
+          points[i],
+          points[(i + 1) % points.length],
+          points[j],
+          points[(j + 1) % points.length],
+        )
+      )
+        return false;
+    }
+  return true;
+}
+function rectanglePolygon(raw) {
+  if (!raw.center || !fin(raw.center.x) || !fin(raw.center.y)) return null;
+  if (!fin(raw.widthM) || raw.widthM <= 0 || !fin(raw.heightM) || raw.heightM <= 0) return null;
+  const x0 = raw.center.x - raw.widthM / 2,
+    x1 = raw.center.x + raw.widthM / 2;
+  const y0 = raw.center.y - raw.heightM / 2,
+    y1 = raw.center.y + raw.heightM / 2;
+  return [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ];
+}
+
+// Áreas físicas usam polígono métrico. Retângulos antigos são migrados para quatro vértices;
+// reconhecer uma zona BLE nunca desloca uma tag para esta geometria.
+function cleanWorkAreas(input, widthM, heightM, strict = false) {
+  if (input == null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) throw Object.assign(new Error("áreas de trabalho inválidas"), { badRequest: true });
+    return [];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = norm(raw.id);
+    const label = norm(raw.label);
+    if (!ID_RE.test(id) || seen.has(id) || !label || label.length > 64) continue;
+    const hasPolygon = Array.isArray(raw.polygon);
+    const polygon = hasPolygon
+      ? raw.polygon.map((point) => ({ x: point?.x, y: point?.y }))
+      : rectanglePolygon(raw);
+    if (!polygon || polygon.length < AREA_MIN_POINTS || polygon.length > AREA_MAX_POINTS) continue;
+    if (polygon.some((point) => !fin(point.x) || !fin(point.y))) continue;
+    if (
+      polygon.some((point) => point.x < 0 || point.x > widthM || point.y < 0 || point.y > heightM)
+    )
+      continue;
+    if (!isSimplePolygon(polygon)) continue;
+    const xs = polygon.map((point) => point.x),
+      ys = polygon.map((point) => point.y);
+    const minX = Math.min(...xs),
+      maxX = Math.max(...xs),
+      minY = Math.min(...ys),
+      maxY = Math.max(...ys);
+    seen.add(id);
+    out.push({
+      id,
+      label,
+      polygon,
+      center: hasPolygon
+        ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+        : { x: raw.center.x, y: raw.center.y },
+      widthM: hasPolygon ? maxX - minX : raw.widthM,
+      heightM: hasPolygon ? maxY - minY : raw.heightM,
+    });
+  }
+  if (strict && out.length !== input.length) {
+    throw Object.assign(
+      new Error("uma ou mais áreas são inválidas, duplicadas ou estão fora da planta"),
+      { badRequest: true },
+    );
+  }
+  return out;
+}
+
 // Valida a planta inteira. Dimensões inválidas são erro do CLIENTE (não há default são para o
 // tamanho do galpão) → lança com `badRequest` (a rota devolve 400 com a mensagem). As estações
 // são saneadas (descarte silencioso), como a allowlist. Devolve o objeto limpo e pronto p/ persistir.
-function clean(fp) {
+function clean(fp, strictAreas = false) {
   if (!fp || typeof fp !== "object") {
     throw Object.assign(new Error("planta baixa inválida"), { badRequest: true });
   }
@@ -63,7 +169,12 @@ function clean(fp) {
       badRequest: true,
     });
   }
-  return { widthM: fp.widthM, heightM: fp.heightM, stations: cleanStations(fp.stations) };
+  return {
+    widthM: fp.widthM,
+    heightM: fp.heightM,
+    stations: cleanStations(fp.stations),
+    workAreas: cleanWorkAreas(fp.workAreas, fp.widthM, fp.heightM, strictAreas),
+  };
 }
 
 // ── Persistência ─────────────────────────────────────────────────────────────
@@ -85,7 +196,9 @@ async function init() {
     try {
       // Tabela idempotente (o schema.sql é a fonte única do resto; aqui, como é um store novo e
       // singleton, garantimos a linha própria sem alterar tabelas existentes — aditivo).
-      await db.query("create table if not exists bt_floorplan (id text primary key, data jsonb not null)");
+      await db.query(
+        "create table if not exists bt_floorplan (id text primary key, data jsonb not null)",
+      );
       const r = await db.query("select data from bt_floorplan where id=$1", [ROW_ID]);
       current = r.rows.length ? clean(r.rows[0].data) : EMPTY();
       usingPg = true;
@@ -117,7 +230,7 @@ function get() {
  * VALIDAÇÃO (dimensões) sai com `badRequest` ANTES de mutar nada. Devolve a planta salva.
  */
 async function save(fp) {
-  const cleaned = clean(fp); // lança badRequest se dimensões inválidas — nada foi mutado ainda
+  const cleaned = clean(fp, true); // save é estrito: geometria inválida nunca some com falso sucesso
   const before = current;
   current = cleaned;
   try {
@@ -138,6 +251,7 @@ module.exports = {
   save,
   // Puro (sem I/O), exportado p/ teste do round-trip da allowlist de estações.
   clean,
+  cleanWorkAreas,
   ID_RE,
   persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
 };

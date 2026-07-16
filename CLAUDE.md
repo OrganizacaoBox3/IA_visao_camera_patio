@@ -55,6 +55,10 @@ de implementação: `docs/analises/implementacao-changelog.md`.
   os dados de vez. Isto é Windows: não existe o truque `/proc/PID/fd/` do Linux — a recuperação depende de
   ferramenta de undelete NTFS (ex. TestDisk) rodada **antes** de qualquer nova escrita no volume; sem garantia.
 - **SQL/persistência:** queries parametrizadas; SIAG é **read-only**; `schema.sql` idempotente (aditivo, sem alterar tabelas existentes).
+- **Planta BLE sem encaixe:** zona provável, posição X,Y e área física são contratos independentes.
+  Fingerprint é a fonte primária quando qualificado; multilateração só é fallback após gate de
+  geometria/residual. É proibido transformar solução externa em posição válida por clamp ou mover a
+  tag para uma zona/mesa. Precisão métrica exige holdout de campo. (ADR-017)
 
 ## 4. Stack & padrão da casa
 

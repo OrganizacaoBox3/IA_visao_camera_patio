@@ -1,6 +1,6 @@
 // DESENHO da Planta BLE — folha de PINTURA, SEPARADA do cálculo. O núcleo de mundo (a estimativa
-// X,Y de cada tag, grampeada ao galpão) vive em fusion/floorplan.ts, testável sem canvas; a
-// suavização temporal (EMA) vive no hook planta/useFloorplanMap.ts. Aqui só se PINTA a view pronta —
+// X,Y de cada tag vive em fusion/floorplan.ts/continuous-position.ts, testável sem canvas; o filtro
+// temporal vive no hook useContinuousFloorplan. Aqui só se PINTA a view pronta —
 // a mesma divisão cálculo↔pintura de camera/drawTopdown.ts.
 //
 // A DIFERENÇA CRUCIAL para o top-down: ali a tag é um ANEL (1 antena = distância, não posição); AQUI
@@ -12,18 +12,27 @@
 // AQUI o canvas É a própria vista de dados — o número/coordenada é o CONTEÚDO, não ruído sobre imagem.
 // Consome os tokens via cssVar (mesmo cache do draw.ts); nunca hex cru de estado.
 //
-// HONESTIDADE do selo `fix` (herdada do núcleo): ok (≥3 antenas) = ponto sólido, coordenada firme;
-// weak (2 antenas) = ponto OCO + halo tracejado + prefixo "≈" (comunica "chute geométrico"); none
-// (1 antena) = SEM ponto (não tem X,Y) — fica só na lista textual da página.
+// HONESTIDADE do selo `fix`: ponto sólido significa estimativa qualificada, nunca coordenada exata;
+// weak = ponto oco + halo; none = sem X,Y. O halo materializa a incerteza e cresce sem evidência.
 
 import { cssVar } from "../camera/draw";
 import { bboxOf, type TopdownBbox, type TopdownTransform } from "../fusion/topdown";
 import type { FloorplanView } from "../fusion/floorplan";
-import type { Vec2 } from "../api";
+import type { ContinuousFloorplanTag } from "../fusion/continuous-position";
+import type { FloorplanWorkArea, Vec2 } from "../api";
+
+/** Marcador de ZONA DE TRABALHO (ponto de survey do fingerprinting com coordenada) + quem está nela
+ *  AGORA segundo a presença com histerese (fusion/zone-presence.ts). É o PRODUTO da tela: "a tag
+ *  está/não está na zona" — a zona ocupada acende (--state-ok); vazia fica neutra. ADITIVO: sem
+ *  `zones`, o desenho é byte-idêntico ao anterior. */
+export type ZoneMarker = { label: string; pos: Vec2; ocupantes: string[] };
+/** Área física para pintura + OCUPAÇÃO opcional (rótulos das tags com presença CONFIRMADA pela
+ *  histerese dentro dela). Ocupação é derivada da posição publicada ∩ polígono — nunca move a tag
+ *  (ADR-017); só muda a cor/rótulo da área. Ausente = desenho neutro de sempre. */
+export type WorkAreaMarker = FloorplanWorkArea & { ocupantes?: readonly string[] };
 
 /** Passo de rótulo dos eixos adaptado ao tamanho do galpão (evita amontoar/rarear demais os ticks). */
-const tickStep = (span: number): number =>
-  span <= 6 ? 1 : span <= 15 ? 2 : span <= 40 ? 5 : 10;
+const tickStep = (span: number): number => (span <= 6 ? 1 : span <= 15 ? 2 : span <= 40 ? 5 : 10);
 
 /**
  * Bbox de mundo que ENQUADRA a planta: os 4 cantos do retângulo do galpão [0,0]→(w,h) ∪ a posição
@@ -89,11 +98,32 @@ function anchorMarker(ctx: CanvasRenderingContext2D, p: Vec2, col: string) {
   ctx.fill();
 }
 
+/** Losango ◆ de zona, centrado no ponto projetado (distinto do ▲ de antena e do ● de tag). */
+function zoneMarkerShape(ctx: CanvasRenderingContext2D, p: Vec2, col: string, filled: boolean) {
+  const s = 6;
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y - s);
+  ctx.lineTo(p.x + s, p.y);
+  ctx.lineTo(p.x, p.y + s);
+  ctx.lineTo(p.x - s, p.y);
+  ctx.closePath();
+  if (filled) {
+    ctx.fillStyle = col;
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
 export function drawFloorplan(
   ctx: CanvasRenderingContext2D,
   view: FloorplanView,
   tf: TopdownTransform,
   canvas: { w: number; h: number },
+  zones?: readonly ZoneMarker[],
+  options: { editing?: boolean; workAreas?: readonly WorkAreaMarker[] } = {},
 ) {
   const surface = cssVar("--cam-surface-bg", "#05080c");
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
@@ -101,6 +131,7 @@ export function drawFloorplan(
   const neutralDim = cssVar("--state-neutral-dim", "#5b6b7a");
   const info = cssVar("--state-info", "#38bdf8");
   const warn = cssVar("--state-warn", "#eab308");
+  const ok = cssVar("--state-ok", "#22c55e");
   const fg = cssVar("--cam-overlay-fg", "#cbd5e1");
 
   ctx.save();
@@ -112,6 +143,7 @@ export function drawFloorplan(
   const w = view.widthM;
   const h = view.heightM;
   const hasBox = w > 0 && h > 0;
+  const compact = canvas.w < 520;
 
   // ── Grade métrica de 1 m + retângulo do galpão (a caixa [0,0]→(w,h) = a planta) + eixos rotulados.
   //    O dono quer LER coordenadas, então marcamos os ticks ("0", "5 m", "10 m") nas bordas. ──
@@ -152,18 +184,81 @@ export function drawFloorplan(
     }
     for (let ty = sy; ty <= h + 1e-6; ty += sy) {
       const p = tf.project({ x: 0, y: ty });
-      label(ctx, `${ty} m`, tl.x - 34, p.y, neutralDim, scrim);
+      label(ctx, `${ty} m`, Math.max(2, tl.x - 34), p.y, neutralDim, scrim);
     }
   }
 
-  // ── TAGS: um PONTO na estimativa X,Y + a coordenada em metros. É o que o dono quer ver. ──
+  // ÁREAS FÍSICAS são geometria independente do classificador. O polígono informa onde a mesa
+  // existe; ele nunca é usado para mover a tag. Distância/ocupação são derivados da posição publicada.
+  // Área OCUPADA (presença confirmada pela histerese) acende em --state-ok com quem está nela;
+  // vazia segue neutra (going-gray: cor é informação).
+  for (const area of options.workAreas ?? []) {
+    if (area.polygon.length < 3) continue;
+    const ocupantes = area.ocupantes ?? [];
+    const ocupada = ocupantes.length > 0;
+    const col = ocupada ? ok : neutralDim;
+    const points = area.polygon.map(tf.project);
+    const anchor = points.reduce((best, point) =>
+      point.y < best.y || (point.y === best.y && point.x < best.x) ? point : best,
+    );
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
+    ctx.closePath();
+    ctx.fillStyle = col;
+    ctx.globalAlpha = ocupada ? 0.16 : 0.12;
+    ctx.fill();
+    ctx.globalAlpha = ocupada ? 0.95 : 0.8;
+    ctx.strokeStyle = col;
+    ctx.setLineDash(ocupada ? [] : [4, 3]);
+    ctx.stroke();
+    ctx.restore();
+    const quem = ocupantes.join(", ");
+    const txt = ocupada
+      ? `${area.label} · ${quem.length > 26 ? `${ocupantes.length} na mesa` : quem}`
+      : area.label;
+    labelNear(ctx, txt, anchor.x, anchor.y - 4, col, scrim, canvas.w);
+  }
+
+  // ── ZONAS DE TRABALHO (pontos de survey com coordenada): losango ◆ + nome. Zona OCUPADA acende
+  //    (--state-ok, preenchida, rótulo "Zona · quem"); vazia fica neutra (contorno). Desenhadas ANTES
+  //    das tags/antenas (são chão, não devem cobrir os marcadores vivos). A ocupação vem da presença
+  //    com HISTERESE (zone-presence) — não da classificação instantânea, que oscila. ──
+  for (const z of zones ?? []) {
+    const p = tf.project(z.pos);
+    const ocupada = z.ocupantes.length > 0;
+    zoneMarkerShape(ctx, p, ocupada ? ok : neutralDim, ocupada);
+    const txt = ocupada
+      ? `${z.label} · ${z.ocupantes.length} ${z.ocupantes.length === 1 ? "tag" : "tags"}`
+      : z.label;
+    labelNear(ctx, txt, p.x, p.y + 14, ocupada ? ok : neutralDim, scrim, canvas.w);
+  }
+
+  // ── TAGS: o mapa operacional mostra identidade, não telemetria. Coordenadas e contagem de antenas
+  //    pertencem ao diagnóstico BLE; removê-las daqui reduz sobreposição sem esconder a posição. ──
   //    ok (≥3) = ponto sólido info, coordenada firme; weak (2) = ponto OCO warn + halo tracejado +
   //    "≈"; none (1) = sem ponto (sem X,Y) — só na lista textual da página.
   for (const t of view.tags) {
     if (!t.pos) continue; // fix "none": nada a pintar aqui
     const p = tf.project(t.pos);
-    const coord = `(${t.pos.x.toFixed(1)}, ${t.pos.y.toFixed(1)})`;
-    if (t.fix === "weak") {
+    const continuous = t as FloorplanTagWithDisplay;
+    const tagLabel = compact ? t.label.trim().split(/\s+/)[0] : t.label;
+    const uncertain = continuous.motionState === "incerto";
+    const uncertaintyM = continuous.uncertaintyM ?? 0;
+    if (uncertaintyM > 0) {
+      const edge = tf.project({ x: t.pos.x + uncertaintyM, y: t.pos.y });
+      const radiusPx = Math.max(8, Math.min(52, Math.abs(edge.x - p.x)));
+      ctx.save();
+      ctx.strokeStyle = uncertain || t.fix === "weak" ? warn : info;
+      ctx.globalAlpha = uncertain ? 0.45 : 0.25;
+      ctx.setLineDash(uncertain ? [4, 4] : []);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radiusPx, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (t.fix === "weak" || uncertain) {
       // Halo tracejado = "estimativa fraca, só 2 antenas".
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = warn;
@@ -180,14 +275,14 @@ export function drawFloorplan(
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
       ctx.stroke();
-      labelNear(ctx, `≈ ${t.label} ${coord}`, p.x, p.y - 2, warn, scrim, canvas.w);
+      if (!options.editing) labelNear(ctx, `≈ ${tagLabel}`, p.x, p.y - 2, warn, scrim, canvas.w);
     } else {
-      // fix "ok": ponto sólido, coordenada firme.
+      // Ponto sólido = estimativa qualificada; o halo continua comunicando a incerteza espacial.
       ctx.fillStyle = info;
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
       ctx.fill();
-      labelNear(ctx, `${t.label} ${coord}`, p.x, p.y - 2, info, scrim, canvas.w);
+      if (!options.editing) labelNear(ctx, tagLabel, p.x, p.y - 2, info, scrim, canvas.w);
     }
   }
 
@@ -197,13 +292,25 @@ export function drawFloorplan(
     const p = tf.project(s.pos);
     const col = s.live ? info : neutralDim;
     anchorMarker(ctx, p, col);
-    labelNear(ctx, s.live ? s.label : `${s.label} · sem sinal`, p.x, p.y - 2, col, scrim, canvas.w);
+    if (!options.editing && !compact) {
+      labelNear(
+        ctx,
+        s.live ? s.label : `${s.label} · sem sinal`,
+        p.x,
+        p.y - 2,
+        col,
+        scrim,
+        canvas.w,
+      );
+    }
   }
 
-  // ── Legenda curta ──
+  // ── Legenda curta (ganha o ◆ de zona só quando há zonas desenháveis) ──
   label(
     ctx,
-    "▲ antena · ● tag (≥3 antenas) · ○ estimativa fraca (2)",
+    ((options.workAreas?.length ?? 0) > 0 ? "▭ área · " : "") +
+      (zones?.length ? "◆ zona · " : "") +
+      "▲ antena · ● tag",
     8,
     canvas.h - 8,
     fg,
@@ -212,3 +319,6 @@ export function drawFloorplan(
 
   ctx.restore();
 }
+
+type FloorplanTagWithDisplay = FloorplanView["tags"][number] &
+  Partial<Pick<ContinuousFloorplanTag, "motionState" | "uncertaintyM">>;

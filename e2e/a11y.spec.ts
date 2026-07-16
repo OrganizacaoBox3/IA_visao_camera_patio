@@ -16,33 +16,24 @@ import AxeBuilder from "@axe-core/playwright";
 // ── Allowlist de dívida conhecida ─────────────────────────────────────────────────────────────
 // Cada entrada: regra do axe + POR QUE está aqui + item da spec que a fecha. Só pode DIMINUIR.
 //
-// BASELINE (2026-07-12, allowlist vazia): as 7 rotas falham numa ÚNICA regra, color-contrast
-// (serious) — zero violação critical. É dívida de TOKEN, não de tela: `--text-muted` sobre
-// `--panel`/rail fica abaixo de 4.5:1 nos papéis pequenos (rail-group-h label 11 uppercase — o
-// mesmo seletor reprova em TODAS as rotas autenticadas — e textos muted/dim das páginas; no
-// login, o parágrafo de rodapé LGPD). Fecha na F1 via ajuste do token (spec §3 DoD "Tokens" +
-// doutrina regra 2: -fg deve ter "contraste AA sobre --panel") — 1 token conserta o app; aí a
-// entrada sai de TODAS as rotas de uma vez.
+// A dívida global de `color-contrast` foi fechada em 2026-07-15 nos tokens `--text-muted` e
+// `--state-neutral-dim`; o teste unitário design-tokens.test.ts trava o AA nas superfícies escuras.
+// A allowlist permanece explícita e vazia por rota: qualquer nova exceção exige justificativa local.
 type AllowEntry = { id: string; why: string };
-const CONTRASTE_MUTED: AllowEntry = {
-  id: "color-contrast",
-  why: "dívida F1 de token: --text-muted/--text-dim < 4.5:1 sobre --panel/rail (spec §3 'Tokens'; doutrina regra 2)",
-};
 const ALLOW: Record<string, AllowEntry[]> = {
-  login: [CONTRASTE_MUTED],
-  monitoramento: [CONTRASTE_MUTED],
-  relatorio: [CONTRASTE_MUTED],
-  usuarios: [CONTRASTE_MUTED],
-  perfil: [CONTRASTE_MUTED],
+  login: [],
+  monitoramento: [],
+  relatorio: [],
+  usuarios: [],
+  perfil: [],
   // ("alarmes-saude" saiu: a rota morreu — a Saúde virou a faixa N1 + as ferramentas N5 DENTRO
   //  de /relatorio, e é lá que o axe a varre agora. A cobertura MUDOU DE LUGAR, não sumiu.)
-  cameras: [CONTRASTE_MUTED],
-  // F2 (varredura B) — mesma dívida de TOKEN das demais (rail-group-h + textos muted da página);
-  // zero violação própria de tela.
-  mapa: [CONTRASTE_MUTED],
-  turnos: [CONTRASTE_MUTED],
-  "tags-ble": [CONTRASTE_MUTED],
-  replay: [CONTRASTE_MUTED],
+  cameras: [],
+  mapa: [],
+  turnos: [],
+  "tags-ble": [],
+  "planta-ble": [],
+  replay: [],
 };
 
 // Mesmo login real do app.spec.ts (hub isolado do global-setup, bootstrap admin).
@@ -166,6 +157,13 @@ test("axe: /tags-ble (abas Tags e Estações)", async ({ page }) => {
   await page.getByRole("tab", { name: "Estações" }).click();
   await expect(page.getByRole("tabpanel")).toBeVisible();
   await checkA11y(page, "tags-ble");
+});
+
+test("axe: /planta-ble", async ({ page }) => {
+  await login(page);
+  await page.goto("/planta-ble");
+  await expect(page.getByRole("heading", { name: "Planta BLE" })).toBeVisible();
+  await checkA11y(page, "planta-ble");
 });
 
 // Replay: canvases com role=img + descrição textual do tick; controles ◀▶✕ agora são Lucide.

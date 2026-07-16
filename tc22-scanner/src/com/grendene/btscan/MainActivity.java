@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.pm.PackageManager;
@@ -19,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelUuid;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
@@ -53,6 +55,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
@@ -110,6 +113,10 @@ public class MainActivity extends Activity {
     static final long STALE_MS = 6000;           // sem ver a tag -> desbota
     static final long DROP_MS = 20000;           // sem ver a tag -> some da lista/contagem
     static final long SCAN_WATCHDOG_MS = 20000;  // sem NENHUMA leitura -> scan provavelmente morreu, reinicia
+    // Janela de "scan vivo" reportada ao hub no campo `scanning` do POST (saúde honesta — o hub
+    // distingue "estação viva mas CEGA" de "sem tags por perto"). 15 s < SCAN_WATCHDOG_MS de
+    // propósito: o hub vê o problema ANTES de o watchdog tentar religar.
+    static final long SCAN_ALIVE_MS = 15000;
     static final int REQ_PERM = 1001;
 
     // Paleta (going-gray: base neutra, cor só p/ significado). parseColor em constantes = sem concat.
@@ -190,8 +197,10 @@ public class MainActivity extends Activity {
     private BluetoothAdapter adapter;
     private BluetoothLeScanner scanner;
     private ScanSettings settings;
+    private List<ScanFilter> scanFilters; // montado no onCreate (buildScanFilters) — NUNCA scan sem filtro
 
     // Estado do scan (tocado só na main thread, exceto os volatile abaixo)
+    private final HashMap<String, Long> rawLogMs = new HashMap<String, Long>(); // throttle do log RAW (cb thread)
     private boolean scanning = false;
     private boolean permissionDenied = false;
     private volatile boolean scanFailed = false;   // set pelo onScanFailed (fora da main)
@@ -257,6 +266,22 @@ public class MainActivity extends Activity {
             boolean isTag = mac.toUpperCase().startsWith(OUI) || name.toUpperCase().startsWith("CP");
             Log.i(TAG, new StringBuilder(isTag ? "TAG " : "dev ")
                     .append(mac).append(' ').append(name).append(' ').append(rssi).toString());
+            // DIAGNÓSTICO do filtro (barato, throttled): despeja o advertisement CRU das tags em hex
+            // para auditar o formato real dos frames (company ID/estrutura) quando o ScanFilter não
+            // casar — foi assim que o filtro certo foi derivado. 1 log por tag a cada ~10 s.
+            if (isTag && r.getScanRecord() != null) {
+                long nowRaw = SystemClock.elapsedRealtime();
+                Long lastRaw = rawLogMs.get(mac);
+                if (lastRaw == null || nowRaw - lastRaw > 10000) {
+                    rawLogMs.put(mac, nowRaw);
+                    byte[] raw = r.getScanRecord().getBytes();
+                    StringBuilder hex = new StringBuilder("RAW ").append(mac).append(' ');
+                    for (int i = 0; i < raw.length; i++) {
+                        hex.append(String.format("%02X", raw[i]));
+                    }
+                    Log.i(TAG, hex.toString());
+                }
+            }
             if (isTag) {
                 long now = SystemClock.elapsedRealtime();
                 lastResultMs = now;
@@ -365,6 +390,53 @@ public class MainActivity extends Activity {
         if (any) locActive = true;
     }
 
+    /**
+     * Filtros de hardware do scan (bug C1 do laudo `docs/analises/planta-ble-localizacao-continua/
+     * estabilidade.md`): desde o Android 8.1 o framework SUPRIME os resultados de scan NÃO-FILTRADO
+     * com a tela apagada — a estação ficava CEGA postando readings vazios, e o watchdog religava um
+     * scan igualmente mudo (religar sem filtro não cura). Scan FILTRADO continua entregando
+     * resultados de tela desligada — mata a C1 na raiz. FLAG_KEEP_SCREEN_ON e o watchdog seguem como
+     * defesa em profundidade (política de OEM pode apagar a tela mesmo assim; scan pode morrer por
+     * outros motivos).
+     *
+     * O formato REAL das DX-CP27 foi AUDITADO NO AR em 2026-07-15 (log "RAW" abaixo, 10 tags):
+     *  - Frame PRINCIPAL (proprietário DX): lista de service UUIDs anuncia 0xFDA5, com service data
+     *    em 0xFEAB (bateria + MAC) e 0xFEAC (MAC), + nome "CP27-xxxx".
+     *      RAW: 0201060303A5FD0A16ABFE64<MAC>00000B16ACFE<MAC>00000A09 43503237...
+     *  - Frame iBeacon: manufacturer data com company ID 0x4458 ("DX" em ASCII — NÃO é a Apple!),
+     *    payload 0x02 0x15 + UUID E2C56DB5... + major/minor.
+     *      RAW: 0201061AFF5844 0215 E2C56DB5DFFB48D2B060D0F5A71096E0 0005 0006 C7
+     * OR entre os filtros (basta UM casar). A máscara do iBeacon cobre só 0x02 0x15 de propósito:
+     * pega o frame de QUALQUER UUID/major/minor — quem filtra por cadastro é o pipeline (isTag +
+     * cadastro no hub), não o rádio. 0x004C (Apple) e 0xFEAA (Eddystone) ficam como futuro-proof
+     * (custo zero) caso as tags sejam reconfiguradas para modos genéricos.
+     * Se as tags forem reconfiguradas p/ um formato FORA desses, o filtro cega a estação até com
+     * tela ligada — reconfigurar advertising exige re-auditar com o log RAW (ver onScanResult).
+     */
+    private List<ScanFilter> buildScanFilters() {
+        ArrayList<ScanFilter> filters = new ArrayList<ScanFilter>();
+        // Frame proprietário DX (o dominante nas 10 tags): service UUID 0xFDA5 na lista.
+        filters.add(new ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid.fromString("0000FDA5-0000-1000-8000-00805F9B34FB"))
+                .build());
+        // Frame iBeacon DX: company ID 0x4458 ("DX"), payload iBeacon clássico 0x02 0x15.
+        filters.add(new ScanFilter.Builder()
+                .setManufacturerData(0x4458,
+                        new byte[]{(byte) 0x02, (byte) 0x15},
+                        new byte[]{(byte) 0xFF, (byte) 0xFF})
+                .build());
+        // Futuro-proof (custo zero): iBeacon Apple e Eddystone genéricos.
+        filters.add(new ScanFilter.Builder()
+                .setManufacturerData(0x004C,
+                        new byte[]{(byte) 0x02, (byte) 0x15},
+                        new byte[]{(byte) 0xFF, (byte) 0xFF})
+                .build());
+        filters.add(new ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid.fromString("0000FEAA-0000-1000-8000-00805F9B34FB"))
+                .build());
+        return filters;
+    }
+
     /** Decide, a cada tick, se o scan deve estar ligado; liga, religa (watchdog) ou desliga. Nunca crasha. */
     private void ensureScan(boolean btOn) {
         if (adapter == null || !btOn) {
@@ -404,7 +476,9 @@ public class MainActivity extends Activity {
         try {
             scanner = adapter.getBluetoothLeScanner(); // pode mudar após religar o BT
             if (scanner == null) return;
-            scanner.startScan(null, settings, cb);
+            // SEMPRE com filtros: startScan(null, ...) é suprimido de tela apagada desde o 8.1 (C1).
+            if (scanFilters == null) scanFilters = buildScanFilters(); // defensivo — onCreate já montou
+            scanner.startScan(scanFilters, settings, cb);
             scanning = true;
             lastScanStartMs = now;
             lastResultMs = now; // dá folga ao watchdog logo após ligar
@@ -452,6 +526,12 @@ public class MainActivity extends Activity {
      * (`measuredAt = now − ageMs`, ver server/bt/bt-readings.js) — imune a skew. É o que permite ao
      * motor distinguir medição fresca de cópia ressuscitada pelo pool (src/fusion/associate.ts).
      *
+     * `scanning` (ADITIVO, retrocompatível — hub antigo ignora o campo): true se o scanner entregou
+     * ALGUMA leitura nos últimos SCAN_ALIVE_MS (15 s), false caso contrário. É a saúde HONESTA da
+     * antena: sem ele, "estação cega" (bug C1 — scan suprimido de tela apagada, ver estabilidade.md)
+     * e "sem tags por perto" chegam ao hub como o MESMO readings vazio. Com ele, o hub distingue e
+     * pode alarmar a causa certa.
+     *
      * POST VAZIO é MANTIDO (nada novo → `readings: []`): é o batimento cardíaco da estação — o hub
      * usa a chegada do POST para saber que a antena está viva (e é assim que "estação cega" pode
      * virar alarme). Silenciar o POST inteiro faria a estação parecer morta.
@@ -463,6 +543,10 @@ public class MainActivity extends Activity {
     private String buildJson(HashMap<String, Long> sent) {
         long now = SystemClock.elapsedRealtime();
         StringBuilder j = new StringBuilder("{\"stationId\":\"").append(stationId).append('"');
+        // Saúde honesta da antena (ADITIVO): callbacks chegando há < SCAN_ALIVE_MS ⇒ scanning=true.
+        // lastResultMs também é semeado no startScanSafe — logo após (re)ligar o scan há folga, igual
+        // ao watchdog. StringBuilder.append(boolean) serializa "true"/"false" — JSON válido.
+        j.append(",\"scanning\":").append(now - lastResultMs < SCAN_ALIVE_MS);
         // Modelo AirTag: com fix, a posição do aparelho vai no objeto raiz (Double/Float.toString = ponto decimal, sem locale).
         if (hasFix) {
             j.append(",\"lat\":").append(Double.toString(lastLat))
@@ -1000,6 +1084,7 @@ public class MainActivity extends Activity {
         settings = new ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build();
+        scanFilters = buildScanFilters(); // scan SEMPRE filtrado (C1 — ver buildScanFilters)
 
         // Permissões de runtime: BLE scan (Android 12+) + localização do aparelho (modelo AirTag). Pede tudo de uma vez.
         ArrayList<String> want = new ArrayList<String>();

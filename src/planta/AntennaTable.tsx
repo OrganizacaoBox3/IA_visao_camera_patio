@@ -54,11 +54,13 @@ type Props = {
 };
 
 export function AntennaTable({ rows, pos, onSetCoord, onPlace, onRemove }: Props) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-[12px] text-text-dim">Antenas (posição em metros)</span>
+      <span className="text-sec text-text-dim">Antenas</span>
       {rows.length === 0 ? (
-        <p className="text-[12px] text-text-muted">
+        <p className="text-sec text-text-muted">
           Nenhuma estação conhecida ainda. Ligue uma estação BLE para posicioná-la aqui.
         </p>
       ) : (
@@ -75,27 +77,42 @@ export function AntennaTable({ rows, pos, onSetCoord, onPlace, onRemove }: Props
                     tone={r.live ? "info" : "neutral"}
                     label={r.live ? "estação viva" : "estação sem sinal"}
                   />
-                  <span className="truncate text-[13px] font-medium text-text">{r.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-body font-medium text-text">{r.label}</span>
                   {p ? (
-                    <IconButton
-                      label={`Remover ${r.label} do mapa`}
-                      className="ml-auto"
-                      onClick={() => onRemove(r.id)}
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} aria-hidden />
-                    </IconButton>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        active={selectedId === r.id}
+                        aria-expanded={selectedId === r.id}
+                        onClick={() => setSelectedId((current) => (current === r.id ? null : r.id))}
+                      >
+                        Ajustar
+                      </Button>
+                      <IconButton
+                        label={`Remover ${r.label} do mapa`}
+                        onClick={() => {
+                          if (selectedId === r.id) setSelectedId(null);
+                          onRemove(r.id);
+                        }}
+                      >
+                        <Trash2 size={14} strokeWidth={1.75} aria-hidden />
+                      </IconButton>
+                    </>
                   ) : (
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="ml-auto"
-                      onClick={() => onPlace(r.id)}
+                      onClick={() => {
+                        setSelectedId(r.id);
+                        onPlace(r.id);
+                      }}
                     >
                       <MapPin size={14} strokeWidth={1.75} aria-hidden /> Colocar no mapa
                     </Button>
                   )}
                 </span>
-                {p && (
+                {p && selectedId === r.id && (
                   <AntennaCoord
                     id={r.id}
                     label={r.label}

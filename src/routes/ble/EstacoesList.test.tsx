@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EstacoesList, estacaoViva, haQuantoTempo, STALE_MS } from "./EstacoesList";
+import { CEGA_MS, EstacoesList, estacaoCega, estacaoViva, haQuantoTempo, STALE_MS } from "./EstacoesList";
 import type { BtStation } from "../../api";
 
 // GATE DE RBAC DA TELA BLE (spec-arquitetura-informacao §3).
@@ -23,7 +23,9 @@ const ROWS: BtStation[] = [
     nome: "Doca 3", // já batizada
     ativo: true,
     primeiraVezEm: AGORA - 86_400_000,
-    ultimaVezEm: AGORA - 2_000, // viva
+    ultimaVezEm: AGORA - 2_000, // viva…
+    ultimaLeituraEm: AGORA - 2_000, // …e LENDO tags (senão seria CEGA, não viva)
+    scanning: true,
   },
   {
     id: "tc22-c3d4",
@@ -101,11 +103,67 @@ describe("EstacoesList — o gate de configuração mora na TELA (a rota morreu)
   });
 });
 
+// ESTAÇÃO CEGA (causa C1/bug B6 — 22 h postando `readings: []` sem alarme): viva pelo POST mas sem
+// ler tags (scan morto pela tela apagada). O estado NÃO altera viva/sem sinal — é um TERCEIRO estado,
+// e "sem sinal" segue soberano quando o POST parou. Going-gray: warn + o que fazer em TEXTO.
+describe("EstacoesList — estação CEGA (posta, mas não lê)", () => {
+  const base: BtStation = {
+    id: "tc22-e5f6",
+    nome: "Expedição",
+    ativo: true,
+    primeiraVezEm: AGORA - 86_400_000,
+    ultimaVezEm: AGORA - 1_000, // viva pelo POST…
+    ultimaLeituraEm: AGORA - 22 * 3_600_000, // …mas 22 h sem trazer UMA leitura (o caso real)
+    scanning: null,
+  };
+
+  it("viva pelo POST + 22 h sem leitura → badge 'cega' (warn) com instrução em TEXTO", () => {
+    const html = render(false, [base]);
+    expect(html).toContain(">cega<");
+    expect(html).toContain("sem ler tags há 22 h");
+    expect(html).toContain("verifique a tela/scan do aparelho");
+    expect(html).not.toContain(">viva<"); // cega NÃO se disfarça de viva (era o bug)
+  });
+
+  it("scanning === false → cega MESMO com leitura fresca (a palavra do app decide)", () => {
+    const html = render(false, [{ ...base, ultimaLeituraEm: AGORA - 1_000, scanning: false }]);
+    expect(html).toContain(">cega<");
+    expect(html).toContain("scan desligado");
+  });
+
+  it("ultimaLeituraEm ausente (hub/registro antigo, nunca leu) → cega com texto próprio", () => {
+    const html = render(false, [{ ...base, ultimaLeituraEm: undefined }]);
+    expect(html).toContain(">cega<");
+    expect(html).toContain("sem nenhuma leitura de tag");
+  });
+
+  it("estação MORTA nunca é cega — 'sem sinal' segue soberano", () => {
+    const html = render(false, [{ ...base, ultimaVezEm: AGORA - 60_000, scanning: false }]);
+    expect(html).toContain(">sem sinal<");
+    expect(html).not.toContain(">cega<");
+  });
+
+  it("viva e LENDO → 'viva' de sempre (estado existente intacto)", () => {
+    const html = render(false, [{ ...base, ultimaLeituraEm: AGORA - 1_000, scanning: true }]);
+    expect(html).toContain(">viva<");
+    expect(html).not.toContain(">cega<");
+  });
+});
+
 describe("EstacoesList — derivações puras", () => {
   it("estacaoViva: a janela é a MESMA do hub (STALE_MS de server/bt/bt-readings.js)", () => {
     const base = { id: "x", nome: "x", ativo: true, primeiraVezEm: 0 };
     expect(estacaoViva({ ...base, ultimaVezEm: AGORA - STALE_MS }, AGORA)).toBe(true); // no limite
     expect(estacaoViva({ ...base, ultimaVezEm: AGORA - STALE_MS - 1 }, AGORA)).toBe(false);
+  });
+
+  it("estacaoCega: limite de CEGA_MS; nunca-leu conta; scanning false decide; morta nunca é cega", () => {
+    const base = { id: "x", nome: "x", ativo: true, primeiraVezEm: 0, ultimaVezEm: AGORA };
+    expect(estacaoCega({ ...base, ultimaLeituraEm: AGORA - CEGA_MS }, AGORA)).toBe(false); // no limite
+    expect(estacaoCega({ ...base, ultimaLeituraEm: AGORA - CEGA_MS - 1 }, AGORA)).toBe(true);
+    expect(estacaoCega({ ...base }, AGORA)).toBe(true); // nunca trouxe leitura (campo ausente)
+    expect(estacaoCega({ ...base, ultimaLeituraEm: AGORA, scanning: false }, AGORA)).toBe(true); // app confessa
+    expect(estacaoCega({ ...base, ultimaVezEm: AGORA - STALE_MS - 1, scanning: false }, AGORA)).toBe(false); // morta = sem sinal
   });
 
   it("haQuantoTempo: segundos → minutos → horas; sem carimbo vira travessão", () => {

@@ -6,7 +6,9 @@
   --border-soft: #16202b;
   --text: #e6edf3;
   --text-dim: #9aa7b4;
-  --text-muted: #5b6b7a;
+  /* Texto secundário continua abaixo de --text-dim na hierarquia, mas mantém
+     contraste WCAG AA nas superfícies escuras do app (inclusive tints de estado). */
+  --text-muted: #7f8d9a;
   --accent: #38bdf8;
   /* ── Tints de INTERAÇÃO (fonte única; antes hex hardcoded nos átomos
      Button/SegmentedControl/Select e em .rail-item.on). Valores = exatamente
@@ -133,7 +135,7 @@
 
   /* Foreground — texto/ícone (contraste AA sobre --panel/--panel-2) */
   --state-neutral-fg: #9aa7b4; /* = --text-dim   */
-  --state-neutral-dim: #5b6b7a; /* = --text-muted (VAZIA) */
+  --state-neutral-dim: #7f8d9a; /* = --text-muted (VAZIA) */
   --state-ok-fg: #4ade80;
   --state-info-fg: #bae6fd;
   --state-warn-fg: #facc15;

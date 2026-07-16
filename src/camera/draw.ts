@@ -864,7 +864,7 @@ function drawSelfIntersection(ctx: CanvasRenderingContext2D, cr: Rect, pts: Zone
 export function drawPolygonEditor(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
-  zones: ReadonlyArray<Zone>,
+  zones: ReadonlyArray<Pick<Zone, "id" | "points">>,
   draft: PolygonDraft | null,
   ov: EditorOverlay,
 ) {
@@ -877,6 +877,19 @@ export function drawPolygonEditor(
   const info = cssVar("--state-info", "#38bdf8");
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
   ctx.save();
+  // Contorno e vértices da forma selecionada. Na câmera reforça as alças existentes; em outros
+  // palcos (como a planta métrica) este é o único renderer do estado de edição.
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = info;
+  tracePolygon(ctx, cr, pts);
+  ctx.stroke();
+  ctx.fillStyle = scrim;
+  for (const point of pts) {
+    ctx.beginPath();
+    ctx.arc(cr.x + point.x * cr.w, cr.y + point.y * cr.h, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   // MIDPOINTS fantasma (semitransparentes — "ainda não existem"; arrastar/clicar cria o vértice).
   ctx.globalAlpha = 0.5;
   ctx.lineWidth = 1.5;

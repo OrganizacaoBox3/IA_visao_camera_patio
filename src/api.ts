@@ -318,7 +318,14 @@ export type CalibrationPoint = { px: Vec2; world: Vec2; mac?: string };
 // silenciosamente o que a UI salvou — foi exatamente o que aconteceu até 2026-07-13.
 // refTag (opcional): tag FIXA num ponto conhecido do chão — âncora p/ heartbeat/drift/RSSI@1m.
 // `mac` = MAC maiúsculo (o mesmo das leituras BLE); `px` = ponto de imagem (0..1). Aditivo. SÓ números/strings.
-export type CameraCalibration = { points: CalibrationPoint[]; H: Matrix3; updatedAt: number; station?: Vec2; stations?: Record<string, Vec2>; refTag?: { mac: string; px: Vec2 } };
+export type CameraCalibration = {
+  points: CalibrationPoint[];
+  H: Matrix3;
+  updatedAt: number;
+  station?: Vec2;
+  stations?: Record<string, Vec2>;
+  refTag?: { mac: string; px: Vec2 };
+};
 // GET /api/calibration/:cameraId → CameraCalibration | null (null = nunca calibrada). Auth: autenticado.
 export const getCalibration = (cameraId: string) =>
   apiGet<CameraCalibration | null>(`/api/calibration/${encodeURIComponent(cameraId)}`);
@@ -332,7 +339,16 @@ export const saveCalibration = (cameraId: string, calibration: CameraCalibration
 // painéis via socket `bt-readings`. Este GET é só a SEMENTE (snapshot do que dá pra ver agora)
 // para um painel que abre depois — o vivo vem pelo socket. SÓ metadados/RSSI (LGPD): efêmero,
 // nunca persistido. `rotulo` = nome da pessoa/tag cadastrada, ou null se a tag não é conhecida.
-export type BtReading = { mac: string; rotulo: string | null; rssi: number; stationId?: string };
+export type BtReading = {
+  mac: string;
+  rotulo: string | null;
+  rssi: number;
+  stationId?: string;
+  /** Quando o hub recebeu a leitura. Aditivo para clientes/hubs antigos. */
+  ts?: number;
+  /** Quando o rádio mediu o RSSI; identifica a medição física para deduplicação. */
+  measuredAt?: number;
+};
 // GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
 // COLAPSADO por MAC (a estação mais fresca vence): 1 leitura por tag — bom para "quem está visível".
 export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
@@ -361,12 +377,20 @@ export const getBtLocations = () => apiGet<TagLocation[]>("/api/bt/locations");
 // ── CADASTRO de tags (definir QUEM é a tag: rótulo/pessoa por nome do BT/MAC) ──────────────────
 // A estação vê a tag pelo MAC/nome; o cadastro liga isso a um rótulo (a pessoa). Persistido (config).
 // Auth de escrita: perfil de configuração (engenharia/superadmin) — coerente com câmeras/zonas.
-export type BtTag = { id: string; btName: string; rotulo: string; ativo: boolean; criadoEm: number };
+export type BtTag = {
+  id: string;
+  btName: string;
+  rotulo: string;
+  ativo: boolean;
+  criadoEm: number;
+};
 export const getBtTags = () => apiGet<BtTag[]>("/api/bt-tags");
 export const createBtTag = (btName: string, rotulo: string) =>
   apiSend<BtTag>("POST", "/api/bt-tags", { btName, rotulo });
-export const updateBtTag = (id: string, patch: { rotulo?: string; ativo?: boolean; btName?: string }) =>
-  apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
+export const updateBtTag = (
+  id: string,
+  patch: { rotulo?: string; ativo?: boolean; btName?: string },
+) => apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
 
 // ── REGISTRO de estações BLE (os celulares/coletores que varrem o BLE) ─────────────────────────
 // A estação NÃO se cadastra por formulário: ela NASCE no hub por AUTO-DESCOBERTA, no primeiro
@@ -381,6 +405,10 @@ export type BtStation = {
   ativo: boolean;
   primeiraVezEm: number;
   ultimaVezEm: number;
+  // ADITIVOS (detecção de estação CEGA — posta mas o scan morreu; causa C1/bug B6). Opcionais:
+  // registro anterior ao campo não os tem. A UI deriva o estado "cega" deles (EstacoesList).
+  ultimaLeituraEm?: number | null; // ts do último POST com ≥1 leitura; null/ausente = nunca
+  scanning?: boolean | null; // último estado de scan reportado pelo app; null/ausente = app não manda
 };
 export const getBtStations = () => apiGet<BtStation[]>("/api/bt-stations");
 export const updateBtStation = (id: string, patch: { nome?: string; ativo?: boolean }) =>
@@ -394,7 +422,23 @@ export const deleteBtStation = (id: string) =>
 // estação/antena; as tags aparecem por multilateração. Config GLOBAL (uma planta por instalação),
 // persistida no hub (server/bt/floorplan.js), SÓ números (LGPD). `stations` indexa pelo mesmo
 // `stationId` do registro/leituras. widthM=0 (default) = "nunca configurada" → a UI pede o setup.
-export type Floorplan = { widthM: number; heightM: number; stations: Record<string, Vec2> };
+export type FloorplanWorkArea = {
+  id: string;
+  label: string;
+  /** Fonte da verdade geométrica, em metros da planta. */
+  polygon: Vec2[];
+  /** Bbox derivada mantida no contrato para clientes/arquivos retangulares legados. */
+  center: Vec2;
+  widthM: number;
+  heightM: number;
+};
+export type Floorplan = {
+  widthM: number;
+  heightM: number;
+  stations: Record<string, Vec2>;
+  /** Geometria física independente da classificação por fingerprint. */
+  workAreas?: FloorplanWorkArea[];
+};
 // GET /api/floorplan → Floorplan (widthM:0 quando nunca salva). Auth: qualquer autenticado.
 export const getFloorplan = () => apiGet<Floorplan | null>("/api/floorplan");
 // PUT /api/floorplan {floorplan} → valida no hub e persiste; responde a planta salva. Auth: canConfigure.

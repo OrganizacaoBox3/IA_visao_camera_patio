@@ -54,6 +54,60 @@ describe("stations — auto-descoberta (a estação NASCE ao postar)", () => {
   });
 });
 
+// DETECÇÃO DE ESTAÇÃO CEGA (causa C1/bug B6 — 22 h postando `readings: []` sem alarme): o registro
+// ganha `ultimaLeituraEm` (ts do último POST com ≥1 leitura) e `scanning` (última voz do app).
+// TUDO ADITIVO: a assinatura antiga seen(id, now) e o payload sem os campos seguem bit-idênticos.
+describe("stations — campos de cegueira (ultimaLeituraEm/scanning) — aditivos", () => {
+  it("estação nova SEM meta → ultimaLeituraEm null (nunca leu) e scanning null (app não manda)", async () => {
+    const r = await stations.seen("est-cega-nova", {}, 1000);
+    expect(r.station.ultimaLeituraEm).toBeNull();
+    expect(r.station.scanning).toBeNull();
+  });
+
+  it("assinatura ANTIGA seen(id, now) — número no 2º arg — segue funcionando", async () => {
+    const r = await stations.seen("est-legado", 1234);
+    expect(r.criada).toBe(true);
+    expect(r.station.ultimaVezEm).toBe(1234);
+    expect(r.station.ultimaLeituraEm).toBeNull();
+    expect(r.station.scanning).toBeNull();
+  });
+
+  it("hadReadings: true carimba ultimaLeituraEm; POST vazio avança ultimaVezEm mas NÃO a leitura", async () => {
+    await stations.seen("est-cega", {}, 1000);
+    await stations.seen("est-cega", { hadReadings: true }, 2000);
+    expect(stations.get("est-cega").ultimaLeituraEm).toBe(2000);
+    await stations.seen("est-cega", { hadReadings: false }, 3000); // o POST da estação CEGA
+    expect(stations.get("est-cega").ultimaVezEm).toBe(3000); // "viva" pelo POST…
+    expect(stations.get("est-cega").ultimaLeituraEm).toBe(2000); // …mas a última LEITURA não mente
+  });
+
+  it("scanning: boolean grava (última voz do app); não-boolean/ausente é ignorado em silêncio", async () => {
+    await stations.seen("est-scan", { hadReadings: true, scanning: true }, 1000);
+    expect(stations.get("est-scan").scanning).toBe(true);
+    await stations.seen("est-scan", { scanning: false }, 2000);
+    expect(stations.get("est-scan").scanning).toBe(false);
+    await stations.seen("est-scan", { scanning: "sim" }, 3000); // app zoado → ignora
+    expect(stations.get("est-scan").scanning).toBe(false);
+    await stations.seen("est-scan", {}, 4000); // ausente → mantém o último valor reportado
+    expect(stations.get("est-scan").scanning).toBe(false);
+  });
+
+  it("write-behind: os campos novos vão no MESMO write espaçado — a frequência de escrita NÃO sobe", async () => {
+    await stations.seen("est-wb", { hadReadings: false }, 1000); // CREATE grava (durável-primeiro)
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    await stations.seen("est-wb", { hadReadings: true, scanning: true }, 2000); // dentro da janela
+    expect(spy).not.toHaveBeenCalled(); // disco quieto (mesma cadência de antes)…
+    expect(stations.get("est-wb").ultimaLeituraEm).toBe(2000); // …mas o GET (memória) já vê
+    expect(stations.get("est-wb").scanning).toBe(true);
+    await stations.seen("est-wb", { hadReadings: true, scanning: false }, 70_000); // janela vencida
+    expect(spy).toHaveBeenCalledTimes(1); // UM write espaçado, como sempre foi
+    const gravado = JSON.parse(spy.mock.calls[0][1]).find((s) => s.id === "est-wb");
+    expect(gravado.ultimaLeituraEm).toBe(70_000); // os campos pegam a carona
+    expect(gravado.scanning).toBe(false);
+    spy.mockRestore();
+  });
+});
+
 describe("stations — PATCH do operador (validação NO SERVIDOR)", () => {
   it("renomeia e (des)ativa", async () => {
     await stations.seen("est-patch", 1000);

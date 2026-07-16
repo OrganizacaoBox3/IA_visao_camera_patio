@@ -20,8 +20,8 @@ afterAll(() => {
 });
 
 describe("floorplan — default vazio antes de qualquer save", () => {
-  it("get() devolve o vazio { widthM:0, heightM:0, stations:{} } (o front aplica defaults)", () => {
-    expect(floorplan.get()).toEqual({ widthM: 0, heightM: 0, stations: {} });
+  it("get() devolve o vazio com estações e áreas vazias (o front aplica defaults)", () => {
+    expect(floorplan.get()).toEqual({ widthM: 0, heightM: 0, stations: {}, workAreas: [] });
   });
 
   it("persistence() reporta 'json' sem Postgres configurado", () => {
@@ -35,6 +35,7 @@ describe("floorplan — round-trip save → get (fallback JSON)", () => {
       widthM: 40,
       heightM: 25.5,
       stations: { "tc22-a1b2": { x: 3, y: 4 }, "tc22-c3d4": { x: 38.2, y: 20 } },
+      workAreas: [],
     };
     const saved = await floorplan.save(fp);
     expect(saved).toEqual(fp);
@@ -55,17 +56,17 @@ describe("floorplan — round-trip save → get (fallback JSON)", () => {
 describe("floorplan — validação defensiva", () => {
   it("widthM <= 0 ou NaN é rejeitado (badRequest → 400)", async () => {
     for (const bad of [0, -5, Number.NaN, Infinity, "trinta", undefined]) {
-      await expect(floorplan.save({ widthM: bad, heightM: 10, stations: {} })).rejects.toMatchObject(
-        { badRequest: true },
-      );
+      await expect(
+        floorplan.save({ widthM: bad, heightM: 10, stations: {} }),
+      ).rejects.toMatchObject({ badRequest: true });
     }
   });
 
   it("heightM <= 0 ou NaN é rejeitado (badRequest → 400)", async () => {
     for (const bad of [0, -1, Number.NaN, null]) {
-      await expect(floorplan.save({ widthM: 10, heightM: bad, stations: {} })).rejects.toMatchObject(
-        { badRequest: true },
-      );
+      await expect(
+        floorplan.save({ widthM: 10, heightM: bad, stations: {} }),
+      ).rejects.toMatchObject({ badRequest: true });
     }
   });
 
@@ -73,7 +74,12 @@ describe("floorplan — validação defensiva", () => {
     await floorplan.save({ widthM: 12, heightM: 8, stations: { ok: { x: 1, y: 1 } } });
     await expect(floorplan.save({ widthM: 0, heightM: 8, stations: {} })).rejects.toBeTruthy();
     // rollback/anterior intacto: o save inválido lança ANTES de mutar
-    expect(floorplan.get()).toEqual({ widthM: 12, heightM: 8, stations: { ok: { x: 1, y: 1 } } });
+    expect(floorplan.get()).toEqual({
+      widthM: 12,
+      heightM: 8,
+      stations: { ok: { x: 1, y: 1 } },
+      workAreas: [],
+    });
   });
 
   it("estação com x/y não-finito é DESCARTADA (silenciosamente); as boas ficam", async () => {
@@ -103,6 +109,78 @@ describe("floorplan — validação defensiva", () => {
       },
     });
     expect(saved.stations).toEqual({ "tc22-ok": { x: 1, y: 2 } });
+  });
+});
+
+describe("floorplan — áreas de trabalho independentes", () => {
+  it("preserva uma área retangular válida sem encaixar tags nela", async () => {
+    const saved = await floorplan.save({
+      widthM: 5,
+      heightM: 3,
+      stations: {},
+      workAreas: [
+        {
+          id: "mesa-serigrafia",
+          label: "Mesa serigrafia",
+          center: { x: 1.5, y: 2.5 },
+          widthM: 1.2,
+          heightM: 0.8,
+        },
+      ],
+    });
+    expect(saved.workAreas).toEqual([
+      {
+        id: "mesa-serigrafia",
+        label: "Mesa serigrafia",
+        polygon: [
+          { x: 0.9, y: 2.1 },
+          { x: 2.1, y: 2.1 },
+          { x: 2.1, y: 2.9 },
+          { x: 0.9, y: 2.9 },
+        ],
+        center: { x: 1.5, y: 2.5 },
+        widthM: 1.2,
+        heightM: 0.8,
+      },
+    ]);
+  });
+
+  it("recusa o save inteiro quando uma área é inválida, duplicada ou está fora", async () => {
+    const invalid = floorplan.save({
+      widthM: 5,
+      heightM: 3,
+      stations: {},
+      workAreas: [
+        { id: "mesa", label: "Mesa", center: { x: 1, y: 1 }, widthM: 1, heightM: 1 },
+        { id: "mesa", label: "Duplicada", center: { x: 2, y: 2 }, widthM: 1, heightM: 1 },
+        { id: "ruim", label: "Ruim", center: { x: 1, y: 1 }, widthM: 0, heightM: 1 },
+        { id: "fora", label: "Fora", center: { x: 4.8, y: 2 }, widthM: 1, heightM: 1 },
+      ],
+    });
+    await expect(invalid).rejects.toMatchObject({ badRequest: true });
+  });
+
+  it("preserva polígonos métricos e deriva a bbox sem reduzi-los a retângulos", async () => {
+    const polygon = [
+      { x: 1, y: 1 },
+      { x: 4, y: 1 },
+      { x: 3, y: 2.5 },
+      { x: 1, y: 2 },
+    ];
+    const saved = await floorplan.save({
+      widthM: 5,
+      heightM: 3,
+      stations: {},
+      workAreas: [{ id: "mesa-poligonal", label: "Mesa poligonal", polygon }],
+    });
+    expect(saved.workAreas[0]).toMatchObject({
+      id: "mesa-poligonal",
+      label: "Mesa poligonal",
+      polygon,
+      center: { x: 2.5, y: 1.75 },
+      widthM: 3,
+      heightM: 1.5,
+    });
   });
 });
 

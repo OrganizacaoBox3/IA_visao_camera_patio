@@ -44,10 +44,20 @@ function saveFile() {
 async function persist(s) {
   if (!usingPg) return saveFile();
   await db.query(
-    `insert into bt_stations (id,nome,ativo,primeira_vez_em,ultima_vez_em) values ($1,$2,$3,$4,$5)
+    `insert into bt_stations (id,nome,ativo,primeira_vez_em,ultima_vez_em,ultima_leitura_em,scanning)
+     values ($1,$2,$3,$4,$5,$6,$7)
      on conflict (id) do update set nome=excluded.nome, ativo=excluded.ativo,
-       ultima_vez_em=excluded.ultima_vez_em`,
-    [s.id, s.nome, s.ativo, s.primeiraVezEm ?? null, s.ultimaVezEm ?? null],
+       ultima_vez_em=excluded.ultima_vez_em, ultima_leitura_em=excluded.ultima_leitura_em,
+       scanning=excluded.scanning`,
+    [
+      s.id,
+      s.nome,
+      s.ativo,
+      s.primeiraVezEm ?? null,
+      s.ultimaVezEm ?? null,
+      s.ultimaLeituraEm ?? null,
+      s.scanning ?? null,
+    ],
   );
 }
 async function persistDelete(id) {
@@ -59,7 +69,8 @@ async function init() {
   if (db.configured()) {
     try {
       const r = await db.query(
-        `select id, nome, ativo, primeira_vez_em as "primeiraVezEm", ultima_vez_em as "ultimaVezEm"
+        `select id, nome, ativo, primeira_vez_em as "primeiraVezEm", ultima_vez_em as "ultimaVezEm",
+                ultima_leitura_em as "ultimaLeituraEm", scanning
          from bt_stations order by primeira_vez_em asc nulls first`,
       );
       list = r.rows;
@@ -84,13 +95,30 @@ async function init() {
  * Desconhecida  → registra PENDENTE (nome = o próprio id) com primeiraVezEm/ultimaVezEm.
  * Já conhecida  → só carimba ultimaVezEm (nome/ativo do operador nunca são sobrescritos).
  * id inválido   → { error } (nunca lança; quem chama trata como acessório).
+ *
+ * `meta` (ADITIVO, detecção de estação CEGA — causa C1/bug B6, o coletor que postou 22 h de
+ * `readings: []` sem alarme porque o scan morreu com a tela apagada):
+ *   • hadReadings: true ⇒ este POST trouxe ≥1 leitura → carimba `ultimaLeituraEm` (null = nunca);
+ *   • scanning: boolean ⇒ último estado de scan reportado pelo app (null = app não manda).
+ * Não-boolean é ignorado em silêncio (retrocompat: payload antigo segue bit-idêntico).
+ * RETROCOMPAT de assinatura: `seen(id, now)` (número no 2º arg) era a forma antiga — segue aceita.
  */
-async function seen(id, now = Date.now()) {
+async function seen(id, meta = {}, now = Date.now()) {
+  if (typeof meta === "number") {
+    now = meta; // assinatura antiga: seen(id, now)
+    meta = {};
+  }
   const key = norm(id);
   if (!ID_RE.test(key)) return { error: "id de estação inválido" };
+  const hadReadings = meta.hadReadings === true;
+  const scanning = typeof meta.scanning === "boolean" ? meta.scanning : undefined;
   const existente = list.find((s) => s.id === key);
   if (existente) {
     existente.ultimaVezEm = now; // write-behind: a memória já está fresca p/ o GET
+    if (hadReadings) existente.ultimaLeituraEm = now;
+    else if (existente.ultimaLeituraEm === undefined) existente.ultimaLeituraEm = null; // registro pré-campo ganha o campo
+    if (scanning !== undefined) existente.scanning = scanning;
+    else if (existente.scanning === undefined) existente.scanning = null;
     // Gravação ESPAÇADA (SEEN_PERSIST_MS), BEST-EFFORT: o `ultimaVezEm` é barato e reconstruído a
     // cada leitura — uma falha aqui não vira "persistência falsa" (o dado JÁ existe no disco), então
     // só loga e retenta no próximo tick, sem derrubar a leitura. `lastPersist` só avança se gravou.
@@ -107,7 +135,15 @@ async function seen(id, now = Date.now()) {
   // Estação NOVA = um CREATE: durável-primeiro com rollback. Sem isso, uma falha de escrita deixaria
   // uma estação-fantasma na tela /estacoes que sumiria no restart. Rollback ⇒ ela reaparece no próximo
   // POST de leitura (a estação posta a ~1–2 Hz). A rota (bt-station.js) é fail-safe e ignora o retorno.
-  const s = { id: key, nome: key, ativo: true, primeiraVezEm: now, ultimaVezEm: now };
+  const s = {
+    id: key,
+    nome: key,
+    ativo: true,
+    primeiraVezEm: now,
+    ultimaVezEm: now,
+    ultimaLeituraEm: hadReadings ? now : null, // null = NUNCA trouxe leitura (candidata a CEGA)
+    scanning: scanning ?? null, // null = o app (ainda) não reporta o estado do scan
+  };
   list.push(s);
   try {
     await persist(s);

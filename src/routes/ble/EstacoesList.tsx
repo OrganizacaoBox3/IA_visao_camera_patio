@@ -37,6 +37,22 @@ export function estacaoViva(s: BtStation, agora: number): boolean {
   return agora - s.ultimaVezEm <= STALE_MS;
 }
 
+// Janela da CEGUEIRA: estação viva pelo POST que passa 2 min sem trazer NENHUMA leitura. O caso
+// real (bug B6): 22 h postando `readings: []` sem alarme — a tela apagada do Android mata o scan
+// sem filtro, mas o POST continua, e "viva" pelo `ultimaVezEm` vira mentira.
+export const CEGA_MS = 120_000;
+
+/**
+ * Estação CEGA = viva pelo POST (`ultimaVezEm` fresco) MAS sem ler tags: o app reporta
+ * `scanning === false`, OU a última leitura real (`ultimaLeituraEm`) está ausente/mais velha que
+ * CEGA_MS. Estação morta NÃO é cega — "sem sinal" continua soberano. PURA (tela + teste).
+ */
+export function estacaoCega(s: BtStation, agora: number): boolean {
+  if (!estacaoViva(s, agora)) return false;
+  if (s.scanning === false) return true;
+  return s.ultimaLeituraEm == null || agora - s.ultimaLeituraEm > CEGA_MS;
+}
+
 export type EstacoesListProps = {
   rows: BtStation[];
   /** Relógio do container (tick de 5 s) — deriva VIVA/SEM SINAL sem re-render próprio. */
@@ -101,6 +117,7 @@ export function EstacoesList({
         <tbody>
           {rows.map((s) => {
             const viva = estacaoViva(s, agora);
+            const cega = estacaoCega(s, agora); // viva pelo POST, mas sem ler tags (scan morto)
             const pendente = s.nome === s.id; // ainda com o id técnico como nome
             const editando = canConfigure && editId === s.id;
             return (
@@ -129,7 +146,26 @@ export function EstacoesList({
                   )}
                 </td>
                 <td className="whitespace-nowrap">
-                  <Badge tone={viva ? "ok" : "warn"}>{viva ? "viva" : "sem sinal"}</Badge>
+                  {/* CEGA (going-gray: a cor nunca fala sozinha — o texto diz o que fazer): a
+                      estação posta (viva pelo POST) mas o scan morreu. "sem sinal" segue soberano
+                      quando o POST parou; "viva" só quando de fato traz leituras. */}
+                  {cega ? (
+                    <div className="flex max-w-[36ch] flex-col gap-0.5 whitespace-normal">
+                      <span>
+                        <Badge tone="warn">cega</Badge>
+                      </span>
+                      <span className="text-micro text-warn">
+                        {s.scanning === false
+                          ? "postando, mas o app reporta scan desligado"
+                          : s.ultimaLeituraEm
+                            ? `postando, sem ler tags ${haQuantoTempo(s.ultimaLeituraEm, agora)}`
+                            : "postando, sem nenhuma leitura de tag"}{" "}
+                        — verifique a tela/scan do aparelho
+                      </span>
+                    </div>
+                  ) : (
+                    <Badge tone={viva ? "ok" : "warn"}>{viva ? "viva" : "sem sinal"}</Badge>
+                  )}
                 </td>
                 <td className="whitespace-nowrap text-label text-text-dim">
                   {haQuantoTempo(s.ultimaVezEm, agora)}

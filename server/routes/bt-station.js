@@ -59,8 +59,15 @@ async function handle(req, res, ctx) {
     // Se já existe, só carimba `ultimaVezEm` (o nome/ativo dele nunca são sobrescritos).
     // FAIL-SAFE: o registro é ACESSÓRIO — a LEITURA é o que importa. Falha no registry (Postgres
     // fora, disco cheio, id fora do formato) NUNCA derruba o POST; loga e segue.
+    // ADITIVO (detecção de estação CEGA — causa C1/bug B6: 22 h postando `readings: []` sem alarme):
+    //   • hadReadings = este POST trouxe ≥1 leitura (distingue "viva" de "postando vazio");
+    //   • scanning    = estado do scan reportado pelo app (só se boolean; inválido/ausente é
+    //     ignorado em silêncio — payload antigo segue bit-idêntico).
     try {
-      await stations.seen(body.stationId);
+      await stations.seen(body.stationId, {
+        hadReadings: Array.isArray(body.readings) && body.readings.length > 0,
+        ...(typeof body.scanning === "boolean" ? { scanning: body.scanning } : {}),
+      });
     } catch (e) {
       console.error("[bt-stations] auto-descoberta falhou (leitura segue):", e && e.message);
     }

@@ -12,6 +12,22 @@
 > (tag 1Hz→2Hz, ESP32-instrumento, caminhada anotada) **continuam valendo** e seguem nas tasks abaixo;
 > quem reabrir o arco parte daqui + da tag.
 
+> **📌 NOTA (2026-07-15) — requisitos de PRODUTO da localização 2D registrados.** O dono especificou
+> o alvo da trilha `/planta-ble` (50×50 m, 1–3 receptores Android fixos, 10 pessoas com beacon
+> DX-CP27 no crachá, precisão-alvo 1–3 m, estabilidade de parado, sem saltos, limites da planta,
+> estados parado/andando/incerto). Requisitos verbatim + análise de atendimento + riscos físicos
+> declarados em **`requisitos-localizacao-planta-2d.md`** (doc vivo próprio). É trilha SEM câmera
+> (identidade = MAC do crachá) — o problema é só ONDE, não QUEM.
+
+> **📌 NOTA (2026-07-15, mais tarde) — guia externo do rastreamento HÍBRIDO câmera+BLE registrado.**
+> O dono trouxe um guia de implementação completo (câmera = fonte de X,Y; BLE = identidade/
+> redundância; piloto de 100 m²; marcador visual no crachá como Estratégia B). Verbatim + parecer da
+> casa em **`guia-hibrido-camera-ble.md`** — ~80% converge com o já medido/decidido (ADR-015 portal,
+> fingerprint, QUEM×ONDE); novidades: marcador visual (ZXing já existe), constantes do filtro de
+> movimento, e a hipótese de advertising 100–200 ms **a verificar** (P-G1 — se a DX-CP27 for
+> configurável, reescreve a lei do n_eff). Gap estrutural exposto: **não há referencial global
+> câmera→planta** (P-G2). Conflito a decidir: histórico de trajetórias × ADR-002 (P-G4).
+
 ## 🔭 VIRADA CONCEITUAL — o objetivo do cliente (2º parecer do especialista, 2026-07-11)
 
 O cliente quer saber **se o operador está trabalhando** (ocupação/ociosidade/conformidade de

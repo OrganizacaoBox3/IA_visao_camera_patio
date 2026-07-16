@@ -1,13 +1,40 @@
-# tc22-scanner — estação BLE do TC22 (identidade aumentada)
+# tc22-scanner — estação BLE (qualquer Android ≥8; TC22, S24, etc.)
 
-App Android mínimo que roda no coletor **Zebra TC22** (Android 14): varre anúncios BLE e mostra/loga as
-tags do projeto (família `48:87:2D` / nome `CP*`). É a **antena real** da fusão tag↔câmera
-(`docs/analises/tags-bluetooth/`). Passo atual: **provar que o coletor acha todas as tags** (logca `BTSCAN`).
-Responsabilidade única: varrer + exibir. (Reporte HTTP ao hub = próximo passo.)
+App Android mínimo que transforma um celular fixo na **antena/estação BLE** do projeto: varre os
+anúncios das tags (família `48:87:2D` / nome `CP*`) e POSTa `{stationId, scanning, readings:[…]}`
+ao hub a cada ~500 ms. É a fonte de dados da Planta BLE e da fusão tag↔câmera.
+
+## Instalar num aparelho NOVO (o caminho rápido)
+
+**APK pronto e assinado**: `build/btscan-estacao-2026-07-15.apk` (idêntico a `build/aligned.apk`).
+
+1. **Com PC**: `adb install -r build/aligned.apk` (mesma assinatura — instala por cima sem perder
+   config). **Sem PC**: mande o APK por Drive/WhatsApp, toque nele e aceite "fontes desconhecidas".
+2. Abra o app 1× e conceda as permissões (Bluetooth/Localização). Ele acha o hub sozinho na LAN
+   (broadcast UDP :41234); o id da estação nasce único (`tc22-<4 chars do ANDROID_ID>`).
+3. **Config recomendada do aparelho-estação** (fixo, na tomada):
+   - `adb shell settings put global stay_on_while_plugged_in 7` (tela nunca apaga carregando) —
+     defesa em profundidade; o scan FILTRADO já sobrevive à tela apagada (ver abaixo);
+   - desativar otimização de bateria para o app (Configurações → Bateria);
+   - Wi-Fi fixo na rede do hub.
+4. Confirme que está lendo: `adb logcat -s BTSCAN` → linhas `TAG <mac> <nome> <rssi>`; e a estação
+   aparece na aba Estações da central (auto-descoberta no 1º POST — batize o nome por lá).
+
+## O que este build tem (2026-07-15 — estabilidade C1)
+
+- **Scan SEMPRE filtrado** (`buildScanFilters`): o Android ≥8.1 suprime scan não-filtrado com a
+  tela apagada — era a causa das estações "cegas". Filtros auditados NO AR contra as DX-CP27:
+  service UUID **0xFDA5** (frame proprietário DX) + manufacturer data **0x4458** ("DX", frame
+  iBeacon deles) + 0x004C/0xFEAA como futuro-proof. **Se reconfigurar o formato de advertising das
+  tags, re-audite com o log `RAW`** (o app despeja o advertisement cru por tag a cada ~10 s).
+- **Campo `scanning` no POST**: o hub distingue "estação viva" de "estação CEGA" (postando sem ler)
+  e a aba Estações alarma.
+- Watchdog de scan mudo + `FLAG_KEEP_SCREEN_ON` seguem como defesa em profundidade.
 
 ## Build + deploy (sem gradle — offline, evita o conflito gradle 7.5.1 × JDK 21)
 ```bash
-bash build.sh
+bash build.sh                 # build + instala no device conectado
+bash build.sh --build-only    # só gera build/aligned.apk
 ```
 Faz: javac (`-XDstringConcat=inline`) → **d8 do build-tools 36** (o do 34 tem bug de R8 com JDK 21;
 **sem** `--no-desugaring` — o d8 precisa desugarar o acesso nestmate) → aapt2 link → jar (add dex) →

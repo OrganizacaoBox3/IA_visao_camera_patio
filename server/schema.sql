@@ -124,6 +124,14 @@ create table if not exists bt_stations (
   primeira_vez_em bigint,         -- epoch-ms do 1º POST visto (auto-descoberta)
   ultima_vez_em bigint            -- epoch-ms do último POST (grava espaçado; memória é a fonte viva)
 );
+-- Migração ADITIVA (mesmo padrão dos carimbos de turno abaixo): `create table if not exists` NÃO
+-- adiciona coluna a tabela já criada — um hub que rodou antes da detecção de estação CEGA precisa
+-- do `add column if not exists` (idempotente; coluna NOVA e NULA, nada existente é alterado).
+-- Estação CEGA (causa C1/bug B6): posta {readings: []} mas o scan morreu — `ultima_vez_em` sozinho
+-- não distingue "viva" de "cega". Persistir `ultima_leitura_em` preserva o "sem ler tags há 22 h"
+-- através de um restart do hub. Ambas gravam no MESMO write-behind espaçado do ultima_vez_em.
+alter table bt_stations add column if not exists ultima_leitura_em bigint; -- epoch-ms do último POST com ≥1 leitura (null = nunca)
+alter table bt_stations add column if not exists scanning boolean;         -- último estado de scan reportado pelo app (null = app não informa)
 
 -- ── PLANTA BAIXA BLE (a geometria da instalação SEM câmera) — singleton jsonb ─────────────────
 -- A tela "Planta BLE" precisa de uma geometria que NÃO vem de câmera (na fábrica ainda não há

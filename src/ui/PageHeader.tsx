@@ -24,12 +24,13 @@ export function PageHeader({
 }) {
   return (
     <header className={cx(HEAD, className)}>
-      <div className="flex flex-col gap-px min-w-0">
+      <div className="flex min-w-0 flex-col gap-px max-[640px]:basis-full max-[640px]:shrink-0">
         <h1 className="m-0 text-[14px] font-semibold text-text">{title}</h1>
         {subtitle && <p className="m-0 text-[12px] text-text-muted">{subtitle}</p>}
       </div>
-      <div className="flex-1" />
-      {children}
+      {Boolean(children) && (
+        <div className="ml-auto flex items-center gap-3 max-[640px]:gap-2">{children}</div>
+      )}
     </header>
   );
 }

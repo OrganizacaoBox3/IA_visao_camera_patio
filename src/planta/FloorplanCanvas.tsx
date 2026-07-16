@@ -9,9 +9,16 @@
 // SVG de edição casa handle↔desenho ao pixel, e o gesto de arraste chega ao hook. Fora do modo de
 // edição, não recebe children nem handlers — segue o mapa read-only de sempre.
 import { useEffect, useRef, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { drawPolygonEditor } from "../camera/draw";
 import { worldToCanvas, type TopdownTransform } from "../fusion/topdown";
 import type { FloorplanView } from "../fusion/floorplan";
-import { drawFloorplan, floorplanBounds } from "./drawFloorplan";
+import type { EditablePolygon, EditorOverlay, PolygonDraft } from "../spatial/usePolygonEditor";
+import {
+  drawFloorplan,
+  floorplanBounds,
+  type WorkAreaMarker,
+  type ZoneMarker,
+} from "./drawFloorplan";
 
 // A margem do fit — a MESMA constante para desenho e para o transform publicado (senão os handles
 // não casariam com o retângulo desenhado). 28 px: o valor histórico do canvas.
@@ -19,10 +26,14 @@ const MARGIN_PX = 28;
 
 export function FloorplanCanvas({
   view,
+  zones,
+  workAreas,
   className,
   ariaLabel,
   containerRef,
   children,
+  editing = false,
+  polygonEditor,
   onTransform,
   onPointerDown,
   onPointerMove,
@@ -30,6 +41,10 @@ export function FloorplanCanvas({
   onPointerLeave,
 }: {
   view: FloorplanView;
+  /** Zonas de trabalho (survey com coordenada) + ocupantes — ADITIVO: ausente = mapa de sempre. */
+  zones?: readonly ZoneMarker[];
+  /** Geometria física independente das zonas/fingerprints; nunca reposiciona uma tag. */
+  workAreas?: readonly WorkAreaMarker[];
   /** Classes do CONTÊINER (o layout da página decide a altura: flex-1 = dominante). */
   className?: string;
   ariaLabel: string;
@@ -37,6 +52,14 @@ export function FloorplanCanvas({
   containerRef?: RefObject<HTMLDivElement | null>;
   /** Sobreposto ao canvas dentro do contêiner (a camada de edição). */
   children?: ReactNode;
+  /** Configuração: reduz rótulos do canvas; a camada SVG já identifica as antenas editáveis. */
+  editing?: boolean;
+  /** Overlay do motor poligonal compartilhado; presente somente na aba Áreas. */
+  polygonEditor?: {
+    items: readonly EditablePolygon[];
+    draftRef: RefObject<PolygonDraft | null>;
+    overlayRef: RefObject<EditorOverlay>;
+  };
   /** Publica o transform ATUAL + tamanho a cada render/resize — a página o repassa à SVG e ao hook. */
   onTransform?: (tf: TopdownTransform, size: { w: number; h: number }) => void;
   onPointerDown?: (e: PointerEvent<HTMLDivElement>) => void;
@@ -57,7 +80,7 @@ export function FloorplanCanvas({
     if (!canvas || !wrap) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const render = () => {
+    const render = (publishTransform = false) => {
       const dpr = window.devicePixelRatio || 1;
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
@@ -68,14 +91,41 @@ export function FloorplanCanvas({
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const tf = worldToCanvas(floorplanBounds(view), { w, h }, MARGIN_PX);
-      drawFloorplan(ctx, view, tf, { w, h });
-      onTransformRef.current?.(tf, { w, h }); // MESMO tf do desenho → a SVG casa ao pixel
+      drawFloorplan(ctx, view, tf, { w, h }, zones, { editing, workAreas });
+      if (polygonEditor && view.widthM > 0 && view.heightM > 0) {
+        const topLeft = tf.project({ x: 0, y: 0 });
+        const bottomRight = tf.project({ x: view.widthM, y: view.heightM });
+        drawPolygonEditor(
+          ctx,
+          {
+            x: topLeft.x,
+            y: topLeft.y,
+            w: bottomRight.x - topLeft.x,
+            h: bottomRight.y - topLeft.y,
+          },
+          polygonEditor.items,
+          polygonEditor.draftRef.current,
+          polygonEditor.overlayRef.current,
+        );
+      }
+      if (publishTransform) onTransformRef.current?.(tf, { w, h });
     };
-    render();
-    const ro = new ResizeObserver(render);
+    render(true);
+    const ro = new ResizeObserver(() => render(true));
     ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [view, wrapRef]);
+    let frame = 0;
+    if (polygonEditor) {
+      const animate = () => {
+        render(false);
+        frame = window.requestAnimationFrame(animate);
+      };
+      frame = window.requestAnimationFrame(animate);
+    }
+    return () => {
+      ro.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [view, zones, workAreas, wrapRef, editing, polygonEditor]);
 
   return (
     <div
