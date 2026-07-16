@@ -8,18 +8,14 @@ import {
 } from "react";
 import {
   BarChart3,
-  Bluetooth,
   CalendarClock,
   Cctv,
   ChevronDown,
   CircleUser,
   LayoutDashboard,
   LogOut,
-  Map,
-  MapPin,
   PanelLeftClose,
   PanelLeftOpen,
-  PlayCircle,
   Search,
   ShieldCheck,
   Users,
@@ -229,22 +225,14 @@ export function AppShell() {
       id: "op",
       title: "Operação",
       items: [
-        // HOME: o Mapa (estilo AirTag) é a tela principal — última localização de cada tag.
-        { to: "/", end: true, icon: MapPin, label: "Mapa" },
-        // Central (câmeras ao vivo): terminologia CANÔNICA única — nav, título do dashboard
-        // e o 404 dizem "Central" (a rota segue /monitoramento). Rótulo curto já cabe no
-        // bottom-nav, então dispensa `short`.
+        // HOME: a Central (câmeras ao vivo) — "/" redireciona p/ /monitoramento (url canônica).
+        // Terminologia CANÔNICA única — nav, título do dashboard e o 404 dizem "Central".
+        // Rótulo curto já cabe no bottom-nav, então dispensa `short`. (Os itens BLE — Mapa/BLE/
+        // Planta — migraram para o repo mvp_trilateracao_BLE; ADR-018.)
         { to: "/monitoramento", icon: LayoutDashboard, label: "Central" },
         // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
         // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
         { to: "/cameras", icon: Video, label: "Câmeras" },
-        // BLE: Tags e Estações numa tela só (abas). Eram DOIS itens em DOIS grupos com DOIS gates —
-        // mesmo domínio, partido ao meio. "A estação está viva?" é a resposta de "por que a tag
-        // sumiu?": é diagnóstico, não configuração. spec-arquitetura-informacao §3.
-        { to: "/tags-ble", icon: Bluetooth, label: "BLE" },
-        // Planta BLE: mapa 2D do local por Bluetooth (sem câmera) — visível a TODOS (o operador vê o
-        // mapa); a EDIÇÃO do setup é gateada dentro da tela por canConfigure. spec Planta BLE.
-        { to: "/planta-ble", icon: Map, label: "Planta" },
         // Relatório: o histórico E a saúde do alarme (a faixa do topo, que precede a leitura — se o
         // alarme está inundando, todo número abaixo é suspeito). Absorveu a /alarmes-saude (§2).
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
@@ -260,10 +248,6 @@ export function AppShell() {
         // Turnos de trabalho (spec-turnos-por-zona F1): cadastro global, mesmo RBAC de
         // configuração (canConfigure) — a leitura pelo relatório/overlay não passa por aqui.
         ...(canConfigure ? [{ to: "/turnos", icon: CalendarClock, label: "Turnos" }] : []),
-        // Bancada de simulação (docs/cientifica/simulador.md) — ferramenta de engenharia.
-        // Rótulo "Simulação": o antigo "Replay (sim)" não tinha interseção lexical nenhuma com o
-        // h1 da página ("Bancada de simulação") — o operador não achava pelo nome.
-        ...(canConfigure ? [{ to: "/replay", icon: PlayCircle, label: "Simulação" }] : []),
         ...(user.papel === "superadmin"
           ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
           : []),

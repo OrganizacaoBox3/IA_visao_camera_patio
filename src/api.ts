@@ -300,31 +300,17 @@ export const saveCamConfig = (cameraId: string, config: CameraCfg) =>
   apiPut<CameraCfg>(`/api/camconfig/${encodeURIComponent(cameraId)}`, { config });
 
 // ── CALIBRAÇÃO de homografia (px normalizado 0..1 ↔ metros) — COMPARTILHADA, por câmera ──
-// Mede distância real no chão em metros e projeta o pé da pessoa no plano (base da fusão de tag
-// BLE — docs/analises/tags-bluetooth/00-avaliacao-e-plano.md §3). H é computada no cliente por
-// src/vision/homography.ts; o hub valida (≥4 pontos, matriz 3×3) e persiste. SÓ números (LGPD).
+// Mede distância real no chão em metros e projeta o pé da pessoa no plano. H é computada no
+// cliente por src/vision/homography.ts; o hub valida (≥4 pontos, matriz 3×3) e persiste.
+// SÓ números (LGPD). (Os campos BLE — mac/station/stations/refTag — migraram com a fusão para
+// o repo mvp_trilateracao_BLE; ADR-018. O contrato do hub é aditivo: removê-los aqui não quebra.)
 import type { Matrix3, Vec2 } from "./vision/homography";
 export type { Matrix3, Vec2 } from "./vision/homography";
-// mac (opcional): MAC MAIÚSCULO de uma tag BLE ÂNCORA fixada NESTE vértice (posição conhecida) —
-// base p/ calibrar distância/triangulação depois. Aditivo; ausente = vértice sem âncora. SÓ string.
-export type CalibrationPoint = { px: Vec2; world: Vec2; mac?: string };
-// station (opcional): ponto de imagem (normalizado 0..1) do chão onde a estação BLE fica — origem
-// da correlação RSSI×distância da fusão tag↔pessoa. Ausente = comportamento atual (aditivo). SÓ números.
-// stations (opcional, MULTI-ANTENA): o ponto de chão de CADA estação, indexado pelo `stationId` que
-// ela carimba nas leituras — a chave que casa o RSSI da fonte com a geometria da fonte no motor.
-// `station` (singular) segue como o ponto da estação PRINCIPAL (retrocompat; o cliente mantém os dois
-// em sincronia — camera/station-points.ts). Aditivo em TODAS as camadas: o tipo aqui, a allowlist do
-// hub (server/camcfg.js cleanCalibration) e o motor. Sem o campo declarado nos três, o hub DESCARTA
-// silenciosamente o que a UI salvou — foi exatamente o que aconteceu até 2026-07-13.
-// refTag (opcional): tag FIXA num ponto conhecido do chão — âncora p/ heartbeat/drift/RSSI@1m.
-// `mac` = MAC maiúsculo (o mesmo das leituras BLE); `px` = ponto de imagem (0..1). Aditivo. SÓ números/strings.
+export type CalibrationPoint = { px: Vec2; world: Vec2 };
 export type CameraCalibration = {
   points: CalibrationPoint[];
   H: Matrix3;
   updatedAt: number;
-  station?: Vec2;
-  stations?: Record<string, Vec2>;
-  refTag?: { mac: string; px: Vec2 };
 };
 // GET /api/calibration/:cameraId → CameraCalibration | null (null = nunca calibrada). Auth: autenticado.
 export const getCalibration = (cameraId: string) =>
@@ -334,132 +320,8 @@ export const getCalibration = (cameraId: string) =>
 export const saveCalibration = (cameraId: string, calibration: CameraCalibration) =>
   apiPut<CameraCalibration>(`/api/calibration/${encodeURIComponent(cameraId)}`, { calibration });
 
-// ── Leituras BLE ao vivo (identidade aumentada por tag — docs/analises/tags-bluetooth/00...) ──────
-// A estação varre BLE e reporta ao hub; o hub enriquece com o rótulo cadastrado e RELAYA aos
-// painéis via socket `bt-readings`. Este GET é só a SEMENTE (snapshot do que dá pra ver agora)
-// para um painel que abre depois — o vivo vem pelo socket. SÓ metadados/RSSI (LGPD): efêmero,
-// nunca persistido. `rotulo` = nome da pessoa/tag cadastrada, ou null se a tag não é conhecida.
-export type BtReading = {
-  mac: string;
-  rotulo: string | null;
-  rssi: number;
-  stationId?: string;
-  /** Quando o hub recebeu a leitura. Aditivo para clientes/hubs antigos. */
-  ts?: number;
-  /** Quando o rádio mediu o RSSI; identifica a medição física para deduplicação. */
-  measuredAt?: number;
-};
-// GET /api/bt/readings → BtReading[] (as tags visíveis agora). Auth: qualquer autenticado.
-// COLAPSADO por MAC (a estação mais fresca vence): 1 leitura por tag — bom para "quem está visível".
-export const getBtReadings = () => apiGet<BtReading[]>("/api/bt/readings");
-// GET /api/bt/readings?all=1 → BtReading[] com UMA linha por (estação, tag): preserva o RSSI de CADA
-// estação para a MESMA tag. É o que a Planta BLE (multilateração X,Y) precisa — o colapsado acima
-// jogaria fora todas as antenas menos uma. Mesma efemeridade/LGPD do getBtReadings.
-export const getBtReadingsAll = () => apiGet<BtReading[]>("/api/bt/readings?all=1");
-
-// ── Última localização por tag (estilo AirTag) — mapa OpenStreetMap ──────────────────────────
-// O TC22 é MÓVEL: a última localização de cada tag = onde o celular estava quando a viu por
-// último (lat/lon + precisão + quando). SÓ metadados/coordenadas (LGPD): nenhum frame. `rotulo` =
-// nome cadastrado ou null; `acc` = raio de precisão em metros (ou null); `ts` = epoch-ms da leitura.
-// A página de mapa usa POLLING deste GET (o socket `bt-locations` saiu na faxina ADR-016 —
-// era emitido e jamais consumido).
-export type TagLocation = {
-  mac: string;
-  rotulo: string | null;
-  lat: number;
-  lon: number;
-  acc: number | null;
-  ts: number;
-};
-// GET /api/bt/locations → TagLocation[] (última localização por tag). Auth: qualquer autenticado.
-export const getBtLocations = () => apiGet<TagLocation[]>("/api/bt/locations");
-
-// ── CADASTRO de tags (definir QUEM é a tag: rótulo/pessoa por nome do BT/MAC) ──────────────────
-// A estação vê a tag pelo MAC/nome; o cadastro liga isso a um rótulo (a pessoa). Persistido (config).
-// Auth de escrita: perfil de configuração (engenharia/superadmin) — coerente com câmeras/zonas.
-export type BtTag = {
-  id: string;
-  btName: string;
-  rotulo: string;
-  ativo: boolean;
-  criadoEm: number;
-};
-export const getBtTags = () => apiGet<BtTag[]>("/api/bt-tags");
-export const createBtTag = (btName: string, rotulo: string) =>
-  apiSend<BtTag>("POST", "/api/bt-tags", { btName, rotulo });
-export const updateBtTag = (
-  id: string,
-  patch: { rotulo?: string; ativo?: boolean; btName?: string },
-) => apiSend<BtTag>("PATCH", `/api/bt-tags/${encodeURIComponent(id)}`, patch);
-
-// ── REGISTRO de estações BLE (os celulares/coletores que varrem o BLE) ─────────────────────────
-// A estação NÃO se cadastra por formulário: ela NASCE no hub por AUTO-DESCOBERTA, no primeiro
-// POST /api/bt/reading (server/bt/stations.js → seen), como PENDENTE (nome = o próprio id técnico).
-// Por isso não existe `createBtStation`: aqui só se BATIZA (nome amigável), (des)ativa e remove.
-// `ultimaVezEm` é o carimbo do último POST — a UI deriva VIVA/SEM SINAL dele (mesma janela de
-// staleness das leituras). Validação (id/nome) mora no SERVIDOR; o client só transporta o erro.
-// GET: qualquer autenticado (a saúde/calibração precisam do nome); escrita: canConfigure.
-export type BtStation = {
-  id: string; // o stationId que o device manda ([a-zA-Z0-9_-]{1,32})
-  nome: string; // rótulo amigável; == id enquanto pendente de batismo
-  ativo: boolean;
-  primeiraVezEm: number;
-  ultimaVezEm: number;
-  // ADITIVOS (detecção de estação CEGA — posta mas o scan morreu; causa C1/bug B6). Opcionais:
-  // registro anterior ao campo não os tem. A UI deriva o estado "cega" deles (EstacoesList).
-  ultimaLeituraEm?: number | null; // ts do último POST com ≥1 leitura; null/ausente = nunca
-  scanning?: boolean | null; // último estado de scan reportado pelo app; null/ausente = app não manda
-};
-export const getBtStations = () => apiGet<BtStation[]>("/api/bt-stations");
-export const updateBtStation = (id: string, patch: { nome?: string; ativo?: boolean }) =>
-  apiSend<BtStation>("PATCH", `/api/bt-stations/${encodeURIComponent(id)}`, patch);
-export const deleteBtStation = (id: string) =>
-  apiSend<{ ok: true }>("DELETE", `/api/bt-stations/${encodeURIComponent(id)}`);
-
-// ── PLANTA BAIXA (floorplan) — a geometria da instalação SEM câmera ────────────────────────────
-// A tela "Planta BLE" precisa de uma geometria que NÃO vem de câmera nenhuma (na fábrica ainda não
-// há câmeras). O operador informa as dimensões do local (metros) e a posição X,Y (metros) de cada
-// estação/antena; as tags aparecem por multilateração. Config GLOBAL (uma planta por instalação),
-// persistida no hub (server/bt/floorplan.js), SÓ números (LGPD). `stations` indexa pelo mesmo
-// `stationId` do registro/leituras. widthM=0 (default) = "nunca configurada" → a UI pede o setup.
-export type FloorplanWorkArea = {
-  id: string;
-  label: string;
-  /** Fonte da verdade geométrica, em metros da planta. */
-  polygon: Vec2[];
-  /** Bbox derivada mantida no contrato para clientes/arquivos retangulares legados. */
-  center: Vec2;
-  widthM: number;
-  heightM: number;
-};
-export type Floorplan = {
-  widthM: number;
-  heightM: number;
-  stations: Record<string, Vec2>;
-  /** Geometria física independente da classificação por fingerprint. */
-  workAreas?: FloorplanWorkArea[];
-};
-// GET /api/floorplan → Floorplan (widthM:0 quando nunca salva). Auth: qualquer autenticado.
-export const getFloorplan = () => apiGet<Floorplan | null>("/api/floorplan");
-// PUT /api/floorplan {floorplan} → valida no hub e persiste; responde a planta salva. Auth: canConfigure.
-export const saveFloorplan = (floorplan: Floorplan) =>
-  apiPut<Floorplan>("/api/floorplan", { floorplan });
-
-// ── FINGERPRINTS de RSSI (survey de localização por assinatura) ─────────────────────────────────
-// Cada fingerprint é a ASSINATURA RSSI das antenas num ponto conhecido (o operador encosta tags no
-// ponto e captura). O classificador (src/fusion/fingerprint.ts) casa o vivo contra o banco → zona +
-// confiança. Persistido no hub (server/bt/fingerprints.js), SÓ números/metadado (LGPD). O id é
-// gerado no server; o front manda {label, x?, y?, vec, createdAt}.
-import type { Fingerprint } from "./fusion/fingerprint";
-export type { Fingerprint } from "./fusion/fingerprint";
-// GET /api/fingerprints → Fingerprint[] (o survey atual; [] se nunca salvo). Auth: qualquer autenticado.
-export const getFingerprints = () => apiGet<Fingerprint[]>("/api/fingerprints");
-// POST /api/fingerprints {fingerprint} → valida, gera id, persiste; responde o item salvo. Auth: canConfigure.
-export const saveFingerprint = (fp: Omit<Fingerprint, "id">) =>
-  apiSend<Fingerprint>("POST", "/api/fingerprints", { fingerprint: fp });
-// DELETE /api/fingerprints/:id → remove um ponto do survey. Auth: canConfigure.
-export const deleteFingerprint = (id: string) =>
-  apiSend<{ ok: true }>("DELETE", `/api/fingerprints/${encodeURIComponent(id)}`);
+// (A superfície BLE — BtReading/getBtReadings*/TagLocation/BtTag/BtStation/Floorplan/
+//  Fingerprint — migrou para o repo mvp_trilateracao_BLE; ADR-018.)
 
 // ── TURNOS de trabalho (cadastro GLOBAL — spec-turnos-por-zona F1) ────────────────────────────
 // Fonte única do "quando a área deveria estar trabalhando". A VALIDAÇÃO DE NEGÓCIO mora no
