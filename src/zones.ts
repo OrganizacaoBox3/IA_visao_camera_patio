@@ -8,7 +8,6 @@ import { activityForLabel } from "./processors/atividade";
 import { OBJECT_KEYS } from "./objects/catalog";
 import { getCameraCfg } from "./cameraConfig";
 import { getZones as apiGetZones, saveZones as apiSaveZones } from "./api";
-import { pointInPolygon } from "./fusion/floor-polygon";
 import { anySet, containsNorm, createMask, type Mask } from "./zoneMask";
 
 // "exclusao" é um modo de SUPRESSÃO: não produz indicador nenhum — só MASCARA a área para
@@ -76,12 +75,42 @@ export const PRESENCA_ALERT_PRESETS_MS = [5_000, 10_000, 30_000, 60_000, 300_000
 export const DEFAULT_PRESENCA_ALERT_MS = 10_000;
 
 // ── ZONA POLIGONAL (spec zonas-poligonais F1) ─────────────────────────────────
-// O teste fino por PONTO usa o pointInPolygon de fusion/floor-polygon (ray casting, puro); o
+// O teste fino por PONTO usa o pointInPolygon abaixo (ray casting, puro — morava em
+// fusion/floor-polygon e voltou para cá quando a fusão BLE migrou de repo, ADR-018); o
 // hub tem ESPELHO byte-a-byte em server/analysis/zones.js — mudou aqui, re-porta LÁ (o sensor
 // de paridade são as fixtures compartilhadas zones-polygon-fixtures.json, CA-4).
 export type ZonePoint = { x: number; y: number };
 export const POLYGON_MIN_POINTS = 3; // P2: não fecha com menos
 export const POLYGON_MAX_POINTS = 20; // P2: teto do setor (Dahua 20; cobre qualquer zona real)
+
+const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isVec = (v: unknown): v is ZonePoint =>
+  !!v && typeof v === "object" && isFiniteNum((v as ZonePoint).x) && isFiniteNum((v as ZonePoint).y);
+
+/**
+ * Ray casting padrão (par/ímpar): lança um raio horizontal de `p` até o infinito e conta
+ * quantas arestas do polígono ele cruza — ímpar = dentro, par = fora.
+ *
+ * Retorno SEGURO: polígono com <3 pontos (ou não-array) → SEMPRE `false` — ausência de dado
+ * não pode virar afirmação otimista. Ponto exatamente sobre uma aresta: o resultado depende da
+ * comparação de ponto flutuante do algoritmo clássico (sem tratamento especial de borda) —
+ * DETERMINÍSTICO, mas sem garantia de "dentro" ou "fora" na borda (documentado, não corrigido).
+ */
+export function pointInPolygon(p: ZonePoint, polygon: ZonePoint[]): boolean {
+  if (!isVec(p) || !Array.isArray(polygon) || polygon.length < 3) return false;
+  const n = polygon.length;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = a.y > p.y !== b.y > p.y;
+    if (crosses) {
+      const xIntersect = ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x;
+      if (p.x < xIntersect) inside = !inside;
+    }
+  }
+  return inside;
+}
 
 const clampCoord = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 

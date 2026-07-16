@@ -1,14 +1,14 @@
-// Adaptador do editor espacial compartilhado para o palco de vídeo.
+// Adaptador do motor poligonal para o palco de vídeo.
 // Toda a gestualidade (retângulo/polígono, seleção, vértices e translação) vive em
-// spatial/usePolygonEditor; aqui permanece somente a conversão letterbox → coordenadas 0..1.
+// usePolygonEditorCore; aqui permanece somente a conversão letterbox → coordenadas 0..1.
 import type { RefObject } from "react";
 import type { FrameSource } from "../frame";
 import type { Zone, ZonePoint } from "../zones";
 import { getContentRect } from "./draw";
 import {
-  usePolygonEditor as useSpatialPolygonEditor,
+  usePolygonEditor as usePolygonEditorCore,
   type PointerLike,
-} from "../spatial/usePolygonEditor";
+} from "./usePolygonEditorCore";
 
 type ZonePatch = { points: ZonePoint[]; x: number; y: number; w: number; h: number };
 
@@ -23,7 +23,7 @@ type Opts = {
   onAlert: (msg: string) => void;
 };
 
-export type { Selection } from "../spatial/usePolygonEditor";
+export type { Selection } from "./usePolygonEditorCore";
 
 export function usePolygonEditor(o: Opts) {
   const contentRect = () => {
@@ -37,7 +37,7 @@ export function usePolygonEditor(o: Opts) {
     };
   };
 
-  return useSpatialPolygonEditor({
+  return usePolygonEditorCore({
     itemsRef: o.zonesRef,
     itemName: "zona",
     space: {

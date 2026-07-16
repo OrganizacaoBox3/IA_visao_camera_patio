@@ -36,9 +36,9 @@ import {
   maskContainsFn,
   rasterizePolygonMask,
   sanitizeShiftIds,
+  pointInPolygon,
   type ZonePoint,
 } from "./zones";
-import { pointInPolygon } from "./fusion/floor-polygon";
 import { APP_CONFIG } from "./config";
 import { OBJECT_KEYS } from "./objects/catalog";
 

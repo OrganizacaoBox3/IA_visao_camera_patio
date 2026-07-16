@@ -1,7 +1,9 @@
-// Motor poligonal CANÔNICO e independente do palco. Câmera e Planta BLE injetam somente conversão
-// ponteiro→0..1/distância em px; gesto, seleção, translação, vértices, midpoints, teclado e validação
-// permanecem aqui. Arraste inicial cria um retângulo editável; clique inicia um polígono ponto a
-// ponto. O renderer lê draftRef/overlayRef, evitando estado React no laço de pintura.
+// Motor poligonal do palco — o CORE independente de coordenadas: o adaptador (usePolygonEditor.ts)
+// injeta somente a conversão ponteiro→0..1/distância em px; gesto, seleção, translação, vértices,
+// midpoints, teclado e validação permanecem aqui. Arraste inicial cria um retângulo editável;
+// clique inicia um polígono ponto a ponto. O renderer lê draftRef/overlayRef, evitando estado React
+// no laço de pintura. (Viveu em src/spatial como seam compartilhado com a Planta BLE; voltou para
+// cá quando a planta migrou para o repo mvp_trilateracao_BLE — ADR-018.)
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   isSimplePolygon,
