@@ -89,7 +89,13 @@ import { describe, it, expect } from "vitest";
 // camera/TopdownCanvas.tsx (o canvas responsivo), TODOS compartilhados com a aba pequena (DRY). Aqui
 // sobrou só a fiação: estado mapaOpen + 2 props ao CamHeader (o toggle) + o overlay condicional na
 // cam-body (que virou `relative`). ~9 linhas de wiring, zero lógica. NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1700;
+// 1700→1620 (jul/16, ADR-018 — separação de domínios): TODA a fiação de fusão BLE saiu do palco
+// (useCameraTagLabels/useFloorTags/useFunnelDiagnosis, prop getReadings, anéis no drawScene,
+// Mapa 2D/Vista2DStage, aba "Por quê"). O código vive no repo mvp_trilateracao_BLE; o rótulo da
+// pessoa volta ao genérico "Pessoa" (personLabel sem labelFor — o gate anti-número FICA).
+// Contabilidade REAL: 1700 → 1614; teto 1620 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1620;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

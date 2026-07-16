@@ -56,15 +56,14 @@ export function stageTarget(s: StageState): StageTarget {
 
 // ── O GATE DE CAMADAS POR MODO (spec §3.1 — a causa-raiz do "totalmente sobreposto") ──────────────
 // A queixa do dono NÃO era z-index: entrar em Calibrar não desligava NADA. O canvas seguia pintando
-// tracks + zonas + tripwires + anéis + a MALHA SALVA, e o SVG da calibração empilhava a grade VIVA
+// tracks + zonas + tripwires + a MALHA SALVA, e o SVG da calibração empilhava a grade VIVA
 // por cima — a malha salva (canvas) e a grade viva (SVG) são DUAS grades idênticas sobrepostas.
 // Aqui mora a decisão "quais camadas de OPERAÇÃO neste modo", PURA e testada, num lugar só (não um
 // if espalhado pelo drawScene). Em Calibrar todas caem: o palco fica só com o vídeo + a calibração
 // VIVA (CalibrationLayer). Fora dele cada camada ainda respeita seu toggle a jusante
-// (layersRef/floorOnRef/hudRef/calib.onRef) — este é o gate do MODO, acima dos toggles.
+// (layersRef/hudRef/calib.onRef) — este é o gate do MODO, acima dos toggles.
 export type StageLayers = {
   heatmap: boolean;
-  floorTags: boolean;
   tracks: boolean;
   zones: boolean;
   /** a MALHA de calibração SALVA (drawCalibrationOverlay) — a 2ª grade que empilhava sobre a viva */
@@ -102,7 +101,6 @@ export function sceneLayers(s: { calActive: boolean }): StageLayers {
   const op = !s.calActive; // camadas de operação só existem FORA do modo calibrar
   return {
     heatmap: op,
-    floorTags: op,
     tracks: op,
     zones: op,
     calibrationMesh: op,

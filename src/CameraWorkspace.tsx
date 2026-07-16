@@ -30,9 +30,7 @@ import {
   type ZoneMode,
 } from "./zones";
 import { loadCamConfig, getCameraCfg, setCameraCfg } from "./cameraConfig";
-import { ApiError, type BtReading } from "./api";
-import { useCameraTagLabels } from "./fusion/useCameraTagLabels";
-import { useFloorTags } from "./fusion/useFloorTags";
+import { ApiError } from "./api";
 import { useCalibrationOverlay } from "./camera/useCalibrationOverlay";
 import { useCalibrationEditor } from "./camera/useCalibrationEditor";
 import { CalibrationLayer } from "./camera/CalibrationLayer";
@@ -67,7 +65,6 @@ import {
   drawZoneOverlays,
   drawTelemetryHud,
   drawCalibrationOverlay,
-  drawFloorTags,
   RISK_LABEL,
   type HubZoneState,
   type ZoneResult,
@@ -75,7 +72,6 @@ import {
 } from "./camera/draw";
 import { ConfigZonaDialog } from "./camera/ConfigZonaDialog";
 import { CamHeader } from "./camera/CamHeader";
-import { Vista2DStage } from "./camera/Vista2DStage";
 import { CamKpiBar } from "./camera/CamKpiBar";
 import { ExibicaoPopover } from "./camera/ExibicaoPopover";
 import { CineBar } from "./camera/CineBar";
@@ -86,7 +82,6 @@ import { TrackInterpolator, toDisplayTracks } from "./camera/interpolate";
 import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
 import { CamDrawer, type DrawerTab } from "./camera/CamDrawer";
 import { type TimelineItem } from "./camera/tabs/TimelineTab";
-import { useFunnelDiagnosis } from "./fusion/useFunnelDiagnosis";
 import "./camera/cine.css";
 
 // Grade do heatmap de ocupação (camada opcional sobre o vídeo).
@@ -145,11 +140,8 @@ type Props = {
   /** Getter ESTÁVEL do último `analysis-tracks` (tracks/zonas do MOTOR do hub). Consumido com
    *  engine==="hub" em ambos os modos: a instância vira espelho e não agenda o coco local. */
   getHubAnalysis?: () => HubAnalysis | null;
-  /** Leituras BLE da estação (fusão tag↔pessoa, caminho C) — rotula a pessoa com o nome da tag em
-   *  QUALQUER modo (full OU tile) quando fornecido. Ausente → sem rótulo de tag (só "Pessoa <id>"). */
-  getReadings?: () => BtReading[];
   /** SYNC AO VIVO da CALIBRAÇÃO (mesmo idioma do tripwiresRev/ADR-006): revisão incrementada pela
-   *  central a cada `camcfg-updated {kind:"calibration"}` → a fusão re-busca H/station. Ausente →
+   *  central a cada `camcfg-updated {kind:"calibration"}` → a câmera re-busca o H. Ausente →
    *  calibração carrega só ao abrir/trocar a câmera (comportamento anterior). */
   calibrationRev?: number;
   /** Transporte do VÍDEO da câmera aberta: "webrtc" = <video-stream> (decode por HW) atrás de um
@@ -173,7 +165,6 @@ export function CameraWorkspace({
   tripwiresRev,
   analysisEngine = "local",
   getHubAnalysis,
-  getReadings,
   calibrationRev,
   transport = "mjpeg",
   onWebrtcFail,
@@ -290,9 +281,6 @@ export function CameraWorkspace({
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
   // vista diária do operador.
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("presenca");
-  // "Mapa 2D": vista superior 2D em tela cheia sobre o palco (visão alternativa só-BLE; o vídeo segue
-  // vivo atrás, o Sair volta). O GROSSO vive em camera/Vista2DStage + useTopdownView + topdown.ts.
-  const [mapaOpen, setMapaOpen] = useState(false);
   const [cfgZoneId, setCfgZoneId] = useState<string | null>(null);
   const [layersOpen, setLayersOpen] = useState(false); // popover Exibição → trap defere ao Radix (cfgOpenRef)
   const [layers, setLayers] = useState<OverlayLayers>({ ...APP_CONFIG.overlay.layers });
@@ -329,71 +317,21 @@ export function CameraWorkspace({
     hubFlowToday,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
 
-  // Fusão tag↔pessoa (caminho C) — nome da tag no rótulo, em QUALQUER modo (full/tile) quando o
-  // chamador fornece getReadings (antes só rodava em mode="full" — assimetria declarada que a
-  // grade MJPEG ficava sem rótulo de tag; a grade WebRTC já rodava isto por tile via
-  // useCameraTagLabels/Go2rtcVideoTile, então o custo por tile já era pago ali sem problema).
-  // Ref lido no rAF/draw. Aditivo: o hook também devolve a CALIBRAÇÃO carregada (H/station/points)
-  // e as tags já associadas — insumos do plot de tags no chão abaixo (mesmo fetch, sem duplicar).
-  //
-  // PORTA ZERO (B7) — o NOME da tag só aparece com o motor no HUB (CLAUDE.md §1: a análise roda no
-  // hub 24/7). Por quê: `labelForRef` é indexado por id de track do HUB, e as caixas desenhadas
-  // vêm do interpolador do hub (toDisplayTracks preserva `id`) — as chaves casam. Em modo LOCAL as
-  // caixas têm id do tracker LOCAL e o getHubAnalysis retorna null → a fusão NEM roda e o labelFor
-  // fica vazio. Isto é condição de DEPLOY (escolha do motor), não gap de código: o labelForRef é
-  // passado ao drawTracks incondicionalmente (ver drawScene). A aba "Por quê" avisa quando o modo
-  // é local (fusionOffReason). RESSALVA: mesmo no hub, o nome só surge quando a ASSOCIAÇÃO por
-  // rádio acontece — RARA (pessoa parada = 94,6% do silêncio medido); persistência de rótulo +
-  // ReID são ondas futuras. Não prometer na UI o que a física não entrega.
-  const {
-    labelForRef,
-    calibration: tagCalibration,
-    assignedTags,
-  } = useCameraTagLabels({
-    cameraId,
-    getHubAnalysis,
-    getReadings,
-    enabled: !!getReadings,
-    calibrationRev,
-  });
-
-  // POR QUE NÃO IDENTIFICOU (aba "Por quê") — o funil de vetos do associador (diagnoseFunnel), que
-  // existia sem NENHUM consumidor de UI (bug B8). SÓ-LEITURA e SÓ com a aba aberta: fora dela o hook
-  // é inerte. A matemática/estado vivem em fusion/useFunnelDiagnosis; aqui só a fiação.
-  const funnelDiag = useFunnelDiagnosis({
-    calibration: tagCalibration,
-    getHubAnalysis,
-    getReadings,
-    // Motor local → a fusão é ESTRUTURALMENTE morta (o labelFor nunca sai vazio: B7). A aba "Por
-    // quê" usa isto p/ dar o motivo PRECISO ("exige o motor no servidor") em vez do B7 genérico.
-    analysisEngine,
-    enabled: !!getReadings && drawerTab === "porque",
-  });
-
-  // ANÉIS DAS ANTENAS (BLE) — âncoras dos cantos (posição exata), estação e anéis de distância
-  // (fusion/useFloorTags; matemática em floor-plot.ts). viewRef lido no rAF/drawScene; toggle
-  // default DESLIGADO (APP_CONFIG.overlay.floorTagsOn=false — decisão do dono 2026-07-13: é dado
-  // de conferência/diagnóstico, não a vista do cliente; não poluir a tela por padrão). O operador
-  // LIGA quando quer ver — a capacidade NÃO some. MESMO idioma do HUD/malha: estado p/ a UI
-  // (pressed) + ref espelho p/ o laço de desenho.
-  const floorTags = useFloorTags({
-    calibration: tagCalibration,
-    getReadings,
-    getAssignedTags: assignedTags,
-    enabled: !!getReadings,
-  });
-  const [floorOn, setFloorOnState] = useState(APP_CONFIG.overlay.floorTagsOn);
-  const floorOnRef = useRef(APP_CONFIG.overlay.floorTagsOn);
-  // Setter ÚNICO do toggle (idioma da "Malha"/useCalibrationOverlay): ref (rAF) + estado (UI)
-  // mudam numa só unidade — nenhum caminho escreve um sem o outro.
-  const setFloorOn = (v: boolean) => {
-    floorOnRef.current = v;
-    setFloorOnState(v);
-  };
+  // (A fusão tag↔pessoa — useCameraTagLabels/useFloorTags/useFunnelDiagnosis — migrou para o
+  //  repo mvp_trilateracao_BLE; ADR-018. O rótulo da pessoa é o genérico "Pessoa": drawTracks sem
+  //  labelFor → personLabel(undefined, id) — o gate anti-número segue em drawTracks.test.ts.)
 
   // Malha da calibração (grade do chão via homografia + pontos cadastrados) — SÓ na câmera ABERTA.
   // Toggle opt-in; refs (onRef/dataRef) lidos no rAF/drawScene sem re-armar o laço de desenho.
   const calib = useCalibrationOverlay(cameraId, mode === "full");
+  // SYNC AO VIVO da calibração (ADR-006): salva em OUTRO posto → a central incrementa a rev
+  // (`camcfg-updated {kind:"calibration"}`) → a malha re-busca o H. (Era a fusão quem consumia a
+  // rev; a re-busca do H é da CÂMERA e permanece.) rev 0/ausente = carga inicial já cobre.
+  const calibRefreshRef = useRef(calib.refresh);
+  calibRefreshRef.current = calib.refresh;
+  useEffect(() => {
+    if (calibrationRev) calibRefreshRef.current();
+  }, [calibrationRev]);
 
   // MODO CALIBRAR do palco (spec-arquitetura-informacao §1 — a rota /calibracao morre): 5º modo, no
   // molde do usePolygonEditor. O hook é dono de cantos/âncoras/estações/refTag/L×C/H/save; aqui só
@@ -1257,15 +1195,6 @@ export function CameraWorkspace({
     if (ov.heatmap && layersRef.current.heatmap && occRef.current)
       drawOccupancyHeatmap(ctx, cr, occRef.current);
 
-    // Anéis das antenas (toggle, default DESLIGADO — APP_CONFIG.overlay.floorTagsOn): âncoras
-    // exatas + estação + anéis de distância BLE. Camada de FUNDO — desenha ANTES de caixas/zonas
-    // (espelha a grade/TrackOverlay: a geometria de pessoa vence a de chão). O rAF lê os refs;
-    // sem calibração/leituras o viewRef é null.
-    if (ov.floorTags && floorOnRef.current) {
-      const ft = floorTags.viewRef.current;
-      if (ft) drawFloorTags(ctx, cr, ft);
-    }
-
     // Suavização DISPLAY-ONLY das caixas do hub (TrackInterpolator, o MESMO puro da grade): a
     // bbox crua congela+salta na cadência do motor (~1fps). Invariante: a LÓGICA (contagem/
     // exclusão/tripwire/ocupação) JÁ RODOU sobre tracksRef EXATO; aqui só muda o que se VÊ.
@@ -1291,16 +1220,10 @@ export function CameraWorkspace({
       );
     }
 
-    // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança)
+    // pessoas (tracks anônimos) — Presença (camada "caixas"; atenua abaixo da confiança).
+    // Sem labelFor (a fusão BLE migrou — ADR-018): personLabel(undefined, id) → "Pessoa".
     if (ov.tracks && layersRef.current.boxes)
-      drawTracks(
-        ctx,
-        cr,
-        displayTracks,
-        confRef.current,
-        pausedRef.current && detailed,
-        labelForRef.current,
-      );
+      drawTracks(ctx, cr, displayTracks, confRef.current, pausedRef.current && detailed);
 
     // Laço por-zona (retângulo/máscara + rótulo + dets + fadiga) → ./camera/draw. Último arg
     // (1 pessoa = 1 caixa): a camada de dets omite a det de pessoa já coberta por um track.
@@ -1535,8 +1458,6 @@ export function CameraWorkspace({
       {/* Barra de ferramentas do palco → ./camera/CamHeader (JSX puro; nenhum canvas/rAF lá). */}
       <CamHeader
         label={label}
-        mapaOpen={mapaOpen}
-        onToggleMapa={() => setMapaOpen((v) => !v)}
         zonesCount={zones.length}
         canConfigure={canConfigure}
         activePreset={activePreset}
@@ -1563,7 +1484,6 @@ export function CameraWorkspace({
             hud={hud}
             setHud={setHud}
             calib={calib}
-            floor={{ available: floorTags.available, on: floorOn, setOn: setFloorOn }}
             layers={layers}
             setLayers={setLayers}
             conf={conf}
@@ -1638,7 +1558,6 @@ export function CameraWorkspace({
           })}
           tab={drawerTab}
           onTab={setDrawerTab}
-          cameraId={cameraId}
           zonas={{
             zonesLoading,
             zones,
@@ -1667,12 +1586,7 @@ export function CameraWorkspace({
           paused={paused}
           cal={cal}
           onCalibrate={toggleCalibration}
-          diag={funnelDiag}
         />
-        {/* MAPA 2D em tela cheia SOBRE o palco: o vídeo + drawer seguem MONTADOS atrás (o <video> não
-            remonta — ADR-007), só cobertos; o "Sair" (ou o toggle do cabeçalho) volta. z-20 sobre a
-            cam-body (relative). Só quando ligado no cabeçalho. */}
-        {mapaOpen && <Vista2DStage cameraId={cameraId} onClose={() => setMapaOpen(false)} />}
       </div>
 
       {/* Barra de KPIs (rodapé) → ./camera/CamKpiBar. "A imagem é soberana" (ADR-003): o número

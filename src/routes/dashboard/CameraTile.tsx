@@ -1,9 +1,6 @@
 import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
-import { type BtReading } from "../../api";
-import { useCameraTagLabels } from "../../fusion/useCameraTagLabels";
-import { useFloorTags } from "../../fusion/useFloorTags";
 import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
@@ -51,18 +48,12 @@ const WEBRTC_ESTABLISH_MS = 7000;
 function Go2rtcVideoTile({
   camId,
   getHubAnalysis,
-  getReadings,
-  calibrationRev,
   onWebrtcFail,
 }: {
   camId: string;
   // Getter estável do último `analysis-tracks` do hub → alimenta o overlay interpolado.
   // Ausente (câmera sem análise) → o overlay simplesmente não desenha (sem erro).
   getHubAnalysis?: () => HubAnalysis | null;
-  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Ausente → sem rótulo de tag (só o genérico "Pessoa").
-  getReadings?: () => BtReading[];
-  // Sync ao vivo da CALIBRAÇÃO (idioma tripwiresRev/ADR-006): incremento → re-busca H/station.
-  calibrationRev?: number;
   // Detecção de fonte caída (go2rtc sem frames p/ esta câmera): chamado UMA vez com o id quando o
   // WebRTC não estabelece vídeo dentro da janela. O pai (DashboardPage) cai o tile pra MJPEG.
   // Ausente → sem fallback; o tile segue tentando WebRTC (comportamento atual).
@@ -154,44 +145,12 @@ function Go2rtcVideoTile({
     };
   }, [camId, onWebrtcFail]);
 
-  // Fusão tag↔pessoa (caminho C): MESMO hook do fullscreen (useCameraTagLabels) — busca a calibração
-  // 1× por câmera (H em metros + `station`, o ponto do chão da estação BLE) e roda a fusão. Antes o
-  // tile duplicava a carga inline guardando SÓ o H (stationPx omitido → default 0.5,1.0 do frame.ts),
-  // e o harness mediu o custo: precisão 81,4% → 49,2% (docs/cientifica/harness-associacao-indoor.md).
-  // Sem getReadings (grade sem estação) fica desligada → labelFor sempre null (e nem busca calibração).
-  const { labelForRef, calibration, assignedTags } = useCameraTagLabels({
-    cameraId: camId,
-    getHubAnalysis,
-    getReadings,
-    enabled: !!getReadings,
-    calibrationRev,
-  });
-  // O TrackOverlay espera FUNÇÃO (dep de efeito), o hook devolve REF (p/ rAF do fullscreen): wrapper
-  // de identidade estável (dep = o ref, que nunca muda) lendo o ref por chamada — o efeito do overlay
-  // não re-arma e o React.memo dos tiles segue valendo.
-  const labelFor = useCallback((trackId: number) => labelForRef.current(trackId), [labelForRef]);
-
-  // TAGS NO CHÃO (default LIGADO na grade quando há calibração + leituras): reusa a MESMA
-  // calibração já buscada acima (sem 2º fetch) + as leituras vivas do socket; tags já associadas
-  // a pessoa não ganham anel (o rótulo AR da caixa já as mostra). Sem dados → viewRef null.
-  const { viewRef: floorRef } = useFloorTags({
-    calibration,
-    getReadings,
-    getAssignedTags: assignedTags,
-    enabled: !!getReadings,
-  });
-  const getFloorTags = useCallback(() => floorRef.current, [floorRef]);
-
   return (
     <div className="tile-vp rtc-vp">
       <video-stream ref={ref} />
-      {/* Caixas do hub interpoladas + tags no chão, num <canvas> transparente sobre o vídeo. */}
-      <TrackOverlay
-        videoRef={ref}
-        getHubAnalysis={getHubAnalysis}
-        labelFor={labelFor}
-        getFloorTags={getFloorTags}
-      />
+      {/* Caixas do hub interpoladas num <canvas> transparente sobre o vídeo. Sem labelFor
+          (a fusão BLE migrou — ADR-018): o rótulo é o genérico "Pessoa" (personLabel). */}
+      <TrackOverlay videoRef={ref} getHubAnalysis={getHubAnalysis} />
     </div>
   );
 }
@@ -256,10 +215,8 @@ type CameraTileProps = {
   // hub; o CameraWorkspace desenha esses tracks na grade em vez de rodar inferência local.
   // OPCIONAL/retrocompatível (ausente → pipeline local). (ADR-009)
   getHubAnalysis?: () => HubAnalysis | null;
-  // Leituras BLE da estação (fusão tag↔pessoa, caminho C). Só o tile WebRTC usa; ausente → sem rótulo.
-  getReadings?: () => BtReading[];
   // Sync ao vivo da CALIBRAÇÃO (mesmo idioma do tripwiresRev): a central incrementa a cada
-  // `camcfg-updated {kind:"calibration"}` → a fusão do tile re-busca H/station em vez de ficar
+  // `camcfg-updated {kind:"calibration"}` → a câmera re-busca o H em vez de ficar
   // stale até remontar. OPCIONAL/retrocompatível; primitiva → amigável ao React.memo abaixo.
   calibrationRev?: number;
   // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
@@ -290,7 +247,6 @@ export const CameraTile = memo(function CameraTile({
   status,
   analysisEngine,
   getHubAnalysis,
-  getReadings,
   calibrationRev,
   transport,
   onWebrtcFail,
@@ -317,8 +273,6 @@ export const CameraTile = memo(function CameraTile({
         key={`rtc-${camera.id}`}
         camId={camera.id}
         getHubAnalysis={getHubAnalysis}
-        getReadings={getReadings}
-        calibrationRev={calibrationRev}
         onWebrtcFail={onWebrtcFail}
       />
     </button>
@@ -344,10 +298,6 @@ export const CameraTile = memo(function CameraTile({
       tripwiresRev={tripwiresRev}
       analysisEngine={analysisEngine}
       getHubAnalysis={getHubAnalysis}
-      // Fusão tag↔pessoa (caminho C) — mesma simetria que o tile WebRTC já tinha (Go2rtcVideoTile
-      // acima): antes só a câmera aberta em tela cheia recebia isto; o tile MJPEG da grade ficava
-      // preso em "Pessoa" sem tag mesmo com a estação BLE configurada.
-      getReadings={getReadings}
       calibrationRev={calibrationRev}
       onOpen={openSelf}
       onAlert={onAlert}

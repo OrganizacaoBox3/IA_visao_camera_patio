@@ -30,7 +30,6 @@ import {
 } from "../vision/counting";
 import { coveredByAny } from "../vision/nms";
 import { worldToPixel, type Matrix3, type Vec2 } from "../vision/homography";
-import type { FloorTagsView } from "../fusion/useFloorTags"; // type-only: sem ciclo (o hook não importa daqui)
 
 // Resultado por zona guardado p/ desenho + painel. Vive aqui (perto do desenho que o
 // consome) e é reimportado pelo CameraWorkspace; mover não muda comportamento.
@@ -467,9 +466,9 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
 // Feedback visual do posicionamento no piso: projeta uma GRADE métrica do chão de volta na imagem
 // (worldToPixel) + marca os PONTOS que o operador cadastrou na calibração. Toggleável (opt-in) — o
 // GATE (estado/ref) vive no componente; aqui só o desenho (função FOLHA/pura). Going-gray: grade em
-// --state-info SUTIL (linha fina, esmaecida, "conferência"); pontos com rótulo curto da âncora/MAC.
+// --state-info SUTIL (linha fina, esmaecida, "conferência") + os pontos cadastrados.
 // Coords px/world são NORMALIZADAS 0..1 → escaladas pelo retângulo de conteúdo (cr), como os demais.
-export type CalibDot = { px: Vec2; world: Vec2; mac?: string };
+export type CalibDot = { px: Vec2; world: Vec2 };
 export function drawCalibrationOverlay(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
@@ -523,11 +522,10 @@ export function drawCalibrationOverlay(
       ctx.restore();
     }
   }
-  // PONTOS cadastrados: círculo marcado no px normalizado; rótulo curto (últimos octetos do MAC/âncora)
-  // ao lado quando o ponto tiver `mac`. Going-gray: contorno --state-info, texto sobre scrim discreto.
+  // PONTOS cadastrados: círculo marcado no px normalizado.
+  // Going-gray: contorno --state-info sobre scrim discreto.
   const dot = cssVar("--state-info", "#38bdf8");
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.8)");
-  const fg = cssVar("--cam-overlay-fg", "#cbd5e1");
   ctx.font = "10px ui-monospace, monospace";
   for (const p of points) {
     const px = cr.x + p.px.x * cr.w,
@@ -539,166 +537,7 @@ export function drawCalibrationOverlay(
     ctx.arc(px, py, 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    if (p.mac) {
-      const tag = p.mac.length > 5 ? p.mac.slice(-5) : p.mac; // âncora curta (ex.: "EE:FF")
-      const tw = ctx.measureText(tag).width + 6;
-      ctx.fillStyle = scrim;
-      ctx.fillRect(px + 6, py - 7, tw, 13);
-      ctx.fillStyle = fg;
-      ctx.fillText(tag, px + 9, py + 3);
-    }
   }
-}
-
-// ── TAGS NO CHÃO (fusão BLE) — âncoras exatas, estação e ANÉIS de distância ──
-// Função FOLHA/pura: recebe a visão derivada (fusion/useFloorTags) e pinta UMA camada.
-//
-// COR: exceção LEGÍTIMA ao going-gray — este overlay pinta SOBRE VÍDEO (imagem arbitrária, não a
-// UI neutra); cinza/neutro some na cena. Croma aqui é CONTRASTE, não estado. Não há token --cam-*
-// p/ cores vivas de overlay (os --cam-* são superfície/scrim/texto) → constantes locais:
-//   âncoras (losango + sufixo)            = AMARELO vivo  (FLOOR_ANCHOR)
-//   anéis + rótulo "~X m" + estação       = CIANO vivo    (FLOOR_RING — distinto do azul
-//                                           --state-info #38bdf8 das caixas de pessoa)
-//   âncora calada há 15+ s                = VERMELHO --state-critical (anomalia real: âncora fixa
-//                                           deveria ser ouvida sempre; distinto do amarelo normal)
-// Textos sempre sobre SCRIM escuro (legível sobre vídeo claro). O anel segue TRACEJADO de
-// propósito: comunica incerteza — RSSI dá DISTÂNCIA à estação, não posição (floor-plot.ts).
-// Coords normalizadas 0..1 do frame → escaladas pelo retângulo de conteúdo (cr), como os demais.
-const FLOOR_ANCHOR = "#facc15"; // amarelo vivo (= hex do --state-warn-fg; aqui é contraste, não warn)
-const FLOOR_RING = "#22d3ee"; // ciano vivo
-const FLOOR_SCRIM = "rgba(2,6,10,0.82)"; // scrim mais denso que o --cam-overlay-scrim (texto colorido)
-
-// AUTO-DIAGNÓSTICO por âncora (backlog científico A4, fusion/useFloorTags.ts FloorAnchor.residualM):
-// |distância real − distância prevista pelo modelo| acima disto = âncora "discordando" do modelo
-// que ELA MESMA ajuda a calibrar (multipath/obstrução naquele ponto, não câmera/rede em geral).
-// 1,5 m é a MESMA ordem de grandeza de DIST_BLEND_SCALE_M (fusion/associate.ts): erro mediano de
-// distância que ~4 dB de ruído de RSSI já induzem sozinho no modelo log-distância — abaixo disso
-// o desvio é "consistente com ruído normal"; acima, começa a cheirar a sensor mentindo.
-const RESIDUAL_ANOMALY_M = 1.5;
-// Âncora discordante: anel pontilhado LARANJA — deliberadamente DISTINTO do amarelo vivo
-// FLOOR_ANCHOR (âncora normal) e do vermelho --state-critical (âncora offline, sem leitura há
-// 15+ s): 3 estados, 3 cores — "normal" / "sinal estranho, mas viva" / "sumida". O operador não
-// pode confundir "essa âncora está mentindo" com "essa âncora está muda".
-const FLOOR_ANOMALY = "#f97316";
-
-// Cache de measureText por texto (mesma técnica do TrackOverlay): fonte fixa e textos repetidos por
-// muitos frames entre derivações (2 Hz); limpa se crescer demais (MACs/distâncias ao longo de horas).
-const floorTextW = new Map<string, number>();
-function floorTextWidth(ctx: CanvasRenderingContext2D, txt: string): number {
-  let w = floorTextW.get(txt);
-  if (w === undefined) {
-    if (floorTextW.size > 512) floorTextW.clear();
-    w = ctx.measureText(txt).width;
-    floorTextW.set(txt, w);
-  }
-  return w;
-}
-
-export function drawFloorTags(ctx: CanvasRenderingContext2D, cr: Rect, v: FloorTagsView) {
-  const critical = cssVar("--state-critical", "#ef4444");
-  ctx.save();
-  ctx.font = "10px ui-monospace, monospace";
-
-  // Estações: marcador ciano (ponto + círculo fino) + NOME — a referência dos anéis. UMA por antena
-  // (multi-antena F5): o operador vê ONDE está cada estação no chão, e cada anel abaixo cerca a SUA.
-  for (const st of v.stations) {
-    const sx = cr.x + st.px.x * cr.w,
-      sy = cr.y + st.px.y * cr.h;
-    ctx.fillStyle = FLOOR_RING;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = FLOOR_RING;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 6, 0, Math.PI * 2);
-    ctx.stroke();
-    if (st.label) {
-      const tw = floorTextWidth(ctx, st.label) + 6;
-      ctx.fillStyle = FLOOR_SCRIM;
-      ctx.fillRect(sx + 8, sy - 6, tw, 13);
-      ctx.fillStyle = FLOOR_RING;
-      ctx.fillText(st.label, sx + 11, sy + 4);
-    }
-  }
-
-  // Anéis de distância: tracejado ciano + rótulo "nome · ~X m" no ponto do anel mais BAIXO
-  // visível (perto da câmera — legível sem cobrir o centro da cena). Pontos fora do quadro só
-  // saem do clip do canvas; fechar o path com pontos descartados (horizonte) vira uma corda
-  // reta — aceitável no tracejado (o anel continua comunicando "distância", não contorno).
-  ctx.setLineDash([4, 4]);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = FLOOR_RING;
-  for (const r of v.rings) {
-    if (r.pixels.length < 2) continue;
-    ctx.globalAlpha = 0.85;
-    ctx.beginPath();
-    ctx.moveTo(cr.x + r.pixels[0].x * cr.w, cr.y + r.pixels[0].y * cr.h);
-    for (let i = 1; i < r.pixels.length; i++)
-      ctx.lineTo(cr.x + r.pixels[i].x * cr.w, cr.y + r.pixels[i].y * cr.h);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    let lp: Vec2 | null = null;
-    for (const p of r.pixels)
-      if (p.x >= 0.02 && p.x <= 0.98 && p.y >= 0.04 && p.y <= 0.96 && (!lp || p.y > lp.y)) lp = p;
-    if (lp) {
-      const dist = r.radiusM < 10 ? r.radiusM.toFixed(1) : String(Math.round(r.radiusM));
-      const txt = `${r.label} · ~${dist} m`;
-      const tw = floorTextWidth(ctx, txt) + 6;
-      const tx = cr.x + lp.x * cr.w - tw / 2,
-        ty = cr.y + lp.y * cr.h;
-      ctx.fillStyle = FLOOR_SCRIM;
-      ctx.fillRect(tx, ty - 6, tw, 13);
-      ctx.fillStyle = FLOOR_RING;
-      ctx.fillText(txt, tx + 3, ty + 4);
-    }
-  }
-  ctx.setLineDash([]);
-
-  // Âncoras: losango PEQUENO no px exato da calibração + sufixo do MAC (a.label, pré-computado
-  // na derivação). Amarelo vivo com leitura fresca; VERMELHO quando calada há 15+ s (anomalia de
-  // AUSÊNCIA). Anomalia de SINAL (auto-diagnóstico A4: a âncora discorda do modelo que ela mesma
-  // calibra) é um problema DIFERENTE — âncora viva, mas RSSI incoerente — e ganha indicador
-  // PRÓPRIO (anel pontilhado laranja + "±Xm" no rótulo) para não ser confundida com "offline".
-  for (const a of v.anchors) {
-    const ax = cr.x + a.px.x * cr.w,
-      ay = cr.y + a.px.y * cr.h;
-    const c = a.fresh ? FLOOR_ANCHOR : critical;
-    const anomalous = a.fresh && a.residualM !== null && a.residualM > RESIDUAL_ANOMALY_M;
-    const R = 5;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay - R);
-    ctx.lineTo(ax + R, ay);
-    ctx.lineTo(ax, ay + R);
-    ctx.lineTo(ax - R, ay);
-    ctx.closePath();
-    ctx.fillStyle = FLOOR_SCRIM;
-    ctx.fill();
-    ctx.strokeStyle = c;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    if (anomalous) {
-      // Anel pontilhado laranja ao redor do losango — "sensor mentindo", distinto do losango
-      // vermelho de âncora muda.
-      ctx.save();
-      ctx.setLineDash([2, 2]);
-      ctx.strokeStyle = FLOOR_ANOMALY;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(ax, ay, R + 4, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-    const label = anomalous ? `${a.label} ±${a.residualM!.toFixed(1)}m` : a.label;
-    const labelColor = anomalous ? FLOOR_ANOMALY : c;
-    const tw = floorTextWidth(ctx, label) + 6;
-    ctx.fillStyle = FLOOR_SCRIM;
-    ctx.fillRect(ax + 7, ay - 7, tw, 13);
-    ctx.fillStyle = labelColor;
-    ctx.fillText(label, ax + 10, ay + 3);
-  }
-  ctx.restore();
 }
 
 // Rascunho de arraste (viewport px): traçado de uma tripwire.

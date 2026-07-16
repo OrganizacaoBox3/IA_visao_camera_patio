@@ -9,9 +9,7 @@
 //    o <canvas>). Ver src/ui/Popover.tsx. O trap de foco manual defere ao Radix enquanto aberto
 //    (o pai propaga `open` para o cfgOpenRef via onOpenChange).
 //  · ADR-003 — a imagem é soberana: o popover FLUTUA, não empurra o vídeo.
-//  · Going-gray — cada toggle carrega o estado em TEXTO + Switch (nunca só-por-cor). "Anéis" nasce
-//    DESLIGADO por padrão (dado de conferência, não a vista do cliente): a origem OFF vive no pai
-//    (APP_CONFIG.overlay.floorTagsOn) — este componente só reflete.
+//  · Going-gray — cada toggle carrega o estado em TEXTO + Switch (nunca só-por-cor).
 // JSX PURO: recebe estado/handlers já resolvidos; não toca canvas/rAF/refs.
 import { type Dispatch, type SetStateAction } from "react";
 import { Layers, RotateCcw } from "lucide-react";
@@ -30,14 +28,13 @@ import {
 import { MODE_TONE } from "./tabs/tone";
 import { MODE_PRESETS, type ModeKey, type OverlayLayers } from "../config";
 
-// Grupos coesos: a camada só existe quando a fonte existe (calibração · leituras BLE); `floor.on`
-// nasce OFF por padrão. `preset.dirty` (ajuste manual sobre o preset) é computado no pai (fonte
-// única, junto do badge do header); `def` deriva de `active` aqui.
+// Grupos coesos: a camada só existe quando a fonte existe (calibração). `preset.dirty` (ajuste
+// manual sobre o preset) é computado no pai (fonte única, junto do badge do header); `def` deriva
+// de `active` aqui.
 type LayersProps = {
   hud: boolean;
   setHud: (v: boolean) => void;
   calib: { hasCalibration: boolean; on: boolean; setOn: (v: boolean) => void };
-  floor: { available: boolean; on: boolean; setOn: (v: boolean) => void };
   layers: OverlayLayers;
   setLayers: Dispatch<SetStateAction<OverlayLayers>>;
   conf: number;
@@ -81,7 +78,6 @@ export function ExibicaoLayers({
   hud,
   setHud,
   calib,
-  floor,
   layers,
   setLayers,
   conf,
@@ -126,17 +122,6 @@ export function ExibicaoLayers({
           onCheckedChange={calib.setOn}
         />
       )}
-      {/* Anéis das antenas (BLE): default DESLIGADO; some sem calibração/leituras. O anel é DISTÂNCIA
-          (RSSI), não posição. */}
-      {floor.available && (
-        <ToggleRow
-          label="Anéis das antenas"
-          hint="Âncoras dos cantos, a estação e um anel tracejado de distância por tag ainda não associada. Desligado por padrão."
-          checked={floor.on}
-          onCheckedChange={floor.setOn}
-        />
-      )}
-
       <div className="mt-sp3">
         <SectionTitle>Detecção</SectionTitle>
         {activePresetDef && preset.active && (

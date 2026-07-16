@@ -21,18 +21,15 @@ import { LinhasTab } from "./tabs/LinhasTab";
 import { TimelineTab, type TimelineItem } from "./tabs/TimelineTab";
 import { PresencaTab } from "./tabs/PresencaTab";
 import { CalibracaoTab } from "./tabs/CalibracaoTab";
-import { PorQueTab } from "./tabs/PorQueTab";
-import { Vista2DTab } from "./tabs/Vista2DTab";
 import type { ComponentProps } from "react";
 import type { CalibrationEditor } from "./useCalibrationEditor";
 import type { StageMode } from "./useStageModes";
-import type { FunnelDiagnosis } from "../fusion/useFunnelDiagnosis";
 
 /** Seções de OBSERVAÇÃO do drawer (só-leitura), sub-abas de um painel único. Zona/Linha/Calibrar NÃO
  *  são abas: são MODOS do palco (spec §3-A) — entra-se por toggle no CamHeader, e o painel vira O
  *  painel contextual daquele modo (ramo `mode` abaixo). Config-de-exibição vive no popover "Exibição"
- *  (spec §3-C), não aqui. */
-export type DrawerTab = "timeline" | "presenca" | "porque" | "vista2d";
+ *  (spec §3-C), não aqui. (As abas "Por quê" e "Vista 2D" migraram com a fusão BLE — ADR-018.) */
+export type DrawerTab = "timeline" | "presenca";
 
 type Props = {
   /** Modo de edição ARMADO no palco (activeStageMode) — governa QUAL painel contextual mostrar;
@@ -40,8 +37,6 @@ type Props = {
   mode: StageMode;
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
-  /** Id da câmera — a aba "Vista 2D" carrega a própria calibração/BLE por ele. */
-  cameraId: string;
   zonas: ComponentProps<typeof ZonasTab>;
   linhas: ComponentProps<typeof LinhasTab>;
   timeline: TimelineItem[];
@@ -49,15 +44,12 @@ type Props = {
   paused: boolean;
   cal: CalibrationEditor;
   onCalibrate: () => void;
-  /** Diagnóstico do funil (fusion/useFunnelDiagnosis) — por que a pessoa em cena não virou nome. */
-  diag: FunnelDiagnosis;
 };
 
 export function CamDrawer({
   mode,
   tab,
   onTab,
-  cameraId,
   zonas,
   linhas,
   timeline,
@@ -65,7 +57,6 @@ export function CamDrawer({
   paused,
   cal,
   onCalibrate,
-  diag,
 }: Props) {
   // MODO ATIVO → o painel INTEIRO se reconfigura (spec §3-A, o molde do Calibrar GENERALIZADO): UM
   // mecanismo escolhe o painel contextual do modo armado — Calibrar → passo-a-passo · Área → zonas
@@ -100,12 +91,7 @@ export function CamDrawer({
         ariaLabel="Seção de observação"
         items={[
           { value: "presenca", label: "Pessoas" },
-          // A seção do PORQUÊ: quando o sistema não identifica alguém, ele deixa de CALAR e diz
-          // qual elo barrou (rádio · movimento · evidência · âncora). O produto não é só acertar.
-          { value: "porque", label: "Por quê" },
           { value: "timeline", label: "Timeline" },
-          // Vista superior 2D (top-down) do chão + beacons — para o teste só-Bluetooth, sem câmera.
-          { value: "vista2d", label: "Vista 2D" },
         ]}
       >
         <ScrollArea className="drawer-scroll" viewportClassName="drawer-scroll-vp">
@@ -113,16 +99,8 @@ export function CamDrawer({
             <PresencaTab presence={presence} paused={paused} />
           </TabsContent>
 
-          <TabsContent value="porque">
-            <PorQueTab diag={diag} />
-          </TabsContent>
-
           <TabsContent value="timeline">
             <TimelineTab timeline={timeline} />
-          </TabsContent>
-
-          <TabsContent value="vista2d">
-            <Vista2DTab cameraId={cameraId} />
           </TabsContent>
         </ScrollArea>
       </Tabs>

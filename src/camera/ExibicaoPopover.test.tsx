@@ -14,11 +14,10 @@ import { APP_CONFIG } from "../config";
 // inteiro não o captura — por isso o CORPO é um componente à parte (ExibicaoLayers), testado direto.
 // O "abre e mostra" no browser real é coberto pelo e2e (app.spec.ts "Exibição é um POPOVER").
 
-const layersProps = (over?: { calibAvailable?: boolean; floorAvailable?: boolean }) => ({
+const layersProps = (over?: { calibAvailable?: boolean }) => ({
   hud: false,
   setHud: () => {},
   calib: { hasCalibration: over?.calibAvailable ?? true, on: false, setOn: () => {} },
-  floor: { available: over?.floorAvailable ?? true, on: false, setOn: () => {} },
   layers: { ...APP_CONFIG.overlay.layers },
   setLayers: () => {},
   conf: APP_CONFIG.overlay.confidenceThreshold,
@@ -30,7 +29,7 @@ const layersProps = (over?: { calibAvailable?: boolean; floorAvailable?: boolean
 });
 
 // TooltipProvider é obrigatório para SSR dos HelpTip/Tooltip do corpo (Radix exige contexto).
-const body = (over?: { calibAvailable?: boolean; floorAvailable?: boolean }) =>
+const body = (over?: { calibAvailable?: boolean }) =>
   renderToStaticMarkup(
     <TooltipProvider>
       <ExibicaoLayers {...layersProps(over)} />
@@ -38,12 +37,11 @@ const body = (over?: { calibAvailable?: boolean; floorAvailable?: boolean }) =>
   );
 
 describe("ExibicaoLayers — os toggles de exibição vivem no POPOVER (não na aba)", () => {
-  it("reúne os toggles hoje partidos: HUD/Malha/Anéis (KPI bar) + Caixas/Máscara/Zonas/Heatmap (Camadas)", () => {
+  it("reúne os toggles hoje partidos: HUD/Malha (KPI bar) + Caixas/Máscara/Zonas/Heatmap (Camadas)", () => {
     const h = body();
     // vindos da barra de KPIs:
     expect(h).toContain("HUD (telemetria)");
     expect(h).toContain("Malha da calibração");
-    expect(h).toContain("Anéis das antenas");
     // vindos da antiga aba Camadas:
     expect(h).toContain("Caixas / detecções");
     expect(h).toContain("Máscara (área pintada)");
@@ -53,12 +51,13 @@ describe("ExibicaoLayers — os toggles de exibição vivem no POPOVER (não na 
     expect(h).toContain("Confiança mínima");
     expect(h).toContain("Preset ativo");
     expect(h).toContain("Longo alcance / Panorâmica");
+    // NEGATIVO (ADR-018): os "Anéis das antenas" (BLE) migraram para o repo mvp_trilateracao_BLE.
+    expect(h).not.toContain("Anéis das antenas");
   });
 
-  it("going-gray preservado: Malha/Anéis SOMEM quando a fonte não existe (sem calibração/BLE)", () => {
-    const h = body({ calibAvailable: false, floorAvailable: false });
+  it("going-gray preservado: a Malha SOME quando a fonte não existe (sem calibração)", () => {
+    const h = body({ calibAvailable: false });
     expect(h).not.toContain("Malha da calibração");
-    expect(h).not.toContain("Anéis das antenas");
     // mas os overlays base seguem lá (não dependem de fonte):
     expect(h).toContain("Caixas / detecções");
     expect(h).toContain("HUD (telemetria)");
@@ -87,11 +86,9 @@ describe("CamDrawer — a aba 'Camadas' saiu; observação vira o painel direto"
     timeline: [],
     presence: { now: 0, peak: 0, dwell: 0 },
     paused: false,
-    cameraId: "cam-teste",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     cal: {} as any,
     onCalibrate: () => {},
-    diag: { status: "idle" } as never,
   };
 
   it("sem modo de edição, o drawer mostra 'Seção de observação' DIRETO — sem nível 'Camadas'", () => {
@@ -103,10 +100,12 @@ describe("CamDrawer — a aba 'Camadas' saiu; observação vira o painel direto"
     // a sub-tablist de observação é o painel direto (não um filho de "Aba do painel"):
     expect(h).toContain('aria-label="Seção de observação"');
     expect(h).toContain("Pessoas");
-    expect(h).toContain("Por quê");
     expect(h).toContain("Timeline");
     // NEGATIVO: nenhuma aba "Camadas" e nenhum nível "Aba do painel"/"Observação" acima.
     expect(h).not.toContain("Camadas");
     expect(h).not.toContain('aria-label="Aba do painel"');
+    // NEGATIVO (ADR-018): as abas de fusão BLE ("Por quê" / "Vista 2D") migraram de repo.
+    expect(h).not.toContain("Por quê");
+    expect(h).not.toContain("Vista 2D");
   });
 });
