@@ -100,69 +100,9 @@ create table if not exists app_settings (
   data jsonb not null
 );
 
--- ── TAGS BLUETOOTH (identidade aumentada na câmera) — registro por nome do BT ──
--- Cadastro das tags que pessoas carregam; a estação BLE casa o que vê (bt_name) com o
--- rótulo. LGPD: só o CADASTRO é persistido (config); leituras de RSSI são efêmeras (em
--- memória, nunca gravadas) — mesma doutrina dos frames (ADR-002). SÓ METADADOS.
-create table if not exists bt_tags (
-  id text primary key,
-  bt_name text unique not null,   -- nome/MAC do Bluetooth p/ casar com o que a estação enxerga
-  rotulo text,                    -- nome amigável / pessoa portadora
-  ativo boolean default true,
-  criado_em bigint
-);
-
--- ── ESTAÇÕES BLE (os coletores/celulares que varrem o BLE e postam as leituras) ──────────────
--- A estação NASCE por AUTO-DESCOBERTA: o app posta em /api/bt/reading e o hub a registra como
--- PENDENTE (nome = o próprio id) — não há cadastro manual. O operador só a BATIZA (nome amigável),
--- (des)ativa e remove. `id` = o stationId que o device manda ([a-zA-Z0-9_-]{1,32}).
--- LGPD: só config/metadado (nenhuma leitura de RSSI é persistida — bt-readings é efêmero, ADR-002).
-create table if not exists bt_stations (
-  id text primary key,            -- stationId enviado pelo device (chave natural)
-  nome text,                      -- rótulo amigável ("Doca 3"); default = o próprio id (pendente)
-  ativo boolean default true,
-  primeira_vez_em bigint,         -- epoch-ms do 1º POST visto (auto-descoberta)
-  ultima_vez_em bigint            -- epoch-ms do último POST (grava espaçado; memória é a fonte viva)
-);
--- Migração ADITIVA (mesmo padrão dos carimbos de turno abaixo): `create table if not exists` NÃO
--- adiciona coluna a tabela já criada — um hub que rodou antes da detecção de estação CEGA precisa
--- do `add column if not exists` (idempotente; coluna NOVA e NULA, nada existente é alterado).
--- Estação CEGA (causa C1/bug B6): posta {readings: []} mas o scan morreu — `ultima_vez_em` sozinho
--- não distingue "viva" de "cega". Persistir `ultima_leitura_em` preserva o "sem ler tags há 22 h"
--- através de um restart do hub. Ambas gravam no MESMO write-behind espaçado do ultima_vez_em.
-alter table bt_stations add column if not exists ultima_leitura_em bigint; -- epoch-ms do último POST com ≥1 leitura (null = nunca)
-alter table bt_stations add column if not exists scanning boolean;         -- último estado de scan reportado pelo app (null = app não informa)
-
--- ── PLANTA BAIXA BLE (a geometria da instalação SEM câmera) — singleton jsonb ─────────────────
--- A tela "Planta BLE" precisa de uma geometria que NÃO vem de câmera (na fábrica ainda não há
--- câmeras): dimensões do local (metros) + posição X,Y (metros) de cada estação. Config GLOBAL —
--- UMA linha (id='default'), no padrão app_settings. SÓ NÚMEROS/METADADO (nenhuma imagem/leitura).
--- O store cria idempotentemente no boot também (server/bt/floorplan.js); aqui é o lugar canônico.
-create table if not exists bt_floorplan (
-  id text primary key,
-  data jsonb not null
-);
-
--- ── FINGERPRINTS de RSSI (survey de localização indoor por Bluetooth) — LISTA jsonb ──────────────
--- Cada linha é a assinatura RSSI das antenas num PONTO CONHECIDO da planta (rótulo + posição em
--- metros + estatísticas mean/std/n por antena). É a base de referência que um classificador usa p/
--- inferir onde uma tag está. LISTA (várias amostras por ponto), ao contrário do bt_floorplan
--- (singleton). SÓ NÚMEROS/METADADO (nenhuma imagem/PII). O store cria idempotentemente no boot
--- também (server/bt/fingerprints.js); aqui é o lugar canônico.
-create table if not exists bt_fingerprints (
-  id text primary key,
-  data jsonb not null
-);
-
--- ── LOCALIZAÇÃO last-known por tag (modelo AirTag: TC22 móvel congela a última posição) ──
--- UMA linha por tag (last-wins, sem trilha/histórico). Só metadado: lat/lon/acc/ts — nunca imagem (LGPD).
-create table if not exists bt_tag_locations (
-  mac text primary key,           -- MAC (maiúsculo) da tag vista pela estação
-  lat double precision,
-  lon double precision,
-  acc double precision,           -- precisão em metros (ou null)
-  ts bigint                       -- epoch-ms da última posição conhecida
-);
+-- (As tabelas BLE — bt_tags, bt_stations, bt_floorplan, bt_fingerprints, bt_tag_locations —
+--  migraram com o domínio para o repo mvp_trilateracao_BLE; ADR-018. Este schema é ADITIVO:
+--  instalações existentes que já as criaram NÃO sofrem DROP — as tabelas ficam dormentes.)
 
 -- ── TURNOS DE TRABALHO (cadastro global — contexto operacional das métricas) ──
 -- Entidade GLOBAL nomeada (spec-turnos-por-zona F1): cadastrada 1×, atribuída a N zonas via

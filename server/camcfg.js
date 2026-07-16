@@ -247,56 +247,16 @@ function cleanCalibration(c) {
     if (!p || !p.px || !p.world) return null;
     if (!isCoord(p.px.x) || !isCoord(p.px.y)) return null; // px normalizado 0..1
     if (!fin(p.world.x) || !fin(p.world.y)) return null; // metros (finitos, sinal livre)
-    const pt = {
+    points.push({
       px: { x: p.px.x, y: p.px.y },
       world: { x: p.world.x, y: p.world.y },
-    };
-    // mac (opcional): tag BLE ÂNCORA fixada NESTE vértice (posição conhecida) — MAC MAIÚSCULO (o
-    // mesmo das leituras BLE). Aditivo: só entra quando presente/não-vazio (SÓ string curta; LGPD).
-    const mac = str(p.mac).toUpperCase();
-    if (mac) pt.mac = mac;
-    points.push(pt);
+    });
   }
   if (!Array.isArray(c.H) || c.H.length !== 9 || !c.H.every(fin)) return null;
-  const out = { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };
-  // station (opcional): ponto de IMAGEM (normalizado 0..1) do CHÃO onde a estação BLE fica —
-  // origem da correlação RSSI×distância. Aditivo: ausente/ inválido = omitido (SÓ números; LGPD).
-  const s = c.station;
-  if (s && typeof s === "object" && isCoord(s.x) && isCoord(s.y)) out.station = { x: s.x, y: s.y };
-  // stations (opcional, MULTI-ANTENA): o ponto de chão de CADA estação BLE (0..1), indexado pelo
-  // `stationId` que a estação carimba nas leituras — é a chave que casa o RSSI da fonte com a
-  // geometria da fonte no motor. `station` (singular) permanece como o ponto da PRINCIPAL
-  // (retrocompat: motor antigo lê só ele; o cliente mantém os dois em sincronia — station-points.ts).
-  // Aditivo e defensivo: id vazio ou ponto fora de 0..1 é DESCARTADO ponto a ponto (uma estação
-  // torta não invalida a calibração inteira); objeto vazio é omitido. SÓ números/ids curtos (LGPD).
-  const st = c.stations;
-  if (st && typeof st === "object" && !Array.isArray(st)) {
-    const stations = {};
-    for (const [id, p] of Object.entries(st)) {
-      const key = str(id);
-      if (!key || !p || typeof p !== "object") continue;
-      if (!isCoord(p.x) || !isCoord(p.y)) continue;
-      stations[key] = { x: p.x, y: p.y };
-    }
-    if (Object.keys(stations).length) out.stations = stations;
-  }
-  // refTag (opcional): tag FIXA de referência num ponto conhecido do chão — âncora p/ heartbeat/drift/
-  // RSSI@1m. `mac` = MAC MAIÚSCULO (o mesmo das leituras BLE); `px` = ponto de IMAGEM (normalizado
-  // 0..1). Aditivo: ausente/ inválido = omitido (SÓ números/strings curtas; LGPD).
-  const rt = c.refTag;
-  if (
-    rt &&
-    typeof rt === "object" &&
-    typeof rt.mac === "string" &&
-    rt.mac.trim() !== "" &&
-    rt.px &&
-    typeof rt.px === "object" &&
-    isCoord(rt.px.x) &&
-    isCoord(rt.px.y)
-  ) {
-    out.refTag = { mac: String(rt.mac).trim().toUpperCase(), px: { x: rt.px.x, y: rt.px.y } };
-  }
-  return out;
+  // (Os campos BLE — mac por vértice, station/stations, refTag — migraram com a fusão para o
+  //  repo mvp_trilateracao_BLE; ADR-018. A allowlist é aditiva: payload antigo com esses campos
+  //  continua válido — eles simplesmente deixam de ser persistidos aqui.)
+  return { points, H: c.H.slice(), updatedAt: fin(c.updatedAt) ? c.updatedAt : Date.now() };
 }
 
 // ── Persistência ─────────────────────────────────────────────────────────────

@@ -36,7 +36,6 @@
 const { attributeZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
-const sessionRecorder = require("../bt/session-recorder"); // gravador OPT-IN (FUSION_RECORD) da sessão de fusão — no-op quando off
 
 /**
  * @param {object} deps
@@ -158,9 +157,8 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // NÃO reseta o dwell (skip = "nada mudou"; ver cabeçalho do presence-alert.js).
     if (presence) presence.observe(st, tracks, now);
 
-    // Gravação OPT-IN da sessão de fusão (FUSION_RECORD): tracks CRUS desta rodada, ANTES do gate de
-    // espectador (o teste de campo grava mesmo sem dashboard aberto). Fail-safe: jamais lança.
-    sessionRecorder.recordTracks(st.id, now, tracks);
+    // (O gravador de sessão de fusão — bt/session-recorder — migrou com o BLE; ADR-018.
+    //  Era o ÚNICO gancho câmera→BLE dentro do motor de análise.)
 
     // Overlay servido: roda TODA rodada com espectador (inclusive 0 tracks — o
     // dashboard precisa da rodada vazia p/ apagar caixas), mesmo sem zona/linha.

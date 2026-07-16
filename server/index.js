@@ -11,11 +11,6 @@ const cpLink = require("./control-plane-link");
 const users = require("./users");
 const whatsapp = require("./whatsapp");
 const recipients = require("./recipients");
-const btTags = require("./bt/bt-tags");
-const btStations = require("./bt/stations");
-const floorplan = require("./bt/floorplan"); // planta baixa do local (dimensões + posição das estações BLE)
-const fingerprints = require("./bt/fingerprints"); // survey de RSSI por ponto conhecido (localização indoor)
-const btLocations = require("./bt/bt-locations");
 const shifts = require("./shifts");
 const persistenceHealth = require("./persistence-health");
 const camcfg = require("./camcfg");
@@ -23,7 +18,6 @@ const events = require("./events");
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
-const discovery = require("./bt/discovery");
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
 
@@ -33,9 +27,6 @@ const routeAuth = require("./routes/auth");
 const routeData = require("./routes/data");
 const routeAlarms = require("./routes/alarms");
 const routeNotif = require("./routes/notif");
-const routeBtTags = require("./routes/bt-tags");
-const routeBtStations = require("./routes/bt-stations"); // registro das estações (CRUD do NOME/ativo)
-const routeBtStation = require("./routes/bt-station"); // ingest da estação (device-facing)
 const routeShifts = require("./routes/shifts");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
@@ -112,9 +103,6 @@ const httpServer = createServer(async (req, res) => {
     if (await routeData.handle(req, res, ctx)) return;
     if (await routeAlarms.handle(req, res, ctx)) return;
     if (await routeNotif.handle(req, res, ctx)) return;
-    if (await routeBtTags.handle(req, res, ctx)) return;
-    if (await routeBtStations.handle(req, res, ctx)) return;
-    if (await routeBtStation.handle(req, res, ctx)) return;
     if (await routeShifts.handle(req, res, ctx)) return;
     if (await routeUsers.handle(req, res, ctx)) return;
     if (await routeCameras.handle(req, res, ctx)) return;
@@ -255,27 +243,17 @@ io.on("connection", (socket) => {
     settings.init(),
     events.init(),
     camcfg.init(),
-    btTags.init(),
-    btStations.init(), // registro das estações BLE (nome amigável); a estação se AUTO-DESCOBRE ao postar
-    floorplan.init(), // planta baixa do local (dimensões em metros + posição X,Y das estações BLE)
-    fingerprints.init(), // survey de RSSI: assinatura das antenas por ponto conhecido (localização indoor)
-    btLocations.init(), // última localização por tag (modelo AirTag) — persistida, sobrevive a restart
     shifts.init(), // turnos de trabalho (cadastro global — spec-turnos-por-zona F1)
   ]);
   // GUARDIÃO DE PERSISTÊNCIA (persistence-health.js): se o PG está configurado mas algum store caiu
   // no fallback JSON, GRITA no boot — foi a armadilha que fez os turnos do dono sumirem (um .json não
-  // sobrevive a um redeploy sem volume persistente). btLocations tem forma própria (AirTag) e fica
-  // fora do resumo.
+  // sobrevive a um redeploy sem volume persistente).
   persistenceHealth.report(db.configured(), {
     users: users.persistence(),
     recipients: recipients.persistence(),
     settings: settings.persistence(),
     events: events.persistence(),
     camcfg: camcfg.persistence(),
-    "bt-tags": btTags.persistence(),
-    "bt-stations": btStations.persistence(),
-    floorplan: floorplan.persistence(),
-    fingerprints: fingerprints.persistence(),
     shifts: shifts.persistence(),
   });
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
@@ -301,17 +279,6 @@ io.on("connection", (socket) => {
       }
     }
   }
-  // Estação BLE (auditoria jul/12): sem BT_STATION_TOKEN, os endpoints de DEVICE (/api/bt/reading,
-  // /api/bt/tag-name, GET /api/bt/tags) ficam ABERTOS fora de produção (MVP em LAN) e respondem
-  // 503 em produção (fail-closed em routes/bt-station.js, SEM derrubar o boot — guard fail-closed
-  // não pode deadlockar o serviço que protege).
-  if (!process.env.BT_STATION_TOKEN) {
-    console.warn(
-      process.env.NODE_ENV === "production"
-        ? "[bt] BT_STATION_TOKEN ausente em PRODUÇÃO — os endpoints da estação BLE respondem 503 até você definir BT_STATION_TOKEN (env) e reiniciar o hub."
-        : "[bt] endpoints da estação BLE ABERTOS sem auth (dev/LAN) — defina BT_STATION_TOKEN no env para exigir o token do dispositivo.",
-    );
-  }
   cameraStore.init(); // câmeras dinâmicas (cameras.json) — síncrono, JSON
   // Motor de análise no hub (ADR-009): D-FINE em worker process, ingest direto no pgstore.
   // Liga/desliga por ANALYSIS_ENABLED (ver server/analysis/engine.js). Câmera analisada conta
@@ -320,9 +287,6 @@ io.on("connection", (socket) => {
   rtsp.setAnalysisViewer(analysis.isAnalyzing);
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);
-    // Descoberta na LAN (mesmo processo): o coletor TC22 acha o hub por UDP broadcast, sem digitar IP.
-    // Falha aqui é acessória — o próprio módulo trata erro sem derrubar o hub.
-    discovery.start({ port: PORT });
     console.log(
       alerts.andonEnabled()
         ? "[andon] webhook de alertas ATIVO"
