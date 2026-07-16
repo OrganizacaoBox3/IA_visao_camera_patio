@@ -8,10 +8,9 @@ import AxeBuilder from "@axe-core/playwright";
 // F1 fecha: consertou a tela → remove a entrada no MESMO PR (o teste avisa quando sobra folga).
 // Mesmo padrão-ratchet do gate estacionário do eval e do scripts/lint-tokens.mjs.
 //
-// APERTADO na F2 (varredura B): "/" (Mapa de tags), /turnos, /tags-ble e /replay ENTRARAM no gate
-// — as 4 telas novas foram varridas (tokens, semântica, estados, Lucide, canvas/mapa com
-// alternativa textual). FORA ainda: /calibracao (frente de produto editando AGORA — entra quando
-// pousar, é o último item da F2).
+// APERTADO na F2 (varredura B): /turnos ENTROU no gate. As rotas BLE (/, /tags-ble, /planta-ble,
+// /replay) saíram do gate quando o domínio migrou para o repo mvp_trilateracao_BLE (ADR-018) —
+// a cobertura delas vive lá. A home "/" agora redireciona a /monitoramento (já varrida).
 
 // ── Allowlist de dívida conhecida ─────────────────────────────────────────────────────────────
 // Cada entrada: regra do axe + POR QUE está aqui + item da spec que a fecha. Só pode DIMINUIR.
@@ -29,20 +28,17 @@ const ALLOW: Record<string, AllowEntry[]> = {
   // ("alarmes-saude" saiu: a rota morreu — a Saúde virou a faixa N1 + as ferramentas N5 DENTRO
   //  de /relatorio, e é lá que o axe a varre agora. A cobertura MUDOU DE LUGAR, não sumiu.)
   cameras: [],
-  mapa: [],
   turnos: [],
-  "tags-ble": [],
-  "planta-ble": [],
-  replay: [],
 };
 
 // Mesmo login real do app.spec.ts (hub isolado do global-setup, bootstrap admin).
+// Home "/" redireciona à Central (ADR-018) — o heading confirma o login E o redirect.
 async function login(page: Page) {
   await page.goto("/");
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 }
 
 // Roda o axe e compara com a allowlist da rota: violação séria FORA da lista = falha;
@@ -128,15 +124,6 @@ test("axe: /cameras", async ({ page }) => {
   await checkA11y(page, "cameras");
 });
 
-// ── F2 (varredura B): as 4 telas novas — as que MAIS violavam a constituição ───────────────────
-// O login já pousa na home ("/" = Mapa de tags). A lista de tags é a ALTERNATIVA TEXTUAL do mapa
-// Leaflet (e existe no mobile agora — antes era `hidden md:flex`).
-test("axe: / (Mapa de tags — home)", async ({ page }) => {
-  await login(page);
-  await expect(page.getByRole("region", { name: "Mapa das tags" })).toBeVisible();
-  await checkA11y(page, "mapa");
-});
-
 test("axe: /turnos", async ({ page }) => {
   await login(page);
   await page.goto("/turnos");
@@ -144,33 +131,6 @@ test("axe: /turnos", async ({ page }) => {
   await checkA11y(page, "turnos");
 });
 
-// /tags-ble = a tela BLE unificada (Tags | Estações — spec-arquitetura-informacao §3). O h1 virou
-// "BLE" (o menu diz "BLE": mesma palavra na navegação e no título — o achado nº 3 da spec). As DUAS
-// abas passam pelo axe: a de Estações é conteúdo novo NESTA rota (veio da /estacoes, que morreu) e
-// ficaria fora do gate se o teste só varresse a aba padrão.
-test("axe: /tags-ble (abas Tags e Estações)", async ({ page }) => {
-  await login(page);
-  await page.goto("/tags-ble");
-  await expect(page.getByRole("heading", { name: "BLE", exact: true })).toBeVisible();
-  await checkA11y(page, "tags-ble");
-
-  await page.getByRole("tab", { name: "Estações" }).click();
-  await expect(page.getByRole("tabpanel")).toBeVisible();
-  await checkA11y(page, "tags-ble");
-});
-
-test("axe: /planta-ble", async ({ page }) => {
-  await login(page);
-  await page.goto("/planta-ble");
-  await expect(page.getByRole("heading", { name: "Planta BLE" })).toBeVisible();
-  await checkA11y(page, "planta-ble");
-});
-
-// Replay: canvases com role=img + descrição textual do tick; controles ◀▶✕ agora são Lucide.
-test("axe: /replay", async ({ page }) => {
-  await login(page);
-  await page.goto("/replay");
-  await expect(page.getByRole("heading", { name: /player de replay/i })).toBeVisible();
-  await expect(page.getByRole("img", { name: /Planta \(top-down\)/i })).toBeVisible();
-  await checkA11y(page, "replay");
-});
+// (Os testes de "/" (Mapa de tags), /tags-ble, /planta-ble e /replay MORRERAM com as rotas — o
+//  domínio BLE migrou para o repo mvp_trilateracao_BLE (ADR-018) e o gate de a11y dele vive lá.
+//  A home "/" redireciona a /monitoramento, já coberta acima.)

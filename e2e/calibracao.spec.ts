@@ -23,8 +23,7 @@ async function login(page: Page) {
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible();
-  await page.goto("/monitoramento");
+  // Home "/" redireciona à Central (ADR-018) — o heading confirma o login E o redirect.
   await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 }
 

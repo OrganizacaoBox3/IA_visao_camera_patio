@@ -7,10 +7,8 @@ async function login(page: Page) {
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
-  // Home agora é o Mapa (estilo AirTag). Confirma o login e segue p/ a Central
-  // (dashboard de câmeras, rota /monitoramento), onde os testes de câmera operam.
-  await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible();
-  await page.goto("/monitoramento");
+  // Home "/" redireciona à Central (dashboard de câmeras, rota /monitoramento — ADR-018):
+  // o heading confirma o login E o redirect, e os testes de câmera já operam daqui.
   await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 }
 
@@ -187,17 +185,12 @@ test("Área (arraste): o retângulo nasce POLÍGONO editável — seleciona, ins
   await expect(page.getByText(/Use “Área” para desenhar/)).toBeVisible();
 });
 
-// GATE DE A11Y do console que o operador mais vive (a a11y.spec.ts varre só as rotas — a câmera
-// ABERTA exige um nó de câmera conectado, então o axe dela mora aqui, junto dos helpers).
-// Mesma régua do a11y.spec.ts: falha em violação critical/serious; `color-contrast` segue como a
-// dívida F1 conhecida (token --text-muted/--text-dim sobre --panel), não é da tela.
-// A TELA DO PORQUÊ (bug B8 do laudo 2026-07-13): quando o sistema não associa a tag à pessoa, ele
-// CALAVA. O diagnóstico (`diagnoseFunnel`) existia, testado, com ZERO consumidor de UI. Este teste
-// prova que ele CHEGOU NA TELA e que a aba fala em português — no nó de webcam do e2e não há
-// estação BLE nem motor do hub, então o estado esperado aqui é justamente o HONESTO: "o diagnóstico
-// não está rodando / a fusão não roda", em vez do silêncio de antes. (O funil COM tag/rádio é
-// coberto por unidade em src/camera/tabs/PorQueTab.test.tsx, com os números medidos em campo.)
-test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunca cala)", async ({
+// GATE do painel de OBSERVAÇÃO (F2/F3, spec-tela-camera-arquitetura §3-B/§3-C): Pessoas · Timeline
+// são SUB-ABAS de um painel único. A F3 tirou a aba "Camadas" do drawer (virou o popover
+// "Exibição"), então o nível de cima "Observação × Camadas" SUMIU — sem modo de edição, o painel
+// mostra a "Seção de observação" DIRETO. Controles negativos: nenhuma "Aba do painel", nenhuma aba
+// "Camadas" e nenhuma aba de fusão BLE ("Por quê"/"Vista 2D" migraram de repo — ADR-018).
+test("Painel de observação: sub-abas diretas (Pessoas·Timeline), sem Camadas nem abas BLE", async ({
   page,
   context,
 }) => {
@@ -207,23 +200,15 @@ test("Por quê: a aba do diagnóstico existe e DIZ por que não identifica (nunc
   await page.locator(".tile[title='Abrir câmera']").first().click();
   await expect(page.locator(".cam-stage")).toBeVisible();
 
-  // F2/F3 (spec-tela-camera-arquitetura §3-B/§3-C): Pessoas · Por quê · Timeline são SUB-ABAS de um
-  // painel de OBSERVAÇÃO único. A F3 tirou a aba "Camadas" do drawer (virou o popover "Exibição"),
-  // então o nível de cima "Observação × Camadas" SUMIU — sem modo de edição, o painel mostra a
-  // "Seção de observação" DIRETO. Controle negativo: nenhuma "Aba do painel" e nenhuma aba "Camadas".
   await expect(page.getByRole("tablist", { name: "Aba do painel" })).toHaveCount(0);
   const obs = page.getByRole("tablist", { name: "Seção de observação" });
   await expect(obs).toBeVisible();
-  await expect(obs.getByRole("tab")).toHaveCount(3);
+  await expect(obs.getByRole("tab")).toHaveCount(2);
   await expect(obs.getByRole("tab", { name: "Camadas" })).toHaveCount(0);
-  await obs.getByRole("tab", { name: "Por quê" }).click();
-  const panel = page.getByRole("tabpanel", { name: "Por quê" });
-  await expect(panel.getByRole("heading", { name: "Por que não identificou?" })).toBeVisible();
-  // O contrato com o operador: a tela NUNCA fica muda — ou explica a cadeia, ou explica por que
-  // nem há cadeia (sem leituras BLE nesta câmera / sem pistas do motor do hub).
-  await expect(
-    panel.getByText(/Diagnóstico desligado|A fusão não está rodando|Ninguém em cena/),
-  ).toBeVisible();
+  await expect(obs.getByRole("tab", { name: "Por quê" })).toHaveCount(0);
+  await expect(obs.getByRole("tab", { name: "Vista 2D" })).toHaveCount(0);
+  await obs.getByRole("tab", { name: "Timeline" }).click();
+  await expect(page.getByRole("tabpanel", { name: "Timeline" })).toBeVisible();
 });
 
 // CALIBRAR É UM MODO, não uma camada empilhada (spec-tela-camera-modos §3): a queixa do dono era

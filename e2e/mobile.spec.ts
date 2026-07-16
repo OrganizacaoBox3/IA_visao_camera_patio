@@ -6,7 +6,7 @@ import { test, expect, type Page } from "@playwright/test";
 test.use({ viewport: { width: 390, height: 844 } });
 
 const SCREENS = [
-  { path: "/", name: "mapa", heading: /Mapa de tags/i },
+  // "/" redireciona à Central (a home BLE migrou de repo — ADR-018); o gate cobre a rota canônica.
   { path: "/monitoramento", name: "central", heading: /Central de câmeras/i },
   { path: "/cameras", name: "cameras", heading: /Câmeras/i },
   // /relatorio ABSORVEU a /alarmes-saude (spec-arquitetura-informacao §2): a rota morreu, e com
@@ -23,7 +23,8 @@ async function login(page: Page) {
   await page.locator("#login-user").fill("admin");
   await page.locator("#login-pass").fill("admin@box3");
   await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(page.getByRole("heading", { name: /Mapa de tags/i })).toBeVisible(); // home agora é o Mapa
+  // Home "/" redireciona à Central (ADR-018) — o heading confirma o login E o redirect.
+  await expect(page.getByRole("heading", { name: "Central", exact: true })).toBeVisible();
 }
 
 test("mobile 390: nenhuma tela tem scroll horizontal da página", async ({ page }) => {
