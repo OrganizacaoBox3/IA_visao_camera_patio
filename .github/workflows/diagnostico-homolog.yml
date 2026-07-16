@@ -1,0 +1,64 @@
+# Diagnóstico READ-ONLY do homolog — espelho do acesso do deploy-homolog.yml, sem NENHUMA
+# escrita: coleta journal do hub (sudoers VISAO_LOGS), portas em escuta, estado do go2rtc e
+# do relay RTMP (ADR-019). Para depurar sem abrir shell manual na VPS compartilhada.
+name: Diagnóstico Homolog (read-only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diagnostico-homolog
+  cancel-in-progress: false
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    environment: homolog
+    timeout-minutes: 5
+    steps:
+      - name: Preparar chave SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?secret HOMOLOG_SSH_KEY não configurado no environment homolog}"
+          : "${SSH_HOST:?secret HOMOLOG_SSH_HOST não configurado no environment homolog}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
+
+      - name: Coletar diagnóstico (só leitura)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -uo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          echo "== portas em escuta (1935 relay / 8935 flv / 8554 rtsp / 1984 api / 8091 hub) =="
+          ss -tln | grep -E ':(1935|8935|8554|1984|8091)\b' || echo "(nenhuma das portas esperadas)"
+          echo
+          echo "== relay HTTP-FLV local vivo? (404 = vivo; falha de conexão = morto) =="
+          curl -s -o /dev/null -w "GET 127.0.0.1:8935/probe.flv -> HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8935/probe.flv || echo "conexão recusada/timeout na 8935"
+          echo
+          echo "== ffmpeg disponível para o unit? =="
+          command -v ffmpeg && ffmpeg -version 2>/dev/null | head -1 || echo "ffmpeg NÃO encontrado no PATH"
+          echo
+          echo "== go2rtc api/streams (produtores/tracks por canal) =="
+          curl -s --max-time 5 http://127.0.0.1:1984/api/streams | head -c 4000 || echo "(api 1984 inacessível)"
+          echo
+          echo
+          echo "== journal do hub (última 1h): rtmp/go2rtc/rtsp =="
+          sudo -n journalctl -u visao-hub --since "-60 min" --no-pager 2>/dev/null | grep -aiE "rtmp|go2rtc|ffmpeg|exec" | tail -120 || echo "(journal indisponível)"
+          REMOTE
