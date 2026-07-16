@@ -28,10 +28,14 @@ Relay RTMP **próprio, zero dependências** (`server/rtmp-ingest.js`, node:net +
 - O relay assume o listener **:1935** (o go2rtc deixa de escutar RTMP). Aceita o publish sem
   interpretar codec, cacheia `onMetaData` + sequence headers, e serve o FLV **verbatim** por
   HTTP em `127.0.0.1:8935/<canal>.flv`.
-- Cada canal de ingest no `go2rtc.yaml` ganha a fonte
-  `ffmpeg:http://127.0.0.1:8935/<canal>.flv#video=copy#audio=copy` — **o ffmpeg (o parser
-  comprovado) faz o parse**, remux puro (`-c copy`, zero re-encode), e entrega RTSP ao go2rtc.
-  Do RTSP em diante nada muda (WebRTC/JPEG/análise).
+- Cada canal de ingest no `go2rtc.yaml` ganha uma fonte que roda
+  `ffmpeg -i http://127.0.0.1:8935/<canal>.flv -c copy -f rtsp {output}` — **o ffmpeg (o
+  parser comprovado) faz o parse**, remux puro (zero re-encode), e entrega RTSP ao go2rtc.
+  Do RTSP em diante nada muda (WebRTC/JPEG/análise). *Nota de produção (mesmo dia): a fonte
+  é `exec:` e não `ffmpeg:` — o módulo ffmpeg do go2rtc **recusa o ffmpeg 4.4.2 do Ubuntu
+  22.04** ("unsupported version", visto no journal do homolog via workflow de diagnóstico
+  read-only); o `exec:` roda o binário sem validar versão, e o 4.4 lê FLV/H.264/HEVC inband
+  normalmente — é o mesmo binário que o `rtsp.js` do hub já usava.*
 - O evento `publish` do relay alimenta o auto-cadastro **direto** (`rtmp-auto-enroll.onPublish`)
   — sem raspagem de log, e o vídeo forma na mesma sessão do DVR.
 - Knob de rollback: `RTMP_INGEST=go2rtc` restaura o comportamento legado na íntegra.

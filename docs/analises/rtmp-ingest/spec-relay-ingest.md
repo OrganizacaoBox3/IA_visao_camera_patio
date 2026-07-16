@@ -34,7 +34,8 @@ DVR ──rtmp :1935──▶ server/rtmp-ingest.js (hub, zero-dep)
                     HTTP-FLV 127.0.0.1:8935/<canal>.flv
                         │
                         ▼ (go2rtc spawna sob demanda)
-                    ffmpeg -i … -c copy -f rtsp (fonte "ffmpeg:" do canal)
+                    ffmpeg -i … -c copy -f rtsp (fonte "exec:" do canal — o módulo
+                    "ffmpeg:" do go2rtc recusa o ffmpeg 4.4.2 do Ubuntu 22.04)
                         │
                         ▼
                     go2rtc (RTSP/WebRTC/JPEG) ──▶ hub/análise/dashboard (INALTERADOS)
