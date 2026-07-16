@@ -12,15 +12,7 @@
 // de volta no palco diz se a calibração "assenta" no chão. Medir = 2 cliques → metros.
 import { Grid3x3, Ruler, Save, Undo2 } from "lucide-react";
 import { Alert, Badge, Button, Field, HelpTip, Input, Loading, SegmentedControl } from "../../ui";
-import { StationHealthChip } from "../../fusion/StationHealthChip";
-import { TagPicker } from "../TagPicker";
-import { takenTags } from "../takenTags";
-import {
-  CORNER_HINT,
-  type CalMode,
-  type CalStep,
-  type CalibrationEditor,
-} from "../useCalibrationEditor";
+import { CORNER_HINT, type CalMode, type CalibrationEditor } from "../useCalibrationEditor";
 
 type Props = {
   cal: CalibrationEditor;
@@ -28,34 +20,8 @@ type Props = {
   onActivate: () => void;
 };
 
-// Os 4 passos, com rótulos CURTOS: "Estação BLE"/"Tag de referência" estouravam o segmentado no
-// drawer estreito. Renderizados num toggle que QUEBRA em 2 linhas (não clipam).
-const CAL_STEPS: [CalStep, string][] = [
-  ["cantos", "Cantos"],
-  ["ancoras", "Âncoras"],
-  ["estacao", "Estação"],
-  ["referencia", "Tag ref."],
-];
-
 export function CalibracaoTab({ cal, onActivate }: Props) {
-  const {
-    active,
-    canConfigure,
-    mode,
-    calStep,
-    corners,
-    cornerMacs,
-    anchorCorner,
-    refTag,
-    sel,
-    selPx,
-    stations,
-    stationIds,
-    liveStationIds,
-    principalId,
-    nameOf,
-    labelOf,
-  } = cal;
+  const { active, canConfigure, mode, corners } = cal;
 
   return (
     <div className="flex flex-col gap-3">
@@ -65,12 +31,8 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
         <HelpTip label="Como calibrar">
           Marque os 4 CANTOS de um retângulo real no chão (área demarcada, pallet, ladrilhos) em
           ORDEM e informe a Largura (lado 1→2) e o Comprimento (lado 2→3) em metros — a homografia
-          sai daí; arraste um canto para ajustar. Passos: Cantos (o retângulo) · Âncoras (uma tag por
-          canto, opcional) · Estação (onde fica a antena BLE) · Tag ref. (uma tag fixa para aferir o
-          sinal). Dica: fixe a estação BLE bem perto da câmera — ajuda a reconhecer quem é quem
-          enquanto a câmera ainda não está calibrada. Com várias estações, a “principal” é a
-          referência de distância quando só ela está calibrada. A grade de conferência (1 m/linha)
-          deve assentar no chão.
+          sai daí; arraste um canto para ajustar. A grade de conferência (1 m/linha) deve assentar
+          no chão.
         </HelpTip>
         {cal.savedH && <Badge tone="ok">calibrada</Badge>}
       </div>
@@ -110,25 +72,6 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
           )}
           {canConfigure && (
             <>
-              {/* Passos — toggle que QUEBRA em 2 linhas no drawer estreito (o segmentado de linha
-                  única clipava os 4 rótulos). Mesmo idioma dos seletores de estação/canto abaixo. */}
-              <div
-                role="group"
-                aria-label="O que marcar no chão"
-                className="flex flex-wrap gap-1.5"
-              >
-                {CAL_STEPS.map(([value, label]) => (
-                  <Button
-                    key={value}
-                    size="sm"
-                    variant={calStep === value ? "primary" : "ghost"}
-                    aria-pressed={calStep === value}
-                    onClick={() => cal.setCalStep(value)}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
               {/* htmlFor/id: o painel ANTIGO não ligava o <label> ao <input> — os dois campos que
                   DEFINEM a escala do mundo (L×C) não tinham nome acessível. Passava despercebido
                   porque a rota /calibracao estava FORA do gate de axe; aqui dentro da câmera ela
@@ -158,17 +101,9 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
                 </Field>
               </div>
               <span className="text-sec text-text-muted">
-                {calStep === "estacao"
-                  ? selPx
-                    ? `${sel ? nameOf(sel) : "Estação"} marcada — arraste para ajustar`
-                    : `Clique no chão onde fica ${sel ? `a estação ${nameOf(sel)}` : "a estação BLE"}`
-                  : calStep === "referencia"
-                    ? refTag?.px
-                      ? "Tag de referência marcada — arraste para ajustar"
-                      : "Escolha a tag na lista e clique no chão onde ela está fixada"
-                    : corners.length < 4
-                      ? `Clique o canto ${CORNER_HINT[corners.length]}`
-                      : "4 cantos marcados"}
+                {corners.length < 4
+                  ? `Clique o canto ${CORNER_HINT[corners.length]}`
+                  : "4 cantos marcados"}
               </span>
               {corners.length > 0 && (
                 <div className="flex flex-wrap gap-2">
@@ -181,142 +116,6 @@ export function CalibracaoTab({ cal, onActivate }: Props) {
                 </div>
               )}
             </>
-          )}
-
-          {canConfigure && calStep === "estacao" && (
-            <div className="flex flex-col gap-2">
-              {/* N estações (multi-antena): escolha a estação e clique no chão onde ela está. Sem
-                  estações no registro (nenhuma postou ainda) o passo segue como sempre — um ponto
-                  único, o da principal. A estação NASCE por auto-descoberta no hub. */}
-              {stationIds.length > 0 && (
-                <>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-sec text-text-muted">Estação:</span>
-                    {/* O botão é o NOME ("Doca 3"); o id técnico vira dica (title) — quem precisa
-                        dele é o suporte, não o operador que marca o ponto no chão. */}
-                    {stationIds.map((id) => (
-                      <Button
-                        key={id}
-                        size="sm"
-                        variant={sel === id ? "primary" : "ghost"}
-                        aria-pressed={sel === id}
-                        title={`id técnico: ${id}`}
-                        onClick={() => cal.setSelStation(id)}
-                      >
-                        {nameOf(id)}
-                        {id === principalId ? " · principal" : ""}
-                        {!liveStationIds.has(id) ? " · sem sinal" : ""}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {sel && stations[sel] && sel !== principalId && (
-                      <Button size="sm" variant="ghost" onClick={() => cal.makePrincipal(sel)}>
-                        Definir {nameOf(sel)} como principal
-                      </Button>
-                    )}
-                    {sel && stations[sel] && (
-                      <Button size="sm" variant="ghost" onClick={() => cal.clearStationPoint(sel)}>
-                        Remover ponto
-                      </Button>
-                    )}
-                    <span className="text-sec text-text-muted">
-                      {Object.keys(stations).length} de {stationIds.length} com ponto marcado.
-                    </span>
-                  </div>
-                </>
-              )}
-              {/* Guia de geometria da instalação: AVISO, nunca bloqueio (o save segue liberado).
-                  A dica geral "fixe a estação perto da câmera" saiu daqui para o "?" do título — era
-                  texto permanente no meio da UI (hierarquia de ajuda: label→placeholder→"?"). */}
-              {cal.geomHints.map((h) => (
-                <Alert key={h.code} tone="info">
-                  {h.text}
-                </Alert>
-              ))}
-            </div>
-          )}
-
-          {canConfigure && calStep === "referencia" && (
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sec text-text-muted">Tags visíveis agora:</span>
-                {/* 1 chip por estação viva; com uma só, o rótulo da fonte é omitido. O nome vem do
-                    CADASTRO (labelOf → "Doca 3"); estação fora do registro degrada para o id. */}
-                {cal.stationsHealth.map((s) => (
-                  <StationHealthChip
-                    key={s.stationId || "estacao"}
-                    health={s}
-                    station={
-                      cal.stationsHealth.length > 1 && s.stationId
-                        ? labelOf(s.stationId)
-                        : undefined
-                    }
-                  />
-                ))}
-              </div>
-              <TagPicker
-                readings={cal.btReadings}
-                selectedMac={refTag?.mac ?? null}
-                onPick={cal.pickRefTag}
-                taken={takenTags(cornerMacs, refTag?.mac ?? null, { step: "referencia" })}
-              />
-            </div>
-          )}
-
-          {canConfigure && calStep === "ancoras" && (
-            <div className="flex flex-col gap-2">
-              <p className="m-0 text-sec text-text-muted">
-                Associe uma tag BLE ÂNCORA (posição conhecida) a cada canto: selecione o canto,
-                depois escolha a tag na lista abaixo.
-              </p>
-              {corners.length < 4 ? (
-                <span className="text-sec text-text-muted">
-                  Marque os 4 cantos primeiro (passo Cantos).
-                </span>
-              ) : (
-                <>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-sec text-text-muted">Canto:</span>
-                    {corners.map((_, i) => (
-                      <Button
-                        key={`ac${i}`}
-                        size="sm"
-                        variant={anchorCorner === i ? "primary" : "ghost"}
-                        aria-pressed={anchorCorner === i}
-                        onClick={() => cal.setAnchorCorner(i)}
-                      >
-                        {i + 1}
-                        {cornerMacs[i] ? ` · ${cal.macName(cornerMacs[i])}` : ""}
-                      </Button>
-                    ))}
-                  </div>
-                  <span className="text-sec text-text-muted">
-                    Tag-âncora para o canto {anchorCorner + 1}:
-                  </span>
-                  <TagPicker
-                    readings={cal.btReadings}
-                    selectedMac={cornerMacs[anchorCorner] || null}
-                    onPick={(mac) => cal.setCornerMac(anchorCorner, mac)}
-                    taken={takenTags(cornerMacs, refTag?.mac ?? null, {
-                      step: "ancoras",
-                      corner: anchorCorner,
-                    })}
-                    leading={
-                      cornerMacs[anchorCorner] ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => cal.setCornerMac(anchorCorner, "")}
-                        >
-                          Sem âncora
-                        </Button>
-                      ) : null
-                    }
-                  />
-                </>
-              )}
-            </div>
           )}
 
           {/* Legenda da grade de conferência (só quando ela está em tela). */}

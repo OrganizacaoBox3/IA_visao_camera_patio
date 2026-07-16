@@ -17,7 +17,7 @@ import type { CalibrationEditor } from "./useCalibrationEditor";
 type Props = { cal: CalibrationEditor };
 
 export function CalibrationLayer({ cal }: Props) {
-  const { rect, mode, calStep, corners, cornerMacs, hoverIdx, anchorCorner } = cal;
+  const { rect, mode, corners, hoverIdx } = cal;
   if (!rect || !cal.active) return null;
   const calibrando = mode === "calibrar";
   return (
@@ -57,12 +57,7 @@ export function CalibrationLayer({ cal }: Props) {
             <circle
               cx={`${p.x * 100}%`}
               cy={`${p.y * 100}%`}
-              r={
-                (calStep === "cantos" && hoverIdx === i) ||
-                (calStep === "ancoras" && anchorCorner === i)
-                  ? 8
-                  : 6
-              }
+              r={hoverIdx === i ? 8 : 6}
               fill="var(--state-info)"
               stroke="var(--bg)"
               strokeWidth={2}
@@ -79,86 +74,8 @@ export function CalibrationLayer({ cal }: Props) {
             >
               {i + 1}
             </text>
-            {cornerMacs[i] && (
-              <text
-                x={`${p.x * 100}%`}
-                y={`${p.y * 100}%`}
-                dx={9}
-                dy={17}
-                fontSize={10}
-                fill="var(--state-info)"
-                opacity={0.75}
-              >
-                {cal.macName(cornerMacs[i])}
-              </text>
-            )}
           </g>
         ))}
-
-      {/* Estações BLE (N): marcador de antena (anel radiante + ponto), cor distinta dos cantos. A EM
-          EDIÇÃO ganha realce; as demais ficam apagadas (going-gray: só o foco pede atenção). */}
-      {calibrando &&
-        cal.stationMarks.map((m) => {
-          const on = calStep === "estacao" && m.id === (cal.sel || null);
-          const hovered = on && hoverIdx === 0;
-          return (
-            <g key={m.id ?? "estacao"} opacity={calStep !== "estacao" || on ? 1 : 0.55}>
-              <circle
-                cx={`${m.px.x * 100}%`}
-                cy={`${m.px.y * 100}%`}
-                r={hovered ? 12 : 10}
-                fill="none"
-                stroke="var(--state-warn)"
-                strokeWidth={1.5}
-                opacity={0.6}
-              />
-              <circle
-                cx={`${m.px.x * 100}%`}
-                cy={`${m.px.y * 100}%`}
-                r={hovered ? 6 : 5}
-                fill="var(--state-warn)"
-                stroke="var(--bg)"
-                strokeWidth={2}
-              />
-              <text
-                x={`${m.px.x * 100}%`}
-                y={`${m.px.y * 100}%`}
-                dx={13}
-                dy={4}
-                fontSize={12}
-                fill="var(--state-warn)"
-              >
-                {m.id ? cal.nameOf(m.id) : "estação"}
-                {m.id && m.principal ? " ★" : ""}
-              </text>
-            </g>
-          );
-        })}
-
-      {/* Tag de referência: LOSANGO (forma distinta do canto-círculo e da estação-antena). */}
-      {calibrando && cal.refTag?.px && (
-        <svg
-          x={`${cal.refTag.px.x * 100}%`}
-          y={`${cal.refTag.px.y * 100}%`}
-          width={1}
-          height={1}
-          overflow="visible"
-        >
-          <rect
-            x={-7}
-            y={-7}
-            width={14}
-            height={14}
-            transform={`rotate(45) scale(${calStep === "referencia" && hoverIdx === 0 ? 1.2 : 1})`}
-            fill="var(--state-info)"
-            stroke="var(--bg)"
-            strokeWidth={2}
-          />
-          <text x={13} y={4} fontSize={12} fill="var(--state-info)">
-            ref
-          </text>
-        </svg>
-      )}
 
       {/* Modo medir: a linha + os 2 pontos (a leitura em metros vive no PAINEL, nunca sobre o
           vídeo — "a imagem é soberana", ADR-003). */}
