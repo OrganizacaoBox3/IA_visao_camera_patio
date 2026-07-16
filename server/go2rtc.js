@@ -168,14 +168,20 @@ function generateYaml(sources) {
       lines.push(`  ${q(s.id)}:`);
       lines.push(`    - ${q(s.url)}`);
     }
-    // Canais de ingest RTMP. Relay (default): fonte ffmpeg puxando o HTTP-FLV local do
-    // relay (-c copy, remux puro — zero re-encode). Legado: stream VAZIO que recebe o publish.
+    // Canais de ingest RTMP. Relay (default): ffmpeg puxa o HTTP-FLV local do relay e publica
+    // RTSP de volta no go2rtc (-c copy, remux puro — zero re-encode). Via fonte "exec:" (não
+    // "ffmpeg:"): o módulo ffmpeg do go2rtc RECUSA o ffmpeg 4.4.2 do Ubuntu 22.04 ("unsupported
+    // version", visto no journal do homolog), enquanto o exec roda o binário sem validar — e o
+    // 4.4 lê FLV/H.264/HEVC inband normalmente (é o MESMO binário que o rtsp.js do hub já usa).
+    // Flags universais (existem desde o ffmpeg 2.x). Legado: stream VAZIO que recebe o publish.
     for (const name of ingest) {
       if (legacyIngest) {
         lines.push(`  ${q(name)}:`);
       } else {
         lines.push(`  ${q(name)}:`);
-        lines.push(`    - ${q(`ffmpeg:http://127.0.0.1:${RELAY_HTTP_PORT}/${name}.flv#video=copy#audio=copy`)}`);
+        lines.push(
+          `    - ${q(`exec:ffmpeg -hide_banner -v error -fflags nobuffer -i http://127.0.0.1:${RELAY_HTTP_PORT}/${name}.flv -c copy -rtsp_transport tcp -f rtsp {output}`)}`,
+        );
       }
     }
   }

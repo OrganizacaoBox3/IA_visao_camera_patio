@@ -62,12 +62,15 @@ describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
     expect(count).toBe(1);
   });
 
-  it("relay (default): canal de ingest consome o HTTP-FLV do relay via ffmpeg; go2rtc NÃO escuta :1935", () => {
+  it("relay (default): canal de ingest consome o HTTP-FLV do relay via exec:ffmpeg; go2rtc NÃO escuta :1935", () => {
     const { text } = go2rtc.generateYaml([{ id: "cam-abc", url: "rtsp://127.0.0.1:8554/causei_cam2" }]);
     expect(text).not.toContain("\nrtmp:"); // quem escuta a :1935 é o relay do hub
     expect(text).toContain('  "cam-abc":'); // stream normal da câmera (source = o republish)
     expect(text).toContain('    - "rtsp://127.0.0.1:8554/causei_cam2"');
-    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam2.flv#video=copy#audio=copy"');
+    // exec (não "ffmpeg:"): o módulo ffmpeg do go2rtc recusa o ffmpeg 4.4.2 do Ubuntu 22.04
+    expect(text).toContain(
+      '    - "exec:ffmpeg -hide_banner -v error -fflags nobuffer -i http://127.0.0.1:8935/causei_cam2.flv -c copy -rtsp_transport tcp -f rtsp {output}"',
+    );
   });
 
   it("legado (RTMP_INGEST=go2rtc): listener RTMP do go2rtc + canal de ingest VAZIO", () => {
@@ -76,7 +79,7 @@ describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
     expect(text).toContain("rtmp:");
     expect(text).toContain('listen: ":1935"');
     expect(text).toMatch(/\n {2}"causei_cam2":\n/); // canal de ingest VAZIO (sem source abaixo)
-    expect(text).not.toContain("ffmpeg:http");
+    expect(text).not.toContain("exec:ffmpeg");
   });
 
   it("aceita localhost e múltiplos canais de ingest", () => {
@@ -84,8 +87,8 @@ describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
       { id: "cA", url: "rtsp://localhost:8554/causei_cam2" },
       { id: "cB", url: "rtsp://127.0.0.1:8554/causei_cam3" },
     ]);
-    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam2.flv#video=copy#audio=copy"');
-    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam3.flv#video=copy#audio=copy"');
+    expect(text).toContain("http://127.0.0.1:8935/causei_cam2.flv");
+    expect(text).toContain("http://127.0.0.1:8935/causei_cam3.flv");
   });
 
   it("sem câmeras: streams vazio e sem rtmp", () => {
