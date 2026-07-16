@@ -3,7 +3,14 @@
 > Como colocar no ar, na VPS de homolog (Ubuntu/DigitalOcean, **compartilhada**), o ingest RTMP
 > para câmeras que só fazem **PUSH** (Intelbras/Dahua). Design: [`PENDENCIAS.md`](PENDENCIAS.md) —
 > a URL self-referente `rtsp://127.0.0.1:8554/<nome>` no cadastro liga o canal; **zero env no servidor**.
-> O RTMP entra por **TCP cru na porta 1935**, direto no go2rtc — **não passa pelo nginx**.
+> O RTMP entra por **TCP cru na porta 1935** — **não passa pelo nginx**.
+>
+> **Desde o ADR-019 (2026-07-16):** quem escuta a :1935 é o **relay do hub**
+> (`server/rtmp-ingest.js`), não o go2rtc — o parser RTMP do go2rtc não decodifica o push de
+> DVRs Intelbras MHDX (producer sem tracks; spec: [`spec-relay-ingest.md`](spec-relay-ingest.md)).
+> O canal consome do relay via `ffmpeg -c copy` (fonte `ffmpeg:` no yaml). O publish que bate
+> em canal desconhecido é **auto-cadastrado** (evento direto → `rtmp-auto-enroll`).
+> Rollback: `RTMP_INGEST=go2rtc` no env restaura o listener legado do go2rtc.
 
 ## Passos
 

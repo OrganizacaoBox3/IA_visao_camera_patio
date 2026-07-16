@@ -1,7 +1,13 @@
 # Pendências — Ingest RTMP (câmera empurra pro hub)
 
 > **Doc vivo.** Diretriz do usuário: manter pendências registradas.
-> Última atualização: 2026-07-09 (ingest assado no hub; restam as pendências de infra do homolog).
+> Última atualização: **2026-07-16 (ADR-019)** — quem escuta a :1935 agora é o **relay próprio
+> do hub** (`server/rtmp-ingest.js`), não o go2rtc: o parser do go2rtc não decodifica o push do
+> DVR Intelbras MHDX (producer com bytes, zero tracks — spec `spec-relay-ingest.md`). O canal
+> consome do relay via `ffmpeg -c copy`; publish em canal desconhecido é **auto-cadastrado**
+> (`rtmp-auto-enroll`, evento direto). Rollback: `RTMP_INGEST=go2rtc`. O histórico abaixo
+> (validações de jul/08-09 sobre o listener do go2rtc) permanece válido como contrato de URL —
+> os links `rtmp://cam.box3.software:1935/<canal>` não mudaram.
 
 ## Contexto (validado em campo)
 
@@ -38,8 +44,10 @@ JPEG real capturado. A rede: PC e câmera no mesmo `/24` (`192.168.1.0/24`), pus
 ## Pendente
 
 1. **Endurecer o firewall da 1935** (P1 de segurança): hoje a 1935 aceitou conexão do mundo
-   (RTMP publish do go2rtc é **SEM auth** → qualquer um que saiba o nome do canal pode empurrar).
-   Restringir a porta ao(s) **IP(s) público(s) de origem das câmeras** (ufw / firewall do DO).
+   (o publish RTMP é **SEM auth** — vale para o relay do ADR-019 igual valia pro go2rtc; com
+   auto-cadastro ligado, quem alcança a porta cria câmera no painel → o firewall é o gate).
+   Restringir a porta aos **IPs públicos de origem** (jul/16: dydentro 177.100.124.59 e
+   177.44.177.184): `ufw allow from <IP> to any port 1935 proto tcp` + `ufw delete allow 1935/tcp`.
 2. **Cadastrar cam2..6** conforme forem sendo apontadas: `rtsp://127.0.0.1:8554/causei_camN` no painel
    + push da câmera pro mesmo `causei_camN` (confirmar caso a caso se o firmware respeita o path ou força `live`).
 3. **Contrato device**: Intelbras/Dahua força app `live` (documentado aqui e no runbook). Falta conferir

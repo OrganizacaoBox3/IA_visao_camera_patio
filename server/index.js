@@ -342,6 +342,20 @@ io.on("connection", (socket) => {
       },
     });
     go2rtc.onLogLine(autoEnroll.onLogLine);
+    // RELAY de ingest RTMP (server/rtmp-ingest.js): por default é ELE quem escuta a :1935 —
+    // aceita o publish de DVRs que o parser do go2rtc não decodifica (MHDX: producer sem
+    // tracks; spec docs/analises/rtmp-ingest/spec-relay-ingest.md) e serve FLV cru por HTTP
+    // local para a fonte "ffmpeg:" dos canais (go2rtc.js). O evento publish alimenta o
+    // auto-cadastro DIRETO (sem raspagem de log — o vídeo forma na mesma sessão do DVR).
+    // RTMP_INGEST=go2rtc reverte ao listener legado do go2rtc (rollback sem redeploy).
+    if (go2rtc.enabled() && process.env.RTMP_INGEST !== "go2rtc") {
+      const { startRtmpIngest } = require("./rtmp-ingest");
+      const ingest = startRtmpIngest({
+        rtmpPort: Number(process.env.GO2RTC_RTMP_PORT ?? 1935),
+        httpPort: Number(process.env.RTMP_RELAY_HTTP_PORT ?? 8935),
+      });
+      ingest.relay.on("publish", (name) => autoEnroll.onPublish(name));
+    }
     // Câmeras IP/RTSP (via ffmpeg → frames JPEG), tratadas como câmeras comuns.
     // Legadas: rtsp.sources.json/env (retrocompat). Dinâmicas: cameras.json (CRUD em runtime).
     // io = ioAnalysis (tee): o motor de análise observa os frames JPEG que o rtsp.js emite

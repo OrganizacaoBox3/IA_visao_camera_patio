@@ -35,11 +35,11 @@ function createAutoEnroll({ enabled, hasChannel, register, max = 32, throttleMs 
   let enrolled = 0;
   let capWarned = false;
 
-  function onLogLine(line, now = Date.now()) {
+  // Núcleo da decisão (validação → throttle → dedup → cap → register). Duas portas de entrada:
+  // onLogLine (legado, raspagem do "stream not found" do go2rtc) e onPublish (evento direto do
+  // relay server/rtmp-ingest.js — o caminho default desde a spec-relay-ingest).
+  function consider(name, now = Date.now()) {
     if (!enabled) return;
-    const m = LINE_RE.exec(String(line));
-    if (!m) return;
-    const name = m[1];
     if (!NAME_RE.test(name)) return; // nome fora do contrato ([\w-]{1,32}) — ignora em silêncio
     const last = lastTry.get(name);
     if (last !== undefined && now - last < throttleMs) return;
@@ -57,7 +57,17 @@ function createAutoEnroll({ enabled, hasChannel, register, max = 32, throttleMs 
     register(name);
   }
 
-  return { onLogLine };
+  function onLogLine(line, now = Date.now()) {
+    const m = LINE_RE.exec(String(line));
+    if (!m) return;
+    consider(m[1], now);
+  }
+
+  function onPublish(name, now = Date.now()) {
+    consider(String(name), now);
+  }
+
+  return { onLogLine, onPublish };
 }
 
 module.exports = { createAutoEnroll };

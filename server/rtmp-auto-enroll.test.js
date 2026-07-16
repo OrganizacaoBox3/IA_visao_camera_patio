@@ -73,4 +73,24 @@ describe("rtmp-auto-enroll", () => {
     h.auto.onLogLine(line("qualquer"), 1_000);
     expect(h.registered).toEqual([]);
   });
+
+  // onPublish — o caminho DIRETO (evento do relay server/rtmp-ingest.js), mesmo núcleo de decisão
+  it("onPublish cadastra direto (sem raspagem de log) e respeita o mesmo contrato", () => {
+    h.auto.onPublish("dydentro_cam07", 1_000);
+    expect(h.registered).toEqual(["dydentro_cam07"]);
+    h.auto.onPublish("nome com espaço", 2_000); // fora do contrato — ignorado
+    expect(h.registered).toEqual(["dydentro_cam07"]);
+  });
+
+  it("onPublish e onLogLine dividem throttle e dedup (um publisher não entra duas vezes)", () => {
+    h.auto.onPublish("cam_x", 1_000);
+    h.auto.onLogLine(line("cam_x"), 5_000); // dentro do throttle — não re-registra
+    expect(h.registered).toEqual(["cam_x"]);
+  });
+
+  it("onPublish com enabled:false não faz nada", () => {
+    h = makeHarness({ enabled: false });
+    h.auto.onPublish("qualquer", 1_000);
+    expect(h.registered).toEqual([]);
+  });
 });

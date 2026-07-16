@@ -45,6 +45,8 @@ const WEBRTC_PORT = Number(process.env.GO2RTC_WEBRTC_PORT ?? 8555);
 // Porta do listener de INGEST RTMP (câmera que só faz PUSH — Intelbras/Dahua). SÓ é aberta quando
 // existe um canal rtmp-in (ver generateYaml); default 1935. Exposição pública depende do firewall.
 const RTMP_PORT = Number(process.env.GO2RTC_RTMP_PORT ?? 1935);
+// Porta HTTP-FLV local do relay de ingest (server/rtmp-ingest.js) — fonte dos canais de push.
+const RELAY_HTTP_PORT = Number(process.env.RTMP_RELAY_HTTP_PORT ?? 8935);
 // Candidatos WebRTC (necessário só p/ acesso FORA da LAN): "10.0.0.20:8555,stun:8555".
 const WEBRTC_CANDIDATES = String(process.env.GO2RTC_WEBRTC_CANDIDATES || "")
   .split(",")
@@ -141,9 +143,14 @@ function generateYaml(sources) {
     lines.push("  candidates:");
     for (const c of WEBRTC_CANDIDATES) lines.push(`    - ${q(c)}`);
   }
-  if (ingest.size) {
-    // Listener de ingest: aceita publish RTMP nos canais VAZIOS abaixo. Só liga quando há câmera
-    // rtmp-in. Sem gravação (LGPD). Publish do go2rtc é SEM auth → exponha a porta só por firewall,
+  // Ingest RTMP: por DEFAULT quem escuta a :1935 é o RELAY do hub (server/rtmp-ingest.js) e o
+  // canal consome dele via ffmpeg (o parser que comprovadamente decodifica o push do MHDX — o
+  // probe do go2rtc exige sequence header formal em ≤5s e deixava producer SEM tracks; spec:
+  // docs/analises/rtmp-ingest/spec-relay-ingest.md). RTMP_INGEST=go2rtc reverte ao legado
+  // (go2rtc escuta :1935 e o canal fica vazio) — rollback sem redeploy.
+  const legacyIngest = process.env.RTMP_INGEST === "go2rtc";
+  if (ingest.size && legacyIngest) {
+    // Sem gravação (LGPD). Publish do go2rtc é SEM auth → exponha a porta só por firewall,
     // restrita à origem das câmeras (ver docs/analises/rtmp-ingest/deploy-homolog-rtmp.md).
     lines.push("rtmp:");
     lines.push(`  listen: ${q(`:${RTMP_PORT}`)}`);
@@ -161,8 +168,16 @@ function generateYaml(sources) {
       lines.push(`  ${q(s.id)}:`);
       lines.push(`    - ${q(s.url)}`);
     }
-    // Canais de ingest RTMP: streams VAZIOS (sem source) que RECEBEM o publish da câmera.
-    for (const name of ingest) lines.push(`  ${q(name)}:`);
+    // Canais de ingest RTMP. Relay (default): fonte ffmpeg puxando o HTTP-FLV local do
+    // relay (-c copy, remux puro — zero re-encode). Legado: stream VAZIO que recebe o publish.
+    for (const name of ingest) {
+      if (legacyIngest) {
+        lines.push(`  ${q(name)}:`);
+      } else {
+        lines.push(`  ${q(name)}:`);
+        lines.push(`    - ${q(`ffmpeg:http://127.0.0.1:${RELAY_HTTP_PORT}/${name}.flv#video=copy#audio=copy`)}`);
+      }
+    }
   }
   return { text: lines.join("\n") + "\n", count: valid.length };
 }

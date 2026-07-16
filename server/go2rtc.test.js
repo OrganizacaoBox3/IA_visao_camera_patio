@@ -46,9 +46,14 @@ describe("enabled()/binExists — stat cacheado com TTL de 60s", () => {
 });
 
 // generateYaml — INGEST RTMP: câmera que só faz PUSH (Intelbras/Dahua) entra pela URL do cadastro
-// apontando pro PRÓPRIO republish do go2rtc (rtsp://127.0.0.1:8554/<nome>) → liga listener RTMP :1935
-// + cria o canal VAZIO <nome> que aceita o publish. Sem env/config no servidor.
+// apontando pro PRÓPRIO republish do go2rtc (rtsp://127.0.0.1:8554/<nome>). Default (relay): o
+// canal consome do relay do hub via ffmpeg (spec-relay-ingest.md) e o go2rtc NÃO escuta :1935.
+// Legado (RTMP_INGEST=go2rtc): listener RTMP do go2rtc + canal VAZIO.
 describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
+  afterEach(() => {
+    delete process.env.RTMP_INGEST;
+  });
+
   it("câmera RTSP normal (pull): nenhum bloco rtmp — comportamento inalterado", () => {
     const { text, count } = go2rtc.generateYaml([{ id: "cam1", url: "rtsp://user:pass@10.0.0.5:554/cam" }]);
     expect(text).not.toContain("rtmp:");
@@ -57,23 +62,30 @@ describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
     expect(count).toBe(1);
   });
 
-  it("URL apontando pro republish do go2rtc: liga listener RTMP + canal de ingest VAZIO", () => {
+  it("relay (default): canal de ingest consome o HTTP-FLV do relay via ffmpeg; go2rtc NÃO escuta :1935", () => {
+    const { text } = go2rtc.generateYaml([{ id: "cam-abc", url: "rtsp://127.0.0.1:8554/causei_cam2" }]);
+    expect(text).not.toContain("\nrtmp:"); // quem escuta a :1935 é o relay do hub
+    expect(text).toContain('  "cam-abc":'); // stream normal da câmera (source = o republish)
+    expect(text).toContain('    - "rtsp://127.0.0.1:8554/causei_cam2"');
+    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam2.flv#video=copy#audio=copy"');
+  });
+
+  it("legado (RTMP_INGEST=go2rtc): listener RTMP do go2rtc + canal de ingest VAZIO", () => {
+    process.env.RTMP_INGEST = "go2rtc";
     const { text } = go2rtc.generateYaml([{ id: "cam-abc", url: "rtsp://127.0.0.1:8554/causei_cam2" }]);
     expect(text).toContain("rtmp:");
     expect(text).toContain('listen: ":1935"');
-    expect(text).toContain('  "cam-abc":'); // stream normal da câmera (source = o republish)
-    expect(text).toContain('    - "rtsp://127.0.0.1:8554/causei_cam2"');
     expect(text).toMatch(/\n {2}"causei_cam2":\n/); // canal de ingest VAZIO (sem source abaixo)
+    expect(text).not.toContain("ffmpeg:http");
   });
 
-  it("aceita localhost e múltiplos canais de ingest com UM só listener", () => {
+  it("aceita localhost e múltiplos canais de ingest", () => {
     const { text } = go2rtc.generateYaml([
       { id: "cA", url: "rtsp://localhost:8554/causei_cam2" },
       { id: "cB", url: "rtsp://127.0.0.1:8554/causei_cam3" },
     ]);
-    expect((text.match(/rtmp:/g) || []).length).toBe(1); // um bloco só
-    expect(text).toMatch(/\n {2}"causei_cam2":\n/);
-    expect(text).toMatch(/\n {2}"causei_cam3":\n/);
+    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam2.flv#video=copy#audio=copy"');
+    expect(text).toContain('    - "ffmpeg:http://127.0.0.1:8935/causei_cam3.flv#video=copy#audio=copy"');
   });
 
   it("sem câmeras: streams vazio e sem rtmp", () => {
