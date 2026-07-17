@@ -27,7 +27,8 @@ de implementação: `docs/analises/implementacao-changelog.md`.
 4. **Contratos estáveis entre camadas.** Mudança de contrato sem teste é a regressão silenciosa nº 1.
 5. **Honestidade técnica.** Validar contra a realidade antes de afirmar; separar medição de inferência;
    documentar até o que _não_ funciona. **Sem evidência, não há "pronto".** Nunca confiar no "o teste passou" relatado — só na execução.
-6. **Entregas pequenas e reversíveis.** Lote pequeno = revert fácil. `main` sempre estável; commit por intenção.
+6. **Entregas pequenas e reversíveis.** Lote pequeno = revert fácil. `dev` (o trunk único do repo
+   `OrganizacaoBox3/IA_visao_camera_patio` desde 2026-07-17) sempre estável; commit por intenção.
 7. **Segurança e LGPD não são opcionais** (ver invariantes).
 
 ## 3. Invariantes — NUNCA VIOLAR
@@ -172,7 +173,7 @@ Quando gerar código é barato, **a verificação é o gargalo**. Sensores deste
 - **IA amplia quem tem fundamentos**; usar para o tedioso, não para terceirizar arquitetura. **Humano no loop** nos pontos irreversíveis.
 - **Autonomy slider:** quanto mais crítico (produção, SIAG, segurança, LGPD), mais curta a coleira.
 - **Tier comercial/no-train** para código não-público; **nunca** mandar `.env`/segredos/PII; **Trae proibida** para código proprietário. Revisão humana significativa de todo output (PI + qualidade).
-- **Gate determinístico antes de ação irreversível** (push em `main`, deploy, DROP, e-mail externo): teste-verde **ou** aprovação humana.
+- **Gate determinístico antes de ação irreversível** (push em `dev`, deploy, DROP, e-mail externo): teste-verde **ou** aprovação humana.
 
 ## 9. Mapa de artefatos
 
