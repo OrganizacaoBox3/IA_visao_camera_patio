@@ -348,3 +348,5 @@ jobs:
           $SUDO journalctl -u "$SERVICE" -n 40 --no-pager || true
           exit 1
           REMOTE
+
+# Repo: OrganizacaoBox3/IA_visao_camera_patio (branch única: dev) — reindexado 2026-07-17.

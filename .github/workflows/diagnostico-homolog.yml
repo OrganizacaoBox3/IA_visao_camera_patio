@@ -62,3 +62,5 @@ jobs:
           echo "== journal do hub (última 1h): rtmp/go2rtc/rtsp =="
           sudo -n journalctl -u visao-hub --since "-60 min" --no-pager 2>/dev/null | grep -aiE "rtmp|go2rtc|ffmpeg|exec" | tail -120 || echo "(journal indisponível)"
           REMOTE
+
+# Repo: OrganizacaoBox3/IA_visao_camera_patio (branch única: dev) — reindexado 2026-07-17.
