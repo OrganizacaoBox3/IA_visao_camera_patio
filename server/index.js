@@ -143,6 +143,20 @@ httpServer.on("upgrade", (req, socket, head) => {
 // (emitido pelas rotas de config). Este wrapper repassa TODO emit ao io real e apenas OBSERVA
 // esses dois eventos. INVARIANTE: trocar ioAnalysis→io em qualquer consumidor desliga
 // frames/zonas do motor SEM nenhum erro — é o fio a proteger em refactor.
+// Host do pipeline de FADIGA no hub (F1a, spec-fadiga-no-hub; ANALYSIS_FADIGA=1 liga).
+// Paralelo ao engine (que segue excluindo câmeras modo fadiga do D-FINE): worker dedicado,
+// risco portado do cliente, ingest nas MESMAS tabelas fad_* e espelho "analysis-fatigue".
+const { createFadigaHost } = require("./analysis/fadiga-host");
+const fadigaHost = createFadigaHost({
+  io,
+  ingest: (kind, sub, payload) => require("./pgstore").ingest(kind, sub, payload),
+  isFadigaCamera: (id) => camcfg.getCamConfig(id).modo === "fadiga",
+  cameraLabelOf: (id) => {
+    const cam = cameras.get(id);
+    return cam ? cam.label : id;
+  },
+});
+
 function analysisTee(target) {
   return {
     to: (room) => analysisTee(target.to(room)),
@@ -150,8 +164,15 @@ function analysisTee(target) {
       return analysisTee(target.volatile);
     },
     emit(ev, payload) {
-      if (ev === "frame" && payload) analysis.onFrame(payload.id, payload.buf, payload.ts);
-      else if (ev === "camcfg-updated") analysis.onCamcfgUpdated(payload);
+      if (ev === "frame" && payload) {
+        analysis.onFrame(payload.id, payload.buf, payload.ts);
+        // Pipeline de FADIGA no hub (F1a, spec-fadiga-no-hub) — host PARALELO ao engine
+        // (câmera modo fadiga é excluída do D-FINE; este host é quem a analisa 24/7).
+        fadigaHost.onFrame(payload.id, payload.buf, payload.ts);
+      } else if (ev === "camcfg-updated") {
+        analysis.onCamcfgUpdated(payload);
+        fadigaHost.onCamcfgUpdated(payload && payload.cameraId);
+      }
       return target.emit(ev, payload);
     },
   };
@@ -286,6 +307,8 @@ io.on("connection", (socket) => {
   // como ESPECTADOR p/ o shed (guard no shed E no rtsp.idleSource — defesa em profundidade).
   await analysis.init({ io, cameras });
   rtsp.setAnalysisViewer(analysis.isAnalyzing);
+  // Fadiga no hub (F1a): host paralelo — só liga com ANALYSIS_FADIGA=1 e modelos garantidos.
+  await fadigaHost.init();
   httpServer.listen(PORT, HOST, () => {
     console.log(`Hub de câmeras ouvindo em http://${HOST}:${PORT} (socket.io)`);
     console.log(
