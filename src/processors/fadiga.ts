@@ -107,6 +107,7 @@ export class FadigaProcessor implements Disposable {
   private face: FaceLandmarker | null = null;
   private hand: HandLandmarker | null = null;
   private faceState: FadigaModelState = "loading";
+  private detectErrLogged = false; // 1º erro de detectForVideo é logado (context-lost em campo)
   private alive = true;
 
   private det = {
@@ -167,15 +168,20 @@ export class FadigaProcessor implements Disposable {
           this.faceState = "ready";
         } else m.close();
       })
-      .catch(() => {
+      .catch((err) => {
         this.faceState = "error";
+        // A causa real já foi logada com retry em fadiga/models.ts; aqui marcamos o CONTEXTO
+        // (qual sensor morreu) — sem isto o "modelo falhou" da UI era indiagnosticável em campo.
+        console.error("[fadiga] FaceLandmarker indisponível — sensor de fadiga sem rosto/EAR", err);
       });
     createHandLandmarker()
       .then((m) => {
         if (this.alive) this.hand = m;
         else m.close();
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[fadiga] HandLandmarker indisponível — gesto manual desativado", err);
+      });
     // Celular via worker de detecção compartilhado (singleton): garante o init; a prontidão
     // é consultada por detectReady() no process() (cobre também o fallback main-thread do cliente).
     ensureDetectClient();
@@ -319,8 +325,13 @@ export class FadigaProcessor implements Disposable {
         snap.landmarks = lm;
         snap.ear = this.smooth.ear;
         snap.mar = this.smooth.mar;
-      } catch {
-        /* timestamp/frame */
+      } catch (err) {
+        // Erro por frame (timestamp/frame inválido OU contexto WebGL perdido). Loga o 1º —
+        // um stream contínuo de falhas aqui é como o context-lost aparece em campo.
+        if (!this.detectErrLogged) {
+          this.detectErrLogged = true;
+          console.warn("[fadiga] detectForVideo (face) falhou — 1ª ocorrência logada", err);
+        }
       }
     }
 
@@ -353,8 +364,11 @@ export class FadigaProcessor implements Disposable {
           w.signalSince = null;
           snap.manualSignal = "SEM_SINAL";
         }
-      } catch {
-        /* ignore */
+      } catch (err) {
+        if (!this.detectErrLogged) {
+          this.detectErrLogged = true;
+          console.warn("[fadiga] detectForVideo (mãos) falhou — 1ª ocorrência logada", err);
+        }
       }
     }
 

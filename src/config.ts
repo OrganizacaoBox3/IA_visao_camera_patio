@@ -253,11 +253,13 @@ export const APP_CONFIG = {
   // Modo FADIGA (operador) — MediaPipe FaceLandmarker + HandLandmarker + coco-ssd (celular).
   // Câmera dedicada ao rosto do operador (≠ câmeras de área). Portado do sensor_fadiga_mvp.
   fadiga: {
-    mediapipeWasmUrl: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
-    faceModelAssetUrl:
-      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-    handModelAssetUrl:
-      "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    // SELF-HOST (mesma origem; scripts/fetch-mediapipe.mjs materializa em public/mediapipe/ no
+    // predev/prebuild). Antes vinha de jsdelivr @latest + Google Storage: o @latest podia
+    // dessincronizar do JS empacotado (mismatch JS↔WASM) e rede corporativa bloqueando CDN
+    // matava o sensor. A versão do wasm agora é a do package-lock (0.10.35).
+    mediapipeWasmUrl: "/mediapipe/wasm",
+    faceModelAssetUrl: "/mediapipe/models/face_landmarker.task",
+    handModelAssetUrl: "/mediapipe/models/hand_landmarker.task",
     faceIntervalMs: 66,
     handIntervalMs: 90,
     objectIntervalMs: 220,

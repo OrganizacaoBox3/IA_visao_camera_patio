@@ -154,3 +154,28 @@ sai do main (≈7,4k linhas-fonte + ≈11k de teste), preservado INTEIRO na tag 
 - Code-splitting dos workers grandes (detectWorker 1.8MB) — avisos de chunk.
 - Considerar migrar persistência de câmeras p/ Postgres (hoje JSON).
 - **Recomendado: `git init` + commit inicial** para criar rede de segurança.
+
+## 2026-07-21 — Fadiga destravada (init lazy + self-host) e objetos focado em CAIXAS
+
+**Fadiga (causa-raiz achada por leitura de código):** `FadigaView` fazia `useRef(new FadigaProcessor())`
+— o argumento é avaliado em TODA renderização (~7×/s pela cadência de UI) e o construtor baixa
+modelo + abre contexto WebGL ⇒ esgotava os ~16 contextos do Chrome em segundos e vazava GPU/heap
+("modelo não carrega/lento", intermitente; o caminho por ZONA via holders sempre foi correto).
+- `FadigaView.tsx`: init lazy (padrão useCineLoop) — 1 processor por montagem.
+- `fadiga/models.ts`: retry 3× com backoff + log do erro REAL (antes morria em catch silencioso).
+- `processors/fadiga.ts`: contexto no log de falha (face/mão) + 1º erro de `detectForVideo` logado
+  (context-lost em campo deixava EAR congelado sem pista).
+- **Self-host** dos assets MediaPipe (`scripts/fetch-mediapipe.mjs`, predev/prebuild →
+  `public/mediapipe/`, gitignored): wasm copiado do node_modules (versão do lockfile — elimina o
+  CDN `@latest`, que podia dessincronizar do JS empacotado) e `.task` baixados com sha256 pinado.
+  Rede corporativa bloqueando CDN deixa de matar o sensor; CSP `'self'` já cobria.
+
+**Objetos → caixas (passo 1 da contagem de caixas):**
+- Default de zona objetos: `["caixa"]` (escolha explícita preservada em zonas antigas).
+- Marcador da caixa = estilo do de Pessoa (`--state-info` + rótulo "Caixa" em scrim; SEM número
+  sobre a imagem — contagem vive no painel). Exceção deliberada ao "cor = categoria" do catálogo.
+- **Fim da supercontagem**: `finalizeOwlDets` (puro, com teste-gate) aplica o piso de score do
+  chamador (o caminho OWL-ViT IGNORAVA `minScore`) + NMS IoU/contenção POR CLASSE — os 3 prompts
+  de caixa disparavam 2-3 dets na MESMA caixa física.
+- Próximo passo (decisão de produto pendente): contagem de FLUXO (tracker/tripwire de objetos) —
+  hoje `counts` é ocupação instantânea; atenção à Regra 9 (cadência OWL-ViT ~700ms).

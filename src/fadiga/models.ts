@@ -34,9 +34,37 @@ async function createWithGpuFallback<T>(
   }
 }
 
+// Retry com backoff: a carga (fetch do .task + instanciação WASM) pode falhar transitoriamente
+// (rede do CD, cold start do asset). 3 tentativas bastam; erro persistente é LOGADO com a causa
+// real ANTES de subir — o chamador (processors/fadiga.ts) só rebaixa o estado da UI, e sem este
+// log o diagnóstico em campo era impossível (o erro morria num catch silencioso).
+const RETRY_DELAYS_MS = [500, 1000, 2000];
+async function createWithRetry<T>(
+  name: string,
+  create: (delegate: "GPU" | "CPU") => Promise<T>,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await createWithGpuFallback(name, create);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        console.warn(
+          `[fadiga] ${name}: carga falhou (tentativa ${attempt + 1}) — retry em ${RETRY_DELAYS_MS[attempt]}ms`,
+          err,
+        );
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      }
+    }
+  }
+  console.error(`[fadiga] ${name}: modelo NÃO carregou após ${RETRY_DELAYS_MS.length + 1} tentativas`, lastErr);
+  throw lastErr;
+}
+
 export async function createFaceLandmarker(): Promise<FaceLandmarker> {
   const vision = await fileset();
-  return createWithGpuFallback("FaceLandmarker", (delegate) =>
+  return createWithRetry("FaceLandmarker", (delegate) =>
     FaceLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: APP_CONFIG.fadiga.faceModelAssetUrl, delegate },
       runningMode: "VIDEO",
@@ -49,7 +77,7 @@ export async function createFaceLandmarker(): Promise<FaceLandmarker> {
 
 export async function createHandLandmarker(): Promise<HandLandmarker> {
   const vision = await fileset();
-  return createWithGpuFallback("HandLandmarker", (delegate) =>
+  return createWithRetry("HandLandmarker", (delegate) =>
     HandLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: APP_CONFIG.fadiga.handModelAssetUrl, delegate },
       runningMode: "VIDEO",

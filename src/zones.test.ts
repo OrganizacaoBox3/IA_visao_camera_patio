@@ -40,7 +40,6 @@ import {
   type ZonePoint,
 } from "./zones";
 import { APP_CONFIG } from "./config";
-import { OBJECT_KEYS } from "./objects/catalog";
 
 // FIXTURES COMPARTILHADAS (CA-4): o MESMO arquivo é consumido por server/analysis/zones.test.js —
 // paridade TS↔JS do pointInPolygon/isSimplePolygon (armadilha 9: divergência ε na borda colocaria
@@ -287,7 +286,7 @@ describe("zones — withDefaults (defaults de zona)", () => {
       ponto: APP_CONFIG.reading.defaultPonto,
       atividade: "Indefinida", // label "Área" não casa nenhuma atividade
     });
-    expect(z.selectedClasses).toEqual([...OBJECT_KEYS]);
+    expect(z.selectedClasses).toEqual(["caixa"]); // default de produto: só caixas (2026-07-21)
     expect(z.mask).toBeUndefined();
   });
 
@@ -368,11 +367,14 @@ describe("zones — withDefaults (defaults de zona)", () => {
     expect(sanitizeShiftIds([1, {}, null])).toEqual([]);
   });
 
-  it("mask só é mantida quando é string; selectedClasses vazio → todas", () => {
+  it("mask só é mantida quando é string; selectedClasses vazio → default caixa", () => {
     expect(withDefaults({ mask: "8x8:AAAA" }, "c").mask).toBe("8x8:AAAA");
     expect(withDefaults({ mask: 123 as never }, "c").mask).toBeUndefined();
-    expect(withDefaults({ selectedClasses: [] }, "c").selectedClasses).toEqual([...OBJECT_KEYS]);
-    expect(withDefaults({ selectedClasses: ["caixa"] }, "c").selectedClasses).toEqual(["caixa"]);
+    expect(withDefaults({ selectedClasses: [] }, "c").selectedClasses).toEqual(["caixa"]);
+    expect(withDefaults({ selectedClasses: ["pessoa", "palete"] }, "c").selectedClasses).toEqual([
+      "pessoa",
+      "palete",
+    ]); // escolha explícita é preservada (zonas antigas não mudam)
   });
 });
 

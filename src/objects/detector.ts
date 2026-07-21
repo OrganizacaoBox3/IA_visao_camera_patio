@@ -6,9 +6,14 @@
 
 import { APP_CONFIG } from "../config";
 import { loadDetector } from "../vision/model";
+import { suppressDuplicates } from "../vision/nms";
 import { OBJECT_CATALOG, keyForCoco } from "./catalog";
 
 export type ObjDetection = { key: string; score: number; bbox: [number, number, number, number] }; // bbox 0..1
+
+// NMS do caminho OWL-ViT (multi-prompt por classe — ver uso em detectObjects).
+const OWL_NMS_IOU = 0.5;
+const OWL_NMS_CONTAIN = 0.7;
 export type ObjBackend = "carregando" | "coco" | "owlvit" | "indisponível";
 
 let backend: ObjBackend = "carregando";
@@ -34,6 +39,43 @@ type WorkerDet = {
 };
 const pending = new Map<number, (d: WorkerDet[]) => void>();
 let rasterCanvas: HTMLCanvasElement | null = null;
+
+/**
+ * Pós-processamento PURO do resultado OWL-ViT (testável sem worker/DOM):
+ *  1. label→key (prompts fora do catálogo caem);
+ *  2. piso `minScore` do CHAMADOR (antes só o threshold do worker filtrava — dets fracas
+ *     entravam na CONTAGEM sem nunca aparecer no overlay);
+ *  3. dedup POR CLASSE (NMS IoU+contenção de vision/nms.ts): cada classe tem VÁRIOS prompts
+ *     ("cardboard box"/"box"/"caixa de papelão") e cada um pode disparar na MESMA caixa
+ *     física → 2-3 dets sobrepostas com a mesma key superCONTAVAM.
+ */
+export function finalizeOwlDets(
+  dets: WorkerDet[],
+  toKey: Map<string, string>,
+  pw: number,
+  ph: number,
+  minScore: number,
+): ObjDetection[] {
+  const out: ObjDetection[] = [];
+  for (const d of dets) {
+    const key = toKey.get(d.label);
+    if (!key) continue;
+    if (d.score < minScore) continue;
+    const x = d.box.xmin / pw,
+      y = d.box.ymin / ph;
+    out.push({
+      key,
+      score: d.score,
+      bbox: [x, y, (d.box.xmax - d.box.xmin) / pw, (d.box.ymax - d.box.ymin) / ph],
+    });
+  }
+  const kept = suppressDuplicates(
+    out.map((o) => ({ cls: o.key, score: o.score, bbox: o.bbox })),
+    OWL_NMS_IOU,
+    OWL_NMS_CONTAIN,
+  );
+  return kept.map((k) => ({ key: k.cls, score: k.score, bbox: k.bbox }));
+}
 
 function initWorker() {
   try {
@@ -138,19 +180,7 @@ export async function detectObjects(
         [img.data.buffer],
       );
     });
-    const out: ObjDetection[] = [];
-    for (const d of dets) {
-      const key = toKey.get(d.label);
-      if (!key) continue;
-      const x = d.box.xmin / pw,
-        y = d.box.ymin / ph;
-      out.push({
-        key,
-        score: d.score,
-        bbox: [x, y, (d.box.xmax - d.box.xmin) / pw, (d.box.ymax - d.box.ymin) / ph],
-      });
-    }
-    return out;
+    return finalizeOwlDets(dets, toKey, pw, ph, minScore);
   }
 
   // Andaime coco-ssd enquanto o OWL-ViT não está pronto (só classes COCO que temos)

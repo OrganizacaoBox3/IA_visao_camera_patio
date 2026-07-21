@@ -5,7 +5,6 @@
 // — a câmera nunca quebra por causa da rede. O formato local estende o antigo (só atividade).
 import { APP_CONFIG } from "./config";
 import { activityForLabel } from "./processors/atividade";
-import { OBJECT_KEYS } from "./objects/catalog";
 import { getCameraCfg } from "./cameraConfig";
 import { getZones as apiGetZones, saveZones as apiSaveZones } from "./api";
 import { anySet, containsNorm, createMask, type Mask } from "./zoneMask";
@@ -280,10 +279,13 @@ export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
     sensitivity: z.sensitivity ?? 5,
     atividade: z.atividade ?? activityForLabel(label),
     ponto: z.ponto ?? APP_CONFIG.reading.defaultPonto,
+    // Default do modo objetos = SÓ CAIXAS (decisão de produto 2026-07-21: o objeto de interesse
+    // da operação é a caixa; contagem é o objetivo). Outras classes seguem disponíveis por
+    // seleção explícita no ConfigZonaDialog — zonas já salvas com classes escolhidas não mudam.
     selectedClasses:
       Array.isArray(z.selectedClasses) && z.selectedClasses.length
         ? z.selectedClasses
-        : [...OBJECT_KEYS],
+        : ["caixa"],
     // proibida: dwell normalizado (número finito ≥0; inválido → default 10s) + arming (enum
     // ZONE_ARMINGS; inválido/ausente → "sempre" = 24/7, o comportamento de hoje).
     presencaAlertMs:

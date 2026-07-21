@@ -16,6 +16,9 @@ dist-ssr
 public/demo/*.mp4
 public/demo/*.webm
 
+# Assets MediaPipe do modo fadiga — materializados por scripts/fetch-mediapipe.mjs (predev/prebuild)
+public/mediapipe/
+
 # Fontes RTSP reais (podem conter credenciais)
 server/rtsp.sources.json
 

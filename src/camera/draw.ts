@@ -953,9 +953,27 @@ export function drawZoneOverlays(
             coveredByAny(d.bbox, personTrackBoxes, TRACK_COVER_IOU, TRACK_COVER_CONTAIN)
           )
             continue;
-          const cc = oc?.color ?? color;
           const bx = cr.x + d.bbox[0] * cr.w,
             by = cr.y + d.bbox[1] * cr.h;
+          if (d.key === "caixa") {
+            // CAIXA usa o MESMO marcador visual da Pessoa (drawTracks): stroke --state-info +
+            // rótulo "Caixa" sobre scrim, sempre visível. Exceção deliberada ao "cor = categoria"
+            // do catálogo (decisão de produto 2026-07-21: caixa é o objeto de 1ª classe da
+            // operação, com paridade visual com Pessoa; sem NÚMERO sobre a imagem — contagem
+            // vive no painel, invariante do CLAUDE.md).
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = cssVar("--state-info", "#38bdf8");
+            ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);
+            const tag = oc?.label ?? "Caixa";
+            ctx.font = "10px monospace";
+            const tw = ctx.measureText(tag).width + 8;
+            ctx.fillStyle = scrim;
+            ctx.fillRect(bx, by - 15, tw, 14);
+            ctx.fillStyle = cssVar("--state-info-fg", "#bae6fd");
+            ctx.fillText(tag, bx + 4, by - 4);
+            continue;
+          }
+          const cc = oc?.color ?? color;
           ctx.lineWidth = 1.5;
           ctx.strokeStyle = cc;
           ctx.strokeRect(bx, by, d.bbox[2] * cr.w, d.bbox[3] * cr.h);

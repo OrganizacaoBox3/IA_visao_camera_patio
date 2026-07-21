@@ -31,6 +31,9 @@ export default tseslint.config(
       "coverage/**",
       "server/wa-auth/**",
       "visao_computacional_mvp/**",
+      // Assets vendorizados do MediaPipe (JS glue UMD copiado do node_modules pelo
+      // scripts/fetch-mediapipe.mjs) — código de terceiros, não lintável.
+      "public/mediapipe/**",
       // O portal (control-plane/web) é um app Vite+React SEPARADO, com seu próprio eslint/tsconfig —
       // o lint da raiz (eslint .) não o processa (ele se auto-verifica no seu diretório).
       "control-plane/web/**",

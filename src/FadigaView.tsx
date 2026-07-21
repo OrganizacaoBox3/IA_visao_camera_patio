@@ -101,7 +101,14 @@ export function FadigaView({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
-  const engineRef = useRef(new FadigaProcessor()); // domínio (modelos + motor de risco)
+  // Domínio (modelos + motor de risco) — init LAZY obrigatório: `useRef(new X())` avalia o
+  // argumento em TODA renderização (o React guarda só o primeiro), e este construtor baixa
+  // modelo e abre contexto WebGL — instanciar por render esgotava os ~16 contextos do Chrome
+  // em segundos e vazava GPU/heap (causa do "modelo não carrega/lento", 2026-07-21). Mesmo
+  // padrão do useCineLoop.
+  const engineRef = useRef<FadigaProcessor | null>(null);
+  if (engineRef.current === null) engineRef.current = new FadigaProcessor();
+  const engine = engineRef.current; // instância única desta montagem (estável entre renders)
   const audioRef = useRef<AudioContext | null>(null);
   const lastBeepRef = useRef(0);
   const onAlertRef = useRef(onAlert);
@@ -146,9 +153,9 @@ export function FadigaView({
   const [thresholds, setThresholds] = useState<FadigaThresholds>(() => loadFadigaThresholds());
 
   useEffect(() => {
-    engineRef.current.setThresholds(thresholds);
+    engine.setThresholds(thresholds);
     saveFadigaThresholds(thresholds);
-  }, [thresholds]);
+  }, [engine, thresholds]);
   useEffect(() => {
     onAlertRef.current = onAlert;
   }, [onAlert]);
@@ -168,9 +175,8 @@ export function FadigaView({
     onCloseRef.current = onClose;
   }, [onClose]);
   useEffect(() => {
-    const e = engineRef.current;
-    return () => e.dispose();
-  }, []);
+    return () => engine.dispose();
+  }, [engine]);
 
   // Casca fullscreen NÃO vira Radix Dialog (ADR-007: Portal/scroll-lock remontaria o canvas)
   // → ESC fecha + trap de foco MANUAIS, via o MESMO hook do CameraWorkspace (a outra casca
@@ -236,7 +242,7 @@ export function FadigaView({
       meterRef.current.tick(now);
 
       // Na GRADE (tile) a cadência de inferência é rebaixada (slow) — ver FadigaProcessor.
-      const r = engineRef.current.process({
+      const r = engine.process({
         frame: f,
         now,
         flags: flagsRef.current,
