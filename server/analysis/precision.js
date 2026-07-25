@@ -67,6 +67,9 @@ const PRECISION = Object.freeze({
     //    PARCIAL do tile vizinho tem IoU baixo com a inteira e passaria no NMS.
     //    0.7 conservador: duas pessoas realmente lado a lado não se contêm a 70%.
     //    SENSOR: `node eval/run-eval.mjs --mode tiled`.
+    //    ⚠ NÃO aplicar no NMS do squash: MEDIDO (2026-07-25), recall_all@0.25 cai 4,4pp
+    //    (pessoa parcialmente contida em cena densa é gente real). A duplicata parcial
+    //    do D-FINE é tratada na guarda de NASCIMENTO do tracker (knob 8b abaixo).
     containment: 0.7,
     // 5. Alvo do resize squash (ANALYSIS_INPUT). 640 = input de treino (default).
     //    ESCAPE-HATCH MEDIDO (opt-in por deploy): 896 = +5 a +8pp de recall em CENA
@@ -99,6 +102,19 @@ const PRECISION = Object.freeze({
     //    NÃO nasce (evita 1 pessoa virar 2 por até ttlMs — bug de campo).
     //    0.55 conservador. SENSOR: bytetrack.test.js.
     birthIouThreshold: 0.55,
+    // 8b. Guarda de nascimento por CONTENÇÃO (2026-07-25 — bug de campo "2 caixas na
+    //    MESMA pessoa" reincidiu): a query duplicada do D-FINE é caixa PARCIAL
+    //    (cabeça/torso) CONTIDA na inteira — IoU ~0.1-0.3 passa pelo knob 8 e nascia
+    //    2º track. Det alta sem par com contenção ≥ isto contra track observado/predito
+    //    não nasce (track livre → recupera; ocupado → descarta) — SÓ contra track FRESCO
+    //    (misses 0; track em miss + escala diferente é o caso do 2º estágio: id novo,
+    //    contrato testado "tamanho INCOMPATÍVEL não re-associa"). POR QUE NO TRACKER e
+    //    não no NMS do worker: MEDIDO no gate — contenção no NMS do squash derruba
+    //    recall_all@0.25 em 4,4pp (83,2% < 87,6%: pessoa parcialmente contida em cena
+    //    densa é gente REAL); no nascimento o custo é só adiar track novo de quem está
+    //    ≥70% contido (oclusão profunda) até se separar. 0.7 espelha o containment do
+    //    tiling (knob 4). 0 desliga. SENSOR: bytetrack.test.(ts|js) + eval:counting.
+    birthContainment: 0.7,
     // 9-11. Derivação do TTL — ver trackTtlMs() abaixo (nunca-cego: acoplado ao
     //    probe). É também o TTL INTERNO dos tracks LOST (janela máxima em que a
     //    re-associação ainda devolve o MESMO id — knob 22). Vale como MORTE só p/ o

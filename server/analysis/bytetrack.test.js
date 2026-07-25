@@ -179,6 +179,46 @@ describe("createByteTracker — GUARDA DE NASCIMENTO (bug de campo: 1 pessoa ≠
   });
 });
 
+// PARIDADE com o front (src/vision/bytetrack.test.ts — mesmo bloco, mesmos números):
+// guarda por CONTENÇÃO — a query duplicada PARCIAL do D-FINE (cabeça/torso contida na caixa
+// inteira, IoU ~0.15) passava pelo birthIou e nascia 2º track. Racional/medição: precision.js 8b.
+describe("createByteTracker — GUARDA por CONTENÇÃO (caixa parcial não nasce 2º track)", () => {
+  const inteira = (score) => ({ score, bbox: [0.3, 0.2, 0.2, 0.6] });
+  const parcial = (score) => ({ score, bbox: [0.34, 0.22, 0.1, 0.18] }); // contenção ~1, IoU ~0.15
+
+  it("det PARCIAL contida junto da inteira: só 1 track (duplicata descartada)", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0.7 });
+    tk.update([inteira(0.8)], 0);
+    const out = tk.update([inteira(0.8), parcial(0.5)], 350);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1);
+    expect(out[0].score).toBe(0.8);
+  });
+
+  it("SÓ a parcial na rodada: RECUPERA o track livre (mesmo id), não nasce id novo", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0.7 });
+    tk.update([inteira(0.8)], 0);
+    const out = tk.update([parcial(0.6)], 350);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(1);
+    expect(out[0].lastSeen).toBe(350);
+  });
+
+  it("RECALL: pessoa ATRÁS meio visível (contenção < 0.7) NASCE — a guarda não engole gente real", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0.7 });
+    tk.update([inteira(0.8)], 0);
+    const out = tk.update([inteira(0.8), { score: 0.7, bbox: [0.44, 0.25, 0.14, 0.4] }], 350);
+    expect(out).toHaveLength(2);
+  });
+
+  it("birthContainment: 0 DESLIGA o eixo (comportamento antigo — parcial nasce)", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0 });
+    tk.update([inteira(0.8)], 0);
+    const out = tk.update([inteira(0.8), parcial(0.5)], 350);
+    expect(out).toHaveLength(2);
+  });
+});
+
 describe("createByteTracker — oclusão curta", () => {
   it("some 1 rodada (dentro do TTL) e reaparece no lugar → MESMO id, firstSeen preservado", () => {
     const tk = createByteTracker({ ttlMs: 1500 });

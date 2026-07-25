@@ -156,6 +156,7 @@ describe("byteTrackerOpts — o precision.js MANDA no tracker do motor (knobs 23
     const opts = engine.byteTrackerOpts();
     expect(opts.iouThreshold).toBe(t.iouThreshold);
     expect(opts.birthIouThreshold).toBe(t.birthIouThreshold);
+    expect(opts.birthContainment).toBe(t.birthContainment); // knob 8b (guarda por contenção)
     expect(opts.reassocDist).toBe(t.reassocDist);
     expect(opts.reassocMaxGapMs).toBe(t.reassocMaxGapMs);
     expect(opts.lostAfterMisses).toBe(t.lostAfterMisses);

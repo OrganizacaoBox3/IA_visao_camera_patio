@@ -109,6 +109,14 @@ export const APP_CONFIG = {
       // o bug de campo "2 pessoas onde há 1". 0.55 conservador: pessoas realmente lado a lado
       // ficam em IoU ~0.2–0.3; só sobreposição de "mesma pessoa" passa disso.
       birthIouThreshold: 0.55,
+      // 2º eixo da guarda (2026-07-25 — o bug reincidiu por outra porta): a query duplicada do
+      // detector é caixa PARCIAL (cabeça/torso) CONTIDA na inteira — IoU ~0.1-0.3 passa pelo
+      // birthIouThreshold e nascia um 2º track na MESMA pessoa. Contenção (inter/área da menor)
+      // ≥ isto contra track observado/predito não nasce; track livre é ATUALIZADO (recupera).
+      // POR QUE no tracker e não no NMS: medido no gate do hub — dedupe por contenção no NMS
+      // derruba recall 4,4pp (pessoa parcialmente contida em cena densa é gente REAL). Espelho
+      // F1: server/analysis/precision.js knob 8b. 0 desliga. Sensor: bytetrack.test.(ts|js).
+      birthContainment: 0.7,
       // Re-associação de 2º ESTÁGIO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts,
       // bloco "stream que SALTA" · espelho F1: server/analysis/bytetrack.js + precision.js):
       // stream com stall/gap desloca a pessoa além de qualquer IoU (as caixas nem se tocam) →

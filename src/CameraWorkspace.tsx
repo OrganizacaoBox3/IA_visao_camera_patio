@@ -571,6 +571,7 @@ export function CameraWorkspace({
         iouThreshold: T.iouThreshold,
         ttlMs: T.ttlMs,
         birthIouThreshold: T.birthIouThreshold, // dono dos knobs: config.people.track
+        birthContainment: T.birthContainment, // duplicata PARCIAL (contida) não nasce 2º track
         reassocDist: T.reassocDist,
         reassocMaxGapMs: T.reassocMaxGapMs,
         lostAfterMisses: T.lostAfterMisses,

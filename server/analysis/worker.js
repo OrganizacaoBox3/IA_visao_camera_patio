@@ -107,7 +107,13 @@ function iouXYWH(a, b) {
   return union > 0 ? inter / union : 0;
 }
 
-/** NMS leve POR CLASSE (o D-FINE emite queries duplicadas no mesmo alvo). */
+/** NMS leve POR CLASSE (o D-FINE emite queries duplicadas no mesmo alvo).
+ *  MEDIDO E REJEITADO (2026-07-25): dedupe por CONTENÇÃO aqui (como no fuseTiles) mataria a
+ *  duplicata parcial na origem, MAS o gate reprovou — recall_all@0.25 caiu 4,4pp (83,2% <
+ *  87,6%): em cena densa a pessoa PARCIALMENTE contida (criança à frente, oclusão) é gente
+ *  REAL. O conserto do "2 tracks na mesma pessoa" vive na GUARDA DE NASCIMENTO do tracker
+ *  (bytetrack birthContainment): a det contida não NASCE track, mas segue existindo p/
+ *  sustentar/ocupação — recall do detector intacto. */
 function nmsPerClass(dets) {
   const byClass = new Map();
   for (const d of dets) {

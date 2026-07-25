@@ -118,6 +118,11 @@ function clamp01(v) {
  *   birthIouThreshold: GUARDA DE NASCIMENTO — det alta sem par com IoU acima disso
  *     contra um track ativo NÃO nasce: atualiza o track livre ou é descartada
  *     (default 0.55, conservador; ver comentário no TS de origem).
+ *   birthContainment: 2º eixo da guarda de nascimento — det alta sem par cuja CONTENÇÃO
+ *     (interseção/área da caixa MENOR) com um track (observado OU predito) ≥ isto não
+ *     nasce (caixa PARCIAL da query duplicada do D-FINE tem IoU baixo e passava pelo
+ *     birthIou → "2 pessoas onde há 1"). 0 desliga. Default 0.7 — dono: precision.js
+ *     (knob 8b; racional completo e a medição que REJEITOU o dedupe no NMS lá).
  *   reassocDist: FOLGA do raio do 2º estágio (norm.; raio = folga + |v|·gap).
  *     0 desliga o estágio. Default 0.12 — dono do default de produção: precision.js.
  *   reassocMaxGapMs: gap máximo desde lastSeen p/ tentar o 2º estágio (default 2500).
@@ -137,6 +142,7 @@ function createByteTracker(opts = {}) {
   const iouThr = opts.iouThreshold ?? 0.25;
   const ttlMs = opts.ttlMs ?? 1500;
   const birthIouThr = opts.birthIouThreshold ?? 0.55;
+  const birthContainment = opts.birthContainment ?? 0.7;
   const reassocDist = opts.reassocDist ?? 0.12;
   const reassocMaxGapMs = opts.reassocMaxGapMs ?? 2500;
   const lostAfterMisses = opts.lostAfterMisses ?? 1;
@@ -210,6 +216,16 @@ function createByteTracker(opts = {}) {
     t.lastSeen = now;
     t.misses = 0; // matcheado nesta rodada → volta (ou permanece) na emissão
     t.ghosted = false; // evidência fresca: a refutação por realocação cai
+  }
+
+  // CONTENÇÃO: interseção / área da caixa MENOR (mesma conta do fuseTiles/nms.ts).
+  // Local de propósito — mantém o port 1:1 com src/vision/bytetrack.ts.
+  function containmentOf(a, b) {
+    const ix = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
+    const iy = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
+    if (ix <= 0 || iy <= 0) return 0;
+    const minArea = Math.min(a[2] * a[3], b[2] * b[3]);
+    return minArea > 0 ? (ix * iy) / minArea : 0;
   }
 
   // Tamanho compatível p/ o 2º estágio: nenhuma dimensão dobra/cai à metade entre
@@ -350,21 +366,29 @@ function createByteTracker(opts = {}) {
     }
 
     // Nascimento: SÓ detecção de score alto sem par (baixa sem par é descartada).
-    // GUARDA DE NASCIMENTO (birthIouThr): detecção sem par que sobrepõe demais um
-    // track existente NÃO vira track novo — a pessoa é a mesma. Compara com a bbox
-    // OBSERVADA e com a PREDITA (a associação falha justamente quando a predição
-    // fugiu da observação; qualquer uma das duas acusa "mesma pessoa"). Track
-    // sobreposto LIVRE → recupera a associação (atualiza); ocupado (inclusive
-    // recém-nascido nesta rodada) → duplicata, descarta.
+    // GUARDA DE NASCIMENTO em DOIS eixos (port 1:1 do TS — racional lá):
+    //   • SOBREPOSIÇÃO (birthIouThr): IoU alto com a bbox OBSERVADA ou PREDITA;
+    //   • CONTENÇÃO (birthContainment): caixa PARCIAL (query duplicada do D-FINE)
+    //     dentro da caixa do track tem IoU BAIXO e passava — a contenção a pega.
+    // Track acusado LIVRE → recupera (atualiza); ocupado → duplicata, descarta.
     for (const di of high) {
       if (detUsed.has(di)) continue;
       const d = dets[di];
       let bestTi = -1;
-      let bestV = birthIouThr;
+      let bestV = 0;
       for (let ti = 0; ti < tracks.length; ti++) {
+        const obs = tracks[ti].bbox;
+        const pb = ti < pred.length ? pred[ti] : null;
+        const iou = Math.max(iouOf(obs, d.bbox), pb ? iouOf(pb, d.bbox) : 0);
+        // Contenção SÓ contra track FRESCO (misses 0): duplicata é fenômeno de cena
+        // fresca; track em miss + escala diferente é o caso do 2º estágio (id novo).
+        const cont =
+          birthContainment > 0 && tracks[ti].misses === 0
+            ? Math.max(containmentOf(obs, d.bbox), pb ? containmentOf(pb, d.bbox) : 0)
+            : 0;
         const v = Math.max(
-          iouOf(tracks[ti].bbox, d.bbox),
-          ti < pred.length ? iouOf(pred[ti], d.bbox) : 0,
+          iou > birthIouThr ? iou : 0,
+          cont >= birthContainment && birthContainment > 0 ? cont : 0,
         );
         if (v > bestV) {
           bestV = v;

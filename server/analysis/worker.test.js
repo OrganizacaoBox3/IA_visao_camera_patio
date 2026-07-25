@@ -98,6 +98,18 @@ describe("nmsPerClass — supressão POR classe", () => {
     const kept = nmsPerClass([d("person", 0.9, [0.1, 0.1, 0.2, 0.4]), d("chair", 0.8, [0.1, 0.1, 0.2, 0.4])]);
     expect(kept).toHaveLength(2);
   });
+
+  // DECISÃO MEDIDA (2026-07-25, gate): a caixa PARCIAL contida SOBREVIVE ao NMS do squash.
+  // Deduplicá-la aqui (contenção 0.7, como no fuseTiles) derrubou recall_all@0.25 em 4,4pp —
+  // em cena densa a pessoa parcialmente contida é gente REAL. O "2 tracks na mesma pessoa"
+  // é tratado na guarda de NASCIMENTO do tracker (bytetrack birthContainment), não aqui.
+  // Este teste TRAVA a decisão: se alguém reintroduzir contenção no squash, ele acusa.
+  it("caixa PARCIAL contida (IoU < limiar) NÃO é suprimida no squash — recall protegido", () => {
+    const inteira = d("person", 0.8, [0.1, 0.1, 0.2, 0.6]); // corpo inteiro
+    const parcial = d("person", 0.4, [0.14, 0.12, 0.1, 0.15]); // caixa contida (IoU baixo)
+    expect(iouXYWH(inteira.bbox, parcial.bbox)).toBeLessThan(0.6);
+    expect(nmsPerClass([inteira, parcial])).toHaveLength(2);
+  });
 });
 
 describe("containment — interseção / área da caixa MENOR", () => {

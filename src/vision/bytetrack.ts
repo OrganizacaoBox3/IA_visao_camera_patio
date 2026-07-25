@@ -116,6 +116,24 @@ export type ByteTrackerOptions = {
    */
   birthIouThreshold?: number;
   /**
+   * GUARDA DE NASCIMENTO POR CONTENÇÃO (bug de campo "2 caixas na MESMA pessoa", 2026-07-25):
+   * o detector (D-FINE/coco) emite query duplicada como caixa PARCIAL (cabeça/torso) DENTRO
+   * da caixa inteira — IoU ~0.1-0.3 passa pelo birthIouThreshold (que mede sobreposição) e
+   * nascia um 2º track na mesma pessoa. Det alta sem par cuja CONTENÇÃO (interseção/área da
+   * caixa MENOR) com um track (observado OU predito) ≥ isto NÃO nasce: track livre →
+   * atualiza (recupera, inclusive corrigindo caixa parcial que virou track); ocupado →
+   * descarta (duplicata). SÓ avaliado contra track FRESCO (misses 0 — visto na última
+   * rodada analisada): duplicata é fenômeno de cena fresca; track em miss + escala muito
+   * diferente é o caso do 2º estágio ("escala não muda tão rápido" → id novo, contrato
+   * testado). POR QUE AQUI e não no NMS do detector: MEDIDO no gate — contenção no NMS
+   * derruba recall_all 4,4pp (pessoa parcialmente contida em cena densa é gente REAL). No
+   * nascimento o custo é só ADIAR o track novo de quem está ≥70% contido em outro (oclusão
+   * profunda) até se separar — mesma classe de trade-off já declarada do birthIouThreshold.
+   * 0.7 espelha o containment do dedupe de tiling. 0 desliga.
+   * Default 0.7. SENSOR: bytetrack.test.(ts|js) + eval:counting.
+   */
+  birthContainment?: number;
+  /**
    * RE-ASSOCIAÇÃO 2º ESTÁGIO (bug de campo "stream salta"): FOLGA do raio de
    * aceitação (norm.; raio = folga + |v|·gap) p/ casar detecção ALTA sem par por
    * IoU a um track sem par pela distância do centro da det ao centro PREVISTO —
@@ -204,6 +222,19 @@ export function iouOf(
   return union > 0 ? inter / union : 0;
 }
 
+/** CONTENÇÃO: interseção / área da caixa MENOR (0..1) — a mesma conta de nms.ts/fuseTiles.
+ *  Local (não importada) de propósito: mantém o port 1:1 com server/analysis/bytetrack.js. */
+function containmentOf(
+  a: readonly [number, number, number, number],
+  b: readonly [number, number, number, number],
+): number {
+  const ix = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
+  const iy = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
+  if (ix <= 0 || iy <= 0) return 0;
+  const minArea = Math.min(a[2] * a[3], b[2] * b[3]);
+  return minArea > 0 ? (ix * iy) / minArea : 0;
+}
+
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
@@ -231,6 +262,7 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
   const iouThr = opts.iouThreshold ?? 0.25;
   const ttlMs = opts.ttlMs ?? 1500;
   const birthIouThr = opts.birthIouThreshold ?? 0.55;
+  const birthContainment = opts.birthContainment ?? 0.7;
   const reassocDist = opts.reassocDist ?? 0.12;
   const reassocMaxGapMs = opts.reassocMaxGapMs ?? 2500;
   const lostAfterMisses = opts.lostAfterMisses ?? 1;
@@ -433,21 +465,37 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
     }
 
     // Nascimento: SÓ detecção de score alto sem par (baixa sem par é descartada).
-    // GUARDA DE NASCIMENTO (birthIouThr): detecção sem par que sobrepõe demais um
-    // track existente NÃO vira track novo — a pessoa é a mesma. Compara com a bbox
-    // OBSERVADA e com a PREDITA (a associação falha justamente quando a predição
-    // fugiu da observação; qualquer uma das duas acusa "mesma pessoa"). Track
-    // sobreposto LIVRE → recupera a associação (atualiza); ocupado (inclusive
+    // GUARDA DE NASCIMENTO em DOIS eixos — a det sem par que é a MESMA pessoa de um
+    // track existente NÃO vira track novo:
+    //   • SOBREPOSIÇÃO (birthIouThr): IoU alto com a bbox OBSERVADA ou PREDITA;
+    //   • CONTENÇÃO (birthContainment): caixa PARCIAL (cabeça/torso — a query duplicada
+    //     típica do detector) DENTRO da caixa do track tem IoU BAIXO e passava — a
+    //     contenção (interseção/área da menor) a pega. Vale nos dois sentidos: det
+    //     GRANDE sobre track que nasceu parcial também acusa (e o recover corrige a caixa).
+    // Track acusado LIVRE → recupera a associação (atualiza); ocupado (inclusive
     // recém-nascido nesta rodada) → duplicata, descarta.
     for (const di of high) {
       if (detUsed.has(di)) continue;
       const d = dets[di];
       let bestTi = -1;
-      let bestV = birthIouThr;
+      let bestV = 0;
       for (let ti = 0; ti < tracks.length; ti++) {
+        const obs = tracks[ti].bbox;
+        const pb = ti < pred.length ? pred[ti] : null;
+        const iou = Math.max(iouOf(obs, d.bbox), pb ? iouOf(pb, d.bbox) : 0);
+        // Eixo de CONTENÇÃO só contra track FRESCO (misses 0 = visto na última rodada
+        // analisada): duplicata do detector é fenômeno de CENA FRESCA (as duas caixas
+        // nascem da mesma pessoa em rodadas adjacentes). Track já em miss + det de escala
+        // muito diferente é o caso do 2º estágio ("escala não muda tão rápido" → id novo)
+        // — sem este gate a contenção o engoliria e re-identificaria o que não devia.
+        const cont =
+          birthContainment > 0 && tracks[ti].misses === 0
+            ? Math.max(containmentOf(obs, d.bbox), pb ? containmentOf(pb, d.bbox) : 0)
+            : 0;
+        // qualifica por QUALQUER eixo; o melhor candidato é o de maior evidência
         const v = Math.max(
-          iouOf(tracks[ti].bbox, d.bbox),
-          ti < pred.length ? iouOf(pred[ti], d.bbox) : 0,
+          iou > birthIouThr ? iou : 0,
+          cont >= birthContainment && birthContainment > 0 ? cont : 0,
         );
         if (v > bestV) {
           bestV = v;

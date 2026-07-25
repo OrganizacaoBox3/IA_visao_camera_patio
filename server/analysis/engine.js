@@ -288,6 +288,7 @@ function byteTrackerOpts() {
     highScore: HIGH_SCORE,
     iouThreshold: t.iouThreshold,
     birthIouThreshold: t.birthIouThreshold,
+    birthContainment: t.birthContainment, // knob 8b — duplicata PARCIAL não nasce 2º track
     ttlMs: TTL_MS,
     // Anti-rastro/salto (precision.js knobs 20-22): re-associação 2º estágio +
     // política LOST (track sem match some da emissão mas vive interno até o TTL).
