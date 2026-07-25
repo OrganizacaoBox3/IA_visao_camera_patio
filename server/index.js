@@ -150,7 +150,13 @@ const { createFadigaHost } = require("./analysis/fadiga-host");
 const fadigaHost = createFadigaHost({
   io,
   ingest: (kind, sub, payload) => require("./pgstore").ingest(kind, sub, payload),
-  isFadigaCamera: (id) => camcfg.getCamConfig(id).modo === "fadiga",
+  // Leitura DEFENSIVA (mesmo contrato do engine.modoOf): câmera sem config → getCamConfig
+  // devolve null → modo default "atividade". Sem o guard, o 1º frame de uma câmera sem
+  // config DERRUBAVA o hub (TypeError em produção local, 2026-07-22).
+  isFadigaCamera: (id) => {
+    const cfg = camcfg.getCamConfig(id);
+    return ((cfg && cfg.modo) || "atividade") === "fadiga";
+  },
   cameraLabelOf: (id) => {
     const cam = cameras.get(id);
     return cam ? cam.label : id;

@@ -104,6 +104,7 @@ function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = con
       st.box = null; // perdeu o rosto → próximo frame re-detecta (YuNet full-frame)
     }
 
+    st.label = cameraLabelOf(cameraId); // re-resolve: a câmera pode ter registrado label após o 1º frame
     const { events } = st.risk.update({ ear, mar, phone: false, now, wallTs: now });
     for (const ev of events) ingest("fad", "event", { posto: st.label, type: ev.type, ts: ev.ts });
     const sample = st.risk.sampleTick(now);
@@ -159,16 +160,29 @@ function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = con
       return true;
     },
 
-    /** Tee de frames (index.js): guarda só o MAIS NOVO por câmera de fadiga. */
+    /** Tee de frames (index.js): guarda só o MAIS NOVO por câmera de fadiga.
+     *  OBSERVADOR NUNCA DERRUBA O RELÉ: qualquer erro aqui é engolido com log 1× —
+     *  o hub caiu em produção local (2026-07-22) por um throw neste caminho. */
     onFrame(id, buf, ts) {
-      if (!active || !isFadigaCamera(id)) return;
-      stateOf(id).latest = { buf, ts: ts ?? Date.now() };
+      try {
+        if (!active || !isFadigaCamera(id)) return;
+        stateOf(id).latest = { buf, ts: ts ?? Date.now() };
+      } catch (e) {
+        if (!this._onFrameErrLogged) {
+          this._onFrameErrLogged = true;
+          log(`[fadiga-hub] onFrame falhou (1ª ocorrência): ${e && e.message}`);
+        }
+      }
     },
 
     /** camcfg mudou: câmera que DEIXOU de ser fadiga sai do mapa (risco/box zerados). */
     onCamcfgUpdated(id) {
-      if (!active) return;
-      if (id && !isFadigaCamera(id)) states.delete(id);
+      try {
+        if (!active) return;
+        if (id && !isFadigaCamera(id)) states.delete(id);
+      } catch {
+        /* observador não derruba o relé */
+      }
     },
 
     status() {
