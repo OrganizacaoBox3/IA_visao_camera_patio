@@ -59,6 +59,13 @@ server/alarm-shelves.json
 deploy/visao-hub.service
 server/users.json
 
+# .env com valores REAIS (AUTH_SECRET/PG*/URLs com credencial) — NUNCA versionar (invariante
+# de segredos do CLAUDE.md). O MAPA documentado (sem valores) é o .env.example, versionado.
+# Carga: server/env.js (hub) + o próprio Vite (VITE_*); ambiente real tem precedência.
+.env
+.env.*
+!.env.example
+
 # Histórico em fallback JSON (runtime — só indicadores agregados)
 server/data-hist.json
 server/data-hist.json.tmp

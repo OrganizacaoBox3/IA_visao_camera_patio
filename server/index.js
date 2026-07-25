@@ -1,5 +1,10 @@
 // Hub de câmeras — relé de frames câmera → dashboard via socket.io.
 // Não processa nem armazena vídeo: apenas registra câmeras conectadas e repassa frames.
+//
+// .env PRIMEIRO (server/env.js): vários módulos abaixo leem env NA CARGA (precision.js,
+// rtsp.js, motion.js…) — o load tem de acontecer antes de qualquer require local. Ambiente
+// real (terminal/systemd) tem precedência sobre o arquivo; mapa documentado: .env.example.
+require("./env").load();
 const { createServer } = require("node:http");
 const { Server } = require("socket.io");
 const rtsp = require("./rtsp");
