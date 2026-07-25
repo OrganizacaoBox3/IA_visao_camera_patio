@@ -33,6 +33,43 @@ const WORKER = path.join(__dirname, "worker-fadiga.js");
 // Subconjunto do overlay (máscara): os MESMOS pontos que o cliente desenha (olhos + boca).
 const MASK_IDX = [...LEFT_EYE, ...RIGHT_EYE, ...MOUTH_W, ...MOUTH_O];
 
+// ── PUROS (contrato de teste) ────────────────────────────────────────────────
+// Mesmo padrão do engine (byteTrackerOpts/buildMotionIgnore): a lógica que decide
+// SE emitimos e O QUE emitimos sai do handleResult para ser travável em Vitest
+// sem subir worker/socket.
+
+/** Há dashboard na room "dashboards"? Espelho do hasViewers do engine (engine.js:116).
+ *  Defensivo de propósito: io/adapter ausente (teste, shutdown) → false, nunca throw —
+ *  observador não derruba o relé. */
+function hasDashboardViewers(io) {
+  return !!io?.sockets?.adapter?.rooms?.get("dashboards")?.size;
+}
+
+/** Monta o payload do "analysis-fatigue" (contrato socket ADITIVO — shape travado em
+ *  fadiga-host.test.js). Só é chamado COM espectador: sem dashboard na room, o
+ *  handleResult retorna antes e este objeto nem nasce (mesma economia do
+ *  analysis-tracks no pipeline.js). latencyMs = quanto o frame envelheceu
+ *  captura→emissão; clock skew entre nó e hub pode dar negativo → clampa em 0
+ *  (mesmo clamp do pipeline). eyes/boca em coordenadas 0..1 do frame; NUNCA
+ *  persiste (biométrico só em trânsito, como o vídeo). */
+function buildFatiguePayload({ cameraId, ts, now, face, snap, maskIdx }) {
+  return {
+    cameraId,
+    ts,
+    latencyMs: Math.max(0, now - ts),
+    fatigue: {
+      ok: !!face.ok,
+      score: face.score ?? 0,
+      box: face.box ?? null,
+      risk: snap.risk,
+      ear: snap.ear,
+      mar: snap.mar,
+      counters: snap.counters,
+      mask: face.ok && face.pts ? maskIdx.map((i) => [face.pts[i * 2], face.pts[i * 2 + 1]]) : null,
+    },
+  };
+}
+
 function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = console.log }) {
   const states = new Map(); // cameraId → { latest:{buf,ts}|null, inflight, box, risk, label }
   let worker = null;
@@ -110,20 +147,15 @@ function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = con
     const sample = st.risk.sampleTick(now);
     if (sample) ingest("fad", "samples", { posto: st.label, ...sample });
 
-    // Espelho p/ overlay (ADITIVO; volatile — perder um frame não importa). eyes/mouth em
-    // coordenadas 0..1 do frame; NUNCA persiste (biométrico só em trânsito, como o vídeo).
+    // Espelho p/ overlay (ADITIVO; volatile — perder um frame não importa). Padrão do
+    // analysis-tracks (pipeline.js): só a room "dashboards" recebe (nó de câmera não
+    // paga banda de overlay) e SEM espectador o payload nem é montado. ATENÇÃO: tudo
+    // acima (ingest de fad event/samples, st.box, st.risk) já rodou — a análise 24/7
+    // não depende de navegador aberto; só a emissão é economizada.
+    if (!hasDashboardViewers(io)) return;
     const snap = st.risk.snapshot();
-    const fatigue = {
-      ok: !!face.ok,
-      score: face.score ?? 0,
-      box: face.box ?? null,
-      risk: snap.risk,
-      ear: snap.ear,
-      mar: snap.mar,
-      counters: snap.counters,
-      mask: face.ok && face.pts ? MASK_IDX.map((i) => [face.pts[i * 2], face.pts[i * 2 + 1]]) : null,
-    };
-    io.volatile.emit("analysis-fatigue", { cameraId, ts: msg.ts, latencyMs: now - msg.ts, fatigue });
+    io.to("dashboards")
+      .volatile.emit("analysis-fatigue", buildFatiguePayload({ cameraId, ts: msg.ts, now, face, snap, maskIdx: MASK_IDX }));
   }
 
   function tick() {
@@ -197,4 +229,4 @@ function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = con
   };
 }
 
-module.exports = { createFadigaHost, MASK_IDX };
+module.exports = { createFadigaHost, MASK_IDX, hasDashboardViewers, buildFatiguePayload };
