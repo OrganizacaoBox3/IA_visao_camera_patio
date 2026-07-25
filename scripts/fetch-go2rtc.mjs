@@ -1,4 +1,4 @@
-// Uso: node scripts/fetch-go2rtc.mjs [--platform <win64|linux-amd64|linux-arm64|all>]
+// Uso: node scripts/fetch-go2rtc.mjs [--platform <win64|linux-amd64|linux-arm64|mac-arm64|mac-amd64|all>]
 //
 // Baixa o binário do go2rtc para <root>/bin/ a fim de EMPACOTAR no release — NÃO é um download
 // em runtime. É o mesmo padrão do ensureModel do motor de análise (server/analysis/engine.js:
@@ -53,14 +53,34 @@ const CATALOG = {
     out: "go2rtc",
     exec: true,
   },
+  // macOS (2026-07-25): dev roda em Mac e o binário estava sendo instalado À MÃO (irreproduzível
+  // — pendência da sessão de overlay tempo-real). Asset é .zip contendo o binário `go2rtc`
+  // (como o win64, mas com chmod +x como no Linux). Release/produção seguem win/linux.
+  "mac-arm64": {
+    asset: "go2rtc_mac_arm64.zip",
+    url: `${BASE}/go2rtc_mac_arm64.zip`,
+    sha256: "919b78adc759d6b3883d1e1b2ac915ac0985bb903ff1897b4d228527bd64690c",
+    zipEntry: "go2rtc",
+    out: "go2rtc",
+    exec: true,
+  },
+  "mac-amd64": {
+    asset: "go2rtc_mac_amd64.zip",
+    url: `${BASE}/go2rtc_mac_amd64.zip`,
+    sha256: "9b0b9a27a4dc3a5b8b93376e7e8fc2787c6af624a512842622be84aec0171c7a",
+    zipEntry: "go2rtc",
+    out: "go2rtc",
+    exec: true,
+  },
 };
 
 // ── Detecção da plataforma atual (default quando --platform não é passado) ────────────────────
 function detectPlatform() {
   if (process.platform === "win32") return "win64";
   if (process.platform === "linux") return process.arch === "arm64" ? "linux-arm64" : "linux-amd64";
+  if (process.platform === "darwin") return process.arch === "arm64" ? "mac-arm64" : "mac-amd64";
   throw new Error(
-    `plataforma atual (${process.platform}/${process.arch}) sem asset no catálogo — passe --platform win64|linux-amd64|linux-arm64`,
+    `plataforma atual (${process.platform}/${process.arch}) sem asset no catálogo — passe --platform ${Object.keys(CATALOG).join("|")}`,
   );
 }
 

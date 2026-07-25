@@ -310,3 +310,10 @@ em rtmp-ingest.js, fora das frentes).
   buildFatiguePayload) + fadiga-host.test.js (shape do contrato travado).
 - F1b da fadiga (cliente consumir o espelho servido) segue pendente — gateada pela validação
   lado a lado da spec-fadiga (Regra 11).
+
+## 2026-07-25 — fetch-go2rtc ganha os assets darwin (mac-arm64/mac-amd64)
+
+O binário do Mac tinha sido instalado À MÃO na sessão (irreproduzível — pendência declarada).
+Catálogo ganhou os dois zips mac do MESMO release v1.9.14, sha256 pinado, extração pela rota de
+zip que o win64 já usava + chmod +x da rota linux; detectPlatform resolve darwin. PROVA: binário
+manual apagado e recriado do zero pelo script (sha ok, `go2rtc version 1.9.14 darwin/arm64`).
