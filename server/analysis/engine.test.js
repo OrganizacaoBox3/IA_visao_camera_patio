@@ -134,9 +134,11 @@ describe("buildMotionIgnore — a exclusão POLIGONAL é rasterizada, não achat
     const N = 20;
     for (let i = 0; i < N; i++) engine.buildMotionIgnore(z);
     const msPorRebuild = Number(process.hrtime.bigint() - t0) / 1e6 / N;
-    // Teto FOLGADO (10ms): o número real medido é ~0,3ms — o assert existe p/ pegar uma
-    // regressão de ordem de grandeza (ex.: alguém rasterizar por FRAME), não p/ cronometrar
-    // a máquina de CI. O medo de perf da spec §4 é fantasma: isto roda 1× por mudança de zona.
-    expect(msPorRebuild).toBeLessThan(10);
+    // Teto FOLGADO (50ms): o número real medido é ~0,3ms — o assert existe p/ pegar uma
+    // regressão de ORDEM DE GRANDEZA (ex.: alguém rasterizar por FRAME), não p/ cronometrar
+    // a máquina. 10ms flakeou em dev sob carga real (hub + pool D-FINE + vite rodando juntos:
+    // mediu 12,5ms de pura contenção de CPU, 2026-07-22); 50ms segue 150× acima do real e
+    // ainda reprova qualquer regressão de verdade. Isto roda 1× por mudança de zona.
+    expect(msPorRebuild).toBeLessThan(50);
   });
 });
