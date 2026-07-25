@@ -179,3 +179,134 @@ modelo + abre contexto WebGL ⇒ esgotava os ~16 contextos do Chrome em segundos
   de caixa disparavam 2-3 dets na MESMA caixa física.
 - Próximo passo (decisão de produto pendente): contagem de FLUXO (tracker/tripwire de objetos) —
   hoje `counts` é ocupação instantânea; atenção à Regra 9 (cadência OWL-ViT ~700ms).
+
+## 2026-07-25 — Overlay "tempo real percebido": Ondas 0+1 da spec-overlay-tempo-real
+
+Spec nova: `spec-overlay-tempo-real.md` (reenquadramento honesto do "nem um milésimo de atraso":
+o alvo verificável é a caixa sentar na pessoa NO QUADRO EXIBIDO + cadência máxima MEDIDA; os
+limites físicos — entrada em cena ≥ cadência+inferência, skew de relógio entre máquinas — ficam
+declarados na spec, não escondidos).
+
+**Onda 1a — o painel de precisão volta a MANDAR no tracker do motor:**
+- `engine.js`: `byteTrackerOpts()` (puro, exportado p/ teste) passa TODOS os knobs do
+  `precision.js` ao `createByteTracker` — fecha o ⚠ WIRING dos knobs 23-26 (estado estacionário),
+  que até aqui só coincidiam com os defaults internos do bytetrack.js (mudar o painel não mudava
+  produção). Valores idênticos aos que já rodavam ⇒ zero mudança de comportamento HOJE; muda quem
+  manda. Teste de fiação em `engine.test.js`; `eval:counting` (12 travessias + suite estacionária
+  + torneio do ttl) verde.
+
+**Onda 1b — paralelismo da focada deixa de ser inerte no host pequeno:**
+- `engine.js`: `focusInflightFor()` (puro, testado) — o default `poolSize-1` dava maxInflight=1
+  com pool=2 (4-core, o homolog), anulando a spec 09 exatamente onde o overlay mais atrasa.
+  Piso 2 quando pool≥2 (custo declarado: com pool=2 a focada pode ocupar os 2 workers; as demais
+  degradam por último-vence, sem backlog). `ANALYSIS_FOCUS_INFLIGHT` segue mandando.
+- `deploy/visao-hub.service.example`: documenta `ANALYSIS_FOCUS_INPUT=512` (Onda 1c, opt-in
+  validado no 07-*: 1,0→1,6fps na focada).
+
+**Onda 0 — réguas de latência no HUD (a medição que autoriza a Onda 2):**
+- `camera/cadence.ts` (novo, puro+teste): intervalo REAL entre payloads `analysis-tracks`
+  distintos (EMA, dedupe por ts — re-leitura no rAF não encolhe a medição).
+- `useFrameRelay.ts`: `bmpTs` — carimbo de chegada DO FRAME QUE ESTÁ NO BITMAP (não do último
+  recebido: com decode em voo divergem; expor `f.ts` cru dessincronizaria o gate de frame-novo e
+  mediria o frame errado). O getter expõe `ts` (campo que o FrameSource já previa).
+- `draw.ts` (drawTelemetryHud): linhas `vid +Nms` (idade chegada→draw do frame exibido; satura
+  >500ms), `trk Nms` e `hub Nms` (réguas neutras — going-gray). `CameraWorkspace`: fiação
+  (~12 linhas; ratchet 1620→1632 com justificativa no size.test — o grosso está extraído).
+
+Validação: `npm run verify` verde (1119 testes) + `npm run eval:counting` OK.
+Residual: linha `vid` não existe no WebRTC (o <video> nativo não carimba ts — medir lá exige
+`requestVideoFrameCallback`, fica p/ a Onda 2); o trânsito LAN segue estimado (~5-20ms), nunca
+medido (skew). Ondas 2-4 especificadas e pendentes.
+
+## 2026-07-25 — Env por arquivo: `.env` na raiz carregado pelo hub (fim do "setar no terminal")
+
+- `server/env.js` (novo, SEM dependência — o nativo basta): parser puro + `load()` do `<raiz>/.env`,
+  chamado na 1ª linha do `index.js` (ANTES dos módulos que leem env na carga: precision/rtsp/motion).
+  **Precedência invariante:** ambiente real (terminal/systemd EnvironmentFile/CI) NUNCA é
+  sobrescrito pelo arquivo — em produção o systemd segue a autoridade (nota no service.example).
+  Workers forkados (D-FINE/fadiga) herdam o env já resolvido. Log só com CONTAGENS (nunca
+  chave/valor — o .env carrega segredos). Testes: `server/env.test.js` (parser + precedência).
+- `.env.example` (novo, versionado): o MAPA completo (~100 vars) agrupado por domínio — núcleo,
+  auth/segredos, Postgres, RTSP/ffmpeg, shed, go2rtc, RTMP, motor de análise (com a fronteira
+  qualidade→precision.js/D.10 anotada), fadiga-hub, alarmes, WhatsApp, control-plane, VITE_* do
+  front (o Vite lê o MESMO .env; só VITE_* chega ao browser) e scripts. Tudo comentado = default.
+- `.gitignore`: **faltava a entrada `.env`** (invariante de segredos do CLAUDE.md — fechado):
+  `.env` + `.env.*` ignorados, `!.env.example` versionado.
+- Validação: `npm run verify` verde (1125 testes) + smoke da precedência (PORT do terminal vence).
+
+## 2026-07-25 — Tracking: "2 caixas na mesma pessoa" consertado no lugar CERTO (guarda por contenção)
+
+**Bug de campo (dono):** dependendo da movimentação, o marcador perde o track ou marca 2 pessoas
+onde há 1. Causa da duplicata encontrada por leitura + medição: a query duplicada do D-FINE é uma
+caixa PARCIAL (cabeça/torso) CONTIDA na caixa inteira — IoU ~0.1-0.3 passa pelo NMS (0.6) E pela
+guarda de nascimento do tracker (birthIou 0.55 mede sobreposição, não contenção) → nascia 2º track.
+
+**Tentativa 1 (REJEITADA pelo gate — o sensor funcionou):** dedupe por contenção no NMS do squash
+(paridade com fuseTiles/nms.ts do front). `npm run eval` reprovou: recall_all@0.25 caiu 4,4pp
+(83,2% < 87,6%) — pessoa parcialmente contida em cena densa é gente REAL. Revertido; a decisão
+ficou TRAVADA em teste (worker.test.js: "parcial contida NÃO é suprimida no squash") e documentada
+no knob 4 do precision.js.
+
+**Conserto (entrou):** 2º eixo na guarda de NASCIMENTO do tracker — `birthContainment` (0.7,
+knob 8b do precision.js · `config.people.track.birthContainment` no front): det alta sem par com
+contenção ≥0.7 contra track FRESCO (misses 0) não nasce — track livre é ATUALIZADO (recupera,
+inclusive corrigindo track que nasceu da caixa parcial), ocupado descarta. O gate "track fresco"
+preserva o contrato do 2º estágio ("tamanho INCOMPATÍVEL não re-associa" → id novo) — pego por
+teste existente na 1ª versão e refinado. Nascido no front (vision/bytetrack.ts), port 1:1 no hub,
+fiação nos dois painéis. Custo declarado: quem está ≥70% contido em outro (oclusão profunda) só
+nasce ao se separar — mesma classe de trade-off do birthIou.
+
+**Validação:** bytetrack.test.(ts|js) espelhados (4 casos novos cada) · `npm run eval` VERDE
+(recall 92,6% ≥ 87,6%) · `npm run eval:counting` OK (12 travessias + estacionária + torneio) ·
+`verify` verde. **Residual honesto:** o "perde o tracking" em movimento rápido é limitado por
+CADÊNCIA (1fps grade / inferência na focada) — mitigado nesta mesma data por focusInflight piso 2
++ ANALYSIS_FOCUS_INPUT=512 + go2rtc; abaixo disso é física, não bug.
+
+## 2026-07-25 — Ambiente local: go2rtc no macOS + .env com todos os recursos
+
+- **Lentidão da webcam no mesmo dispositivo — causa:** sem `bin/go2rtc` (o fetch só tem asset
+  win/linux), o probe WHIP falhava e o nó caía no JPEG-socket (encode 1280@12fps na main thread da
+  aba + decode no dashboard + D-FINE, tudo na mesma CPU; aba em 2º plano ainda é estrangulada).
+  **Fix:** binário go2rtc v1.9.14 darwin/arm64 (mesma versão pinada no fetch) instalado em
+  `bin/go2rtc` — o hub auto-liga pela presença; webcam publica WHIP (encode por hardware, sem
+  estrangulamento) e o transporte "auto" da tile resolve WebRTC.
+- **`.env` criado (gitignored) com todos os recursos ativos:** WHATSAPP_ENABLED, ANALYSIS_ENABLED,
+  ANALYSIS_FADIGA, RTMP_INGEST(+AUTO_ENROLL), ANALYSIS_GO2RTC_PULL, ANALYSIS_FOCUS_INPUT=512.
+  WhatsApp exige pareamento por QR no 1º boot (wa-auth/). Modelo S baixado (sha ok) p/ o eval.
+
+## 2026-07-25 — Ondas 2–4 da spec-overlay-tempo-real (execução PARALELA: 2 agentes + frente principal)
+
+Paralelizado por PROPRIEDADE EXCLUSIVA DE ARQUIVO (doutrina §5); revisão e verify serializados
+no estado combinado ao fim. `verify` verde (1143 testes; único warning de lint é pré-existente
+em rtmp-ingest.js, fora das frentes).
+
+**Onda 2 — mecanismo do overlay↔quadro (frente principal):**
+- `TrackInterpolator.sample(now, videoLagMs)` — a extrapolação pode mirar o instante do QUADRO
+  EXIBIDO (now − delay − lag) em vez do agora absoluto (CA-4: vídeo e overlay corriam em
+  relógios diferentes; com vídeo atrasado a caixa LIDERAVA a pessoa na imagem). Clamp ≥0;
+  fade/expiração seguem pela idade do DADO (teste trava: lag alto não apaga caixa fresca).
+- Knob `APP_CONFIG.overlay.videoLagMs` {mjpeg, webrtc}, DEFAULT 0 = inerte — calibrar SÓ com
+  medição (HUD `vid` + cronômetro filmado). Fiação: CameraWorkspace (por transporte, via
+  webrtcRef) e TrackOverlay (grade WebRTC).
+
+**Onda 3a — bancada INT8 (agente, medição pura, repo intocado):**
+- `model_quantized.onnx` (uint8 dinâmico, 11,2 MB) PASSA o gate no fixture (f1 85,1% · recall
+  92,6% · precisão 80,4% · 0 FP) **mas é MAIS LENTA que o fp32 nesta máquina arm64/M5:
+  inferMs ~78 vs ~65–69 (+13–20%)** — quantização dinâmica no CPU EP ARM paga o
+  quantize/dequantize por op. `model_int8.onnx` CRASHA o ORT 1.27 (SIGABRT no create).
+  **VEREDITO: não entra.** Residual: repetir no homolog x86 (AVX2/VNNI pode inverter — hipótese);
+  full-set não rodado (fixture 21+8).
+
+**Onda 3b — WebRTC default: JÁ ENTREGUE POR DESIGN (constatação, zero código):**
+- Default de câmera é `transport:"auto"`; `transportOf` resolve WebRTC quando o go2rtc serve o
+  stream, com fallback+cooldown. O que faltava era o binário (instalado ontem no dev).
+
+**Onda 4 — consistência (frente principal + agente):**
+- `HUB_TRACKS_STALE_MS` unificado em `types/analysis.ts` (fonte única; re-export de compat em
+  useHubAnalysis; TrackOverlay perdeu a cópia — o TODO antigo fechou).
+- `analysis-fatigue` no padrão do `analysis-tracks` (fadiga-host.js): room `dashboards` +
+  volatile + payload NEM MONTADO sem espectador (ingest fad/estado seguem 24/7, intocados);
+  `latencyMs` clampado ≥0 (skew nó→hub). PUROS testáveis extraídos (hasDashboardViewers/
+  buildFatiguePayload) + fadiga-host.test.js (shape do contrato travado).
+- F1b da fadiga (cliente consumir o espelho servido) segue pendente — gateada pela validação
+  lado a lado da spec-fadiga (Regra 11).
