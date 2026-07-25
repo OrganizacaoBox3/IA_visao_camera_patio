@@ -16,7 +16,12 @@ Contexto → Decisão → Consequências. Status: aceito salvo indicação.
 | [009](ADR-009-analise-server-side.md) | Análise de visão server-side (motor D-FINE no hub) | aceito |
 | [010](ADR-010-conector-de-site-edge-gateway.md) | Conector de site (edge gateway) p/ câmeras de clientes remotos | proposto |
 | [011](ADR-011-video-webrtc-go2rtc.md) | Vídeo por WebRTC via go2rtc empacotado (ativação por presença, fallback MJPEG) | aceito |
-| [012](ADR-012-abordagem-cientifica-viabilidade.md) | Abordagem científica (fusão BLE+visão): viabilidade + trilha de adoção (pesquisa à parte; subconjunto barato no MVP) | aceito |
+| 012 | Abordagem científica (fusão BLE+visão): viabilidade + trilha de adoção — **vive no repo irmão** `../mvp_trilateracao_BLE/docs/analises/decisoes/` (ADR-018) | aceito (lá) |
+| 013, 014, 017 | Arco BLE (motor universal, observação de processo, localização sem encaixe) — **vivem no repo irmão** `../mvp_trilateracao_BLE/` (ADR-018) | aceito (lá) |
+| [015](ADR-015-reid-visual-pilar-de-identidade.md) | ReID visual como pilar de identidade (mantido aqui: a identidade por visão é do domínio da câmera) | aceito |
+| [016](ADR-016-faxina-pesquisa-fora-do-main.md) | Faxina: código de pesquisa fora do main (tag `research-fusion-arc-2026-07-12`) | aceito |
+| [018](ADR-018-separacao-dominios-ble.md) | Separação de domínios: BLE sai para `mvp_trilateracao_BLE` (visão pura aqui) | aceito |
+| [019](ADR-019-relay-rtmp-proprio.md) | Relay RTMP próprio na frente do go2rtc (ingest de DVRs que ele não decodifica) | aceito |
 
 > Convenção: novas decisões de peso ganham um ADR aqui. Mudanças que revertem um ADR
 > criam um novo ADR com status "substitui ADR-XXX".

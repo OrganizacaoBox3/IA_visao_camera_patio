@@ -67,7 +67,8 @@ de implementação: `docs/analises/implementacao-changelog.md`.
   o invariante de não-deleção continua valendo para os originais daqui.*
 - **SQL/persistência:** queries parametrizadas; SIAG é **read-only**; `schema.sql` idempotente (aditivo, sem alterar tabelas existentes).
 - ~~Planta BLE sem encaixe (ADR-017)~~ — **migrado para `mvp_trilateracao_BLE` (ADR-018)**; o
-  invariante segue valendo LÁ (o ADR-017 permanece aqui como registro histórico da decisão).
+  invariante e o PRÓPRIO ADR vivem LÁ (`../mvp_trilateracao_BLE/docs/analises/decisoes/`) —
+  não procure o arquivo aqui. Mesma coisa com os ADRs 012, 013 e 014 do arco BLE.
 
 ## 4. Stack & padrão da casa
 

@@ -3,6 +3,10 @@
 Data: 2026-07-12 · Status: aceito (direção); implementação gated · Origem: as 5 respostas de domínio
 do dono (2026-07-12) + o gate de contagem (Regra 8). Complementa o ADR-014 e re-escopa a Onda 2.
 
+> **Nota de localização (ADR-018):** o ADR-014 citado aqui vive no repo irmão
+> `../mvp_trilateracao_BLE/docs/analises/decisoes/ADR-014-observacao-de-processo-unidade-visita.md`
+> (o arco BLE migrou; este ADR ficou por tratar de identidade por VISÃO).
+
 ## Contexto — o que as respostas do dono mataram
 
 O dono respondeu 5 perguntas de domínio sobre o CD e três delas **refutaram a premissa da Onda 2**:
