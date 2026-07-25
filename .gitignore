@@ -16,6 +16,14 @@ dist-ssr
 public/demo/*.mp4
 public/demo/*.webm
 
+# Gravações de campo e renders do vídeo comercial (dezenas de MB — git não é repositório de
+# mídia). O ROTEIRO e o script de montagem SÃO versionados:
+# docs/analises/demo-video-roteiro.md + scripts/monta-demo-video.sh
+video/
+
+# Prints/capturas soltos na raiz (referências de investigação — o achado vira ADR/doc, não .png)
+/*.png
+
 # Assets MediaPipe do modo fadiga — materializados por scripts/fetch-mediapipe.mjs (predev/prebuild)
 public/mediapipe/
 
