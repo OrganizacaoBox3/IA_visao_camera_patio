@@ -20,7 +20,7 @@ const MOUTH_O = [13, 14];
 // Espelho de APP_CONFIG.fadiga (src/config.ts) — coberto pelo teste de paridade.
 const DEFAULTS = {
   eyesClosedEarThreshold: 0.21,
-  yawnMarThreshold: 0.075,
+  yawnMarThreshold: 0.15, // 0.075→0.15 (2026-07-22): fala disparava bocejo — espelha o cliente
   fatigueConfirmationMs: 1500,
   phoneConfirmationMs: 1000,
   yawnConfirmationMs: 900,

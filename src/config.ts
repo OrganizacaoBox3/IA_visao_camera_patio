@@ -271,7 +271,10 @@ export const APP_CONFIG = {
     phoneAdjustedScoreThreshold: 0.52,
     phoneRetainMs: 420,
     eyesClosedEarThreshold: 0.21,
-    yawnMarThreshold: 0.075,
+    // 0.075→0.15 (2026-07-22, pedido do dono): FALA abria a boca o suficiente p/ disparar
+    // bocejo. MAR = abertura/largura da boca; conversa fica <0.15 com a EMA, bocejo real
+    // sustenta bem acima. Ajustável na UI (Calibrar) — slider vai até 0.6.
+    yawnMarThreshold: 0.15,
     fatigueConfirmationMs: 1500,
     phoneConfirmationMs: 1000,
     yawnConfirmationMs: 900,

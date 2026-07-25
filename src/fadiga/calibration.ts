@@ -36,7 +36,9 @@ export const FADIGA_THRESHOLD_FIELDS: {
     key: "marYawn",
     label: "Bocejo (MAR)",
     min: 0.03,
-    max: 0.2,
+    // 0.2→0.6 (2026-07-22): o teto antigo não deixava calibrar ACIMA da faixa da fala —
+    // bocejo real sustenta MAR >0.4; agora dá para exigir boca escancarada de verdade.
+    max: 0.6,
     step: 0.005,
     fmt: (v) => v.toFixed(3),
     hint: "maior = mais rígido (boca mais aberta)",
