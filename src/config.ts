@@ -178,6 +178,17 @@ export const APP_CONFIG = {
       zones: true as boolean,
       heatmap: false as boolean,
     },
+    // Idade do QUADRO EXIBIDO por transporte (ms) — Onda 2 da spec-overlay-tempo-real (CA-4).
+    // O interpolador extrapola a caixa p/ o instante do QUADRO (now − videoLag), não p/ o agora
+    // absoluto: vídeo e overlay correm em relógios diferentes e sem isto a caixa pode LIDERAR a
+    // pessoa na imagem. Default 0 = comportamento de sempre (mecanismo inerte). CALIBRAR COM
+    // MEDIÇÃO, não a olho: a linha `vid` do HUD dá a parcela chegada→draw do MJPEG; a parcela
+    // upstream (captura→relé) e o WebRTC exigem medição externa (cronômetro filmado) — o número
+    // daqui é o TOTAL estimado por transporte. Doutrina: sem medição, fica 0.
+    videoLagMs: {
+      mjpeg: 0 as number,
+      webrtc: 0 as number,
+    },
   },
 
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS

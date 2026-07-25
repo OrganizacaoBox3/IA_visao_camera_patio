@@ -21,13 +21,18 @@ export type FrameEntry = {
   h: number;
   srcW: number; // largura NATIVA informada no payload (0 = desconhecida; RTSP não envia w/h)
   ts: number; // epoch-ms da última chegada (frame-gate barato quando o getter o expõe)
+  // epoch-ms da CHEGADA do frame que virou o `bmp` corrente (≠ ts quando há decode em voo:
+  // ts já é do frame mais novo, bmp ainda é o anterior). É o carimbo que o getter expõe —
+  // muda EXATAMENTE quando o bmp muda (gate de frame-novo intacto) e mede a idade do que
+  // está NA TELA, não do que chegou (HUD de latência — spec-overlay-tempo-real Onda 0).
+  bmpTs: number;
   pending: ArrayBuffer | null;
   decoding: boolean;
 };
 
 // Fábrica de entrada nova — usada pelo handler `frame` do socket ao ver uma câmera pela 1ª vez.
 export function newFrameEntry(): FrameEntry {
-  return { bmp: null, w: 0, h: 0, srcW: 0, ts: 0, pending: null, decoding: false };
+  return { bmp: null, w: 0, h: 0, srcW: 0, ts: 0, bmpTs: 0, pending: null, decoding: false };
 }
 
 // Largura do decode reduzido para feeds que estão SÓ em tile (a grade exibe ~400px).
@@ -74,6 +79,9 @@ export function useFrameRelay(cameras: Camera[]): FrameRelay {
     const f = framesRef.current.get(id);
     if (!f || f.decoding || !f.pending) return;
     const buf = f.pending;
+    // f.ts foi gravado JUNTO com este pending no handler `frame` — captura aqui, antes que um
+    // frame mais novo chegue durante o decode e o sobrescreva (o carimbo é DESTE buf).
+    const bufTs = f.ts;
     f.pending = null;
     f.decoding = true;
     // Decode com RESIZE p/ tiles: feed que está só na grade não precisa de pixels nativos
@@ -110,6 +118,7 @@ export function useFrameRelay(cameras: Camera[]): FrameRelay {
         f.bmp = bmp;
         f.w = bmp.width;
         f.h = bmp.height;
+        f.bmpTs = bufTs; // carimbo do frame que ESTÁ no bmp (muda junto com ele)
         if (old) old.close();
       })
       .catch(() => {})
@@ -182,7 +191,11 @@ export function useFrameRelay(cameras: Camera[]): FrameRelay {
       g = () => {
         const f = framesRef.current.get(id);
         if (!f || !f.bmp) return null;
-        return { el: f.bmp, w: f.w, h: f.h };
+        // `ts` (opcional, previsto no FrameSource) = chegada local do frame que está NO bmp
+        // (bmpTs, não f.ts: com decode em voo, f.ts já é do frame seguinte). Mesmo relógio do
+        // consumidor → sem skew. Consumidores: gate de frame-novo (muda junto com `el`, semântica
+        // intacta) e a linha `vid` do HUD de latência (spec-overlay-tempo-real Onda 0).
+        return { el: f.bmp, w: f.w, h: f.h, ts: f.bmpTs || undefined };
       };
       gettersRef.current.set(id, g);
     }

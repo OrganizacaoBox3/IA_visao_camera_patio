@@ -9,9 +9,10 @@ import { type TripwireCounts } from "../vision/counting";
 import { loadFlowToday } from "../report/store";
 import type { HubAnalysis, HubZone, Track } from "../types/analysis";
 
-// Payload do hub mais velho que isto é STALE (motor reiniciando/rede) → não desenhar caixa velha.
-// Exportado: o CameraWorkspace usa o MESMO limiar p/ gatear o ingest do interpolador da câmera focada.
-export const HUB_TRACKS_STALE_MS = 5000;
+// STALE do payload do hub: FONTE ÚNICA em types/analysis.ts (Onda 4). Importado (uso local no
+// applyHubAnalysis) e RE-EXPORTADO por compat — importadores existentes seguem sem mudança.
+import { HUB_TRACKS_STALE_MS } from "../types/analysis";
+export { HUB_TRACKS_STALE_MS };
 // Cadência do refresh do acumulado "hoje" das linhas quando o MOTOR DO HUB analisa a câmera.
 const HUB_FLOW_REFRESH_MS = 30_000;
 

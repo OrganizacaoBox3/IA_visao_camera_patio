@@ -25,6 +25,12 @@ export type HubZone = { id: string; label: string; people: number; occupied: boo
 // em `recvT - latencyMs` e extrapola pro AGORA → a caixa senta na pessoa (07-diagnostico-overlay-lag).
 export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[]; latencyMs?: number };
 
+// Payload do hub mais velho que isto é STALE (motor reiniciando/rede caída): não desenhar caixa
+// morta — deixa expirar/limpar. FONTE ÚNICA (Onda 4 da spec-overlay-tempo-real): era duplicado em
+// useHubAnalysis.ts e TrackOverlay.tsx (TODO antigo); os consumidores importam daqui. O `ts`
+// comparado é o de RECEPÇÃO local (useDashboardSocket grava Date.now()) — imune a skew hub×cliente.
+export const HUB_TRACKS_STALE_MS = 5000;
+
 /** Track do pipeline do CLIENTE (local ou espelho do hub) — alimenta presença/zona/counter/desenho. */
 export type Track = {
   id: number;

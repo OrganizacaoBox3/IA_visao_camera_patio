@@ -142,3 +142,56 @@ describe("buildMotionIgnore — a exclusão POLIGONAL é rasterizada, não achat
     expect(msPorRebuild).toBeLessThan(50);
   });
 });
+
+// ── Fiação painel→tracker + piso do paralelismo da focada (spec-overlay-tempo-real, Onda 1) ──
+//
+// A MORDIDA (1a): os knobs 23-26 (estado estacionário) existiam no precision.js mas o engine NÃO
+// os passava ao createByteTracker — o motor herdava os defaults internos do bytetrack.js (paridade
+// por COINCIDÊNCIA de valor). Mudar o painel não mudava produção: a classe de bug "config que não
+// manda" (a mesma do wiring do front, fechada em #F4-w). Este teste trava a fiação: TODO knob do
+// tracker no painel tem de chegar às opts do tracker.
+describe("byteTrackerOpts — o precision.js MANDA no tracker do motor (knobs 23-26 incluídos)", () => {
+  it("todos os knobs do painel chegam às opts do createByteTracker", () => {
+    const t = PRECISION.tracker;
+    const opts = engine.byteTrackerOpts();
+    expect(opts.iouThreshold).toBe(t.iouThreshold);
+    expect(opts.birthIouThreshold).toBe(t.birthIouThreshold);
+    expect(opts.reassocDist).toBe(t.reassocDist);
+    expect(opts.reassocMaxGapMs).toBe(t.reassocMaxGapMs);
+    expect(opts.lostAfterMisses).toBe(t.lostAfterMisses);
+    // Os 4 do estado ESTACIONÁRIO — o wiring que este teste existe p/ nunca mais soltar:
+    expect(opts.stationaryTolerance).toBe(t.stationaryTolerance);
+    expect(opts.stationaryEnterRounds).toBe(t.stationaryEnterRounds);
+    expect(opts.stationaryMaxMisses).toBe(t.stationaryMaxMisses);
+    expect(opts.stationaryMaxMs).toBe(t.stationaryMaxMs);
+  });
+
+  it("highScore e ttlMs derivados (cadência/gate) presentes e coerentes", () => {
+    const opts = engine.byteTrackerOpts();
+    expect(opts.highScore).toBe(PRECISION.detector.highScore);
+    // TTL nunca-cego: com gate ligado tem de cobrir o probe + margem (precision.trackTtlMs).
+    expect(opts.ttlMs).toBeGreaterThanOrEqual(PRECISION.tracker.ttlFloorMs);
+  });
+});
+
+// A MORDIDA (1b): o default `poolSize-1` do focusInflight ZERAVA o paralelismo da focada no host
+// pequeno — pool=2 (4-core, o homolog) dava maxInflight=1 e a feature da spec 09 ficava INERTE
+// exatamente onde o overlay mais atrasa. CA-3: piso 2 quando o pool tem 2+ workers.
+describe("focusInflightFor — piso 2 com pool≥2 (CA-3); env manda quando setado", () => {
+  it("pool=1 → 1 (nunca acima do pool)", () => {
+    expect(engine.focusInflightFor(1, undefined)).toBe(1);
+  });
+  it("pool=2 → 2 (o caso do homolog 4-core — era 1, feature inerte)", () => {
+    expect(engine.focusInflightFor(2, undefined)).toBe(2);
+  });
+  it("pool=3 → 2 e pool=4 → 3 (volta a sobrar worker p/ as não-focadas)", () => {
+    expect(engine.focusInflightFor(3, undefined)).toBe(2);
+    expect(engine.focusInflightFor(4, undefined)).toBe(3);
+  });
+  it("env ANALYSIS_FOCUS_INFLIGHT manda, clampado ao pool", () => {
+    expect(engine.focusInflightFor(4, "2")).toBe(2);
+    expect(engine.focusInflightFor(2, "8")).toBe(2); // teto = pool
+    expect(engine.focusInflightFor(4, "lixo")).toBe(3); // inválido → default
+    expect(engine.focusInflightFor(4, "0")).toBe(3); // não-positivo → default
+  });
+});

@@ -95,7 +95,13 @@ import { describe, it, expect } from "vitest";
 // pessoa volta ao genérico "Pessoa" (personLabel sem labelFor — o gate anti-número FICA).
 // Contabilidade REAL: 1700 → 1614; teto 1620 mantém a folga mínima da convenção (≈5).
 // NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1620;
+// 1620→1632 (jul/25, spec-overlay-tempo-real Onda 0): réguas de LATÊNCIA no HUD da câmera aberta
+// (vid/trk/hub — a medição que autoriza a Onda 2). O GROSSO foi EXTRAÍDO — medidor de cadência em
+// camera/cadence.ts (puro, testado) e as linhas novas em drawTelemetryHud (folha, camera/draw.ts);
+// aqui sobrou fiação: 1 import + 2 refs + observe/latency no ramo hub + 3 props ao drawTelemetryHud.
+// Contabilidade REAL: 1614 → 1626; teto 1632 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1632;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

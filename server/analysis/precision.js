@@ -143,11 +143,9 @@ const PRECISION = Object.freeze({
     // pessoa estiver parada" e da métrica-que-mata (zona VAZIA com pessoa dentro).
     // SENSOR de todos: eval/stationary.mjs (roda no npm run eval:counting) — a régua
     // CA-8 mede ocupação/ghost/id-switch de dwell sob o gate de movimento REAL.
-    // ⚠ WIRING: engine.js (createState) ainda NÃO passa estes 4 knobs no
-    //   createByteTracker — o motor herda hoje os MESMOS valores pelos DEFAULTS
-    //   internos do bytetrack.js (paridade por VALOR, não por referência). Ligar os
-    //   4 no createByteTracker é a próxima mudança de 4 linhas em engine.js (outro
-    //   dono de arquivo nesta onda); até lá, mudar um número AQUI não muda produção.
+    // WIRING fechado (2026-07-25, spec-overlay-tempo-real Onda 1a): engine.byteTrackerOpts()
+    // passa os 4 ao createByteTracker — este painel MANDA em produção; o teste de fiação
+    // em engine.test.js quebra se um knob deixar de chegar.
     //
     // 23. Tolerância de JITTER do bbox (norm.): deslocamento do centro que ainda NÃO é
     //     movimento. Medido contra a ÂNCORA (onde a imobilidade começou) — quem TREME

@@ -3,6 +3,8 @@ import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import type { HubAnalysis } from "../../CameraWorkspace";
 import { getContentRect, cssVar, personLabel } from "../../camera/draw";
 import { TrackInterpolator } from "../../camera/interpolate";
+import { HUB_TRACKS_STALE_MS } from "../../types/analysis";
+import { APP_CONFIG } from "../../config";
 
 // ── Overlay de caixas SOBRE o <video-stream> (tiles WebRTC/go2rtc) ────────────────────────────────
 // Um <canvas> transparente exatamente sobre o vídeo do tile. Desenha as caixas de pessoa vindas do
@@ -10,10 +12,7 @@ import { TrackInterpolator } from "../../camera/interpolate";
 // pessoa a ~30fps em vez de congelar+teleportar. Sem tracks (câmera sem análise) → não desenha, sem
 // erro. rAF próprio; para ao desmontar (tile pausado/fora de tela desmonta o tile inteiro).
 
-// Payload do hub mais velho que isto = motor reiniciando/rede caída: deixa a caixa expirar (fade)
-// em vez de ancorar keyframe em dado morto. Valor duplicado do HUB_TRACKS_STALE_MS do
-// CameraWorkspace (dono do gate) — unificar quando o contrato migrar p/ types/analysis.ts (F4).
-const HUB_TRACKS_STALE_MS = 5000;
+// STALE do payload do hub: FONTE ÚNICA em types/analysis.ts (o TODO antigo daqui fechou — Onda 4).
 
 type TrackOverlayProps = {
   // Ref do <video-stream> do tile (Go2rtcVideoTile). Lemos `.video` (o <video> interno) p/ dimensões
@@ -79,7 +78,8 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
         interp.ingest(hd, performance.now());
       }
-      const drawn = interp.sample(performance.now());
+      // Onda 2 (CA-4): amostra p/ o instante do QUADRO do <video> (knob calibrável; 0 = inerte).
+      const drawn = interp.sample(performance.now(), APP_CONFIG.overlay.videoLagMs.webrtc);
       if (!drawn.length) return; // sem tracks → nada a sobrepor (sem erro)
 
       ctx.lineWidth = 1.5;

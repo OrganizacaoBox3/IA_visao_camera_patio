@@ -79,6 +79,7 @@ import { useTelemetry } from "./camera/useTelemetry";
 import { useWebrtcTransport } from "./camera/useWebrtcTransport";
 import { useHubAnalysis, applyHubAnalysis, HUB_TRACKS_STALE_MS } from "./camera/useHubAnalysis";
 import { TrackInterpolator, toDisplayTracks } from "./camera/interpolate";
+import { createCadenceMeter } from "./camera/cadence";
 import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
 import { CamDrawer, type DrawerTab } from "./camera/CamDrawer";
 import { type TimelineItem } from "./camera/tabs/TimelineTab";
@@ -355,6 +356,10 @@ export function CameraWorkspace({
 
   // Interpolador DISPLAY-ONLY das caixas do hub (o MESMO puro da grade — camera/interpolate.ts).
   const hubInterpRef = useRef<TrackInterpolator>(new TrackInterpolator());
+  // Réguas de latência do HUD (spec-overlay-tempo-real Onda 0): cadência real do analysis-tracks
+  // (EMA c/ dedupe por ts — camera/cadence.ts) + latencyMs do último payload fresco. Refs no rAF.
+  const hubCadenceRef = useRef(createCadenceMeter());
+  const hubLatencyRef = useRef<number | null>(null);
 
   // Tripwires (./camera/useTripwires): estado/editor + ciclo de vida (load/migração/sync ADR-006).
   // O rAF cria/atualiza `counterRef`; o desenho lê `tripwiresRef`/`twCountsRef`/`twDrawRef`.
@@ -1212,9 +1217,16 @@ export function CameraWorkspace({
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
         hubInterpRef.current.ingest(hd, nowMs);
         hubProibidas = hd.zonesProibidas ?? null;
+        // Réguas do HUD (Onda 0): cadência real dos payloads + latência hub do último fresco.
+        hubCadenceRef.current.observe(hd.ts, nowMs);
+        hubLatencyRef.current = typeof hd.latencyMs === "number" ? hd.latencyMs : null;
       }
+      // Onda 2 (CA-4): amostra p/ o instante do QUADRO exibido — lag por transporte (knob, 0=inerte).
+      const vLag = webrtcRef.current
+        ? APP_CONFIG.overlay.videoLagMs.webrtc
+        : APP_CONFIG.overlay.videoLagMs.mjpeg;
       displayTracks = toDisplayTracks(
-        hubInterpRef.current.sample(nowMs),
+        hubInterpRef.current.sample(nowMs, vLag),
         hubFirstSeenRef.current,
         nowMs,
       );
@@ -1283,6 +1295,11 @@ export function CameraWorkspace({
         overlayAgeMs: age,
         dropped: typeof fx.dropped === "number" ? fx.dropped : undefined,
         recvFps: typeof fx.recvFps === "number" ? fx.recvFps : undefined,
+        // Réguas de latência (Onda 0/CA-1) — durações LOCAIS, sem skew: `vid` = idade
+        // chegada→draw do frame EXIBIDO (só MJPEG; WebRTC não carimba ts → linha omitida).
+        frameAgeMs: typeof fx.ts === "number" && fx.ts > 0 ? Date.now() - fx.ts : undefined,
+        trackIntervalMs: eng === "hub" ? hubCadenceRef.current.intervalMs() : undefined,
+        hubLatencyMs: eng === "hub" ? hubLatencyRef.current : undefined,
         detectMs: st.detect,
         decodeMs: st.decode,
         faceMs: st.face,

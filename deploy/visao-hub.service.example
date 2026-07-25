@@ -18,6 +18,9 @@ RestartSec=3
 Environment=HOST=127.0.0.1
 Environment=PORT=8091
 Environment=NODE_ENV=production
+# Precedência de env: o systemd (Environment/EnvironmentFile) SETA o ambiente real, que SEMPRE
+# vence o <raiz>/.env do repo (server/env.js só preenche o que está ausente). Em produção a
+# autoridade continua sendo este unit; o .env é conveniência de dev/homolog (mapa: .env.example).
 # SEGREDOS fora do unit versionado: aponte para um arquivo só-root, NÃO versionado.
 #   sudo install -m 600 -o root -g root /dev/null /etc/visao-patio.env
 #   # edite /etc/visao-patio.env com AUTH_SECRET, PG*, etc. (ver chaves abaixo)
@@ -27,6 +30,11 @@ EnvironmentFile=/etc/visao-patio.env
 #   PGHOST=<host>  PGPORT=5432  PGUSER=<user>  PGPASSWORD=<senha>  PGDATABASE=visao_computacional
 #   # Opcionais: SUPERADMIN_USER, SUPERADMIN_PASSWORD, CAMERA_TOKEN,
 #   #            ALERT_WEBHOOK_URL, ALERT_DEDUP_MS, WHATSAPP_ENABLED, RTSP_SOURCES, RTSP_FPS, RTSP_WIDTH
+#   # Overlay mais fresco na câmera ABERTA (spec-overlay-tempo-real Onda 1c, validado no
+#   # 07-diagnostico-overlay-lag: 1,0→1,6fps na focada; recall reduzido SÓ nela):
+#   #   ANALYSIS_FOCUS_INPUT=512
+#   # Host 4-core: ANALYSIS_WORKERS=2 já é o default (floor(cores/2)); o piso 2 do
+#   # paralelismo da focada (CA-3) dispensa override.
 # Hardening básico
 NoNewPrivileges=true
 PrivateTmp=true

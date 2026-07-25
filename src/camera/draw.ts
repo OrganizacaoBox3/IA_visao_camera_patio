@@ -408,6 +408,10 @@ export type HudStats = {
   overlayAgeMs: number | null; // ms desde o último payload de track do hub (null = local/sem payload)
   dropped?: number; // opcional: frames dropados na recepção
   recvFps?: number; // opcional: fps de RECEPÇÃO de frames
+  // Réguas de LATÊNCIA (spec-overlay-tempo-real Onda 0/CA-1) — todas DURAÇÃO local (sem skew):
+  frameAgeMs?: number | null; // idade chegada→draw do frame EXIBIDO (MJPEG; WebRTC não expõe ts)
+  trackIntervalMs?: number | null; // intervalo REAL entre payloads analysis-tracks (EMA — cadence.ts)
+  hubLatencyMs?: number | null; // idade captura→emissão do último payload (medida NO hub, por perna)
   // Telemetria POR ESTÁGIO dos processadores (última medição; ausente/null = estágio inativo).
   // Campos ADITIVOS/opcionais — a régua por estágio que precede qualquer ajuste de cadência.
   detectMs?: number | null; // objetos: OWL-ViT (worker)
@@ -421,6 +425,7 @@ export type HudStats = {
 const HUD_FPS_LOW = 12; // abaixo disso o vídeo "pula"
 const HUD_MS_HI = 8; // meta do plano: <8 ms/frame na main-thread
 const HUD_OVERLAY_STALE_MS = 1200; // overlay mais velho que isto = caixa congelada visível
+const HUD_FRAME_AGE_HI = 500; // frame exibido mais velho que isto = vídeo visivelmente atrasado
 export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: HudStats) {
   const neutral = cssVar("--cam-overlay-fg", "#cbd5e1");
   const warn = cssVar("--state-warn", "#eab308");
@@ -435,6 +440,12 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
     lines.push([`overlay ${Math.round(s.overlayAgeMs)}ms`, s.overlayAgeMs > HUD_OVERLAY_STALE_MS]);
   if (s.recvFps != null) lines.push([`recv ${Math.round(s.recvFps)} fps`, s.recvFps < HUD_FPS_LOW]);
   if (s.dropped != null) lines.push([`drop ${s.dropped}`, s.dropped > 0]);
+  // Réguas de latência (Onda 0): `vid` satura quando o vídeo exibido está visivelmente velho;
+  // `trk`/`hub` são régua de MEDIÇÃO (going-gray: medir não é anormalidade — neutros).
+  if (s.frameAgeMs != null)
+    lines.push([`vid +${Math.round(s.frameAgeMs)}ms`, s.frameAgeMs > HUD_FRAME_AGE_HI]);
+  if (s.trackIntervalMs != null) lines.push([`trk ${Math.round(s.trackIntervalMs)}ms`, false]);
+  if (s.hubLatencyMs != null) lines.push([`hub ${Math.round(s.hubLatencyMs)}ms`, false]);
   // Estágios dos processadores + fila (neutros: régua de medição, não anormalidade — going-gray).
   if (s.detectMs != null) lines.push([`owl ${Math.round(s.detectMs)} ms`, false]);
   if (s.decodeMs != null) lines.push([`zxing ${Math.round(s.decodeMs)} ms`, false]);

@@ -169,9 +169,20 @@ export class TrackInterpolator {
     }
   }
 
-  /** Amostra as caixas interpoladas na hora local `now`. Poda ids já expirados (efeito colateral). */
-  sample(now: number): DrawnTrack[] {
+  /**
+   * Amostra as caixas interpoladas na hora local `now`. Poda ids já expirados (efeito colateral).
+   *
+   * `videoLagMs` (Onda 2 — spec-overlay-tempo-real CA-4): idade do QUADRO EXIBIDO sob o overlay.
+   * A extrapolação passa a mirar o instante do QUADRO (now − delay − videoLag) em vez do agora
+   * absoluto — sem isto, com vídeo atrasado a caixa PREVÊ À FRENTE da pessoa NA IMAGEM ("a imagem
+   * é soberana", ADR-003). Default 0 = comportamento de sempre; o valor vem do knob calibrável
+   * APP_CONFIG.overlay.videoLagMs (por transporte), medido em campo com o HUD (`vid`). Clamp ≥0.
+   * Só desloca o instante RENDERIZADO — fade/expiração seguem pela idade do DADO (ageMs), senão
+   * um lag alto apagaria caixas frescas.
+   */
+  sample(now: number, videoLagMs = 0): DrawnTrack[] {
     const c = this.cfg;
+    const lag = videoLagMs > 0 ? videoLagMs : 0;
     const out: DrawnTrack[] = [];
     for (const [id, e] of this.entries) {
       const ageMs = now - e.last.t;
@@ -185,7 +196,7 @@ export class TrackInterpolator {
           : Math.max(0, 1 - (ageMs - c.fadeStartMs) / (c.expireMs - c.fadeStartMs));
       out.push({
         id,
-        bbox: this.boxAt(e, now - c.delayMs),
+        bbox: this.boxAt(e, now - c.delayMs - lag),
         zone: e.last.zone,
         score: e.last.score,
         opacity,

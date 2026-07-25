@@ -114,6 +114,26 @@ describe("TrackInterpolator — dead-reckoning por velocidade do Kalman (vx/vy)"
     expect(d[0].bbox[3]).toBeCloseTo(0.2, 6);
   });
 
+  // Onda 2 (spec-overlay-tempo-real CA-4): `videoLagMs` mira o instante do QUADRO exibido.
+  it("videoLagMs desloca o instante RENDERIZADO p/ trás (caixa senta na pessoa NO quadro)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, maxExtrapMs: 1000 });
+    it0.ingest(snap(1, [{ id: 7, bbox: box(0, 0), vx: 0.2, vy: 0 }]), 0);
+    // sem lag: renderT=500 → x=0.1; com lag 300: renderT=200 → x=0.04 (o quadro exibido é o de 200ms)
+    expect(it0.sample(500)[0].bbox[0]).toBeCloseTo(0.1, 6);
+    expect(it0.sample(500, 300)[0].bbox[0]).toBeCloseTo(0.04, 6);
+    // lag negativo/0 = comportamento de sempre (clamp ≥0 — knob torto não inverte o tempo)
+    expect(it0.sample(500, -100)[0].bbox[0]).toBeCloseTo(0.1, 6);
+  });
+
+  it("videoLagMs NÃO acelera fade/expiração (idade é do DADO, não do instante renderizado)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, fadeStartMs: 400, expireMs: 800 });
+    it0.ingest(snap(1, [{ id: 9, bbox: box(0.5, 0.5), vx: 0, vy: 0 }]), 0);
+    // idade 300ms < fadeStart: opaca com OU sem lag (lag alto não pode apagar caixa fresca)
+    expect(it0.sample(300)[0].opacity).toBe(1);
+    expect(it0.sample(300, 700)[0].opacity).toBe(1);
+    expect(it0.sample(300, 700)[0].ageMs).toBe(300);
+  });
+
   it("CLAMP por maxExtrapMs: a previsão para quando a pessoa para (não dispara)", () => {
     // expire/fade altos p/ isolar a clampagem da extrapolação da expiração por idade.
     const it0 = new TrackInterpolator({

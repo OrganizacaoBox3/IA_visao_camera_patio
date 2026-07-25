@@ -233,11 +233,21 @@ function targetFpsOf(st) {
 
 // Máx. de inferências EM VOO por câmera. Só a FOCADA paraleliza (mais cadência = marcador acompanha
 // giro/entrada, SEM trocar de modelo → recall intacto); as demais seguem serial (1). Teto = poolSize
-// (nunca mais que os workers); default deixa ≥1 worker p/ as outras (poolSize-1). Env: ANALYSIS_FOCUS_INFLIGHT.
+// (nunca mais que os workers). Env: ANALYSIS_FOCUS_INFLIGHT manda quando setado.
+//
+// DEFAULT com PISO 2 (spec-overlay-tempo-real CA-3): o default original `poolSize-1` ("deixa ≥1
+// worker p/ as outras") ZERAVA o recurso no host pequeno — pool=2 (4-core, o homolog) dava
+// maxInflight=1 e o paralelismo da spec 09 ficava INERTE justamente onde o overlay mais atrasa.
+// Com pool=2 a focada agora pode ocupar os 2 workers; as não-focadas degradam graciosamente
+// (último-vence — atrasam, nunca acumulam). Custo declarado; com pool≥3 volta a sobrar worker.
+// PURA (poolSize/env por parâmetro) — contrato de teste em engine.test.js.
+function focusInflightFor(pool, envRaw) {
+  const env = Number(envRaw);
+  const k = Number.isFinite(env) && env > 0 ? env : Math.max(pool - 1, Math.min(2, pool));
+  return Math.max(1, Math.min(pool, Math.round(k)));
+}
 function focusInflight() {
-  const env = Number(process.env.ANALYSIS_FOCUS_INFLIGHT);
-  const k = Number.isFinite(env) && env > 0 ? env : poolSize - 1;
-  return Math.max(1, Math.min(poolSize, Math.round(k)));
+  return focusInflightFor(poolSize, process.env.ANALYSIS_FOCUS_INFLIGHT);
 }
 function maxInflightFor(focused) {
   return focused ? focusInflight() : 1;
@@ -268,6 +278,31 @@ function staggerIndexOf(id) {
   return staggerOrder.get(id);
 }
 
+// Opções do ByteTracker derivadas do PAINEL (precision.js) — função PURA p/ o teste de fiação
+// (engine.test.js) provar que TODOS os knobs do painel chegam ao tracker. Fecha o ⚠ WIRING dos
+// knobs 23-26 (estado estacionário): antes o motor herdava os DEFAULTS internos do bytetrack.js
+// (paridade por VALOR); agora o precision.js é quem manda (mudar lá MUDA produção).
+function byteTrackerOpts() {
+  const t = PRECISION.tracker;
+  return {
+    highScore: HIGH_SCORE,
+    iouThreshold: t.iouThreshold,
+    birthIouThreshold: t.birthIouThreshold,
+    ttlMs: TTL_MS,
+    // Anti-rastro/salto (precision.js knobs 20-22): re-associação 2º estágio +
+    // política LOST (track sem match some da emissão mas vive interno até o TTL).
+    reassocDist: t.reassocDist,
+    reassocMaxGapMs: t.reassocMaxGapMs,
+    lostAfterMisses: t.lostAfterMisses,
+    // Estado ESTACIONÁRIO (knobs 23-26 — spec-tracking-pessoa-parada §2 C2): pessoa parada é
+    // ESTADO, não morte — isenta do TTL de relógio, morre por EVIDÊNCIA. Sensor: eval/stationary.mjs.
+    stationaryTolerance: t.stationaryTolerance,
+    stationaryEnterRounds: t.stationaryEnterRounds,
+    stationaryMaxMisses: t.stationaryMaxMisses,
+    stationaryMaxMs: t.stationaryMaxMs,
+  };
+}
+
 function createState(id) {
   const now = Date.now();
   const st = {
@@ -286,17 +321,7 @@ function createState(id) {
     lastRelayAt: 0, // último frame vindo do RELÉ (só onFrame) — base da decisão de pull
     source: "relay", // origem do último frame: "relay" | "go2rtc"
     errors: 0,
-    tracker: createByteTracker({
-      highScore: HIGH_SCORE,
-      iouThreshold: PRECISION.tracker.iouThreshold,
-      birthIouThreshold: PRECISION.tracker.birthIouThreshold,
-      ttlMs: TTL_MS,
-      // Anti-rastro/salto (precision.js knobs 20-22): re-associação 2º estágio +
-      // política LOST (track sem match some da emissão mas vive interno até o TTL).
-      reassocDist: PRECISION.tracker.reassocDist,
-      reassocMaxGapMs: PRECISION.tracker.reassocMaxGapMs,
-      lostAfterMisses: PRECISION.tracker.lostAfterMisses,
-    }),
+    tracker: createByteTracker(byteTrackerOpts()), // TODOS os knobs do painel (incl. 23-26)
     counter: createCounter(camcfg.getTripwires(id), {
       minMove: PRECISION.counter.minMove,
       ttl: TTL_MS,
@@ -741,4 +766,8 @@ module.exports = {
   // PURO (contrato de teste — engine.test.js): mapa de ignore do gate a partir das zonas de
   // exclusão. Exposto porque é o ponto onde o hub honra (ou descarta) `points` — spec §5.
   buildMotionIgnore,
+  // PUROS (contrato de teste — engine.test.js, spec-overlay-tempo-real Onda 1): a fiação
+  // painel→tracker (knobs 23-26 incluídos) e o piso do paralelismo da focada (CA-3).
+  byteTrackerOpts,
+  focusInflightFor,
 };
