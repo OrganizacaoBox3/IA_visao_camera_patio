@@ -33,6 +33,15 @@ const isCoord = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && 
 // "proibida": área que deve ficar VAZIA (spec alerta-por-atividade E1) — o motor do hub produz
 // o alarme tipo "presenca" a partir DESTA config (dwell em presencaAlertMs).
 const ZONE_MODES = new Set(["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"]);
+// Modos em que o RÓTULO é a identidade que chega ao operador — e por isso tem de ser ÚNICO por
+// câmera (ver validateZoneLabels). "atividade": o label vira a coluna `area` do ativ_buckets (o
+// relatório); "proibida": o label vira o campo `zona` do alarme de presença. Nos demais modos
+// (leitura/objetos/fadiga/exclusao) NENHUM consumidor lê o rótulo — ele é decoração de UI, e
+// exigir unicidade lá só bloquearia saves legítimos sem comprar nada.
+const LABEL_UNIQUE_MODES = new Map([
+  ["atividade", "atividade"],
+  ["proibida", "área proibida"],
+]);
 // Janela de armamento da zona proibida (E4 / turnos F2): "sempre" (24/7, default seguro) ou
 // relativa aos turnos ATRIBUÍDOS à zona (shiftIds). Quem decide é alarm/shift.js (a política);
 // aqui só se PERSISTE o enum — espelho de ZONE_ARMINGS em src/zones.ts.
@@ -103,9 +112,42 @@ function rectPreset(saneada) {
   ]);
 }
 
+const badRequest = (msg) => Object.assign(new Error(msg), { badRequest: true });
+
+// ── MODO DA ZONA: LEITURA e ESCRITA são DELIBERADAMENTE diferentes ───────────────────────────
+// ESCRITA (strict, saveZones ⇒ PUT): modo fora do enum é ERRO DO CLIENTE → 400 com mensagem.
+//   O rebaixamento silencioso p/ "atividade" que existia aqui transformava uma zona PROIBIDA
+//   corrompida numa zona de CONTAGEM sem erro, sem log e sem 400 — vigilância sumindo em
+//   silêncio, que é a pior falha possível num sistema de alarme (falso-OK).
+// LEITURA (lenient, init/boot): NUNCA derruba o hub e NUNCA reinterpreta. O modo desconhecido é
+//   preservado VERBATIM + WARN alto. Consequência (a intencional): a zona fica INERTE — os
+//   filtros do engine são igualdade exata (`z.modo === "atividade" | "exclusao" | "proibida"`,
+//   engine.js:147/154/161), então uma zona de modo que este hub não conhece não conta, não
+//   alarma e não exclui. É o comportamento HONESTO: não sabemos o que ela é, então não fingimos.
+//   Preservar (em vez de dropar) protege o rollback: um hub antigo lendo config de um hub novo
+//   ignora a zona futura sem DESTRUIR o desenho do operador ao regravar o arquivo.
+// RESIDUAL DECLARADO: com uma zona assim na config, todo PUT daquela câmera passa a dar 400
+//   até que ela seja corrigida/removida (o front faz GET → PUT da lista inteira). É o preço de
+//   falhar alto, e a mensagem diz exatamente qual zona e qual modo.
+function zoneMode(z, strict) {
+  const raw = z.modo;
+  if (raw == null || raw === "") return "atividade"; // ausente = default de sempre (retrocompat)
+  if (ZONE_MODES.has(raw)) return raw;
+  const nome = str(z.label) || str(z.id) || "(sem rótulo)";
+  if (strict)
+    throw badRequest(
+      `zona "${nome}": modo ${JSON.stringify(raw)} é desconhecido — modos válidos: ${[...ZONE_MODES].join(", ")}`,
+    );
+  console.warn(
+    `[camcfg] zona "${nome}" tem modo desconhecido ${JSON.stringify(raw)} — preservado como está; a zona fica INERTE (não conta, não alarma, não exclui) neste hub`,
+  );
+  return raw;
+}
+
 // Zona (src/zones.ts Zone): geometria normalizada + modo + config plana por modo.
 // `mask` é opcional (string codificada); só é incluída quando presente (retrocompat).
-function cleanZone(z) {
+// `strict` = caminho de ESCRITA (ver zoneMode): LANÇA badRequest em vez de normalizar em silêncio.
+function cleanZone(z, strict) {
   if (!z || typeof z !== "object") return null;
   const id = str(z.id);
   if (!id) return null;
@@ -116,7 +158,7 @@ function cleanZone(z) {
     y: clamp01(z.y, 0),
     w: clamp01(z.w, 1),
     h: clamp01(z.h, 1),
-    modo: ZONE_MODES.has(z.modo) ? z.modo : "atividade",
+    modo: zoneMode(z, strict),
     idleAlertMs: Math.max(0, num(z.idleAlertMs, 0)),
     sensitivity: num(z.sensitivity, 5),
     atividade: str(z.atividade),
@@ -157,18 +199,52 @@ function cleanZone(z) {
   }
   return out;
 }
-function cleanZones(arr) {
+// `strict` só é passado pelo caminho de ESCRITA (saveZones). O de LEITURA (init) chama sem ele —
+// config já persistida com modo desconhecido NÃO pode derrubar o boot (ver zoneMode).
+function cleanZones(arr, strict) {
   if (!Array.isArray(arr)) return [];
   const out = [];
   const seen = new Set();
   for (const z of arr) {
-    const c = cleanZone(z);
+    const c = cleanZone(z, strict);
     if (c && !seen.has(c.id)) {
       seen.add(c.id);
       out.push(c);
     }
   }
   return out;
+}
+// ── RÓTULO ÚNICO por câmera nos modos que chegam ao operador (bug medido 2026-07-26) ──────────
+// Duas zonas homônimas somavam a contagem uma da outra no motor. A causa PRIMÁRIA (agregação por
+// label) foi corrigida em analysis/pipeline.js — a contagem é por zone.id. Esta regra é a
+// segunda camada, e é sobre AMBIGUIDADE, não sobre aritmética: duas "Doca" na mesma câmera
+// produzem duas linhas `area="Doca"` no relatório e dois alarmes `zona="Doca"` indistinguíveis —
+// o operador não tem como saber QUAL área agir. E não é canto raro: cleanZone rotula toda zona
+// sem nome como "Área", então criar duas zonas e não nomear é o caminho PADRÃO.
+// ESCOPO (justificado em LABEL_UNIQUE_MODES): só atividade e proibida, e a unicidade é POR MODO —
+// uma zona de atividade "Doca" e uma proibida "Doca" caem em sinks diferentes (ativ_buckets ×
+// alarme) e não se confundem entre si. Comparação EXATA sobre o label já trimado pelo cleanZone:
+// "doca" e "Doca" são visualmente distintos no relatório; dobrar isso em case-folding seria
+// inventar política que ninguém pediu.
+// SÓ NA ESCRITA (mesma assimetria do modo): config LEGADA com duplicata continua carregando —
+// depois da correção do pipeline ela é ambígua, não errada, e barrar no boot só apagaria zonas.
+// ⚠ PENDÊNCIA CROSS-FRENTE (não é deste arquivo): o front batiza zona nova de
+// `Área ${lista.length + 1}` (CameraWorkspace.tsx:413) — depois de APAGAR uma zona, o contador
+// volta e o nome COLIDE com um existente ⇒ 400 legítimo em cima de um nome que o operador não
+// escolheu. O conserto é gerar o PRÓXIMO nome LIVRE lá; aqui a regra fica, e a mensagem diz
+// exatamente o que renomear (auto-renomear no save seria mutar em silêncio o nome do operador).
+// PURA (recebe a lista já saneada) — devolve a mensagem do 400 ou null.
+function validateZoneLabels(list) {
+  const seen = new Set();
+  for (const z of list) {
+    const nomeModo = LABEL_UNIQUE_MODES.get(z.modo);
+    if (!nomeModo) continue;
+    const key = `${z.modo} ${z.label}`;
+    if (seen.has(key))
+      return `duas zonas de ${nomeModo} desta câmera se chamam "${z.label}" — o rótulo é como o operador identifica a área no painel, no relatório e no alarme; dê nomes distintos`;
+    seen.add(key);
+  }
+  return null;
 }
 // ── OVERLAP dos turnos de UMA zona (D4 / CA-4) — a REGRA vive no servidor ────────────────────
 // A grade atribuída a uma zona é uma PARTIÇÃO do tempo: dois turnos da MESMA zona não podem se
@@ -417,15 +493,18 @@ function getZones(cameraId) {
   return zones.get(str(cameraId)) || [];
 }
 // Substitui as zonas de uma câmera e persiste; devolve a lista salva.
-// REJEITA (throw com badRequest → 400 na rota) a grade com turnos sobrepostos na mesma zona
-// (CA-4): a validação de NEGÓCIO é do servidor; a UI só exibe a mensagem. Nada é mutado antes
-// de validar — save inválido deixa o estado anterior intacto.
+// REJEITA (throw com badRequest → 400 na rota) três coisas, nesta ordem: modo FORA do enum
+// (cleanZones strict — falhar alto em vez de rebaixar em silêncio), RÓTULO repetido nos modos
+// que chegam ao operador (validateZoneLabels) e grade com turnos sobrepostos na mesma zona
+// (validateZoneShifts, CA-4). A validação de NEGÓCIO é do servidor; a UI só exibe a mensagem.
+// NADA é mutado nem persistido antes de validar — save inválido deixa o estado anterior intacto
+// (o teste unitário depende disso: é a única chamada de saveZones que pode rodar sem tocar disco).
 async function saveZones(cameraId, input) {
   const id = str(cameraId);
   if (!id) return [];
-  const list = cleanZones(input);
-  const err = validateZoneShifts(list, shiftsStore.all());
-  if (err) throw Object.assign(new Error(err), { badRequest: true });
+  const list = cleanZones(input, true);
+  const err = validateZoneLabels(list) || validateZoneShifts(list, shiftsStore.all());
+  if (err) throw badRequest(err);
   if (list.length === 0) zones.delete(id);
   else zones.set(id, list);
   await persistZones(id);
@@ -478,5 +557,7 @@ module.exports = {
   cleanCalibration,
   // Puro (cadastro de turnos por parâmetro): a regra de overlap da grade da zona (CA-4).
   validateZoneShifts,
+  // Puro (lista já saneada): a regra de RÓTULO ÚNICO por câmera nos modos atividade/proibida.
+  validateZoneLabels,
   persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
 };

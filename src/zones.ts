@@ -438,6 +438,26 @@ export const ZONE_MODE_COLOR: Record<ZoneMode, string> = {
   exclusao: "#64748b", // going-gray: supressão é operação normal, não anormalidade (base neutra)
   proibida: "#a85d5d", // vermelho DESSATURADO: armada é estado normal; saturação só na VIOLAÇÃO (E6)
 };
+/**
+ * Próximo rótulo LIVRE para uma zona nova ("Área 1", "Área 2", …).
+ *
+ * POR QUE não `Área ${lista.length + 1}` (o que havia antes): com 3 zonas, apagar a "Área 2" deixa
+ * duas (1 e 3) e o próximo nome cairia em "Área 3" — COLIDINDO com a existente. Enquanto rótulo
+ * duplicado era só um bug de contagem silencioso isso passava batido; agora o hub REJEITA rótulo
+ * duplicado com 400 (zonas homônimas somavam a contagem uma da outra — medido: 100% de inflação,
+ * `server/analysis/pipeline.js`), e o operador levaria um erro sobre um nome que ele nem escolheu.
+ * Varre a partir de 1 e devolve o primeiro índice não usado. PURA.
+ */
+export function nextZoneLabel(existing: ReadonlyArray<{ label?: string }>, prefix = "Área"): string {
+  const used = new Set(existing.map((z) => (z.label ?? "").trim()));
+  for (let i = 1; i <= used.size + 1; i++) {
+    const candidate = `${prefix} ${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  /* istanbul ignore next — inalcançável: com N rótulos usados, um dos N+1 candidatos está livre */
+  return `${prefix} ${used.size + 1}`;
+}
+
 export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
   atividade: "Atividade",
   leitura: "Leitura",

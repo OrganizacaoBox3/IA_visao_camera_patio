@@ -37,6 +37,7 @@ import {
   rasterizePolygonMask,
   sanitizeShiftIds,
   pointInPolygon,
+  nextZoneLabel,
   type ZonePoint,
 } from "./zones";
 import { APP_CONFIG } from "./config";
@@ -681,5 +682,39 @@ describe("desempate com zonas 100% POLIGONAIS (o mundo pós-migração) — regr
     const elleZ = withDefaults({ label: "Elle", points: FIX.polygons.elle }, "c");
     expect(assignZone([elleZ, grande], 0.45, 0.3, undefined, fine)?.label).toBe("Espera"); // vão
     expect(assignZone([elleZ, grande], 0.2, 0.3, undefined, fine)?.label).toBe("Elle"); // braço
+  });
+});
+
+// ── nextZoneLabel — o conserto da colisão que a validação de rótulo duplicado expôs ────────────
+// O hub passou a rejeitar rótulo duplicado com 400 (zonas homônimas somavam a contagem uma da
+// outra — 100% de inflação, medido). Com o naming antigo (`Área ${length + 1}`), apagar uma zona
+// do meio fazia o próximo nome colidir e o operador levava erro num nome que não escolheu.
+describe("nextZoneLabel", () => {
+  it("lista vazia → Área 1", () => {
+    expect(nextZoneLabel([])).toBe("Área 1");
+  });
+
+  it("sequência cheia → próximo do fim", () => {
+    expect(nextZoneLabel([{ label: "Área 1" }, { label: "Área 2" }])).toBe("Área 3");
+  });
+
+  it("CRITÉRIO DE ACEITE: buraco no meio é reaproveitado (não colide com o que existe)", () => {
+    // era o bug: com [1,3] o naming antigo daria "Área 3" — já existente ⇒ 400 do hub
+    expect(nextZoneLabel([{ label: "Área 1" }, { label: "Área 3" }])).toBe("Área 2");
+  });
+
+  it("ignora rótulos fora do padrão e não colide com eles", () => {
+    const out = nextZoneLabel([{ label: "Doca de carga" }, { label: "Área 1" }]);
+    expect(out).toBe("Área 2");
+  });
+
+  it("tolera zona sem rótulo e espaços em volta", () => {
+    expect(nextZoneLabel([{}, { label: "  Área 1  " }])).toBe("Área 2");
+  });
+
+  it("nunca devolve um rótulo já usado (varredura)", () => {
+    const zonas = [{ label: "Área 2" }, { label: "Área 4" }, { label: "Área 1" }];
+    const usados = new Set(zonas.map((z) => z.label));
+    expect(usados.has(nextZoneLabel(zonas))).toBe(false);
   });
 });

@@ -24,6 +24,7 @@ import {
   loadZonesForCamera,
   persistZones,
   withDefaults,
+  nextZoneLabel,
   assignZone,
   ZONE_MODE_LABEL,
   type Zone,
@@ -408,10 +409,10 @@ export function CameraWorkspace({
       setTripwireMode(false);
       cal.stop();
     },
+    // Rótulo = próximo índice LIVRE (não `length + 1`, que colidia após apagar zona do meio — e o
+    // hub agora rejeita rótulo duplicado, porque zonas homônimas somavam a contagem uma da outra).
     onCreate: (points) =>
-      setZones((p) =>
-        persist([...p, withDefaults({ label: `Área ${p.length + 1}`, points }, cameraId)]),
-      ),
+      setZones((p) => persist([...p, withDefaults({ label: nextZoneLabel(p), points }, cameraId)])),
     onLive: (id, patch) => setZones((p) => p.map((z) => (z.id === id ? { ...z, ...patch } : z))),
     onPatch: (id, patch) => patchZone(id, patch),
     onAlert: (m) => onAlertRef.current?.(`⚠ ${label}: ${m}`),

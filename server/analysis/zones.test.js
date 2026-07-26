@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const {
+  resolveZone,
   attributeZone,
   inExclusionZone,
   createMask,
@@ -59,6 +60,45 @@ describe("attributeZone — critério primário: centro dentro da zona", () => {
     expect(attributeZone({ x: 0.4, y: 0.4 }, zs)).toBe("Z");
     expect(attributeZone({ cx: 0.4, cy: 0.4 }, zs)).toBe("Z");
     expect(attributeZone([0.35, 0.3, 0.1, 0.2], zs)).toBe("Z");
+  });
+});
+
+// resolveZone é o 1:1 do assignZone do cliente (devolve a ZONA); attributeZone é o wrapper de
+// rótulo (`?.label ?? null`, o mesmo que CameraWorkspace.tsx:614 faz). Existe porque RÓTULO NÃO É
+// IDENTIDADE: quem CONTA por zona precisa do id — foi por chavear a contagem no label que duas
+// zonas homônimas somavam a contagem uma da outra (bug medido; pipeline.test.js "zonas HOMÔNIMAS").
+describe("resolveZone — devolve a ZONA (identidade), e attributeZone é o wrapper de rótulo", () => {
+  it("devolve o MESMO objeto de zona da lista (identidade referencial, não uma cópia)", () => {
+    const z = zone("Doca", 0.2, 0.2, 0.4, 0.4);
+    expect(resolveZone(bboxAt(0.4, 0.4), [z])).toBe(z);
+    expect(resolveZone(bboxAt(0.9, 0.9), [z])).toBeNull();
+  });
+
+  it("zonas HOMÔNIMAS são distinguíveis por resolveZone e INDISTINGUÍVEIS por attributeZone", () => {
+    const esq = { id: "z1", label: "Doca", x: 0, y: 0, w: 0.5, h: 1 };
+    const dir = { id: "z2", label: "Doca", x: 0.5, y: 0, w: 0.5, h: 1 };
+    expect(resolveZone({ x: 0.25, y: 0.5 }, [esq, dir]).id).toBe("z1");
+    expect(resolveZone({ x: 0.75, y: 0.5 }, [esq, dir]).id).toBe("z2");
+    // …e é exatamente esta colisão que o rótulo não resolve (por isso a contagem migrou p/ o id):
+    expect(attributeZone({ x: 0.25, y: 0.5 }, [esq, dir])).toBe("Doca");
+    expect(attributeZone({ x: 0.75, y: 0.5 }, [esq, dir])).toBe("Doca");
+  });
+
+  it("PARIDADE: attributeZone === resolveZone(...)?.label ?? null em todos os casos do desempate", () => {
+    const zs = [
+      zone("Espera", 0, 0, 1, 1),
+      zone("Doca 3", 0.35, 0.3, 0.3, 0.5),
+      { id: "sem-label", x: 0.8, y: 0.8, w: 0.1, h: 0.1 }, // zona SEM label → null, não undefined
+    ];
+    const alvos = [bboxAt(0.5, 0.5), bboxAt(0.05, 0.05), bboxAt(0.85, 0.85), { x: 0.5, y: 0.5 }, { x: 0.85, y: 0.85 }, [0.35, 0.3, 0.1, 0.2]]; // prettier-ignore
+    for (const alvo of alvos) {
+      const z = resolveZone(alvo, zs);
+      expect(attributeZone(alvo, zs)).toBe(z ? (z.label ?? null) : null);
+    }
+    // ponto (overlap 0 p/ todas) → vence a de MENOR área, que aqui é a SEM label: o wrapper
+    // devolve null, NUNCA undefined (é o valor que vai no campo `zone` do analysis-tracks).
+    expect(resolveZone({ x: 0.85, y: 0.85 }, zs).id).toBe("sem-label");
+    expect(attributeZone({ x: 0.85, y: 0.85 }, zs)).toBeNull();
   });
 });
 

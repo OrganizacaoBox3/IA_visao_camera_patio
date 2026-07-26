@@ -389,6 +389,59 @@ describe("processRound — zonas de atividade (janela + overlay)", () => {
   });
 });
 
+// ── ZONAS HOMÔNIMAS (bug MEDIDO no pipeline real, 2026-07-26) ────────────────────────────────
+// Duas zonas DISTINTAS com o MESMO rótulo somavam a contagem uma da outra: a agregação era um
+// Map chaveado por LABEL e cada zona lia `perLabel.get(z.label)`. Medido: 2 zonas "Doca", 1
+// pessoa em cada → `analysis-tracks` reportava people=2 nas DUAS e o ingest gravava peak=2 nas
+// duas (100% de inflação, contaminando people_peak no relatório). Não é canto raro: camcfg
+// rotula toda zona sem nome como "Área" — criar duas e não nomear é o caminho PADRÃO.
+// A correção é contar por IDENTIDADE (zone.id). O rótulo segue sendo só rótulo.
+describe("processRound — zonas HOMÔNIMAS não somam a contagem uma da outra (identidade > rótulo)", () => {
+  // Metades esquerda/direita do frame, MESMO label. Sem sobreposição: cada pessoa cai em uma só.
+  const esq = { id: "z1", label: "Doca", atividade: "Separação", x: 0, y: 0, w: 0.5, h: 1 };
+  const dir = { id: "z2", label: "Doca", atividade: "Separação", x: 0.5, y: 0, w: 0.5, h: 1 };
+
+  it("1 pessoa em cada → people:1 em CADA zona do payload (não 2 e 2)", () => {
+    const st = makeSt({ zonesAtiv: [esq, dir] });
+    pipeline.processRound(st, [person(0.25, 0.8), person(0.75, 0.8)], 1000);
+    expect(deps.emitTracks.mock.calls[0][0].zones).toEqual([
+      { id: "z1", label: "Doca", people: 1, occupied: true },
+      { id: "z2", label: "Doca", people: 1, occupied: true },
+    ]);
+  });
+
+  it("a JANELA do ingest guarda peak:1 em cada zona homônima (o relatório não infla people_peak)", () => {
+    const st = makeSt({ zonesAtiv: [esq, dir] });
+    pipeline.processRound(st, [person(0.25, 0.8), person(0.75, 0.8)], 1000);
+    expect(st.window.zones.get("z1")).toMatchObject({ label: "Doca", active: 1, peak: 1 });
+    expect(st.window.zones.get("z2")).toMatchObject({ label: "Doca", active: 1, peak: 1 });
+    pipeline.flushWindows(new Map([["cam1", st]]));
+    const { samples } = deps.ingest.mock.calls[0][2];
+    expect(samples.map((s) => ({ zoneId: s.zoneId, people: s.people }))).toEqual([
+      { zoneId: "z1", people: 1 },
+      { zoneId: "z2", people: 1 },
+    ]);
+  });
+
+  it("zona homônima VAZIA continua vazia (a ocupação da irmã não vaza pelo rótulo)", () => {
+    const st = makeSt({ zonesAtiv: [esq, dir] });
+    pipeline.processRound(st, [person(0.25, 0.8)], 1000); // só na metade esquerda
+    expect(deps.emitTracks.mock.calls[0][0].zones).toEqual([
+      { id: "z1", label: "Doca", people: 1, occupied: true },
+      { id: "z2", label: "Doca", people: 0, occupied: false },
+    ]);
+    expect(st.window.zones.get("z2")).toMatchObject({ active: 0, peak: 0 });
+  });
+
+  // CONTRATO com o front: o campo `zone` do track é o LABEL (string|null) — a contagem passou a
+  // ser por id, o RÓTULO não. Se um id vazar aqui, o overlay passa a escrever "z2" na tela.
+  it("o campo `zone` do track segue sendo o RÓTULO, nunca o id (contrato analysis-tracks)", () => {
+    const st = makeSt({ zonesAtiv: [esq, dir] });
+    pipeline.processRound(st, [person(0.75, 0.8)], 1000);
+    expect(deps.emitTracks.mock.calls[0][0].tracks[0].zone).toBe("Doca");
+  });
+});
+
 describe("processRound — logs rolantes (janela 60s)", () => {
   it("poda rounds/detsLog além de 60s", () => {
     const st = makeSt({ rounds: [1000], detsLog: [{ t: 1000, n: 1, x: 0, a: 0 }] });

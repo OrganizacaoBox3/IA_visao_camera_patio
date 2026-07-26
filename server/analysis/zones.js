@@ -24,9 +24,23 @@
 // como o CameraWorkspace faz — esta função não filtra.
 //
 // API:
-//   attributeZone(bboxOuPonto, zones) → label | null
+//   resolveZone(bboxOuPonto, zones) → a ZONA vencedora (o objeto) | null
+//   attributeZone(bboxOuPonto, zones) → label | null   (= resolveZone(...)?.label ?? null)
 //     bboxOuPonto: [x,y,w,h] normalizado (Track.bbox) OU ponto {x,y} / {cx,cy}.
-//     zones: Array<{ label, x, y, w, h, mask? }> (Zone de src/zones.ts).
+//     zones: Array<{ id?, label, x, y, w, h, mask?, points? }> (Zone de src/zones.ts).
+//
+// POR QUE DUAS FUNÇÕES (e por que a nova é a MAIS fiel ao TS): o espelho no cliente
+// (src/zones.ts assignZone) devolve a ZONA; quem quer o rótulo faz `?.label ?? null` no
+// call-site (CameraWorkspace.tsx:614). Este port nasceu já colapsado no rótulo — e o rótulo
+// NÃO é identidade: duas zonas homônimas (o caminho PADRÃO, já que camcfg rotula toda zona sem
+// nome como "Área") são indistinguíveis por ele. Isso somava a contagem de uma na outra
+// (bug medido 2026-07-26; ver pipeline.test.js "zonas HOMÔNIMAS"). `resolveZone` é o 1:1 do
+// assignZone (mesma regra, mesmo desempate, mesmo retorno) e `attributeZone` passou a ser o
+// wrapper de rótulo — assinatura e semântica INALTERADAS, porque ela é contrato de outros
+// call-sites (presence-alert.js, camcfg.test.js) e do par de paridade zones.test.ts/js.
+// Quem precisa de IDENTIDADE (contagem por zona) usa resolveZone; quem precisa de TEXTO
+// (overlay, alarme) usa attributeZone. Mudança de COMPORTAMENTO segue sendo feita no TS e
+// re-portada aqui — não há comportamento novo nesta dupla, só o retorno que o TS já tinha.
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
@@ -228,14 +242,17 @@ function maskFor(enc) {
 // ── atribuição de zona (port 1:1 do zoneAtAtiv) ──────────────────────────────
 
 /**
- * Zona da pessoa/objeto. Ver critério no cabeçalho.
+ * Zona da pessoa/objeto — devolve a ZONA (identidade preservada). Ver critério no cabeçalho.
+ * Espelho 1:1 de assignZone (src/zones.ts): mesma candidatura (centro no retângulo + teste fino
+ * points>mask) e mesmo desempate (maior interseção, depois menor área, depois a 1ª da lista).
  * @param {[number,number,number,number] | {x?:number,y?:number,cx?:number,cy?:number}} target
  *   bbox normalizado [x,y,w,h] (o centro é derivado dele — Track.cx/cy É o centro
  *   do bbox no bytetrack) OU um ponto {x,y}/{cx,cy} (sem desempate por overlap).
- * @param {Array<{label:string,x:number,y:number,w:number,h:number,mask?:string}>} zones
- * @returns {string | null} label da zona vencedora, ou null.
+ * @template {{x:number,y:number,w:number,h:number,label?:string,mask?:string}} Z
+ * @param {Array<Z>} zones
+ * @returns {Z | null} a zona vencedora, ou null.
  */
-function attributeZone(target, zones) {
+function resolveZone(target, zones) {
   let bbox = null;
   let cx, cy;
   if (Array.isArray(target)) {
@@ -273,6 +290,19 @@ function attributeZone(target, zones) {
       bestOv = ov;
     }
   }
+  return best;
+}
+
+/**
+ * Rótulo da zona da pessoa/objeto — wrapper de resolveZone (idêntico ao `?.label ?? null` que o
+ * cliente faz sobre o assignZone). Contrato INALTERADO: mesma assinatura, mesmo retorno.
+ * NÃO usar para CONTAR por zona — rótulo não é identidade (duas zonas podem ter o mesmo).
+ * @param {[number,number,number,number] | {x?:number,y?:number,cx?:number,cy?:number}} target
+ * @param {Array<{label:string,x:number,y:number,w:number,h:number,mask?:string}>} zones
+ * @returns {string | null} label da zona vencedora, ou null.
+ */
+function attributeZone(target, zones) {
+  const best = resolveZone(target, zones);
   return best ? (best.label ?? null) : null;
 }
 
@@ -317,7 +347,8 @@ function inExclusionZone(target, zones) {
 }
 
 module.exports = {
-  attributeZone,
+  resolveZone, // identidade (contagem por zona) — 1:1 do assignZone do cliente
+  attributeZone, // rótulo (overlay/alarme) — wrapper de resolveZone
   inExclusionZone,
   // helpers de máscara (mesma semântica do zoneMask.ts; exportados p/ testes/engine)
   createMask,

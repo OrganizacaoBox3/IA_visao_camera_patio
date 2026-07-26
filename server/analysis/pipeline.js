@@ -33,7 +33,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-const { attributeZone, inExclusionZone } = require("./zones");
+const { resolveZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
 
@@ -132,17 +132,23 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // Zonas de atividade → people/occupied por zona. A atribuição por track roda
     // UMA vez e alimenta os dois consumidores — a janela do ingest e o payload de
     // overlay — zero trabalho extra.
-    const zoneByTrack = new Map(); // track.id → label | null
-    const perLabel = new Map(); // label → pessoas nesta rodada
+    //
+    // A CONTAGEM É POR IDENTIDADE (zone.id), NUNCA POR RÓTULO. Chavear por label somava a
+    // contagem de zonas HOMÔNIMAS (bug medido 2026-07-26: 2 zonas "Doca", 1 pessoa em cada →
+    // people=2 nas duas e peak=2 no ingest ⇒ people_peak inflado 100% no relatório). E não é
+    // canto raro: camcfg rotula toda zona sem nome como "Área". O rótulo segue viajando no
+    // payload (é o que o operador lê), mas quem SOMA é o id. Ver zones.js/resolveZone.
+    const zoneByTrack = new Map(); // track.id → LABEL | null (contrato do payload — id NÃO vaza)
+    const perZone = new Map(); // zone.ID → pessoas nesta rodada
     if (st.zonesAtiv.length) {
       for (const t of tracks) {
-        const label = attributeZone(t.bbox, st.zonesAtiv);
-        zoneByTrack.set(t.id, label);
-        if (label) perLabel.set(label, (perLabel.get(label) || 0) + 1);
+        const z = resolveZone(t.bbox, st.zonesAtiv);
+        zoneByTrack.set(t.id, z ? (z.label ?? null) : null);
+        if (z) perZone.set(z.id, (perZone.get(z.id) || 0) + 1);
       }
       st.window.frames += 1;
       for (const z of st.zonesAtiv) {
-        const n = perLabel.get(z.label) || 0;
+        const n = perZone.get(z.id) || 0;
         let acc = st.window.zones.get(z.id);
         if (!acc)
           st.window.zones.set(z.id, (acc = { label: z.label, atividade: z.atividade || "", active: 0, peak: 0 }));
@@ -190,7 +196,7 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
           zone: zoneByTrack.get(t.id) ?? null,
         })),
         zones: st.zonesAtiv.map((z) => {
-          const people = perLabel.get(z.label) || 0;
+          const people = perZone.get(z.id) || 0; // por IDENTIDADE (ver a agregação acima)
           return { id: z.id, label: z.label, people, occupied: people > 0 };
         }),
         // Zonas PROIBIDAS (campo ADITIVO — contrato da Onda B): uma entrada POR

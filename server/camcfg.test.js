@@ -167,6 +167,120 @@ describe("camcfg — validateZoneShifts (CA-4: overlap rejeitado no save)", () =
   });
 });
 
+// ── RÓTULO ÚNICO por câmera (bug medido 2026-07-26) ─────────────────────────────────────────
+// Duas zonas homônimas somavam a contagem uma da outra no motor (causa primária corrigida em
+// analysis/pipeline.js: a contagem é por zone.id). Esta é a 2ª camada e trata de AMBIGUIDADE:
+// duas "Doca" viram duas linhas `area="Doca"` no relatório e dois alarmes `zona="Doca"`
+// indistinguíveis. Escopo: só os modos cujo rótulo chega ao operador (atividade/proibida).
+describe("camcfg — validateZoneLabels (rótulo duplicado rejeitado no save)", () => {
+  const z = (id, label, modo = "atividade") => ({ id, label, modo });
+
+  it("duas zonas de ATIVIDADE com o mesmo rótulo → erro claro (com o rótulo repetido)", () => {
+    const err = camcfg.validateZoneLabels([z("z1", "Doca"), z("z2", "Doca")]);
+    expect(err).toContain("Doca");
+    expect(err).toMatch(/atividade/i);
+    expect(err).toMatch(/nomes distintos/i);
+  });
+
+  it("o CAMINHO PADRÃO: duas zonas SEM NOME (ambas viram 'Área' no cleanZone) já é duplicata", () => {
+    // É por isso que a regra não é um canto raro — criar duas zonas e não nomear é o normal.
+    const list = cleanZones([{ id: "z1" }, { id: "z2" }]);
+    expect(list.map((k) => k.label)).toEqual(["Área", "Área"]);
+    expect(camcfg.validateZoneLabels(list)).not.toBeNull();
+  });
+
+  it("rótulos distintos, zona única e lista vazia passam", () => {
+    expect(camcfg.validateZoneLabels([z("z1", "Doca"), z("z2", "Expedição")])).toBeNull();
+    expect(camcfg.validateZoneLabels([z("z1", "Doca")])).toBeNull();
+    expect(camcfg.validateZoneLabels([])).toBeNull();
+  });
+
+  it("duas PROIBIDAS homônimas também barram (o alarme carrega o rótulo em `zona`)", () => {
+    const err = camcfg.validateZoneLabels([z("p1", "Cofre", "proibida"), z("p2", "Cofre", "proibida")]);
+    expect(err).toContain("Cofre");
+    expect(err).toMatch(/proibida/i);
+  });
+
+  it("a unicidade é POR MODO: atividade 'Doca' + proibida 'Doca' convivem (sinks diferentes)", () => {
+    expect(camcfg.validateZoneLabels([z("z1", "Doca"), z("p1", "Doca", "proibida")])).toBeNull();
+  });
+
+  it("modos SEM consumidor de rótulo (exclusao/leitura/objetos/fadiga) não são barrados", () => {
+    for (const modo of ["exclusao", "leitura", "objetos", "fadiga"])
+      expect(camcfg.validateZoneLabels([z("a", "Área", modo), z("b", "Área", modo)]), modo).toBeNull();
+  });
+
+  it("comparação EXATA sobre o label já trimado: 'Doca' ≠ 'doca', mas ' Doca ' == 'Doca'", () => {
+    expect(camcfg.validateZoneLabels([z("z1", "Doca"), z("z2", "doca")])).toBeNull();
+    // o trim é do cleanZone — a lista que chega ao validador já vem saneada
+    expect(camcfg.validateZoneLabels(cleanZones([z("z1", " Doca "), z("z2", "Doca")]))).not.toBeNull();
+  });
+
+  // A prova do 400: saveZones rejeita com `badRequest` (a rota mapeia isso p/ 400 —
+  // routes/config-routes.js:50). ⚠ SÓ o caminho REJEITADO pode ser exercitado aqui: saveZones
+  // com payload VÁLIDO persistiria em disco (sobrescrevendo o camcfg.json REAL). A validação roda
+  // ANTES de qualquer mutação/persist, então este teste não toca no arquivo — não "conserte" isto
+  // trocando por um payload válido.
+  it("saveZones REJEITA com badRequest (→400 na rota) e não muta/persiste nada", async () => {
+    await expect(
+      camcfg.saveZones("cam-teste-labels", [
+        { id: "z1", label: "Doca", modo: "atividade" },
+        { id: "z2", label: "Doca", modo: "atividade" },
+      ]),
+    ).rejects.toMatchObject({ badRequest: true, message: expect.stringContaining("Doca") });
+    expect(camcfg.getZones("cam-teste-labels")).toEqual([]); // estado anterior intacto
+  });
+});
+
+// ── MODO INVÁLIDO: falhar ALTO na escrita, tolerar na LEITURA ────────────────────────────────
+// Antes, `ZONE_MODES.has(z.modo) ? z.modo : "atividade"` rebaixava em silêncio: uma zona
+// PROIBIDA corrompida virava zona de CONTAGEM sem erro, sem log e sem 400 — vigilância sumindo
+// calada. Agora ESCRITA = 400; LEITURA = preserva verbatim + warn, e a zona fica INERTE (os
+// filtros do engine são igualdade exata, engine.js:147/154/161).
+describe("camcfg — modo de zona desconhecido (escrita 400 × leitura tolerante)", () => {
+  it("LEITURA (cleanZones sem strict): preserva o modo verbatim — NÃO rebaixa p/ atividade", () => {
+    const [z] = cleanZones([{ id: "z1", label: "Cofre", modo: "proibidaX" }]);
+    expect(z.modo).toBe("proibidaX"); // ← o rebaixamento silencioso morreu aqui
+    expect(z.modo).not.toBe("atividade");
+    // e a zona sobrevive intacta no round-trip (rollback de hub não destrói a config futura)
+    expect(roundTrip([{ id: "z1", label: "Cofre", modo: "proibidaX" }])[0].modo).toBe("proibidaX");
+  });
+
+  it("LEITURA: o modo desconhecido não casa com NENHUM filtro do engine → zona INERTE", () => {
+    const [z] = cleanZones([{ id: "z1", modo: "proibidaX" }]);
+    for (const conhecido of ["atividade", "exclusao", "proibida"]) expect(z.modo).not.toBe(conhecido);
+  });
+
+  it("ESCRITA (strict): modo fora do enum LANÇA badRequest com o modo e a lista de válidos", () => {
+    expect(() => cleanZones([{ id: "z1", label: "Cofre", modo: "proibidaX" }], true)).toThrow(/proibidaX/);
+    try {
+      cleanZones([{ id: "z1", label: "Cofre", modo: "proibidaX" }], true);
+      throw new Error("deveria ter lançado");
+    } catch (e) {
+      expect(e.badRequest).toBe(true);
+      expect(e.message).toContain("Cofre"); // qual zona
+      expect(e.message).toContain("proibida"); // a lista de modos válidos ajuda o operador
+    }
+  });
+
+  it("ESCRITA: modo AUSENTE/vazio segue valendo o default 'atividade' (retrocompat, não é erro)", () => {
+    for (const modo of [undefined, null, ""]) {
+      const [z] = cleanZones([{ id: "z1", modo }], true);
+      expect(z.modo, String(modo)).toBe("atividade");
+    }
+    // ...e todo modo do enum passa no strict
+    for (const modo of ["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"])
+      expect(cleanZones([{ id: "z1", modo }], true)[0].modo, modo).toBe(modo);
+  });
+
+  it("saveZones com modo inválido REJEITA com badRequest (→400) sem mutar/persistir", async () => {
+    await expect(
+      camcfg.saveZones("cam-teste-modo", [{ id: "z1", label: "Cofre", modo: "proibidaX" }]),
+    ).rejects.toMatchObject({ badRequest: true });
+    expect(camcfg.getZones("cam-teste-modo")).toEqual([]);
+  });
+});
+
 // Os 4 cantos que a MIGRAÇÃO semeia p/ um retângulo, na ordem TL → TR → BR → BL (horária, y p/
 // baixo). É a forma canônica do preset — o teste a escreve à mão de propósito (se ele importasse
 // o rectPreset do camcfg, provaria só que a função é igual a si mesma).
