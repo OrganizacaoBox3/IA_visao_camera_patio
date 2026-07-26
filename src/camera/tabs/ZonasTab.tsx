@@ -5,6 +5,7 @@
 // ela vive — NO PALCO, sobre o vídeo (selecionar → arrastar a forma/vértice · midpoint insere ·
 // Delete remove) — e não numa grade de pincel de 32×18 que só sabia aproximar um polígono em
 // escada. A máscara das zonas legadas continua sendo LIDA e desenhada; só não se autora mais.
+import { type CSSProperties } from "react";
 import { Settings2, Smartphone, X } from "lucide-react";
 import { APP_CONFIG } from "../../config";
 import { fmtDuration } from "../../format";
@@ -13,6 +14,7 @@ import { objClass } from "../../objects/catalog";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
 import { Badge, HelpTip, Kpi, Loading, SectionTitle, Tooltip } from "../../ui";
 import { MetricCell } from "../../components/Sparkline";
+import { restritaSummary, type LegendItem } from "../derive";
 import { RISK_LABEL, stateVar, type ZoneResult } from "../draw";
 import {
   EAR_HI,
@@ -28,13 +30,33 @@ import {
 } from "../useTelemetry";
 import { MODE_TONE, RISK_TONE } from "./tone";
 
+// Amostra da legenda: o quadradinho fala o MESMO idioma do canvas — preenchimento sólido,
+// hachura (área restrita armada), contorno tracejado (marcação sem leitura nova) e esmaecido
+// (abaixo do limiar de confiança). Estilo INLINE porque a cor é DADO (token var(--state-*)); o
+// CSS da página só conhece o tamanho do quadrado (.ws-legend .leg i — 10×10, box-sizing: border-box).
+function swatchStyle(e: LegendItem): CSSProperties {
+  switch (e.variant) {
+    case "hatch": // mesma hachura diagonal do drawProibidaHatch, na escala do swatch
+      return {
+        backgroundImage: `repeating-linear-gradient(45deg, ${e.color} 0 1px, transparent 1px 4px)`,
+        border: `1px dashed ${e.color}`,
+      };
+    case "dashed":
+      return { background: "transparent", border: `2px dashed ${e.color}` };
+    case "dim": // 0.3 = a MESMA atenuação que drawTracks aplica abaixo da confiança
+      return { background: e.color, opacity: 0.3 };
+    default:
+      return { background: e.color };
+  }
+}
+
 type Props = {
   zonesLoading: boolean;
   zones: Zone[];
   canConfigure: boolean;
   panel: Map<string, ZoneResult>;
   hist: (zoneId: string, key: string) => number[];
-  legend: { color: string; label: string }[];
+  legend: LegendItem[];
   setCfgZoneId: (id: string) => void;
   removeZone: (id: string) => void;
 };
@@ -56,9 +78,12 @@ export function ZonasTab({
       {!zonesLoading && zones.length > 0 && canConfigure && (
         <p className="empty-note">
           Cada zona roda um modo de IA na sua área.{" "}
+          {/* O modo que ALARMA (“Área restrita”) faltava nesta lista — era o único omitido, e
+              justamente o único que dispara alarme crítico. Rótulos dos dois modos de exceção
+              conforme o vocabulário do diálogo de configuração (CT-B). */}
           <HelpTip label="Ajuda das zonas">
-            Modos: Atividade, Leitura, Objetos, Fadiga ou Exclusão. Para trocar, use “Configurar
-            zona” → Modo.
+            Modos: Atividade, Leitura, Objetos, Fadiga, “Ignorar área (sem alarme)” ou “Área
+            restrita (gera alarme)”. Para trocar, use “Configurar zona” → Modo.
           </HelpTip>
         </p>
       )}
@@ -317,8 +342,24 @@ export function ZonasTab({
               <p className="empty-note zone-note">
                 Pessoas nesta área são ignoradas.{" "}
                 <HelpTip label="Ajuda da exclusão">
-                  Máscara de supressão: quem está com o pé na área não conta nem é rastreado. A zona
-                  não gera indicador.
+                  Ignorar área (sem alarme). Máscara de supressão: quem está com o pé na área não
+                  conta nem é rastreado. A zona não gera indicador.
+                </HelpTip>
+              </p>
+            )}
+
+            {/* ÁREA RESTRITA: espelha o bloco da exclusão — o único modo que ALARMA era o único
+                SEM linha explicativa aqui. O dwell e a janela de armamento só existiam dentro do
+                diálogo; agora a lista DIZ em texto quando esta área dispara (restritaSummary,
+                testado em derive.test.ts — inclusive o fail-open de "sem turno atribuído"). */}
+            {z.modo === "proibida" && (
+              <p className="empty-note zone-note">
+                {restritaSummary(z)}{" "}
+                <HelpTip label="Ajuda da área restrita">
+                  Área restrita (gera alarme): a área deve ficar VAZIA. Presença contínua acima do
+                  limite dispara alarme crítico; quem só atravessa não dispara. O alarme é produzido
+                  pelo motor do hub (24/7, sem painel aberto) — câmera sem o motor não gera este
+                  alerta. Limite e janela ficam em “Configurar zona”.
                 </HelpTip>
               </p>
             )}
@@ -331,12 +372,19 @@ export function ZonasTab({
               `ws-legend-title` fica: é CSS de página (unlayered) e vence as utilities do átomo —
               o visual não muda, e o seletor não vira órfão (G6). */}
           <SectionTitle flush className="ws-legend-title">
-            Legenda do overlay
+            Legenda do overlay{" "}
+            {/* A AÇÃO por trás de cada canal: os dois estados da marcação pedem coisas
+                DIFERENTES do operador, e antes nada dizia isso. */}
+            <HelpTip label="Ajuda da legenda">
+              A marcação da pessoa usa dois canais independentes: o CONTORNO tracejado significa que
+              ela está sendo sustentada sem leitura nova (verifique câmera, rede ou carga do hub); a
+              OPACIDADE mede a confiança da detecção (ajuste em Exibição → “Confiança mínima”).
+            </HelpTip>
           </SectionTitle>
           <div className="ws-legend-items">
             {legend.map((e, i) => (
               <span key={i} className="leg">
-                <i style={{ background: e.color }} />
+                <i style={swatchStyle(e)} />
                 {e.label}
               </span>
             ))}

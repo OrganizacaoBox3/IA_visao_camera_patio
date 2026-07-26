@@ -334,8 +334,12 @@ test("regressão: Select abre e seleciona DENTRO do modal de config da zona", as
   await modo.click();
   const opt = page.getByRole("option", { name: "Leitura" });
   await expect(opt).toBeVisible(); // dropdown na frente do overlay
-  // A opção de CALIBRAÇÃO "Exclusão" existe no mesmo Select (não é o default — o padrão é Atividade).
-  await expect(page.getByRole("option", { name: "Exclusão" })).toBeVisible();
+  // Os dois modos que o operador (e o dono do produto) TROCAVAM entre si vivem no mesmo Select e
+  // agora dizem o efeito no próprio rótulo — "Exclusão"/"Proibida" eram a mesma palavra na cabeça
+  // de quem escolhe. Nenhum dos dois é o default (o padrão é Atividade). Se estes nomes mudarem
+  // sem passar pelo produto, é AQUI que quebra (o rótulo é contrato de UI, não decoração).
+  await expect(page.getByRole("option", { name: "Ignorar área (sem alarme)" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Área restrita (gera alarme)" })).toBeVisible();
   await opt.click(); // clique funciona
   await expect(modo).toContainText("Leitura"); // valor mudou → confirmado
 });

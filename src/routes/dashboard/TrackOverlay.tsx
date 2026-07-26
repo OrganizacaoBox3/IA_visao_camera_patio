@@ -90,18 +90,22 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
 
       ctx.lineWidth = 1.5;
       ctx.font = "10px monospace";
+      // PARIDADE COM O MJPEG (drawTracks): a incerteza da marcação sai em DOIS canais separados,
+      // porque as duas causas pedem AÇÃO diferente do operador — contorno TRACEJADO = coasting
+      // (o motor não reobservou nesta rodada: olhar rede/CPU/câmera) · OPACIDADE = confiança/fade
+      // (ajustar "Exibição → Confiança mínima"). Antes os dois viviam na opacidade e a caixa a 45%
+      // era ambígua. Este arquivo é o renderizador do tile WebRTC; a divergência "MJPEG consertado,
+      // WebRTC esquecido" é a classe de bug que o invariante do draw.ts alerta — daí a paridade.
       for (const t of drawn) {
-        // Opacidade do interpolador: carrega DOIS sinais de incerteza — o FADE da caixa que está
-        // sumindo e o COASTING (marcação sustentada sem observação nova, piso 0.45). Aplicada ao
-        // CONJUNTO (contorno + scrim + rótulo), a mesma linguagem do drawTracks/MJPEG: atenuação =
-        // "não sei ao certo". Não separar por cor nem por traço é decisão — a imagem é soberana.
         ctx.globalAlpha = t.opacity;
         const x = cr.x + t.bbox[0] * cr.w,
           y = cr.y + t.bbox[1] * cr.h,
           w = t.bbox[2] * cr.w,
           h = t.bbox[3] * cr.h;
         ctx.strokeStyle = stroke;
+        if (t.coasting) ctx.setLineDash([5, 4]); // mesmo padrão do drawTracks
         ctx.strokeRect(x, y, w, h);
+        if (t.coasting) ctx.setLineDash([]); // scrim/rótulo abaixo nunca saem tracejados
         // Rótulo: o genérico "Pessoa" (personLabel — a MESMA fonte do drawTracks/MJPEG; a caixa
         // NUNCA exibe número, ver draw.ts). Sem labelFor: a fusão BLE migrou de repo (ADR-018).
         const tag = personLabel(undefined, t.id);

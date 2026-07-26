@@ -253,12 +253,20 @@ export type TrackBox = {
   bbox: [number, number, number, number];
   firstSeen: number;
   zone: string | null;
-  // Opacidade vinda do interpolate.ts — DOIS sinais de INCERTEZA no mesmo canal, de propósito:
-  // (a) FADE da caixa que está sumindo e (b) COASTING (marcação sustentada sem observação nova,
-  // piso 0.45). Atenuação é a linguagem que o projeto já usa para "não sei ao certo" — não há cor
-  // nova nem borda tracejada. OPCIONAL/retrocompatível: ausente → 1 (opaca). Só a câmera focada
-  // (interpolador) a passa; os demais chamadores omitem.
+  // Opacidade vinda do interpolate.ts (fade da caixa que está sumindo + piso do coasting).
+  // OPCIONAL/retrocompatível: ausente → 1 (opaca). Só a câmera focada (interpolador) a passa;
+  // os demais chamadores omitem.
   opacity?: number;
+  // COASTING: a marcação vive só de ASSERÇÃO do hub — nenhuma observação nova desde o último
+  // keyframe (passthrough de DrawnTrack.coasting, via toDisplayTracks).
+  //
+  // CANAL PRÓPRIO (contorno TRACEJADO), e o porquê: a opacidade sozinha carregava DOIS
+  // significados que exigem AÇÕES DIFERENTES do operador — (a) score abaixo do slider de
+  // confiança ⇒ calibrar o slider; (b) marcação sem observação nova ⇒ investigar câmera/CPU/rede.
+  // Uma caixa a 45% não dizia qual dos dois era. Documentar a ambiguidade na legenda descreveria
+  // o problema; separar os canais o RESOLVE. Opcional: ausente/false → contorno sólido (todo
+  // chamador antigo segue idêntico, sem sequer uma chamada a setLineDash).
+  coasting?: boolean;
 };
 // INVARIANTE DE RENDERIZAÇÃO (decisão do dono, 2026-07-12) — FONTE ÚNICA dos DOIS caminhos de render
 // da caixa de pessoa: drawTracks (câmera aberta / MJPEG) E TrackOverlay (tile WebRTC da grade). Os
@@ -275,6 +283,13 @@ export function personLabel(
   return labelFor?.(id) || "Pessoa";
 }
 
+// Padrão do contorno da caixa em COASTING (traço curto: legível a 10px de altura sem virar ruído)
+// e o sólido de volta. Módulo-nível: arrays constantes, zero alocação por frame.
+// A MESMA linguagem da zona restrita quieta (setLineDash([6,4]) em drawZoneOverlays): tracejado =
+// "isto não é observação fresca/cheia". Verbete na legenda: legendFor (derive.ts), variant "dashed".
+const COAST_DASH: number[] = [5, 4];
+const SOLID_DASH: number[] = [];
+
 export function drawTracks(
   ctx: CanvasRenderingContext2D,
   cr: Rect,
@@ -289,11 +304,23 @@ export function drawTracks(
   const personStroke = cssVar("--state-info", "#38bdf8");
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
   const personFg = cssVar("--state-info-fg", "#bae6fd");
+  // O dash só é TOCADO quando o estado muda (e nunca, se nenhuma caixa estiver em coasting):
+  // chamador antigo/pipeline local não paga chamada nenhuma. `dashed` espelha o dash vigente.
+  let dashed = false;
   for (const t of tracks) {
-    // Atenuação do slider de confiança (score<conf) × opacidade do interpolador (fade da caixa que
-    // some E coasting: marcação sem observação nova). Multiplicativo e aplicado ao CONJUNTO —
+    // CANAL 1 — CONTORNO: tracejado ⇔ coasting (marcação sustentada SEM observação nova).
+    const coasting = t.coasting === true;
+    if (coasting !== dashed) {
+      ctx.setLineDash(coasting ? COAST_DASH : SOLID_DASH);
+      dashed = coasting;
+    }
+    // CANAL 2 — OPACIDADE: confiança. Atenuação do slider (score<conf) × opacidade do
+    // interpolador (fade da caixa que está sumindo). Multiplicativo e aplicado ao CONJUNTO —
     // contorno, scrim e rótulo — senão a caixa incerta teria um rótulo opaco desmentindo-a.
-    // Gate: draw.test.ts trava a passagem do opacity (uma caixa em coasting DEVE sair esmaecida).
+    // Gate: draw.test.ts trava a passagem do opacity (uma caixa em fade DEVE sair esmaecida).
+    // RESIDUAL DECLARADO: o piso de opacidade do coasting continua vindo do interpolador
+    // (coastOpacityFloor, em interpolate.ts) — a caixa em coasting ainda sai apagada ALÉM do
+    // tracejado. O tracejado é quem NOMEIA a causa; zerar o piso é mudança no interpolador.
     ctx.globalAlpha = (t.score < conf ? 0.3 : 1) * (t.opacity ?? 1);
     const x = cr.x + t.bbox[0] * cr.w,
       y = cr.y + t.bbox[1] * cr.h,
@@ -312,6 +339,7 @@ export function drawTracks(
     ctx.fillStyle = personFg;
     ctx.fillText(tag, x + 4, y - 4);
   }
+  if (dashed) ctx.setLineDash(SOLID_DASH); // o resto do palco assume contorno sólido
   ctx.globalAlpha = 1;
 }
 

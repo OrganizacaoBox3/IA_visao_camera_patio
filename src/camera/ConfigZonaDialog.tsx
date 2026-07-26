@@ -25,28 +25,76 @@ import { VertexTable } from "./VertexTable";
 import { getShifts, type Shift } from "../api";
 import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
 
-// Labels são contrato do e2e (option name "Leitura" etc.) — a explicação vai como
-// hint dinâmico ABAIXO do select, não dentro das options.
-const MODO_OPTS = [
+// RÓTULOS (CT-B). Os VALORES gravados são contrato e NÃO mudam
+// (atividade|leitura|objetos|fadiga|exclusao|proibida seguem idênticos no camcfg e no motor);
+// muda só o texto exibido. "Exclusão" × "Proibida" eram a mesma palavra na cabeça de quem
+// escolhe — o próprio dono do produto descreveu a exclusão como "a função que impede o operador
+// de entrar na área", que é EXATAMENTE o outro modo. O rótulo agora carrega o efeito
+// (alarma / não alarma) no ponto da escolha, não na explicação que só aparece depois.
+// Mesmas strings no drawer e na legenda (superfície única do produto).
+// Gate: ConfigZonaDialog.test.ts.
+export const MODO_OPTS: { value: ZoneMode; label: string }[] = [
   { value: "atividade", label: "Atividade" },
   { value: "leitura", label: "Leitura" },
   { value: "objetos", label: "Objetos" },
   { value: "fadiga", label: "Fadiga" },
-  { value: "exclusao", label: "Exclusão" },
-  { value: "proibida", label: "Proibida" },
+  { value: "exclusao", label: "Ignorar área (sem alarme)" },
+  { value: "proibida", label: "Área restrita (gera alarme)" },
 ];
-
-// 1 linha por modo, visível ao selecionar — o usuário não escolhe mais às cegas.
-const MODO_DESC: Record<ZoneMode, string> = {
-  atividade: "Movimento/ociosidade + contagem de pessoas na área (padrão).",
-  leitura: "Lê código de barras/QR dentro da zona — desenhe-a sobre a esteira/etiqueta.",
-  objetos: "Conta as classes escolhidas (caixa, palete…) — modelo pesado, o 1º uso demora.",
-  fadiga: "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use Câmeras → Ajustes desta câmera → Operador (fadiga).",
+// Explicação por modo, visível ao selecionar — o usuário não escolhe mais às cegas.
+// REGRA (gate no teste): toda descrição declara ONDE RODA. Sem isso o operador supõe que tudo
+// é 24/7 (a de "proibida" se gabava do hub e, por contraste, deixava as outras ambíguas) —
+// leitura/objetos/fadiga rodam SÓ no navegador, com aquela câmera aberta na tela: o motor do
+// hub descarta tudo que não é `person` (server/analysis/pipeline.js).
+export const MODO_DESC: Record<ZoneMode, string> = {
+  atividade:
+    "Movimento/ociosidade + contagem de pessoas na área (padrão). Roda no motor do hub, 24/7 — continua valendo com o painel fechado.",
+  leitura:
+    "Lê código de barras/QR dentro da zona — desenhe-a sobre a esteira/etiqueta. Roda no NAVEGADOR: só lê enquanto esta câmera estiver aberta na tela; painel fechado, nada é lido.",
+  objetos:
+    "Conta as classes escolhidas (caixa, palete…) — modelo pesado, o 1º uso demora. Roda no NAVEGADOR: só conta enquanto esta câmera estiver aberta na tela; painel fechado, nada é contado.",
+  fadiga:
+    "Rosto/mãos de 1 operador na zona — p/ câmera dedicada use Câmeras → Ajustes desta câmera → Operador (fadiga). Roda no NAVEGADOR: só monitora enquanto esta câmera estiver aberta na tela; painel fechado, nada é monitorado.",
   exclusao:
-    "Ignora detecções de pessoa nesta área — use sobre fontes fixas de falso positivo (grade, placa, janela de van, TV). Não gera indicador.",
+    "A câmera finge que esta área não existe: pessoa aqui não conta, não rastreia e NÃO dispara alarme nenhum. Use sobre grade, placa, TV ou janela escura de van. Vale no hub (24/7) e na tela — em nenhum dos dois ela alarma.",
   proibida:
-    "Área que deve ficar VAZIA: pessoa presente acima do limite dispara alarme crítico — o alarme nasce no motor do hub (24/7, sem precisar de painel aberto).",
+    "Área que deve ficar VAZIA: pessoa parada aqui acima do limite dispara ALARME crítico. Roda no motor do hub, 24/7 — alarma com o painel fechado.",
 };
+// ── COBERTURA DO QUADRO (medidor da zona de exclusão) ────────────────────────
+/**
+ * Fração do QUADRO (0..1) que esta zona subtrai — em coordenadas normalizadas 0..1 a área da
+ * geometria JÁ É a fração do quadro (shoelace, sem escala nenhuma).
+ *
+ * NÃO é uma aproximação da forma: é a MESMA geometria que o hub rasteriza em
+ * `buildMotionIgnore` (server/analysis/engine.js) — polígono (`points`) quando existe, senão a
+ * bbox `x/y/w/h` INTEIRA (o hub é conservador e ignora o bbox todo das zonas sem polígono, e a
+ * máscara de pincel é legada). Logo o número exibido é a área realmente ignorada.
+ *
+ * PONTO CEGO DECLARADO: mede UMA zona. O diálogo só recebe a zona aberta — a cobertura TOTAL da
+ * câmera (união das zonas de exclusão, sobreposição contada uma vez) exigiria prop nova vinda do
+ * workspace e ficou de fora. Polígono auto-interceptante (fora do contrato "polígono SIMPLES")
+ * sub-mede; o clamp abaixo só garante 0..1.
+ */
+export function zoneFrameCoverage(z: Pick<Zone, "x" | "y" | "w" | "h" | "points">): number {
+  const clamp01 = (v: number) => (Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0);
+  const pts = z.points;
+  if (pts && pts.length >= 3) {
+    let dobro = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++)
+      dobro += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+    return clamp01(Math.abs(dobro) / 2);
+  }
+  const w = Number.isFinite(z.w) ? z.w : 0;
+  const h = Number.isFinite(z.h) ? z.h : 0;
+  return clamp01(Math.abs(w * h));
+}
+
+// Limiar de DESTAQUE do aviso: heurística de UI, não um degrau medido — o gate de movimento
+// degrada de forma CONTÍNUA com a área ignorada (não há joelho). Serve só para que uma zona
+// que come 1/5 do quadro não passe despercebida.
+const EXCLUSAO_COBERTURA_ALERTA = 0.2;
+const fmtCobertura = (frac: number) =>
+  frac > 0 && frac < 0.01 ? "<1%" : `${Math.round(frac * 100)}%`;
 
 // ── TURNOS (spec-turnos-por-zona F2) ─────────────────────────────────────────
 // A zona só CADASTRA a atribuição (ids); QUEM RESOLVE turno/pausa/borda é o servidor
@@ -300,21 +348,45 @@ export function ConfigZonaDialog({
 
               {z.modo === "fadiga" && (
                 <p className="empty-note">
-                  Monitora 1 operador na ROI da zona (recorte). Som e calibração de limiares ficam na
-                  câmera dedicada de fadiga.
+                  Monitora 1 operador na ROI da zona (recorte). Som e calibração de limiares ficam
+                  na câmera dedicada de fadiga.
                 </p>
               )}
 
               {/* A PODA (F5): o pincel morreu, então o texto que mandava "Pintar área" virou
                   mentira — mandava o operador procurar um botão que não existe mais. A exclusão
-                  se desenha como qualquer zona: polígono no palco (ou vértice a vértice abaixo). */}
-              {z.modo === "exclusao" && (
-                <p className="empty-note">
-                  Área de exclusão: toda pessoa cujo pé cair aqui é ignorada (não conta, não
-                  rastreia, não aparece). Sem parâmetros — desenhe a área sobre a fonte fixa de falso
-                  positivo (grade, placa, janela de van, TV).
-                </p>
-              )}
+                  se desenha como qualquer zona: polígono no palco (ou vértice a vértice abaixo).
+                  O 2º parágrafo é o EFEITO OCULTO (achado de auditoria): a mesma zona vira máscara
+                  de ignore do gate de movimento do hub (buildMotionIgnore) — ninguém sabia. */}
+              {z.modo === "exclusao" &&
+                (() => {
+                  const cobertura = zoneFrameCoverage(z);
+                  return (
+                    <>
+                      <p className="empty-note">
+                        Toda pessoa cujo pé cair aqui é descartada: não conta, não rastreia, não
+                        aparece e <b>não gera alarme</b> — nem aqui, nem no relatório. Sem
+                        parâmetros: desenhe a área sobre a fonte fixa de falso positivo (grade,
+                        placa, janela escura de van, TV). Para vigiar uma área que deve ficar vazia,
+                        o modo é <b>Área restrita (gera alarme)</b>.
+                      </p>
+                      <p className="empty-note">
+                        <b>Efeito colateral:</b> esta área também fica invisível para o gate de
+                        movimento do motor — movimento AQUI não acorda a análise. Esta zona cobre{" "}
+                        <b>{fmtCobertura(cobertura)}</b> do quadro (só esta; outras zonas de
+                        exclusão somam). Quanto mais quadro ignorado, mais a câmera depende da
+                        varredura periódica (poucos segundos) para descobrir gente: atraso na
+                        detecção, não cegueira. Cubra só a fonte do falso positivo.
+                        {cobertura >= EXCLUSAO_COBERTURA_ALERTA && (
+                          <span className="text-warn">
+                            {" "}
+                            Cobertura alta — reveja o desenho desta área.
+                          </span>
+                        )}
+                      </p>
+                    </>
+                  );
+                })()}
 
               {/* PROIBIDA (spec alerta-por-atividade E2): dwell por presets — SEM slider de
                   sensibilidade (armadilha A4: o gatilho é PESSOA detectada, não motion) e SEM o

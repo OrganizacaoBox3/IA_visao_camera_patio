@@ -438,6 +438,20 @@ export const ZONE_MODE_COLOR: Record<ZoneMode, string> = {
   exclusao: "#64748b", // going-gray: supressão é operação normal, não anormalidade (base neutra)
   proibida: "#a85d5d", // vermelho DESSATURADO: armada é estado normal; saturação só na VIOLAÇÃO (E6)
 };
+// RÓTULOS EXIBIDOS dos modos (CT-B, 2026-07-26). "Exclusão" e "Proibida" eram quase sinônimos em
+// português operacional e o próprio dono do produto trocou os dois — descreveu a exclusão como "a
+// função que impede o operador de entrar na área", que é o que a PROIBIDA faz. O nome passa a
+// carregar a diferença que importa (alarma × não alarma) em vez do adjetivo. Os VALORES gravados
+// (`exclusao`/`proibida`) NÃO mudam — isto é display. Fonte única: quem exibir modo de zona lê daqui.
+export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
+  atividade: "Atividade",
+  leitura: "Leitura",
+  objetos: "Objetos",
+  fadiga: "Fadiga",
+  exclusao: "Ignorar área (sem alarme)",
+  proibida: "Área restrita (gera alarme)",
+};
+
 /**
  * Próximo rótulo LIVRE para uma zona nova ("Área 1", "Área 2", …).
  *
@@ -457,15 +471,6 @@ export function nextZoneLabel(existing: ReadonlyArray<{ label?: string }>, prefi
   /* istanbul ignore next — inalcançável: com N rótulos usados, um dos N+1 candidatos está livre */
   return `${prefix} ${used.size + 1}`;
 }
-
-export const ZONE_MODE_LABEL: Record<ZoneMode, string> = {
-  atividade: "Atividade",
-  leitura: "Leitura",
-  objetos: "Objetos",
-  fadiga: "Fadiga",
-  exclusao: "Exclusão",
-  proibida: "Proibida",
-};
 
 // Ponto normalizado (0..1) cai dentro da zona? Respeita a MÁSCARA via `contains` (quando a zona
 // foi pintada); sem máscara, é o retângulo cheio `x,y,w,h`. Função PURA (testável) reusada pelo

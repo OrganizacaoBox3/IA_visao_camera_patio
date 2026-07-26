@@ -12,22 +12,37 @@ import { drawTracks, drawTelemetryHud, type HudStats, type TrackBox } from "./dr
 
 const CR = { x: 0, y: 0, w: 640, h: 360 };
 
-/** ctx 2D mínimo que registra o globalAlpha VIGENTE em cada primitiva pintada. */
+/** ctx 2D mínimo que registra o globalAlpha e o DASH vigentes em cada primitiva pintada. */
 function alphaCtx() {
   const strokes: number[] = [];
   const texts: number[] = [];
+  const dashes: number[][] = []; // dash vigente em cada strokeRect (1 por caixa)
+  let dash: number[] = [];
   const ctx = {
     lineWidth: 0,
     strokeStyle: "",
     fillStyle: "",
     font: "",
     globalAlpha: 1,
-    strokeRect: () => strokes.push(ctx.globalAlpha),
+    setLineDash: (d: number[]) => {
+      dash = d;
+    },
+    strokeRect: () => {
+      strokes.push(ctx.globalAlpha);
+      dashes.push(dash);
+    },
     fillRect: () => {},
     measureText: (s: string) => ({ width: s.length * 6 }),
     fillText: () => texts.push(ctx.globalAlpha),
   };
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, strokes, texts, raw: ctx };
+  return {
+    ctx: ctx as unknown as CanvasRenderingContext2D,
+    strokes,
+    texts,
+    dashes,
+    raw: ctx,
+    dashNow: () => dash,
+  };
 }
 
 const track = (over: Partial<TrackBox> = {}): TrackBox => ({
@@ -68,6 +83,54 @@ describe("drawTracks — a caixa incerta (coasting/fade) desenha ESMAECIDA", () 
     const { ctx, raw } = alphaCtx();
     drawTracks(ctx, CR, [track({ opacity: 0.45 })], 0.5, false);
     expect(raw.globalAlpha).toBe(1);
+  });
+});
+
+// CANAIS SEPARADOS (a causa-raiz da ambiguidade): a opacidade sozinha significava DUAS coisas que
+// pedem AÇÕES diferentes do operador — score abaixo do slider (calibrar) × marcação sem observação
+// nova (investigar câmera/CPU/rede). O contorno TRACEJADO passou a ser o canal do coasting; a
+// opacidade segue sendo o da confiança. Verbete de ambos na legenda (derive.legendFor).
+describe("drawTracks — coasting tem canal PRÓPRIO: contorno tracejado", () => {
+  it("coasting:true desenha TRACEJADO", () => {
+    const { ctx, dashes } = alphaCtx();
+    drawTracks(ctx, CR, [track({ coasting: true })], 0.5, false);
+    expect(dashes).toHaveLength(1);
+    expect(dashes[0].length).toBeGreaterThan(0);
+  });
+
+  it("coasting:false (e ausente) desenha SÓLIDO — nada regride p/ o chamador antigo", () => {
+    const { ctx, dashes } = alphaCtx();
+    drawTracks(ctx, CR, [track({ coasting: false }), track({ id: 2 })], 0.5, false);
+    expect(dashes).toEqual([[], []]);
+  });
+
+  it("os canais são INDEPENDENTES: a opacidade segue chegando ao canvas com tracejado", () => {
+    const { ctx, strokes, dashes } = alphaCtx();
+    drawTracks(ctx, CR, [track({ coasting: true, opacity: 0.45 })], 0.5, false);
+    expect(strokes).toEqual([0.45]);
+    expect(dashes[0].length).toBeGreaterThan(0);
+    // e o tracejado NÃO depende da opacidade: caixa opaca em coasting também sai tracejada
+    const b = alphaCtx();
+    drawTracks(b.ctx, CR, [track({ coasting: true })], 0.5, false);
+    expect(b.dashes[0].length).toBeGreaterThan(0);
+  });
+
+  it("caixa a caixa: tracejada só a que está em coasting (o dash não vaza p/ a vizinha)", () => {
+    const { ctx, dashes } = alphaCtx();
+    drawTracks(
+      ctx,
+      CR,
+      [track({ id: 1, coasting: true }), track({ id: 2 }), track({ id: 3, coasting: true })],
+      0.5,
+      false,
+    );
+    expect(dashes.map((d) => d.length > 0)).toEqual([true, false, true]);
+  });
+
+  it("restaura o contorno SÓLIDO ao sair (o resto do palco desenha linha cheia)", () => {
+    const { ctx, dashNow } = alphaCtx();
+    drawTracks(ctx, CR, [track({ coasting: true })], 0.5, false);
+    expect(dashNow()).toEqual([]);
   });
 });
 

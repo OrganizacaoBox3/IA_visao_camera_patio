@@ -1,9 +1,10 @@
 // Derivações PURAS da view do CameraWorkspace (sem React/DOM/refs): assinaturas baratas do
-// painel, modo predominante (preset) e legenda do overlay. Extraídas do componente (padrão
-// rafSteps) p/ teste sem runtime — o JSX/rAF só consome.
+// painel, modo predominante (preset), resumo da zona restrita e legenda do overlay. Extraídas do
+// componente (padrão rafSteps) p/ teste sem runtime — o JSX/rAF só consome.
 import { type ModeKey } from "../config";
+import { fmtLimit } from "../format";
 import { objClass } from "../objects/catalog";
-import type { Zone } from "../zones";
+import { DEFAULT_PRESENCA_ALERT_MS, type Zone } from "../zones";
 import type { ZoneResult } from "./draw";
 
 // Assinatura BARATA do snapshot do painel: serializa por zona SÓ o que o JSX exibe, na
@@ -49,8 +50,32 @@ export function dominantMode(zs: Zone[]): ModeKey {
   );
 }
 
+// ── RESUMO DA ZONA RESTRITA (modo "proibida") ────────────────────────────────────────────────
+// A zona que ALARMA era a única sem uma linha em texto no drawer: o dwell e a janela de
+// armamento só existiam DENTRO do diálogo de configuração — quem olhava a lista não sabia se a
+// área estava armada 24/7 nem a partir de quantos segundos ela dispara.
+// FAIL-OPEN declarado: "dentro/fora dos turnos" SEM turno atribuído segue 24/7 (o servidor nunca
+// cala um alarme por config incompleta — ver zones.ts/ConfigZonaDialog); o texto diz isso em vez
+// de prometer uma janela que não existe.
+export function armingSummary(z: Pick<Zone, "arming" | "shiftIds">): string {
+  const a = z.arming ?? "sempre";
+  if (a === "sempre") return "armada 24/7";
+  if (!z.shiftIds?.length) return "armada 24/7 (sem turno atribuído)";
+  return a === "dentro-turnos" ? "armada só nos turnos" : "armada só fora dos turnos";
+}
+
+/** Uma linha: quando esta área restrita alarma. Ex.: "Alarma se alguém ficar mais de 30s · armada 24/7". */
+export function restritaSummary(z: Pick<Zone, "arming" | "shiftIds" | "presencaAlertMs">): string {
+  const dwell = fmtLimit(z.presencaAlertMs ?? DEFAULT_PRESENCA_ALERT_MS);
+  return `Alarma se alguém ficar mais de ${dwell} · ${armingSummary(z)}`;
+}
+
 // Legenda do overlay: só as cores realmente em uso pelos modos/classes das zonas atuais.
-export type LegendItem = { color: string; label: string };
+// `variant` é o canal NÃO-CROMÁTICO do overlay — sem ele a legenda só sabe falar de COR e metade
+// da linguagem do desenho (hachura da zona restrita, contorno tracejado, marcação esmaecida) fica
+// sem verbete. Ausente = preenchimento sólido (comportamento de sempre).
+export type LegendVariant = "hatch" | "dashed" | "dim";
+export type LegendItem = { color: string; label: string; variant?: LegendVariant };
 export function legendFor(zones: Zone[]): LegendItem[] {
   const out: LegendItem[] = [];
   const modes = new Set(zones.map((z) => z.modo));
@@ -80,5 +105,28 @@ export function legendFor(zones: Zone[]): LegendItem[] {
     );
   if (modes.has("exclusao"))
     out.push({ color: "var(--state-neutral)", label: "Exclusão (ignorada)" });
+  // ZONA RESTRITA (proibida): o overlay a desenha em DOIS estados e a legenda ignorava os dois.
+  // Quieta = hachura + contorno tracejado NEUTRO + badge ARMADA (going-gray: estar armada é
+  // operação normal); violada = --state-critical com fill saturado + badge VIOLADA. Ver draw.ts.
+  if (modes.has("proibida"))
+    out.push(
+      { color: "var(--state-neutral)", label: "Área restrita · ARMADA", variant: "hatch" },
+      { color: "var(--state-critical)", label: "Área restrita · VIOLADA" },
+    );
+  // ── MARCAÇÃO DA PESSOA: os DOIS canais de incerteza, nomeados ─────────────────────────────
+  // Antes, "caixa a 45%" era ambíguo: podia ser score abaixo do slider de confiança (ação:
+  // calibrar o slider) OU coasting (ação: investigar câmera/CPU/rede). O desenho passou a separar
+  // os canais — TRACEJADO = sem observação nova, OPACIDADE = confiança — e a legenda os declara.
+  // Entram sempre que a legenda existe: drawTracks é independente do modo das zonas (a marcação
+  // de pessoa aparece em qualquer câmera com o motor ligado).
+  if (zones.length)
+    out.push(
+      {
+        color: "var(--state-info)",
+        label: "Pessoa tracejada · sem leitura nova",
+        variant: "dashed",
+      },
+      { color: "var(--state-info)", label: "Pessoa apagada · abaixo da confiança", variant: "dim" },
+    );
   return out;
 }

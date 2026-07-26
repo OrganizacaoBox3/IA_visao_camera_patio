@@ -11,7 +11,12 @@ export const MODE_TONE: Record<ZoneMode, Tone> = {
   objetos: "warn",
   fadiga: "info",
   exclusao: "info", // supressão (going-gray); Tone não tem neutro, "info" é o mais discreto
-  proibida: "info", // armada quieta é estado NORMAL (going-gray) — saturação só na violação (draw)
+  // ÚNICO modo que dispara alarme crítico — e o badge o pintava igual a Leitura/Fadiga ("info"),
+  // o que apagava a única distinção que importa nesta lista. O badge nomeia o MODO (a CAPACIDADE
+  // de alarmar), não o estado ao vivo: going-gray segue intacto SOBRE A IMAGEM, onde a zona
+  // armada quieta é neutra/hachurada e o vermelho só entra na VIOLAÇÃO (draw.ts). "alert" é o
+  // token de anormalidade que já existe (--state-critical) — nenhuma cor nova.
+  proibida: "alert",
 };
 
 export const RISK_TONE: Record<RiskState, Tone> = {
