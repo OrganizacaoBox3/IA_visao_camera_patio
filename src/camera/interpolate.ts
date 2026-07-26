@@ -36,7 +36,21 @@ export type Snapshot = {
    *  → a extrapolação prevê pro AGORA e a caixa senta na pessoa (07-diagnostico-overlay-lag.md).
    *  Ausente/0 (hub antigo) → ancora em `recvT`, comportamento de antes (retrocompat). */
   latencyMs?: number;
+  /** RE-EMISSÃO de rodada PULADA pelo gate de movimento do hub (`pipeline.emitCoasting`): o servidor
+   *  repete o ÚLTIMO payload com `ts` fresco. **NÃO É OBSERVAÇÃO** — ninguém olhou a imagem nessa
+   *  rodada. (O comentário do servidor diz que "o gate só pula com a cena ESTÁTICA"; é FALSO: ele pula
+   *  sempre que o ratio de movimento fica abaixo do limiar, o que inclui pessoa PEQUENA/DISTANTE
+   *  ANDANDO — muda menos pixels que o limiar.) Aqui vale como ASSERÇÃO de continuidade: mantém a
+   *  caixa viva (C1 — não piscar durante os ~6s de probe) sem virar keyframe, histórico ou cadência.
+   *  Ausente/false = payload REAL (retrocompat com hub antigo). */
+  coasting?: boolean;
 };
+
+/** Ramo do `boxAt` que produziu a posição desenhada (sensor de campo — `stats().exactFrac`):
+ *  - `exact`   histórico REAL (modo síncrono: renderT no passado, entre/sobre observações);
+ *  - `extrap`  dead-reckoning (posição PREDITA além do último dado) ou lerp legado extrapolando;
+ *  - `static`  caixa PARADA na última observação: legado sem penúltimo, ou id congelado por coasting. */
+export type DrawBranch = "exact" | "extrap" | "static";
 
 /** Caixa pronta para desenhar: bbox já interpolada + opacidade do fade + idade (telemetria). */
 export type DrawnTrack = {
@@ -44,8 +58,12 @@ export type DrawnTrack = {
   bbox: [number, number, number, number];
   zone: string | null;
   opacity: number; // 0..1 (1 = presente; <1 = sumindo)
-  ageMs: number; // ms desde o último payload que citou este id
+  ageMs: number; // ms desde o último payload REAL que citou este id
   score?: number; // score do ÚLTIMO keyframe (passthrough); undefined = payload sem score
+  /** id vivo só por ASSERÇÃO de coasting — nenhuma observação nova desde o último keyframe. */
+  coasting: boolean;
+  /** qual ramo produziu a posição (telemetria: hoje ninguém sabe o que está desenhando). */
+  branch: DrawBranch;
 };
 
 export type InterpConfig = {
@@ -84,19 +102,27 @@ export type InterpConfig = {
   expireIntervalFactor: number;
   fadeFloorMs: number;
   expireFloorMs: number;
+  /** PISO de opacidade enquanto o id vive só de ASSERÇÃO de coasting (rodada pulada pelo gate).
+   *  TRADE-OFF DECLARADO: a pessoa GENUINAMENTE parada passa a ser desenhada mais apagada durante o
+   *  pulo do gate, em vez de opaca como antes. É deliberado — o cliente NÃO consegue distinguir
+   *  "parada de verdade" de "andando e o gate ficou cego" (o gate pula pelo RATIO de pixels, não pela
+   *  pessoa); mostrar incerteza como incerteza é o comportamento honesto e torna o fantasma VISÍVEL
+   *  em vez de invisível. O conserto de RAIZ é no gate do hub (outra onda). */
+  coastOpacityFloor: number;
 };
 
 // Defaults calibrados p/ payload a ~1fps: fade só depois de 1,5s (não pisca entre payloads),
 // some em 2,6s. delay baixo (extrapolação leve) privilegia latência; subir delayMs troca por
 // suavidade.
-// maxExtrapMs=1000 (um intervalo-base inteiro): a MEDIÇÃO (docs/analises/reconhecimento-pessoas/07-*)
-// mostrou que a cadência REAL do overlay é ~727ms-1000ms MESMO com a câmera focada (a inferência
-// ~640ms/1080p serializa por câmera → o alvo de 6fps não é atingido). Com o cap antigo de 500ms
-// (meio intervalo) a caixa CONGELAVA na 2ª metade de cada gap enquanto a pessoa seguia andando =
-// o "marcador atrás" relatado. 1000ms deixa a caixa PREVER o gap inteiro. Seguro contra overshoot
-// quando a pessoa PARA: o Kalman leva vx/vy→0 (teste "parado: sem drift") — o cap de meio-intervalo
-// era redundante com essa proteção. Overshoot em MUDANÇA de direção é limitado ao próximo payload
-// (≤~1s) e suavizado pelo easing do snap.
+// maxExtrapMs=1000 NÃO é mais o teto VIGENTE de extrapolação: desde a onda anti-oscilação quem manda
+// é o `extrapCapMs()` ADAPTATIVO (extrapIntervalFactor × cadência OBSERVADA, piso extrapFloorMs), e o
+// maxExtrapMs virou (a) o TETO desse cap, (b) o clamp do dt para TRÁS e (c) o cap da compensação de
+// latencyMs. Histórico do valor: a MEDIÇÃO (docs/analises/reconhecimento-pessoas/07-*) mostrou cadência
+// real ~727ms-1000ms MESMO com a câmera focada (inferência ~640ms/1080p serializa por câmera → o alvo
+// de 6fps não é atingido); com o cap antigo de 500ms a caixa CONGELAVA na 2ª metade de cada gap = o
+// "marcador atrás" relatado. Em cadência LENTA (grade ~1fps) o cap adaptativo bate nesse teto e o
+// comportamento é o de então (prevê o gap inteiro); em cadência RÁPIDA (6fps) o cap cai a ~250ms.
+// Seguro contra overshoot quando a pessoa PARA: o Kalman leva vx/vy→0 (teste "parado: sem drift").
 export const DEFAULT_INTERP: InterpConfig = {
   delayMs: 100,
   minIntervalMs: 150,
@@ -117,6 +143,9 @@ export const DEFAULT_INTERP: InterpConfig = {
   expireIntervalFactor: 4,
   fadeFloorMs: 400,
   expireFloorMs: 700,
+  // Coasting (rodada pulada pelo gate): a caixa não some (C1) mas também não finge certeza — 0.45 é
+  // visível sem competir com as caixas de dado real. Ver o trade-off no tipo InterpConfig.
+  coastOpacityFloor: 0.45,
 };
 
 /** Clamp escalar (sem alocar), usado no hot-path do dead-reckoning. */
@@ -148,6 +177,12 @@ type Keyframe = { bbox: Bbox; zone: string | null; score?: number; vx?: number; 
 // caixa é interpolação EXATA — zero extrapolação, zero arrasto por construção. Cada kf carrega
 // wS/hS (tamanho suavizado NO INGEST, temporalmente consistente) p/ o passado não "respirar".
 type Keyframe2 = Keyframe & { wS: number; hS: number };
+// assertT: carimbo da última ASSERÇÃO de coasting (hora LOCAL) — o hub repetiu o payload numa rodada
+// que o gate PULOU. Não é observação: só declara "o track continua vivo". Mantém a caixa na tela (C1)
+// sem mover nada. LIMPO assim que uma observação REAL cita o id (dado supera asserção).
+// bootstrap: a Entry NASCEU de uma asserção (o cliente conectou no meio de um apagão do gate e a
+// única coisa que sabe daquela pessoa é a re-emissão). Nunca houve dado real: desenha-se no PISO de
+// opacidade, imóvel, e o `hist` nasce VAZIO — asserção não vira passado interpolável.
 type Entry = {
   prev: Keyframe | null;
   last: Keyframe;
@@ -158,7 +193,14 @@ type Entry = {
   vyS?: number;
   wS?: number;
   hS?: number;
+  assertT?: number;
+  bootstrap?: boolean;
 };
+
+/** Instante da ASSERÇÃO vigente do id (coasting) — ou undefined quando o dado REAL é o mais novo. */
+function assertionT(e: Entry): number | undefined {
+  return e.assertT !== undefined && e.assertT >= e.last.t ? e.assertT : undefined;
+}
 
 // Janela do histórico por id (cobre o teto do modo síncrono + folga). Memória: ~6fps × 6s × poucos
 // tracks — dezenas de objetos pequenos, irrelevante.
@@ -176,9 +218,30 @@ export class TrackInterpolator {
   // ADAPTATIVO de extrapolação (extrapCapMs): prever 3× além do próximo dado só amplifica ruído.
   private lastRecvT = Number.NEGATIVE_INFINITY;
   private intervalEma: number | null = null;
+  // Houve coasting desde o último payload REAL? O intervalo que ATRAVESSA um apagão do gate não é a
+  // cadência do pipeline (é o apagão) — medi-lo inflaria o cap de extrapolação e as janelas de fade
+  // logo na volta. Então o 1º payload real depois de um apagão só re-ancora o relógio (não mede).
+  private coastGap = false;
+  // Ring dos últimos ≤30 ingests processados (true = coasting) — sensor: quanto do overlay é dado real.
+  private readonly ingestLog: boolean[] = [];
+  // Fração de tracks do ÚLTIMO sample() desenhados pelo ramo "exact" (0..1).
+  private lastExactPct = 0;
+  // Ramo do último boxAt() (out-param sem alocação no hot-path do rAF).
+  private branchOut: DrawBranch = "extrap";
 
   constructor(cfg: Partial<InterpConfig> = {}) {
     this.cfg = { ...DEFAULT_INTERP, ...cfg };
+  }
+
+  /** Sensor de campo: cadência REAL observada, quanto veio de coasting e quanto do overlay é exato. */
+  stats(): { intervalMs: number | null; coastFrac: number; exactFrac: number } {
+    let coasts = 0;
+    for (const c of this.ingestLog) if (c) coasts++;
+    return {
+      intervalMs: this.intervalEma,
+      coastFrac: this.ingestLog.length ? coasts / this.ingestLog.length : 0,
+      exactFrac: this.lastExactPct,
+    };
   }
 
   /** Teto de extrapolação da rodada: função da cadência observada (piso/teto do cfg). */
@@ -193,15 +256,70 @@ export class TrackInterpolator {
    * Dedupe por `ts`: reingerir o mesmo payload (getter devolve a mesma ref) é no-op — não desloca
    * o keyframe, senão a caixa "andaria" a cada rAF sem dado novo. Ids ausentes deste payload NÃO
    * são tocados: envelhecem por `recvT` e somem no sample() (fade → expira).
+   *
+   * `snap.coasting` (re-emissão de rodada PULADA pelo gate): NÃO É OBSERVAÇÃO. Não cria nem avança
+   * keyframe, não entra no histórico, não mexe nas EMAs (v/tamanho) nem na cadência — só REFRESCA a
+   * asserção de continuidade dos ids citados. Antes, ingerido como keyframe legítimo, ele empurrava
+   * uma observação INVENTADA ("a pessoa está aqui AGORA"), congelava a caixa, resetava os relógios de
+   * fade/expiração e — no modo síncrono — interpolava uma pessoa PARADA por até 6s, até o probe do
+   * gate disparar e a caixa TELEPORTAR: o fantasma congelado que nunca some, seguido de salto.
    */
   ingest(snap: Snapshot, recvT: number): void {
     if (snap.ts === this.lastTs) return;
     this.lastTs = snap.ts;
-    // Cadência observada (payloads DISTINTOS — o dedupe acima garante): EMA leve, robusta a jitter.
-    if (Number.isFinite(this.lastRecvT)) {
+    if (this.ingestLog.length >= 30) this.ingestLog.shift();
+    this.ingestLog.push(snap.coasting === true);
+    if (snap.coasting) {
+      // ASSERÇÃO de continuidade: o hub não OBSERVOU nada nesta rodada, mas afirma que os tracks
+      // seguem vivos. Id CONHECIDO só tem a asserção refrescada — nada de keyframe/histórico/EMA
+      // (é o conserto do fantasma congelado + teleporte).
+      this.coastGap = true;
+      for (const tr of snap.tracks) {
+        const e = this.entries.get(tr.id);
+        if (e) {
+          e.assertT = recvT;
+          continue;
+        }
+        // BOOTSTRAP do id DESCONHECIDO (dashboard que abriu no meio de um apagão do gate). Coasting
+        // não é observação, mas É asserção de PRESENÇA do tracker do hub — e p/ quem ainda não sabe
+        // de nada, uma asserção honestamente marcada como incerta vale mais que tela preta ("nunca-
+        // cego" é invariante da casa; sem isto o operador que abre a central fica sem caixa nenhuma
+        // por até o probe do gate, ~6s, com gente em quadro). Não polui a interpolação: não há
+        // histórico p/ corromper, e a entrada nasce JÁ em coasting → desenha no piso de opacidade e
+        // no ramo "static" (posição congelada, sem dead-reckoning a partir de um dado que pode ter
+        // segundos). A 1ª observação real assume o comando pelo caminho normal (limpa o assertT).
+        this.entries.set(tr.id, {
+          prev: null,
+          last: { bbox: tr.bbox, zone: tr.zone, score: tr.score, vx: tr.vx, vy: tr.vy, t: recvT },
+          hist: [
+            {
+              bbox: tr.bbox,
+              zone: tr.zone,
+              score: tr.score,
+              vx: tr.vx,
+              vy: tr.vy,
+              t: recvT,
+              wS: tr.bbox[2],
+              hS: tr.bbox[3],
+            },
+          ],
+          vxS: tr.vx,
+          vyS: tr.vy,
+          wS: tr.bbox[2],
+          hS: tr.bbox[3],
+          assertT: recvT,
+          bootstrap: true,
+        });
+      }
+      return;
+    }
+    // Cadência observada entre payloads REAIS distintos (o dedupe acima garante a distinção): EMA
+    // leve, robusta a jitter. Intervalo que atravessou coasting não conta (ver coastGap).
+    if (Number.isFinite(this.lastRecvT) && !this.coastGap) {
       const dt = recvT - this.lastRecvT;
       if (dt > 0) this.intervalEma = this.intervalEma == null ? dt : 0.3 * dt + 0.7 * this.intervalEma;
     }
+    this.coastGap = false;
     this.lastRecvT = recvT;
     // Latência captura→emissão do hub: ancora o keyframe ATRÁS de recvT nesse tanto, p/ a extrapolação
     // prever pro AGORA real (a caixa nasceria ~latencyMs atrás). Capada ao teto de extrapolação
@@ -225,7 +343,13 @@ export class TrackInterpolator {
         // que, no instante do payload, o easing comece exatamente onde a caixa está (k=0).
         if (tr.vx !== undefined && tr.vy !== undefined) {
           const snapT = recvT - this.cfg.delayMs;
-          e.snapFrom = this.boxAt(e, snapT); // usa o keyframe ANTIGO (ainda em e.last)
+          // usa o keyframe ANTIGO (ainda em e.last) — e no MESMO regime em que a caixa vinha sendo
+          // desenhada: se o id estava em coasting, ela estava CONGELADA, e é dali que o easing parte
+          // (senão o easing sairia de uma posição que ninguém viu, reintroduzindo o salto).
+          // MESMO predicado do sample() (assertionT): inclui o id nascido de BOOTSTRAP, cuja caixa
+          // também estava congelada — o easing tem de partir de onde ela estava, não de uma predição.
+          const wasCoasting = assertionT(e) !== undefined;
+          e.snapFrom = this.boxAt(e, snapT, wasCoasting);
           e.snapT = snapT;
         } else {
           e.snapFrom = undefined; // legacy (sem vx/vy) → sem easing, mantém a estimativa por 2 kf
@@ -233,6 +357,8 @@ export class TrackInterpolator {
         }
         e.prev = e.last;
         e.last = kf;
+        e.assertT = undefined; // observação REAL supera qualquer asserção pendente de coasting
+        e.bootstrap = undefined; // …e a idade do dado deixa de ser desconhecida (fim do teto de opacidade)
         // EMAs anti-oscilação: velocidade (o hub manda delta CRU) e tamanho (a caixa "respira").
         const va = this.cfg.vAlpha;
         e.vxS = tr.vx === undefined ? undefined : e.vxS === undefined ? tr.vx : va * tr.vx + (1 - va) * e.vxS;
@@ -273,8 +399,9 @@ export class TrackInterpolator {
     const lag = videoLagMs > 0 ? videoLagMs : 0;
     const renderT = now - c.delayMs - lag;
     const out: DrawnTrack[] = [];
+    let exact = 0;
     for (const [id, e] of this.entries) {
-      const ageMs = now - e.last.t; // idade do DADO (exposta — HUD/telemetria)
+      const ageMs = now - e.last.t; // idade do DADO REAL (exposta — HUD/telemetria)
       // Fade/expiração pela idade RENDERIZADA (renderT − último kf): no modo síncrono a caixa
       // tem de viver até o VÍDEO atrasado alcançar o fim do track — expirar pela idade do dado
       // apagaria a caixa segundos antes da pessoa sumir NA TELA. Com lag 0, ageR == ageMs − delay
@@ -287,20 +414,40 @@ export class TrackInterpolator {
       const expEff =
         iv == null ? c.expireMs : Math.min(c.expireMs, Math.max(c.expireFloorMs, iv * c.expireIntervalFactor));
       const ageR = renderT - e.last.t;
-      if (ageR > expEff) {
+      // COASTING: o hub asseriu "o track segue vivo" numa rodada que o gate PULOU. A EXPIRAÇÃO olha a
+      // asserção (é o propósito legítimo do coasting — C1: a caixa não pode piscar durante os ~6s de
+      // probe); a OPACIDADE segue a idade do DADO REAL, com PISO enquanto a asserção estiver fresca.
+      const aT = assertionT(e);
+      const coasting = aT !== undefined;
+      const liveR = coasting ? Math.min(ageR, renderT - aT) : ageR;
+      if (liveR > expEff) {
         this.entries.delete(id);
         continue;
       }
-      const opacity = ageR <= fadeEff ? 1 : Math.max(0, 1 - (ageR - fadeEff) / (expEff - fadeEff));
+      let opacity = ageR <= fadeEff ? 1 : Math.max(0, 1 - (ageR - fadeEff) / (expEff - fadeEff));
+      if (coasting && opacity < c.coastOpacityFloor) opacity = c.coastOpacityFloor;
+      // Id nascido de BOOTSTRAP (só re-emissão vista até agora): a idade do DADO é DESCONHECIDA — o
+      // conteúdo pode ter até um probe do gate. `ageR` mediria a chegada, não a observação, e daria
+      // opacidade 1 = cara de certeza. Enquanto nenhuma observação real chegar, o teto é o próprio
+      // piso do coasting: a caixa aparece (nunca-cego) sem mentir que é fresca.
+      if (e.bootstrap && opacity > c.coastOpacityFloor) opacity = c.coastOpacityFloor;
+      // Posição CONGELADA enquanto se coasteia: nada de prever com velocidade velha por segundos (era
+      // o salto no fim do apagão). No modo síncrono, se renderT ainda cai DENTRO do histórico real, o
+      // ramo exato desenha dado de verdade — não há o que congelar, e o branch reporta "exact".
+      const bbox = this.boxAt(e, renderT, coasting);
+      if (this.branchOut === "exact") exact++;
       out.push({
         id,
-        bbox: this.boxAt(e, renderT),
+        bbox,
         zone: e.last.zone,
         score: e.last.score,
         opacity,
         ageMs,
+        coasting,
+        branch: this.branchOut,
       });
     }
+    this.lastExactPct = out.length ? exact / out.length : 0;
     return out;
   }
 
@@ -309,7 +456,10 @@ export class TrackInterpolator {
     return this.entries.size;
   }
 
-  private boxAt(e: Entry, renderT: number): [number, number, number, number] {
+  /** Posição do id em `renderT`. Efeito colateral: publica em `this.branchOut` o ramo que decidiu.
+   *  `frozen` (id em coasting) proíbe prever ALÉM do último dado real — a caixa para onde o dado
+   *  parou, em vez de arrastar com velocidade velha até o probe do gate corrigir com um teleporte. */
+  private boxAt(e: Entry, renderT: number, frozen = false): [number, number, number, number] {
     const c = this.cfg;
     const last = e.last;
     // ── MODO SÍNCRONO (renderT no PASSADO, com histórico): interpolação EXATA entre duas
@@ -321,9 +471,11 @@ export class TrackInterpolator {
       while (bi < h.length && h[bi].t < renderT) bi++;
       if (bi === 0) {
         const k = h[0]; // antes do histórico: clampa na 1ª observação conhecida
+        this.branchOut = "exact"; // posição de uma observação REAL (clampada), não predição
         return [k.bbox[0] + k.bbox[2] / 2 - k.wS / 2, k.bbox[1] + k.bbox[3] - k.hS, k.wS, k.hS];
       }
       if (bi < h.length) {
+        this.branchOut = "exact";
         const a = h[bi - 1];
         const b = h[bi];
         const f = b.t > a.t ? (renderT - a.t) / (b.t - a.t) : 1;
@@ -342,10 +494,12 @@ export class TrackInterpolator {
     // Kalman → não dispara; e mesmo com v alto a previsão não foge além de meio intervalo); atrás cobre
     // o atraso de reprodução (delayMs). Move já no 1º keyframe (não precisa do penúltimo).
     if (last.vx !== undefined && last.vy !== undefined) {
+      this.branchOut = frozen ? "static" : "extrap";
       // Velocidade SUAVIZADA (EMA — anti-oscilação) + teto de extrapolação ADAPTATIVO à cadência.
+      // Em coasting o teto vira 0: dt ≤ 0 ⇒ zero avanço (a caixa senta no último dado real).
       const vx = e.vxS ?? last.vx;
       const vy = e.vyS ?? last.vy;
-      const dtSec = clampNum(renderT - last.t, -c.maxExtrapMs, this.extrapCapMs()) / 1000;
+      const dtSec = clampNum(renderT - last.t, -c.maxExtrapMs, frozen ? 0 : this.extrapCapMs()) / 1000;
       const px = last.bbox[0] + vx * dtSec;
       const py = last.bbox[1] + vy * dtSec;
       // Tamanho SUAVIZADO ancorado no PÉ (bottom-center estável da pessoa): a caixa cresce/encolhe
@@ -371,15 +525,21 @@ export class TrackInterpolator {
     }
     // ── LEGACY (sem vx/vy — hub antigo): estimativa por 2 keyframes, comportamento de antes ──────────
     // Sem penúltimo (id recém-visto): 1 amostra só → caixa estática (nada a interpolar).
-    if (!e.prev) return [last.bbox[0], last.bbox[1], last.bbox[2], last.bbox[3]];
+    if (!e.prev) {
+      this.branchOut = "static";
+      return [last.bbox[0], last.bbox[1], last.bbox[2], last.bbox[3]];
+    }
     const dt = last.t - e.prev.t;
     const interval = Math.min(c.maxIntervalMs, Math.max(c.minIntervalMs, dt));
     if (renderT <= e.prev.t) {
+      this.branchOut = "exact"; // clampado na observação anterior (dado real), sem prever
       return [e.prev.bbox[0], e.prev.bbox[1], e.prev.bbox[2], e.prev.bbox[3]];
     }
-    // alpha em unidades de intervalo: 1 = no último keyframe; >1 extrapola (limitado por maxExtrap).
-    const maxAlpha = 1 + c.maxExtrapMs / interval;
+    // alpha em unidades de intervalo: 1 = no último keyframe; >1 extrapola (limitado por maxExtrap —
+    // ou por 1, quando congelado por coasting: sem dado novo não se prevê além do último keyframe).
+    const maxAlpha = frozen ? 1 : 1 + c.maxExtrapMs / interval;
     const alpha = Math.min(maxAlpha, (renderT - e.prev.t) / interval);
+    this.branchOut = frozen ? "static" : alpha > 1 ? "extrap" : "exact";
     return lerpBbox(e.prev.bbox, last.bbox, alpha);
   }
 }
@@ -399,6 +559,8 @@ export type DisplayTrack = {
   firstSeen: number;
   opacity: number;
   foot: { x: number; y: number };
+  /** passthrough do sample(): a caixa vive só de asserção de coasting (nenhum dado novo). */
+  coasting: boolean;
 };
 
 export function toDisplayTracks(
@@ -419,6 +581,7 @@ export function toDisplayTracks(
       firstSeen: firstSeen.get(d.id) ?? now,
       opacity: d.opacity,
       foot: { x: d.bbox[0] + d.bbox[2] / 2, y: d.bbox[1] + d.bbox[3] },
+      coasting: d.coasting,
     });
   }
   return out;

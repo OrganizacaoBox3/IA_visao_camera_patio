@@ -10,6 +10,7 @@ import {
   DEFAULT_INTERP,
   type Snapshot,
   type Bbox,
+  type DrawnTrack,
 } from "./interpolate";
 
 const box = (x: number, y: number, w = 0.1, h = 0.2): Bbox => [x, y, w, h];
@@ -27,6 +28,11 @@ const snap = (
     vy: t.vy,
   })),
 });
+/** Re-emissão do hub em rodada PULADA pelo gate: MESMO payload, `ts` fresco, `coasting:true`. */
+const coast = (
+  ts: number,
+  tracks: Array<{ id: number; bbox: Bbox; score?: number; vx?: number; vy?: number }>,
+): Snapshot => ({ ...snap(ts, tracks), coasting: true });
 
 describe("lerpBbox", () => {
   it("t=0 → a, t=1 → b, t=0.5 → ponto médio", () => {
@@ -362,11 +368,208 @@ describe("TrackInterpolator — fade + expiração", () => {
   });
 });
 
+// ── COASTING (bug de campo 2026-07-26): a re-emissão de rodada PULADA pelo gate NÃO é observação ──
+// O hub repete o último payload com `ts` fresco e `coasting:true` quando o gate de movimento pula a
+// inferência. O gate pula pelo RATIO DE PIXELS — o que inclui pessoa pequena/distante ANDANDO, não só
+// cena estática (o comentário do servidor está errado). Ingerido como keyframe, isso empurrava uma
+// observação INVENTADA: caixa congelada com relógio zerado (fantasma que nunca some) e teleporte
+// quando o probe do gate finalmente enxergava. Aqui travamos a semântica de ASSERÇÃO.
+describe("TrackInterpolator — coasting (rodada pulada pelo gate) não é observação", () => {
+  const walking = (x: number) => [{ id: 1, bbox: box(x, 0.5), vx: 0.2, vy: 0 }];
+
+  it("não cria nem avança keyframe/histórico: a caixa CONGELA e a idade do dado segue correndo", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1 });
+    it0.ingest(snap(1, walking(0.5)), 0); // observações REAIS a 500ms (v=0.2/s → +0.1 por rodada)
+    it0.ingest(snap(2, walking(0.6)), 500);
+    // apagão do gate: o hub repete o MESMO payload (é o que emitCoasting faz) com ts fresco
+    it0.ingest(coast(3, walking(0.6)), 660);
+    it0.ingest(coast(4, walking(0.6)), 820);
+    it0.ingest(coast(5, walking(0.6)), 980);
+
+    const d = it0.sample(1000)[0];
+    // (a) o keyframe NÃO avançou: a idade é a do último dado REAL (500ms), não ~20ms
+    expect(d.ageMs).toBe(500);
+    // (b) a posição CONGELA no último dado real — sem dead-reckoning com velocidade velha
+    //     (com o bug, extrapolava +0.2×0.5s = 0.7 e depois teleportava para o dado verdadeiro)
+    expect(d.bbox[0]).toBeCloseTo(0.6, 6);
+    expect(d.branch).toBe("static");
+    expect(d.coasting).toBe(true);
+    expect(it0.size()).toBe(1);
+
+    // (c) o CONTEÚDO da re-emissão é ignorado: nem uma bbox diferente entra como observação
+    it0.ingest(coast(6, walking(0.9)), 1140);
+    expect(it0.sample(1160)[0].bbox[0]).toBeCloseTo(0.6, 6);
+    // (d) e o histórico não foi poluído: renderizar o passado ENTRE o último dado real e o apagão
+    //     segue congelado no dado real (com kf falso no hist, a caixa "andaria" até 0.9)
+    const past = it0.sample(1560, 960)[0]; // renderT = 600 (o último kf real é t=500)
+    expect(past.bbox[0] + past.bbox[2] / 2).toBeCloseTo(0.65, 6);
+    expect(past.branch).toBe("static");
+    // (e) …e o passado DENTRO do histórico real segue exato (A→B), intacto
+    const older = it0.sample(1200, 950)[0]; // renderT = 250, entre as duas observações reais
+    expect(older.bbox[0] + older.bbox[2] / 2).toBeCloseTo(0.6, 6);
+    expect(older.branch).toBe("exact");
+  });
+
+  // BOOTSTRAP — decisão revista na revisão da onda: coasting NÃO é observação, mas É asserção de
+  // PRESENÇA do tracker do hub. Ignorar id desconhecido deixava o dashboard que abre no meio de um
+  // apagão do gate SEM CAIXA NENHUMA por até um probe (~6s) com gente em quadro — tela preta viola
+  // o "nunca-cego" da casa, e o produtor (pipeline.emitCoasting) re-emite justamente para esse
+  // cliente. A caixa nasce, mas HONESTA: opacidade no piso e posição congelada.
+  it("BOOTSTRAP: id desconhecido em coasting NASCE, mas marcado como incerto (nunca-cego)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    it0.ingest(snap(1, walking(0.5)), 0);
+    it0.ingest(coast(2, [{ id: 42, bbox: box(0.8, 0.8), vx: 0, vy: 0 }]), 160);
+    const out = it0.sample(200);
+    expect(out.map((d) => d.id)).toEqual([1, 42]);
+    const boot = out.find((d) => d.id === 42)!;
+    expect(boot.coasting).toBe(true);
+    expect(boot.branch).toBe("static"); // sem dead-reckoning a partir de dado de idade desconhecida
+    expect(boot.opacity).toBeCloseTo(DEFAULT_INTERP.coastOpacityFloor, 6); // TETO, não 1: não finge frescor
+    expect(it0.size()).toBe(2);
+  });
+
+  it("BOOTSTRAP: a caixa nascida de asserção NÃO se move enquanto não houver observação real", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    it0.ingest(coast(1, [{ id: 7, bbox: box(0.3, 0.5), vx: 0.4, vy: 0 }]), 0); // vx alto de propósito
+    const a = it0.sample(100)[0];
+    it0.ingest(coast(2, [{ id: 7, bbox: box(0.3, 0.5), vx: 0.4, vy: 0 }]), 300);
+    const b = it0.sample(600)[0];
+    expect(b.bbox[0]).toBeCloseTo(a.bbox[0], 6); // congelada: a v do payload NÃO extrapola
+    expect(b.opacity).toBeCloseTo(DEFAULT_INTERP.coastOpacityFloor, 6);
+  });
+
+  it("BOOTSTRAP: a 1ª observação REAL assume o comando (opacidade volta a 1, sem teleporte)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 0 });
+    it0.ingest(coast(1, [{ id: 7, bbox: box(0.3, 0.5), vx: 0, vy: 0 }]), 0);
+    expect(it0.sample(100)[0].opacity).toBeCloseTo(DEFAULT_INTERP.coastOpacityFloor, 6);
+    // observação real no MESMO lugar: nada de salto, e a incerteza acaba
+    it0.ingest(snap(2, [{ id: 7, bbox: box(0.32, 0.5), vx: 0, vy: 0 }]), 200);
+    const real = it0.sample(220)[0];
+    expect(real.coasting).toBe(false);
+    expect(real.opacity).toBe(1);
+    expect(real.bbox[0]).toBeCloseTo(0.32, 6); // senta no dado real, sem overshoot
+  });
+
+  it("C1 preservado: coasting IMPEDE a expiração — mas a opacidade CAI até o piso (incerteza visível)", () => {
+    const still = [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]; // pessoa parada (o caso legítimo do C1)
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1 });
+    let t = 0;
+    for (let i = 0; i < 5; i++) it0.ingest(snap(i + 1, still), (t += 160)); // cadência 6fps → expEff ~700ms
+    const lastReal = t;
+
+    // apagão de ~3s (o probe do gate roda a cada ~6s): re-emissão a cada rodada gateada
+    const opac: number[] = [];
+    for (let i = 0; i < 19; i++) {
+      it0.ingest(coast(50 + i, still), (t += 160));
+      const d = it0.sample(t)[0];
+      expect(d).toBeDefined(); // NUNCA expira enquanto o hub assere que o track vive (C1)
+      expect(d.coasting).toBe(true);
+      expect(d.branch).toBe("static");
+      opac.push(d.opacity);
+    }
+    expect(t - lastReal).toBeGreaterThan(3000);
+    expect(opac[0]).toBe(1); // dado ainda fresco (160ms) → opaca
+    for (let i = 1; i < opac.length; i++) expect(opac[i]).toBeLessThanOrEqual(opac[i - 1]); // decai
+    expect(opac[opac.length - 1]).toBeCloseTo(DEFAULT_INTERP.coastOpacityFloor, 6); // e PARA no piso
+    expect(opac.every((o) => o > 0)).toBe(true);
+
+    // controle: sem as re-emissões, a MESMA idade de dado já teria expirado (o C1 é o que salva)
+    const ctrl = new TrackInterpolator({ delayMs: 0, snapMs: 1 });
+    let ct = 0;
+    for (let i = 0; i < 5; i++) ctrl.ingest(snap(i + 1, still), (ct += 160));
+    expect(ctrl.sample(t)).toHaveLength(0);
+  });
+
+  it("observação REAL depois de N coastings volta ao regime normal e NÃO teleporta", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 }); // snapMs default (180ms de easing)
+    let t = 0;
+    const xs = [0, 0.032, 0.064, 0.096]; // 4 rodadas reais a 160ms com v=0.2/s
+    for (let i = 0; i < xs.length; i++) it0.ingest(snap(i + 1, walking(xs[i])), (t += 160));
+    for (let i = 0; i < 6; i++) it0.ingest(coast(50 + i, walking(0.096)), (t += 160)); // apagão ~1s
+
+    const before = it0.sample(t)[0].bbox[0];
+    expect(before).toBeCloseTo(0.096, 6); // congelada no último dado real
+
+    // o probe do gate enxerga: a pessoa ANDOU 0.204 durante o apagão (o gate estava cego, não a cena parada)
+    it0.ingest(snap(90, walking(0.3)), (t += 160));
+    const after = it0.sample(t)[0];
+    expect(Math.abs(after.bbox[0] - before)).toBeLessThanOrEqual(0.3 - 0.096 + 1e-9); // sem salto > o real
+    expect(after.bbox[0]).toBeCloseTo(0.096, 6); // o easing parte de onde a caixa ESTAVA (k=0)
+    expect(after.coasting).toBe(false);
+    // …e depois do snap, na nova reta de dead-reckoning (regime normal restaurado)
+    const settled = it0.sample(t + DEFAULT_INTERP.snapMs)[0];
+    expect(settled.bbox[0]).toBeCloseTo(0.3 + 0.2 * 0.18, 6);
+    expect(settled.branch).toBe("extrap");
+  });
+
+  it("coasting NÃO contamina a cadência observada (nem as janelas de fade/extrapolação)", () => {
+    const still = [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }];
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    let t = 0;
+    for (let i = 0; i < 5; i++) it0.ingest(snap(i + 1, still), (t += 160));
+    const before = it0.stats().intervalMs;
+    expect(before).toBe(160);
+
+    for (let i = 0; i < 10; i++) it0.ingest(coast(50 + i, still), (t += 160)); // re-emissões vazias
+    expect(it0.stats().intervalMs).toBe(before); // idem antes e depois — a cadência é de dado REAL
+
+    // e o 1º payload real DEPOIS do apagão só re-ancora o relógio: o buraco do gate não é cadência
+    it0.ingest(snap(90, still), (t += 160));
+    expect(it0.stats().intervalMs).toBe(before);
+    it0.ingest(snap(91, still), t + 160);
+    expect(it0.stats().intervalMs).toBe(before);
+  });
+
+  it("stats(): intervalMs/coastFrac/exactFrac — o sensor de qual ramo está desenhando", () => {
+    const still = [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }];
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    expect(it0.stats()).toEqual({ intervalMs: null, coastFrac: 0, exactFrac: 0 }); // nada ingerido ainda
+    it0.ingest(snap(1, still), 0);
+    expect(it0.stats().intervalMs).toBeNull(); // cadência só existe do 2º payload REAL em diante
+
+    let t = 0;
+    const it1 = new TrackInterpolator({ delayMs: 0 });
+    for (let i = 0; i < 4; i++) it1.ingest(snap(i + 1, still), (t += 160));
+    for (let i = 0; i < 6; i++) it1.ingest(coast(50 + i, still), (t += 160));
+    expect(it1.stats().coastFrac).toBeCloseTo(0.6, 6); // 6 de 10 ingests
+    it1.ingest(coast(55, still), t); // ts repetido → dedupe: no-op, não entra na janela
+    expect(it1.stats().coastFrac).toBeCloseTo(0.6, 6);
+    for (let i = 0; i < 30; i++) it1.ingest(snap(100 + i, still), (t += 160)); // janela = últimos 30
+    expect(it1.stats().coastFrac).toBe(0);
+
+    // exactFrac: fração do ÚLTIMO sample() desenhada por histórico REAL (modo síncrono)
+    const it2 = new TrackInterpolator({ delayMs: 0, snapMs: 1 });
+    it2.ingest(snap(1, [{ id: 1, bbox: box(0, 0), vx: 0.2, vy: 0 }]), 0);
+    it2.ingest(snap(2, [{ id: 1, bbox: box(0.1, 0), vx: 0.2, vy: 0 }]), 500);
+    it2.ingest(
+      snap(3, [
+        { id: 1, bbox: box(0.2, 0), vx: 0.2, vy: 0 },
+        { id: 2, bbox: box(0.7, 0), vx: 0.2, vy: 0 }, // nasce agora: 1 keyframe só, sem passado
+      ]),
+      1000,
+    );
+    const sync = it2.sample(1200, 800).sort((a, b) => a.id - b.id); // renderT = 400 (passado)
+    expect(sync[0].branch).toBe("exact"); // id 1 tem histórico cercando o instante
+    expect(sync[1].branch).toBe("extrap"); // id 2 não tem — cai no dead-reckoning
+    expect(it2.stats().exactFrac).toBeCloseTo(0.5, 6);
+    expect(it2.sample(1100)[0].branch).toBe("extrap"); // AO VIVO: prevê além do último dado
+    expect(it2.stats().exactFrac).toBe(0);
+  });
+
+  it("branch 'static' também no legado sem penúltimo (1 keyframe, nada a interpolar)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    it0.ingest(snap(1, [{ id: 3, bbox: box(0.3, 0.3) }]), 0); // hub antigo: sem vx/vy
+    const d = it0.sample(50)[0];
+    expect(d.branch).toBe("static");
+    expect(d.coasting).toBe(false);
+  });
+});
+
 describe("toDisplayTracks — ponte sample() → drawTracks da câmera focada", () => {
   it("monta o shape de desenho: score default 1, firstSeen do lookup, foot e opacity", () => {
-    const drawn = [
-      { id: 1, bbox: [0.2, 0.3, 0.1, 0.4] as [number, number, number, number], zone: "Z", opacity: 0.6, ageMs: 0, score: 0.8 },
-      { id: 2, bbox: [0, 0, 0.2, 0.2] as [number, number, number, number], zone: null, opacity: 1, ageMs: 0 }, // sem score
+    const drawn: DrawnTrack[] = [
+      { id: 1, bbox: [0.2, 0.3, 0.1, 0.4], zone: "Z", opacity: 0.6, ageMs: 0, score: 0.8, coasting: false, branch: "extrap" },
+      { id: 2, bbox: [0, 0, 0.2, 0.2], zone: null, opacity: 1, ageMs: 0, coasting: true, branch: "static" }, // sem score
     ];
     const firstSeen = new Map<number, number>([[1, 111]]); // id 2 ausente → fallback now
     const out = toDisplayTracks(drawn, firstSeen, 999);
@@ -379,8 +582,10 @@ describe("toDisplayTracks — ponte sample() → drawTracks da câmera focada", 
       firstSeen: 111,
       opacity: 0.6,
       foot: { x: 0.2 + 0.1 / 2, y: 0.3 + 0.4 },
+      coasting: false,
     });
     expect(out[1].score).toBe(1); // sem score no sample → 1 (nunca atenua)
     expect(out[1].firstSeen).toBe(999); // id fora do mapa (fade) → fallback now
+    expect(out[1].coasting).toBe(true); // passthrough do sinal de incerteza p/ o desenho
   });
 });
