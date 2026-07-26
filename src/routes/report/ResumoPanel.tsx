@@ -99,16 +99,18 @@ export function ResumoPanel({
               <div className="rc-k">
                 <b
                   style={{
-                    // going-gray: ≤2% é o normal → sem cor; saturada só no risco.
+                    // going-gray: ≤2% é o normal → sem cor; saturada só no risco. `null` =
+                    // SEM AMOSTRA no recorte: nem cor nem número — não sabemos, e fingir 0% de
+                    // alerta seria afirmar operação saudável sobre o vazio.
                     color:
-                      fadiga.fk.alertPct <= 2
+                      fadiga.fk.alertPct === null || fadiga.fk.alertPct <= 2
                         ? undefined
                         : fadiga.fk.alertPct <= 10
                           ? "var(--state-warn)"
                           : "var(--state-critical)",
                   }}
                 >
-                  {fadiga.fk.alertPct}%
+                  {fadiga.fk.alertPct === null ? "—" : `${fadiga.fk.alertPct}%`}
                 </b>
                 <span>em alerta</span>
               </div>
@@ -145,15 +147,17 @@ export function ResumoPanel({
                 <b
                   style={{
                     // going-gray: taxa boa (≥95%) é o normal → sem cor; saturada só no degradado.
+                    // `null` = NENHUMA passagem no recorte: `—`, nunca 100% (zero passagem não é
+                    // cobertura perfeita — era o falso-OK que esta onda mata).
                     color:
-                      leitura.rk.ratePct >= 95
+                      leitura.rk.ratePct === null || leitura.rk.ratePct >= 95
                         ? undefined
                         : leitura.rk.ratePct >= 80
                           ? "var(--state-warn)"
                           : "var(--state-critical)",
                   }}
                 >
-                  {leitura.rk.ratePct}%
+                  {leitura.rk.ratePct === null ? "—" : `${leitura.rk.ratePct}%`}
                 </b>
                 <span>taxa</span>
               </div>

@@ -12,6 +12,8 @@ import {
   insights,
   byAtividade,
   shiftRuler,
+  idleMeasurement,
+  type IdleMeasurement,
   flowWindow,
   flowKpis,
   flowByHour,
@@ -41,6 +43,9 @@ export type AtividadeSummary = {
   // Régua do TURNO (spec §4.3): ocupação ÷ turno−pausas (não ÷ 24h) + a linha "fora do turno"
   // (D7). `ruler.stamped=false` ⇒ o hub ainda não carimba shiftId no bucket → a UI omite.
   ruler: ShiftRuler;
+  // A ociosidade foi MEDIDA no recorte? Com o motor no hub o bucket vem com idleMs=0 por
+  // construção (A6) — a UI troca o número pelo selo em vez de exibir "0m". Ver calc/atividade.
+  idle: IdleMeasurement;
 };
 export type AtividadeDetails = {
   hm: ReturnType<typeof heatmap>;
@@ -64,7 +69,14 @@ export function useAtividadeVM(args: {
   area: string | "Todas";
   /** cadastro de turnos (/api/shifts) — rótulo e ordem das barras "Por turno". */
   shifts: ShiftDef[];
-}): { dataset: Dataset; summary: AtividadeSummary | null; details: AtividadeDetails | null } {
+}): {
+  dataset: Dataset;
+  summary: AtividadeSummary | null;
+  details: AtividadeDetails | null;
+  /** células da JANELA FILTRADA (período+turno+área). `null` = view "off", não computado —
+   *  "não calculei" nunca pode virar "não há dado" (o gate de vazio depende disto). */
+  windowCells: number | null;
+} {
   const { view, ds, events, flowDs, period, shift, area, shifts } = args;
   const dataset = ds ?? EMPTY_DS;
   const off = view === "off";
@@ -83,6 +95,7 @@ export function useAtividadeVM(args: {
         kPeople: peoplePeakOf(current),
         tips: insights(current, k),
         ruler: shiftRuler(current),
+        idle: idleMeasurement(current),
       } satisfies AtividadeSummary,
     };
   }, [off, dataset, period, shift, area]);
@@ -114,5 +127,10 @@ export function useAtividadeVM(args: {
     };
   }, [full, base, dataset, events, flowDs, period, shift, area, shifts]);
 
-  return { dataset, summary: base?.summary ?? null, details };
+  return {
+    dataset,
+    summary: base?.summary ?? null,
+    details,
+    windowCells: base ? base.cur.length : null,
+  };
 }

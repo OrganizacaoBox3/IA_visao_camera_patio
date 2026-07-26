@@ -2,7 +2,16 @@
 // junto das agregações irmãs). Lógica pura extraída nasce com teste ao lado (CLAUDE.md §6).
 // shiftRuler — o KPI na RÉGUA DO TURNO (spec-turnos-por-zona §4.3 + D7).
 import { describe, it, expect } from "vitest";
-import { byAtividade, shiftRuler, type Cell } from "./atividade";
+import {
+  byAtividade,
+  shiftRuler,
+  idleMeasurement,
+  idleUnavailable,
+  insights,
+  kpis,
+  IDLE_UNAVAILABLE_NOTE,
+  type Cell,
+} from "./atividade";
 
 const cell = (over: Partial<Cell>): Cell => ({
   area: "Doca",
@@ -107,5 +116,56 @@ describe("shiftRuler — ocupação na régua do TURNO (não ÷ 24h)", () => {
     expect(r.occupancyPct).toBe(70);
     expect(r.idleMinInShift).toBe(5);
     expect(r.unknownHours).toBe(1);
+  });
+});
+
+// ── OCIOSIDADE NÃO MEDIDA (auditoria 2026-07-26, A6) ─────────────────────────────────────────
+// Com o motor no hub o bucket "ativ" chega com idleMs=0 POR CONSTRUÇÃO (pipeline.js:253): o
+// relatório exibia "0m", que se lê como "nada parou". Aqui o zero-sem-medição fica separado do
+// zero-medido. Isto NÃO mede ociosidade — só impede a afirmação.
+describe("idleMeasurement — zero medido × zero não medido", () => {
+  it("bucket com frames>0 e ociosidade zerada ⇒ NÃO MEDIDO (o caso do motor no hub)", () => {
+    const m = idleMeasurement([
+      cell({ hour: 8, idleMin: 0, samples: 900, activeSamples: 300 }),
+      cell({ hour: 9, idleMin: 0, samples: 900, activeSamples: 120 }),
+    ]);
+    expect(m.measured).toBe(false);
+    expect(m.observedSamples).toBe(1800);
+    expect(idleUnavailable(m)).toBe(true);
+  });
+
+  it("qualquer ociosidade registrada ⇒ MEDIDO (o front mediu; a tela pode mostrar número)", () => {
+    const m = idleMeasurement([cell({ idleMin: 12, samples: 900 })]);
+    expect(m.measured).toBe(true);
+    expect(idleUnavailable(m)).toBe(false);
+  });
+
+  it("recorte sem bucket nenhum não é 'não medido' — é vazio (quem fala é o estado de vazio)", () => {
+    expect(idleUnavailable(idleMeasurement([]))).toBe(false);
+  });
+});
+
+describe("insights — não afirma ociosidade que ninguém mediu", () => {
+  it("com ociosidade não medida, DECLARA a indisponibilidade e cala o resto", () => {
+    const cells = [cell({ hour: 8, idleMin: 0, samples: 900, alerts: 0 })];
+    const tips = insights(cells, kpis(cells));
+    expect(tips[0]).toBe(IDLE_UNAVAILABLE_NOTE);
+    expect(tips.join(" ")).not.toMatch(/Pico de ociosidade|concentra/);
+  });
+
+  it("alertas continuam sendo reportados mesmo sem ociosidade medida (são outra medição)", () => {
+    const cells = [cell({ hour: 8, idleMin: 0, samples: 900, alerts: 4 })];
+    expect(insights(cells, kpis(cells)).join(" ")).toMatch(/4 alertas no período/);
+  });
+
+  it("recorte vazio não gera insight nenhum", () => {
+    expect(insights([], kpis([]))).toEqual([]);
+  });
+
+  it("com ociosidade medida as frases normais voltam", () => {
+    const cells = [cell({ area: "Doca", hour: 15, idleMin: 40, samples: 900 })];
+    const tips = insights(cells, kpis(cells));
+    expect(tips.join(" ")).toMatch(/Doca concentra 100%/);
+    expect(tips.join(" ")).toMatch(/Pico de ociosidade às 15h/);
   });
 });

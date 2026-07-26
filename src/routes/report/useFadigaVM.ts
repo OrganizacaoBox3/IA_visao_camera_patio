@@ -40,7 +40,13 @@ export function useFadigaVM(args: {
   period: Period;
   shift: Shift | "Todos";
   posto: string | "Todos";
-}): { dataset: FadigaDataset; summary: FadigaSummary | null; details: FadigaDetails | null } {
+}): {
+  dataset: FadigaDataset;
+  summary: FadigaSummary | null;
+  details: FadigaDetails | null;
+  /** células da JANELA FILTRADA (período+turno+posto). `null` = view "off", não computado. */
+  windowCells: number | null;
+} {
   const { view, ds, events, period, shift, posto } = args;
   const dataset = ds ?? EMPTY_FDS;
   const off = view === "off";
@@ -77,5 +83,10 @@ export function useFadigaVM(args: {
     };
   }, [full, base, dataset, period, shift, posto]);
 
-  return { dataset, summary: base?.summary ?? null, details };
+  return {
+    dataset,
+    summary: base?.summary ?? null,
+    details,
+    windowCells: base ? base.cur.length : null,
+  };
 }

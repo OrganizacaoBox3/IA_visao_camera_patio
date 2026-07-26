@@ -27,19 +27,30 @@ export type ReadingEventRow = ShiftStamp & {
   ts: number;
   ponto: string;
   code: string;
-  cameras: number;
+  /** LEGADO/OBSOLETO (ADR-016 + auditoria A7): o agregador multi-câmera por Ponto de Leitura foi
+   *  removido, então a informação que esta coluna carregaria não existe mais no sistema. O
+   *  servidor parou de fabricá-la (grava `null`); só linhas históricas ainda trazem o literal `1`.
+   *  Nunca mais exibir — a tabela de leituras já não tem a coluna "Câmeras". */
+  cameras?: number | null;
   shift: string;
 };
 export type ReadingFilters = { period: Period; shift: ShiftFilter; ponto: string | "Todos" };
+// AMOSTRA ZERO É `null`, NUNCA 100 (auditoria 2026-07-26, A2). Uma taxa é uma FRAÇÃO: sem
+// denominador ela não existe — e o valor que estava aqui (`: 100`) fazia um período sem NENHUMA
+// passagem renderizar "taxa de leitura de 100% — excelente cobertura". Falso-OK é pior que erro:
+// o `null` propaga para a UI, que escreve "—" (mesmo padrão do AlarmHealthStrip e do `Delta`).
 export type ReadingKpis = {
   boxes: number;
   reads: number;
   multiReads: number;
-  multiPct: number;
+  /** % de caixas confirmadas por +1 câmera. `null` = nenhuma caixa no recorte (sem denominador). */
+  multiPct: number | null;
   passages: number;
   noReads: number;
-  ratePct: number;
+  /** taxa de leitura. `null` = NENHUMA passagem medida no recorte — não existe taxa a afirmar. */
+  ratePct: number | null;
   topPonto: string;
+  /** hora de maior volume. Só tem sentido com `boxes > 0` (quem exibe checa; ver LeituraPanel). */
   peakHour: number;
   pontos: number;
 };
@@ -83,10 +94,10 @@ export function readingKpis(cells: ReadingCell[]): ReadingKpis {
     boxes,
     reads,
     multiReads,
-    multiPct: boxes ? Math.round((multiReads / boxes) * 100) : 0,
+    multiPct: boxes ? Math.round((multiReads / boxes) * 100) : null,
     passages,
     noReads,
-    ratePct: passages ? Math.min(100, Math.round((boxes / passages) * 100)) : 100,
+    ratePct: passages ? Math.min(100, Math.round((boxes / passages) * 100)) : null,
     topPonto,
     peakHour,
     pontos: byPonto.size,
@@ -122,7 +133,10 @@ export function readingRanking(cells: ReadingCell[], pontos: string[]) {
         boxes,
         multiReads,
         noReads,
-        ratePct: passages ? Math.min(100, Math.round((boxes / passages) * 100)) : 100,
+        // Sem `: 100`. O filtro abaixo descarta a linha sem NADA medido (passagem 0 ⇒ boxes 0 e
+        // noReads 0), então toda linha exibida tem denominador real; o piso 1 só evita a divisão
+        // por zero da linha que já vai ser jogada fora — nunca vira uma taxa "perfeita" na tela.
+        ratePct: Math.min(100, Math.round((boxes / Math.max(1, passages)) * 100)),
       };
     })
     .filter((r) => r.boxes > 0 || r.noReads > 0)
@@ -163,7 +177,11 @@ export function readingEvolution(ds: ReadingDataset, f: ReadingFilters, lastN = 
   return { bars: out, max };
 }
 
+// SEM AMOSTRA, SEM FRASE. Insight é afirmação sobre a operação; com n=0 não há o que afirmar
+// (regra 10 da casa — o sistema não estava quebrado, estava falando quando não tinha o que dizer).
+// Lista vazia ⇒ a faixa de Insight NÃO É RENDERIZADA (ver LeituraPanel).
 export function readingInsights(k: ReadingKpis): string[] {
+  if (k.ratePct === null) return []; // nenhuma passagem no recorte ⇒ nada medido
   const out: string[] = [];
   out.push(
     k.ratePct >= 98
@@ -171,10 +189,13 @@ export function readingInsights(k: ReadingKpis): string[] {
       : `Taxa de leitura de ${k.ratePct}%${k.noReads > 0 ? ` (${k.noReads.toLocaleString("pt-BR")} no-reads)` : ""}.`,
   );
   if (k.topPonto !== "—") out.push(`${k.topPonto} é o ponto de maior volume.`);
-  out.push(
-    k.multiPct > 0
-      ? `${k.multiPct}% das caixas confirmadas por +1 câmera (redundância saudável).`
-      : `Sem multi-leitura — avaliar cobertura de ângulos.`,
-  );
+  // multiPct null = sem caixa lida: "sem multi-leitura" seria diagnóstico de cobertura de ângulo
+  // num período em que nada passou. Cala.
+  if (k.multiPct !== null)
+    out.push(
+      k.multiPct > 0
+        ? `${k.multiPct}% das caixas confirmadas por +1 câmera (redundância saudável).`
+        : `Sem multi-leitura — avaliar cobertura de ângulos.`,
+    );
   return out;
 }

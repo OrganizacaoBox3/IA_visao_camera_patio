@@ -82,6 +82,39 @@ export function kpis(cells: Cell[]): Kpis {
   return { idleMin, alerts, topArea, peakHour: peakHour < 0 ? 0 : peakHour, activePct };
 }
 
+// ── OCIOSIDADE: MEDIDA ou NÃO MEDIDA? (auditoria 2026-07-26, A6) ─────────────────────────────
+// Com o motor no HUB (ADR-009) o bucket "ativ" chega com `idleMs: 0` POR CONSTRUÇÃO
+// (server/analysis/pipeline.js:253 — "ociosidade por motion segue no front"), e o cliente só
+// mede quando alguém deixa a câmera aberta. Resultado: `idleMin` zerado NÃO significa "nada
+// parou" — significa "ninguém mediu". O bucket não carrega carimbo de origem, então os dois
+// casos são INDISTINGUÍVEIS aqui; entre afirmar "0m parado" e declarar ignorância, a casa
+// declara (falso-OK é pior que erro). O custo é assumido e conhecido: um recorte real de
+// ociosidade zero também aparece como "não medida" — conservador na direção segura.
+// NÃO tente medir ociosidade aqui: isto só para de afirmar zero.
+export type IdleMeasurement = {
+  /** houve ALGUMA ociosidade registrada no recorte (⇒ existe medição de fato). */
+  measured: boolean;
+  /** há buckets no recorte (⇒ a câmera observou algo, e ainda assim o tempo parado veio zerado). */
+  buckets: number;
+  /** amostras observadas nos buckets (frames agregados) — 0 em hub antigo que não manda o campo. */
+  observedSamples: number;
+};
+
+export function idleMeasurement(cells: Cell[]): IdleMeasurement {
+  let idleMin = 0,
+    observedSamples = 0;
+  for (const c of cells) {
+    idleMin += c.idleMin;
+    observedSamples += typeof c.samples === "number" ? c.samples : 0;
+  }
+  return { measured: idleMin > 0, buckets: cells.length, observedSamples };
+}
+
+/** A UI deve trocar o número por um selo de indisponibilidade? (observou e não mediu) */
+export function idleUnavailable(m: IdleMeasurement): boolean {
+  return !m.measured && m.buckets > 0;
+}
+
 /** Heatmap: por área, idleMin somado por hora (0..23) + máximo p/ escala. */
 export function heatmap(cells: Cell[], areas: string[]) {
   const rows = areas.map((area) => {
@@ -253,13 +286,26 @@ export function shiftRuler(cells: Cell[]): ShiftRuler {
   };
 }
 
-/** Eventos de alerta sintéticos a partir das células com alerts>0. */
+/** Texto único do selo de ociosidade não medida — fonte única (tela, insight e CSV). */
+export const IDLE_UNAVAILABLE_NOTE =
+  "Ociosidade não medida no período — o motor do hub não mede tempo parado; nenhum número de ociosidade é exibido.";
+
+/** Insights da operação. Sem ociosidade MEDIDA, nada de "pico às 00h" nem de "área mais parada":
+ *  a lista devolve a DECLARAÇÃO da indisponibilidade (ou nada, se o recorte está vazio). */
 export function insights(cells: Cell[], k: Kpis): string[] {
+  if (cells.length === 0) return []; // recorte vazio: quem fala é o estado de vazio, não o insight
+  const idle = idleMeasurement(cells);
+  const out: string[] = [];
+  if (idleUnavailable(idle)) {
+    out.push(IDLE_UNAVAILABLE_NOTE);
+    if (k.alerts > 0)
+      out.push(`${k.alerts} alertas no período; revisar limites por área para reduzir ruído.`);
+    return out;
+  }
   const total = k.idleMin || 1;
   const byArea = new Map<string, number>();
   for (const c of cells) byArea.set(c.area, (byArea.get(c.area) ?? 0) + c.idleMin);
   const top = [...byArea.entries()].sort((a, b) => b[1] - a[1])[0];
-  const out: string[] = [];
   if (top)
     out.push(
       `${top[0]} concentra ${Math.round((top[1] / total) * 100)}% do tempo parado do período.`,

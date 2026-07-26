@@ -5,8 +5,11 @@ import {
   ranking,
   evolution,
   fmtMin,
+  idleUnavailable,
+  IDLE_UNAVAILABLE_NOTE,
   type EventRow,
   type ShiftRuler,
+  type IdleMeasurement,
 } from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
 import {
@@ -37,11 +40,23 @@ export type FlowView = {
   byLine: { rows: FlowLineRow[]; max: number };
 };
 
+// Selo de ociosidade NÃO MEDIDA (auditoria A6). Aparece no lugar do número/gráfico — a tela
+// declara a ausência de medição em vez de exibir "0m", que se lê como "nada parou".
+// Isto NÃO mede ociosidade (é trabalho de outra onda): só para de afirmar zero.
+function IdleUnavailableNote({ compact = false }: { compact?: boolean }) {
+  return (
+    <p className="empty-note">
+      {compact ? "Ociosidade não medida no período (motor do hub)." : IDLE_UNAVAILABLE_NOTE}
+    </p>
+  );
+}
+
 export function AtividadePanel({
   lens,
   k,
   kPrev,
   ruler,
+  idle,
   tips,
   hm,
   rank,
@@ -58,6 +73,9 @@ export function AtividadePanel({
   // Régua do turno: só existe se o hub CARIMBOU o turno no bucket (ruler.stamped). Sem carimbo,
   // a faixa some inteira — melhor nenhum número do que um número na régua errada (÷24h).
   ruler: ShiftRuler;
+  // Ociosidade medida no recorte? Com o motor no hub o bucket vem com idleMs=0 por construção
+  // (A6): a tela troca TODO número de tempo parado pelo selo de indisponibilidade.
+  idle: IdleMeasurement;
   tips: string[];
   hm: ReturnType<typeof heatmap>;
   rank: ReturnType<typeof ranking>;
@@ -71,6 +89,7 @@ export function AtividadePanel({
   // "fluxo" só é uma aba válida quando o hub expõe o kind "flow"; se o estado herdou "fluxo"
   // e a seção sumiu (refresh/hub antigo), cai para "quando" sem efeito colateral.
   const activeTab = tab === "fluxo" && !flow ? "quando" : tab;
+  const noIdle = idleUnavailable(idle); // observou e veio zerado ⇒ não medido, não "sem parada"
   return (
     <>
       <RepLens lens={lens} />
@@ -86,21 +105,42 @@ export function AtividadePanel({
               value={ruler.occupancyPct === null ? "—" : `${ruler.occupancyPct}%`}
               label="ocupação no turno"
             />
-            <Kpi value={fmtMin(ruler.idleMinInShift)} label="tempo parado no turno" />
+            <Kpi
+              value={noIdle ? "—" : fmtMin(ruler.idleMinInShift)}
+              label={
+                noIdle ? (
+                  <>
+                    tempo parado no turno <span className="muted">· não medido</span>
+                  </>
+                ) : (
+                  "tempo parado no turno"
+                )
+              }
+            />
             <Kpi value={ruler.alertsInShift} label="alertas no turno" />
             <Kpi value={`${ruler.offActiveHours}h`} label="atividade fora do turno" />
           </KpiRow>
+          {noIdle && <IdleUnavailableNote compact />}
         </section>
       )}
       {/* 5 KPIs (o "pico de pessoas" desceu p/ o CSV — número cru sem faixa-alvo não sustenta
           decisão; o dado continua no arquivo, só não ocupa a tela). */}
       <KpiRow fit>
+        {/* "0m parado" é a leitura de "nada parou" — e com o motor no hub o zero é AUSÊNCIA DE
+            MEDIÇÃO (A6). Os três KPIs derivados de ociosidade viram "—" juntos: exibir só um
+            deles como "—" e os outros como zero seria trocar uma mentira por duas. */}
         <Kpi
-          value={fmtMin(k.idleMin)}
+          value={noIdle ? "—" : fmtMin(k.idleMin)}
           label={
-            <>
-              tempo parado <Delta v={deltaPct(k.idleMin, kPrev.idleMin)} />
-            </>
+            noIdle ? (
+              <>
+                tempo parado <span className="muted">· não medido</span>
+              </>
+            ) : (
+              <>
+                tempo parado <Delta v={deltaPct(k.idleMin, kPrev.idleMin)} />
+              </>
+            )
           }
         />
         <Kpi
@@ -111,12 +151,15 @@ export function AtividadePanel({
             </>
           }
         />
-        <Kpi value={k.topArea} label="área mais parada" />
-        <Kpi value={`${String(k.peakHour).padStart(2, "0")}h`} label="horário crítico" />
+        <Kpi value={noIdle ? "—" : k.topArea} label="área mais parada" />
+        <Kpi
+          value={noIdle ? "—" : `${String(k.peakHour).padStart(2, "0")}h`}
+          label="horário crítico"
+        />
         {/* going-gray: cor em valor numérico só condicional a estado — sem verde incondicional */}
         <Kpi value={`${k.activePct}%`} label="tempo ativo" />
       </KpiRow>
-      <Insight label="Oportunidades" tips={tips} />
+      {tips.length > 0 && <Insight label="Oportunidades" tips={tips} />}
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -135,48 +178,70 @@ export function AtividadePanel({
         <TabsContent value="quando" className={REP_TABPANEL_CLS}>
           <section className="panel flex-1">
             <SectionTitle>Quando para — horários críticos</SectionTitle>
-            <Heatmap
-              rows={hm.rows.map((row) => ({
-                key: row.area,
-                label: row.area,
-                title: row.area,
-                hours: row.hours,
-              }))}
-              cellColor={(_, v) => heatColor(v, hm.max)}
-              cellTitle={(row, v, h) =>
-                `${row.title} · ${String(h).padStart(2, "0")}h · ${fmtMin(v)} parado`
-              }
-              legendLeft="menos"
-              legendRight="mais ocioso"
-            />
+            {/* grade inteira de zeros com cara de mapa de calor "tudo tranquilo" — não desenha. */}
+            {noIdle ? (
+              <IdleUnavailableNote />
+            ) : (
+              <Heatmap
+                rows={hm.rows.map((row) => ({
+                  key: row.area,
+                  label: row.area,
+                  title: row.area,
+                  hours: row.hours,
+                }))}
+                cellColor={(_, v) => heatColor(v, hm.max)}
+                cellTitle={(row, v, h) =>
+                  `${row.title} · ${String(h).padStart(2, "0")}h · ${fmtMin(v)} parado`
+                }
+                legendLeft="menos"
+                legendRight="mais ocioso"
+              />
+            )}
           </section>
         </TabsContent>
         <TabsContent value="onde" className={REP_TABPANEL_CLS}>
           <div className="rep-2col flex-1" style={{ alignItems: "stretch" }}>
             <section className="panel">
               <SectionTitle>Por área</SectionTitle>
+              {/* "Sem ociosidade no período." é uma AFIRMAÇÃO — falsa quando ninguém mediu. */}
               <RankingBars
-                rows={rank.rows.map((r) => ({
-                  key: r.area,
-                  label: r.area,
-                  value: r.idleMin,
-                  valueText: `${fmtMin(r.idleMin)} · ${r.alerts} alertas`,
-                }))}
+                rows={
+                  noIdle
+                    ? []
+                    : rank.rows.map((r) => ({
+                        key: r.area,
+                        label: r.area,
+                        value: r.idleMin,
+                        valueText: `${fmtMin(r.idleMin)} · ${r.alerts} alertas`,
+                      }))
+                }
                 max={rank.max}
-                emptyNote="Sem ociosidade no período."
+                emptyNote={
+                  noIdle
+                    ? "Ociosidade não medida no período (motor do hub) — sem ranking a exibir."
+                    : "Sem ociosidade no período."
+                }
               />
             </section>
             <section className="panel">
               <SectionTitle>Por atividade</SectionTitle>
               <RankingBars
-                rows={byAtiv.rows.map((r) => ({
-                  key: r.atividade,
-                  label: r.atividade,
-                  value: r.idleMin,
-                  valueText: `${fmtMin(r.idleMin)} · ${r.alerts} alertas`,
-                }))}
+                rows={
+                  noIdle
+                    ? []
+                    : byAtiv.rows.map((r) => ({
+                        key: r.atividade,
+                        label: r.atividade,
+                        value: r.idleMin,
+                        valueText: `${fmtMin(r.idleMin)} · ${r.alerts} alertas`,
+                      }))
+                }
                 max={byAtiv.max}
-                emptyNote="Sem dados."
+                emptyNote={
+                  noIdle
+                    ? "Ociosidade não medida no período (motor do hub) — sem ranking a exibir."
+                    : "Sem dados."
+                }
               />
             </section>
           </div>
@@ -184,15 +249,23 @@ export function AtividadePanel({
         {/* "Por turno" MORREU aqui: turno já é filtro GLOBAL — com um turno escolhido o gráfico
             virava UMA barra. A quebra por turno segue no CSV (seção POR TURNO). */}
         <TabsContent value="tendencia" className={REP_TABPANEL_CLS}>
-          <TrendSection
-            bars={evo.bars.map((b) => ({
-              key: b.dayIndex,
-              label: b.label,
-              value: b.idleMin,
-              title: `${b.label} · ${fmtMin(b.idleMin)} parado`,
-            }))}
-            max={evo.max}
-          />
+          {/* 14 barras zeradas leem-se como "14 dias sem parada" — o mesmo zero não medido. */}
+          {noIdle ? (
+            <section className="panel flex-1">
+              <SectionTitle>Tendência (14 dias)</SectionTitle>
+              <IdleUnavailableNote />
+            </section>
+          ) : (
+            <TrendSection
+              bars={evo.bars.map((b) => ({
+                key: b.dayIndex,
+                label: b.label,
+                value: b.idleMin,
+                title: `${b.label} · ${fmtMin(b.idleMin)} parado`,
+              }))}
+              max={evo.max}
+            />
+          )}
         </TabsContent>
         <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
           <EventsTable

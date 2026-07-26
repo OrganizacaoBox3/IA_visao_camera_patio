@@ -19,6 +19,7 @@ import { Download, Printer, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   ALL_SHIFTS,
   legacyShiftsIn,
+  objectWindows,
   shiftLabelOf,
   shiftOptions,
   type Period,
@@ -32,6 +33,7 @@ import { buildCSV, downloadCSVFile, dateStamp, reportSections } from "./report/c
 import {
   Alert,
   Button,
+  EmptyState,
   IconButton,
   Kpi,
   KpiRow,
@@ -167,6 +169,48 @@ function SectionFilter({ children }: { children: ReactNode }) {
   );
 }
 
+// ESTADO DE VAZIO DA JANELA — distinto do "sem histórico" (EmptyHistory).
+// Auditoria 2026-07-26 (A2): o gate olhava o DATASET INTEIRO. Com 20 dias gravados e o período
+// "Hoje" sem operação, `ready` era true, o painel renderizava inteiro e o Insight afirmava
+// "Taxa de leitura de 100% — excelente cobertura". Existe histórico; o RECORTE é que está vazio —
+// e um painel de zeros/100% aqui se lê como operação perfeita. Nenhum indicador é exibido.
+// A DECISÃO do vazio, pura e testável fora do React (o bug A2 morava exatamente aqui).
+// `null` = há dado no recorte. Ordem importa: sem histórico nenhum, o texto é o de ativação
+// (EmptyHistory); com histórico e recorte vazio, o texto é o do recorte (EmptyWindow).
+// `windowCells === null` significa "view off, não computado" — e NUNCA vira vazio.
+export type ModeEmpty = "no-history" | "empty-window" | null;
+export function modeEmptyState(p: { datasetCells: number; windowCells: number | null }): ModeEmpty {
+  if (p.datasetCells === 0) return "no-history";
+  if (p.windowCells === 0) return "empty-window";
+  return null;
+}
+/** Mesma decisão para o Resumo (N2): ele agrega as dimensões, não uma só. */
+export function resumoEmptyState(p: {
+  dimsWithHistory: number;
+  hasAlarmHistory: boolean;
+  anyDimensionInWindow: boolean;
+}): ModeEmpty {
+  if (p.dimsWithHistory === 0 && !p.hasAlarmHistory) return "no-history";
+  if (!p.anyDimensionInWindow) return "empty-window";
+  return null;
+}
+
+function EmptyWindow({ lens, days }: { lens: string; days: number }) {
+  return (
+    <EmptyState>
+      <p>
+        <b>Sem dados no recorte — {lens}.</b>
+      </p>
+      <p>
+        O histórico existe ({days} dia{days === 1 ? "" : "s"} gravado{days === 1 ? "" : "s"}), mas
+        nada foi registrado neste recorte. Nenhum indicador é exibido: uma tela de zeros (ou de
+        100%) se leria como operação normal.
+      </p>
+      <p className="muted">Amplie o período ou remova os filtros para ver o que existe.</p>
+    </EmptyState>
+  );
+}
+
 export function ReportPage() {
   const { canConfigure, isSuper } = useAuth();
   const [modeState, setMode] = useState<Mode>("resumo");
@@ -272,17 +316,64 @@ export function ReportPage() {
   const isObjects = mode === "objetos";
   const isFadiga = mode === "fadiga";
   const isAlarmes = mode === "alarmes";
-  // Alarmes tem estado de vazio próprio (dentro da view); não entra no noData genérico.
+
+  // ── O RECORTE, não o dataset (auditoria A2) ──────────────────────────────────────────────────
+  // Objetos é a única dimensão cujo view-model não é desta frente: a janela sai aqui, com a MESMA
+  // função pura dos demais (calc/objetos), sem tocar no useObjetosVM.
+  const objWindowCells = useMemo(
+    () =>
+      isObjects || isResumo
+        ? objectWindows(objetos.dataset, { period, shift, setor }).current.length
+        : null,
+    [isObjects, isResumo, objetos.dataset, period, shift, setor],
+  );
+  // Dimensão COM DADO NA JANELA filtrada (≠ `has`, que é "existe no histórico do site").
+  // `has` continua mandando em quem vira BOTÃO de modo — o gestor precisa poder abrir a dimensão
+  // e ver o vazio honesto; `hasWindow` manda em quem vira NÚMERO.
+  const hasWindow = {
+    atividade: (atividade.windowCells ?? 0) > 0,
+    leitura: (leitura.windowCells ?? 0) > 0,
+    objetos: (objWindowCells ?? 0) > 0,
+    fadiga: (fadiga.windowCells ?? 0) > 0,
+    alarmes: al.akPeriod.total > 0,
+  };
+  const modeWindowCells = isReading
+    ? leitura.windowCells
+    : isObjects
+      ? objWindowCells
+      : isFadiga
+        ? fadiga.windowCells
+        : atividade.windowCells;
+  // Alarmes tem estado de vazio próprio (dentro da view); não entra nos gates genéricos.
   // Resumo só é "vazio" quando NENHUMA dimensão (nem os alarmes) tem dado.
   const modeVm = isReading ? leitura : isObjects ? objetos : isFadiga ? fadiga : atividade;
-  const noData =
-    !loading &&
-    !error &&
-    !isAlarmes &&
-    (isResumo
-      ? dims.length === 0 && !has.alarmes
-      : modeVm.dataset.cells.length === 0);
-  const ready = !loading && !error && !noData; // painéis só com dados carregados e não-vazios
+  const live = !loading && !error && !isAlarmes;
+  // Dois vazios DIFERENTES, com textos diferentes: nunca houve dado × não houve NESTE recorte.
+  const empty: ModeEmpty = !live
+    ? null
+    : isResumo
+      ? resumoEmptyState({
+          dimsWithHistory: dims.length,
+          hasAlarmHistory: has.alarmes,
+          anyDimensionInWindow: Object.values(hasWindow).some(Boolean),
+        })
+      : modeEmptyState({
+          datasetCells: modeVm.dataset.cells.length,
+          windowCells: modeWindowCells,
+        });
+  const noHistory = empty === "no-history";
+  const emptyWindow = empty === "empty-window";
+  const ready = !loading && !error && !noHistory && !emptyWindow; // painéis só com dado no recorte
+  // Dias de histórico do recorte (o texto do vazio de janela diz o que EXISTE — no Resumo, o
+  // maior entre as dimensões, que é o alcance real do histórico do site).
+  const historyDays = isResumo
+    ? Math.max(
+        atividade.dataset.days,
+        leitura.dataset.days,
+        objetos.dataset.days,
+        fadiga.dataset.days,
+      )
+    : modeVm.dataset.days;
   const { alarmPriority, alarmState } = al;
   const filters = {
     mode,
@@ -433,27 +524,39 @@ export function ReportPage() {
           <div className="rep-skeleton" aria-busy="true" aria-label="Carregando relatório">
             <KpiRow>
               {Array.from({ length: 5 }).map((_, i) => (
-                <Kpi key={i} value={<Skeleton w="55%" h={22} />} label={<Skeleton w="80%" h={11} />} />
+                <Kpi
+                  key={i}
+                  value={<Skeleton w="55%" h={22} />}
+                  label={<Skeleton w="80%" h={11} />}
+                />
               ))}
             </KpiRow>
             <Loading variant="skeleton" lines={6} label="Carregando gráfico" />
           </div>
         )}
         {!loading && error && <Alert tone="alert">{error}</Alert>}
-        {noData && <EmptyHistory mode={mode} dataSource={dataSource} />}
+        {noHistory && <EmptyHistory mode={mode} dataSource={dataSource} />}
+        {emptyWindow && (
+          <EmptyWindow
+            lens={isResumo ? `${PERIOD_LABEL[period]} · Turno: ${shiftLabel}` : lens}
+            days={historyDays}
+          />
+        )}
 
-        {/* N2 — Resumo: só as dimensões COM DADO (o gate das 4 morreu) + o cartão de Alarmes. */}
+        {/* N2 — Resumo: só as dimensões COM DADO NO RECORTE (`hasWindow`, não `has`) + o cartão de
+            Alarmes. Um cartão de zeros/100% para uma dimensão que não operou no período é o mesmo
+            falso-OK dos KPIs; a dimensão segue acessível pelo seletor, com o vazio honesto lá. */}
         {ready && isResumo && (
           <ResumoPanel
             periodLabel={PERIOD_LABEL[period]}
             shiftLabel={shiftLabel}
             atividade={
-              has.atividade && atividade.summary
+              hasWindow.atividade && atividade.summary
                 ? { k: atividade.summary.k, tips: atividade.summary.tips }
                 : null
             }
             fadiga={
-              has.fadiga && fadiga.summary
+              hasWindow.fadiga && fadiga.summary
                 ? {
                     fk: fadiga.summary.fk,
                     fOccFadiga: fadiga.summary.fOccFadiga,
@@ -463,12 +566,12 @@ export function ReportPage() {
                 : null
             }
             leitura={
-              has.leitura && leitura.summary
+              hasWindow.leitura && leitura.summary
                 ? { rk: leitura.summary.rk, rtips: leitura.summary.rtips }
                 : null
             }
             objetos={
-              has.objetos && objetos.summary
+              hasWindow.objetos && objetos.summary
                 ? { ok: objetos.summary.ok, oLoads: objetos.summary.oLoads }
                 : null
             }
@@ -477,8 +580,10 @@ export function ReportPage() {
           />
         )}
 
-        {/* N4 — Dimensão. O filtro do recorte vive COM a seção (não no header global). */}
-        {ready && !isResumo && !isAlarmes && (
+        {/* N4 — Dimensão. O filtro do recorte vive COM a seção (não no header global).
+            Ele SOBREVIVE ao vazio de janela: se foi o próprio filtro (ponto/área/posto) que
+            esvaziou o recorte, esconder o Select deixaria o gestor sem como voltar atrás. */}
+        {(ready || emptyWindow) && !isResumo && !isAlarmes && (
           <SectionFilter>
             <Select
               value={modeFilter.value}
@@ -498,6 +603,7 @@ export function ReportPage() {
             k={atividade.summary.k}
             kPrev={atividade.summary.kPrev}
             ruler={atividade.summary.ruler}
+            idle={atividade.summary.idle}
             tips={atividade.summary.tips}
             hm={atividade.details.hm}
             rank={atividade.details.rank}

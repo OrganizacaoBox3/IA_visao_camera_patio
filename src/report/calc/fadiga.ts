@@ -29,13 +29,25 @@ export type FadigaEventRow = ShiftStamp & {
   shift: string;
 };
 export type FadigaFilters = { period: Period; shift: ShiftFilter; posto: string | "Todos" };
+// AMOSTRA ZERO É `null`, NUNCA 100/0 (auditoria 2026-07-26, A2). `okPct: samples ? … : 100` fazia
+// um período SEM NENHUMA amostra render "Operação saudável: 100% do tempo sem alerta" — e
+// `alertPct: … : 0` pintava o KPI de verde ("≤2% é o normal"). Sem amostra não há percentual:
+// `null` sobe até a UI, que escreve "—". Falso-OK é pior que erro.
 export type FadigaKpis = {
-  alertPct: number;
-  okPct: number;
-  avgEar: number;
+  /** % do tempo em alerta. `null` = nenhuma amostra no recorte (sem denominador). */
+  alertPct: number | null;
+  /** % do tempo sem alerta. `null` = nenhuma amostra no recorte. */
+  okPct: number | null;
+  /** EAR médio. `null` = nenhuma amostra de EAR no recorte. */
+  avgEar: number | null;
+  /** hora de maior risco. Só tem sentido com `alertSamples > 0` (quem exibe checa). */
   peakHour: number;
   alertMin: number;
   postos: number;
+  /** amostras do recorte (≈1/s). ADITIVO: é o "n" — quem exibe decide calar quando é 0. */
+  samples: number;
+  /** amostras em estado de risco (fadiga+celular+duplo) — o "n" do pico/das ocorrências. */
+  alertSamples: number;
 };
 
 export function fadigaWindows(ds: FadigaDataset, f: FadigaFilters) {
@@ -64,12 +76,14 @@ export function fadigaKpis(cells: FadigaCell[]): FadigaKpis {
   for (const c of cells) byHour[c.hour] += c.fadiga + c.celular + c.duplo;
   const peakHour = byHour.some((v) => v > 0) ? byHour.indexOf(Math.max(...byHour)) : 0;
   return {
-    alertPct: samples ? Math.round((alert / samples) * 100) : 0,
-    okPct: samples ? Math.round(((samples - alert) / samples) * 100) : 100,
-    avgEar: earSamples ? +(earSum / earSamples).toFixed(2) : 0,
+    alertPct: samples ? Math.round((alert / samples) * 100) : null,
+    okPct: samples ? Math.round(((samples - alert) / samples) * 100) : null,
+    avgEar: earSamples ? +(earSum / earSamples).toFixed(2) : null,
     peakHour,
     alertMin: Math.round(alert / 60),
     postos: new Set(cells.map((c) => c.posto)).size,
+    samples,
+    alertSamples: alert,
   };
 }
 
@@ -89,9 +103,11 @@ export function fadigaHeatmap(cells: FadigaCell[]) {
   return { rows, max };
 }
 
+// Tendência diária. `samples` viaja junto (ADITIVO): um dia sem amostra tem barra zero — que na
+// tela é indistinguível de "dia perfeito". Quem desenha usa o `samples` para dizer "sem dado".
 export function fadigaEvolution(ds: FadigaDataset, f: FadigaFilters, lastN = 14) {
   const lo = Math.max(0, ds.days - lastN);
-  const out: { dayIndex: number; label: string; pct: number }[] = [];
+  const out: { dayIndex: number; label: string; pct: number; samples: number }[] = [];
   for (let d = lo; d < ds.days; d++) {
     let samples = 0,
       alert = 0;
@@ -105,20 +121,26 @@ export function fadigaEvolution(ds: FadigaDataset, f: FadigaFilters, lastN = 14)
       dayIndex: d,
       label: date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
       pct: samples ? Math.round((alert / samples) * 100) : 0,
+      samples,
     });
   }
   const max = Math.max(1, ...out.map((o) => o.pct));
   return { bars: out, max };
 }
 
+// SEM AMOSTRA, SEM FRASE (mesma regra do readingInsights). "Operação saudável" com n=0 é a pior
+// frase do relatório: afirma segurança onde não houve medição. Lista vazia ⇒ faixa não renderiza.
 export function fadigaInsights(k: FadigaKpis, occFadiga: number, occCelular: number): string[] {
+  if (k.alertPct === null || k.okPct === null) return []; // nenhuma amostra no recorte
   const out: string[] = [];
   out.push(
     k.alertPct <= 2
       ? `Operação saudável: ${k.okPct}% do tempo sem alerta.`
       : `${k.alertPct}% do tempo em alerta (${k.alertMin} min).`,
   );
-  out.push(`Pico de risco às ${String(k.peakHour).padStart(2, "0")}h.`);
+  // Pico de risco sem NENHUMA amostra de risco seria sempre "00h" (o índice do máximo de um vetor
+  // zerado) — um horário inventado. Só sai quando há risco medido.
+  if (k.alertSamples > 0) out.push(`Pico de risco às ${String(k.peakHour).padStart(2, "0")}h.`);
   if (occFadiga + occCelular > 0)
     out.push(`${occFadiga} ocorrência(s) de fadiga, ${occCelular} de celular.`);
   return out;

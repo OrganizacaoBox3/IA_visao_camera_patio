@@ -47,7 +47,14 @@ export function useLeituraVM(args: {
   ponto: string | "Todos";
   /** cadastro de turnos (/api/shifts) — rótulo e ordem das barras "Por turno". */
   shifts: ShiftDef[];
-}): { dataset: ReadingDataset; summary: LeituraSummary | null; details: LeituraDetails | null } {
+}): {
+  dataset: ReadingDataset;
+  summary: LeituraSummary | null;
+  details: LeituraDetails | null;
+  /** células da JANELA FILTRADA (período+turno+ponto). `null` = view "off", não computado —
+   *  "não calculei" nunca pode virar "não há dado" (o gate de vazio depende disto). */
+  windowCells: number | null;
+} {
   const { view, ds, events, period, shift, ponto, shifts } = args;
   const dataset = ds ?? EMPTY_RDS;
   const off = view === "off";
@@ -86,5 +93,10 @@ export function useLeituraVM(args: {
     };
   }, [full, base, dataset, events, period, shift, ponto, shifts]);
 
-  return { dataset, summary: base?.summary ?? null, details };
+  return {
+    dataset,
+    summary: base?.summary ?? null,
+    details,
+    windowCells: base ? base.cur.length : null,
+  };
 }

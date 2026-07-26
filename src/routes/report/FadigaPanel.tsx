@@ -1,11 +1,13 @@
-import {
-  fadigaKpis,
-  fadigaHeatmap,
-  fadigaEvolution,
-  type FadigaEventRow,
-} from "../../report/calc";
+import { fadigaKpis, fadigaHeatmap, fadigaEvolution, type FadigaEventRow } from "../../report/calc";
 import { Tabs, TabsContent } from "../../ui";
-import { RepLens, HistoryFooter, Insight, SectionTitle, REP_TABPANEL_CLS, type RepTab } from "./chrome";
+import {
+  RepLens,
+  HistoryFooter,
+  Insight,
+  SectionTitle,
+  REP_TABPANEL_CLS,
+  type RepTab,
+} from "./chrome";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { TrendSection } from "./TrendChart";
@@ -44,33 +46,49 @@ export function FadigaPanel({
     <>
       <RepLens lens={lens} />
       {/* "bocejos" desceu p/ o CSV: contagem crua sem faixa-alvo (doutrina 12). */}
+      {/* SEM AMOSTRA NÃO EXISTE PERCENTUAL (auditoria A2): `alertPct === null` ⇒ "—". O 0% que
+          ficava aqui era pintado como "operação saudável ≤2%" — falso-OK no KPI de SEGURANÇA. */}
       <KpiRow fit>
         <Kpi
-          value={`${fk.alertPct}%`}
-          label="tempo em alerta"
+          value={fk.alertPct === null ? "—" : `${fk.alertPct}%`}
+          label={
+            fk.alertPct === null ? (
+              <>
+                tempo em alerta <span className="muted">· sem amostra no recorte</span>
+              </>
+            ) : (
+              "tempo em alerta"
+            )
+          }
           valueStyle={{
             // going-gray: operação saudável (≤2%) é o normal → sem cor; saturada só no risco.
             color:
-              fk.alertPct <= 2
+              fk.alertPct === null || fk.alertPct <= 2
                 ? undefined
                 : fk.alertPct <= 10
                   ? "var(--state-warn)"
                   : "var(--state-critical)",
           }}
         />
+        {/* "0 ocorrências" sem NENHUMA amostra é ausência de medição, não ausência de risco. */}
         <Kpi
-          value={fOccFadiga}
+          value={fk.samples > 0 ? fOccFadiga : "—"}
           label="ocorrências de fadiga"
           valueStyle={{ color: fOccFadiga ? "var(--state-warn)" : undefined }}
         />
         <Kpi
-          value={fOccCelular}
+          value={fk.samples > 0 ? fOccCelular : "—"}
           label="ocorrências de celular"
           valueStyle={{ color: fOccCelular ? "var(--state-warn)" : undefined }}
         />
-        <Kpi value={`${String(fk.peakHour).padStart(2, "0")}h`} label="horário crítico" />
+        {/* pico de um vetor zerado é sempre 00h — só sai com amostra de risco de verdade. */}
+        <Kpi
+          value={fk.alertSamples > 0 ? `${String(fk.peakHour).padStart(2, "0")}h` : "—"}
+          label="horário crítico"
+        />
       </KpiRow>
-      <Insight label="Operador" tips={ftips} />
+      {/* Insight sem amostra não existe (fadigaInsights devolve []) — a faixa some inteira. */}
+      {ftips.length > 0 && <Insight label="Operador" tips={ftips} />}
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -107,7 +125,9 @@ export function FadigaPanel({
               key: b.dayIndex,
               label: b.label,
               value: b.pct,
-              title: `${b.label} · ${b.pct}% em alerta`,
+              // dia sem amostra tem barra zero — que é visualmente idêntica a "dia perfeito".
+              // O título diz qual dos dois é (o número só existe onde houve medição).
+              title: b.samples > 0 ? `${b.label} · ${b.pct}% em alerta` : `${b.label} · sem dado`,
             }))}
             max={fevo.max}
             note="% do tempo em alerta"

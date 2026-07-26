@@ -61,13 +61,23 @@ export function LeituraPanel({
             </>
           }
         />
+        {/* SEM PASSAGEM MEDIDA NÃO EXISTE TAXA: `ratePct === null` ⇒ "—" (auditoria A2). O verde
+            de "≥95%" era exatamente o que pintava um período vazio de excelente. */}
         <Kpi
-          value={`${rk.ratePct}%`}
-          label="taxa de leitura"
+          value={rk.ratePct === null ? "—" : `${rk.ratePct}%`}
+          label={
+            rk.ratePct === null ? (
+              <>
+                taxa de leitura <span className="muted">· sem passagem no recorte</span>
+              </>
+            ) : (
+              "taxa de leitura"
+            )
+          }
           valueStyle={{
             // going-gray: taxa boa (≥95%) é o estado normal → sem cor; saturada só p/ o degradado.
             color:
-              rk.ratePct >= 95
+              rk.ratePct === null || rk.ratePct >= 95
                 ? undefined
                 : rk.ratePct >= 80
                   ? "var(--state-warn)"
@@ -75,14 +85,19 @@ export function LeituraPanel({
           }}
         />
         <Kpi
-          value={rk.noReads.toLocaleString("pt-BR")}
+          value={rk.passages > 0 ? rk.noReads.toLocaleString("pt-BR") : "—"}
           label="no-reads"
           valueStyle={{ color: rk.noReads > 0 ? "var(--state-critical)" : undefined }}
         />
         <Kpi value={rk.topPonto} label="ponto de maior volume" />
-        <Kpi value={`${String(rk.peakHour).padStart(2, "0")}h`} label="horário de pico" />
+        {/* "horário de pico" de um vetor zerado é sempre 00h — hora inventada. Só com caixa lida. */}
+        <Kpi
+          value={rk.boxes > 0 ? `${String(rk.peakHour).padStart(2, "0")}h` : "—"}
+          label="horário de pico"
+        />
       </KpiRow>
-      <Insight label="Leitura" tips={rtips} />
+      {/* Insight sem amostra não existe (readingInsights devolve []) — a faixa some inteira. */}
+      {rtips.length > 0 && <Insight label="Leitura" tips={rtips} />}
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
@@ -167,9 +182,13 @@ export function LeituraPanel({
           />
         </TabsContent>
         <TabsContent value="eventos" className={REP_TABPANEL_CLS}>
+          {/* A coluna "Câmeras" MORREU (auditoria A7 + ADR-016): ela fingia variar (`>1 ? "N×" :
+              "1"`) mas o servidor gravava o literal `1` em todos os caminhos — o agregador
+              multi-câmera por Ponto de Leitura não existe mais. Hoje o servidor grava `null` e o
+              histórico ainda tem `1`: uma coluna que só sabe dizer "1" não informa nada. */}
           <EventsTable
             title={`Leituras — códigos no período (${revt.length})`}
-            headers={["Data / hora", "Ponto", "Código", "Câmeras", "Turno"]}
+            headers={["Data / hora", "Ponto", "Código", "Turno"]}
             rows={revt}
             emptyNote="Nenhuma leitura no período."
             renderCells={(r) => (
@@ -177,7 +196,6 @@ export function LeituraPanel({
                 <td className="mono">{new Date(r.ts).toLocaleString("pt-BR")}</td>
                 <td>{r.ponto}</td>
                 <td className="mono">{r.code}</td>
-                <td className="mono">{r.cameras > 1 ? `${r.cameras}×` : "1"}</td>
                 <td>{r.shift}</td>
               </>
             )}
