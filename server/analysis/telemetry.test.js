@@ -1,6 +1,6 @@
 // Testes da montagem do /api/analysis/status (telemetry.js) — o shape é CONTRATO
 // ADITIVO consumido pelo front/diagnóstico: aqui congelamos os campos existentes
-// e a agregação por câmera (fps real, dets1m, poda do skipLog, auto-máscara).
+// e a agregação por câmera (fps real, dets1m, poda do gateLog, auto-máscara).
 // vitest é ESM; o módulo sob teste é CommonJS → createRequire (padrão da pasta).
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
@@ -25,7 +25,7 @@ function fakeSt(over = {}) {
     latest: null,
     rounds: [],
     detsLog: [],
-    skipLog: [],
+    gateLog: [],
     skipped: 0,
     motionRatio: 0,
     lastMs: 0,
@@ -36,6 +36,24 @@ function fakeSt(over = {}) {
     ...over,
   };
 }
+
+// Uma rodada GATEADA como engine.recordGateRound a grava. `infer` deriva do motivo
+// (só "skip" não roda) — assim o teste não pode inventar um par (infer,reason) que o
+// engine nunca produziria.
+const round = (t, reason, ratio = 0, moving = 0) => ({
+  t,
+  ratio,
+  infer: reason !== "skip",
+  reason,
+  moving,
+});
+// Bloco `gate` de uma câmera sem NENHUMA rodada na janela (zero-fill declarado).
+const GATE_ZERO = {
+  skipMoving1m: 0,
+  ratioP50: 0,
+  ratioP95: 0,
+  reasons1m: { baseline: 0, motion: 0, probe: 0, skip: 0 },
+};
 
 function snapWith(states, over = {}) {
   return {
@@ -115,19 +133,157 @@ describe("buildStatus — agregação por câmera", () => {
       longRange: true,
       fadiga: false,
       source: "go2rtc",
+      gate: GATE_ZERO, // bloco ADITIVO do sensor do gate (sem rodadas na janela)
     });
   });
 
-  it("poda o skipLog além de 60s (mutação deliberada) e agrega skipped no motionGate", () => {
-    const st = fakeSt({ skipLog: [30_000, 50_000, 90_000], skipped: 7 }); // cutoff = 40_000
+  it("poda o gateLog além de 60s (mutação deliberada) e agrega skipped no motionGate", () => {
+    const gateLog = [round(30_000, "skip"), round(50_000, "skip"), round(90_000, "skip")]; // cutoff = 40_000
+    const st = fakeSt({ gateLog, skipped: 7 });
     const s = buildStatus(snapWith(new Map([["cam1", st]])));
-    expect(st.skipLog).toEqual([50_000, 90_000]); // 30_000 podado NO estado
+    expect(st.gateLog.map((g) => g.t)).toEqual([50_000, 90_000]); // 30_000 podado NO estado
     expect(s.perCamera.cam1.skipped1m).toBe(2);
     expect(s.perCamera.cam1.skippedTotal).toBe(7);
     expect(s.motionGate.skipped1m).toBe(2); // agregado de todas as câmeras
     expect(s.motionGate.skippedTotal).toBe(7);
   });
 
+  it("estado SEM gateLog (parcial/legado) não derruba o /status — leitura defensiva", () => {
+    const st = fakeSt({ gateLog: undefined, skipped: 3 });
+    const s = buildStatus(snapWith(new Map([["cam1", st]])));
+    expect(s.perCamera.cam1.skipped1m).toBe(0);
+    expect(s.perCamera.cam1.gate).toEqual(GATE_ZERO);
+    expect(s.perCamera.cam1.skippedTotal).toBe(3); // acumulado do boot é independente da janela
+  });
+});
+
+// ── O SENSOR DO GATE (frente C) ──────────────────────────────────────────────
+// A PERGUNTA QUE ISTO EXISTE PARA RESPONDER: "o gate de movimento está me cegando?".
+// `skipped1m` só media o CUSTO economizado — pulo em cena parada e pulo com uma pessoa
+// distante andando (poucas células mudadas no thumbnail 64×48, abaixo do limiar) iam
+// no MESMO balde. `gate.skipMoving1m` separa: pulo com ≥1 track vivo NÃO estacionário
+// é cegueira MEDIDA. Nenhum limiar muda aqui — medir vem antes de mexer.
+describe("perCamera[].gate — cegueira do gate medida, não presumida", () => {
+  it("pulo COM gente se movendo conta em skipMoving1m; pulo com a cena vazia NÃO", () => {
+    const st = fakeSt({
+      gateLog: [
+        round(70_000, "skip", 0.001, 2), // pulou com 2 pessoas em movimento → CEGUEIRA
+        round(71_000, "skip", 0.002, 0), // pulou com a cena vazia → economia legítima
+        round(72_000, "skip", 0.001, 1), // pulou com 1 pessoa em movimento → CEGUEIRA
+        round(73_000, "motion", 0.02, 3), // rodou (não é pulo — não entra no skipMoving)
+      ],
+    });
+    const g = buildStatus(snapWith(new Map([["cam1", st]]))).perCamera.cam1;
+    expect(g.gate.skipMoving1m).toBe(2);
+    expect(g.skipped1m).toBe(3); // os 3 pulos seguem contados como CUSTO, como antes
+  });
+
+  it("moving=0 em TODOS os pulos → skipMoving1m 0 (o gate não está cegando esta câmera)", () => {
+    const st = fakeSt({ gateLog: [round(70_000, "skip", 0.0), round(71_000, "skip", 0.001)] });
+    const g = buildStatus(snapWith(new Map([["cam1", st]]))).perCamera.cam1;
+    expect(g.gate.skipMoving1m).toBe(0);
+    expect(g.skipped1m).toBe(2);
+  });
+
+  it("track parado NÃO é cegueira: moving já vem líquido de estacionários (engine.movingOf)", () => {
+    // Contrato com o engine: `moving` é alive-estacionários NO INSTANTE da decisão.
+    // Pessoa parada em quadro com a cena estática é exatamente o caso que o gate
+    // existe p/ pular (e o coasting cobre) — não pode inflar a cegueira.
+    const st = fakeSt({ gateLog: [round(70_000, "skip", 0.0004, 0)] });
+    expect(buildStatus(snapWith(new Map([["cam1", st]]))).perCamera.cam1.gate.skipMoving1m).toBe(0);
+  });
+
+  it("ratioP50/P95 por nearest-rank sobre a janela, arredondados a 4 casas", () => {
+    // 10 ratios 0.001..0.010 → P50 = 5º (0.005), P95 = 10º (0.010).
+    const gateLog = Array.from({ length: 10 }, (_, i) =>
+      round(70_000 + i, i < 5 ? "skip" : "motion", (i + 1) / 1000),
+    );
+    const g = buildStatus(snapWith(new Map([["cam1", fakeSt({ gateLog })]]))).perCamera.cam1;
+    expect(g.gate.ratioP50).toBe(0.005);
+    expect(g.gate.ratioP95).toBe(0.01);
+  });
+
+  it("percentil arredonda a 4 casas (ratio cru de 6 casas não vaza)", () => {
+    const st = fakeSt({ gateLog: [round(70_000, "motion", 0.0123456)] });
+    const g = buildStatus(snapWith(new Map([["cam1", st]]))).perCamera.cam1;
+    expect(g.gate.ratioP50).toBe(0.0123);
+    expect(g.gate.ratioP95).toBe(0.0123); // amostra única: os dois percentis são ela
+  });
+
+  it("rodada NÃO MEDIDA (decode-error/gate-off) fica FORA do percentil, mas conta em reasons1m", () => {
+    // O engine grava ratio=0 quando não houve medição. Se esses zeros entrassem no
+    // percentil, puxariam P50/P95 PARA BAIXO — justamente o número que se leria p/
+    // decidir o limiar (mediria o instrumento, não a cena).
+    const gateLog = [
+      round(70_000, "motion", 0.02),
+      round(71_000, "decode-error", 0), // fail-open: rodou sem medir
+      round(72_000, "gate-off", 0), // gate desligado: nem decode houve
+      round(73_000, "motion", 0.04),
+    ];
+    const g = buildStatus(snapWith(new Map([["cam1", fakeSt({ gateLog })]]))).perCamera.cam1;
+    expect(g.gate.ratioP50).toBe(0.02); // só os 2 medidos entram
+    expect(g.gate.ratioP95).toBe(0.04);
+    expect(g.gate.reasons1m).toEqual({
+      baseline: 0,
+      motion: 2,
+      probe: 0,
+      skip: 0,
+      "decode-error": 1, // motivos raros entram ADITIVAMENTE (nada se perde)
+      "gate-off": 1,
+    });
+  });
+
+  it("reasons1m diz POR QUE cada rodada rodou; a soma é o total de rodadas gateadas", () => {
+    const gateLog = [
+      round(70_000, "baseline"),
+      round(71_000, "motion", 0.03),
+      round(72_000, "probe", 0.001),
+      round(73_000, "skip", 0.001),
+      round(74_000, "skip", 0.002),
+    ];
+    const g = buildStatus(snapWith(new Map([["cam1", fakeSt({ gateLog })]]))).perCamera.cam1;
+    expect(g.gate.reasons1m).toEqual({ baseline: 1, motion: 1, probe: 1, skip: 2 });
+    const total = Object.values(g.gate.reasons1m).reduce((a, b) => a + b, 0);
+    expect(total).toBe(gateLog.length);
+    expect(g.skipped1m).toBe(g.gate.reasons1m.skip); // pulo == reason "skip", sem terceira via
+  });
+
+  it("CONTRATO ADITIVO: todo campo ANTIGO de perCamera segue presente e com o mesmo valor", () => {
+    // O bloco `gate` é ACRÉSCIMO. Se algum campo que o front/diagnóstico já lê sumir
+    // ou mudar de semântica, este teste cai — é o gate do contrato, não decoração.
+    const st = fakeSt({
+      rounds: [95_000, 96_000],
+      detsLog: [{ t: 95_000, n: 2, x: 1, a: 0 }],
+      gateLog: [round(70_000, "skip", 0.001, 4), round(71_000, "motion", 0.03, 4)],
+      skipped: 9,
+      motionRatio: 0.03,
+      lastMs: 120,
+    });
+    const cam = buildStatus(snapWith(new Map([["cam1", st]]))).perCamera.cam1;
+    for (const k of [
+      "fps",
+      "targetFps",
+      "focused",
+      "queue",
+      "skipped1m",
+      "skippedTotal",
+      "motion",
+      "lastMs",
+      "dets1m",
+      "excluded1m",
+      "longRange",
+      "fadiga",
+      "source",
+    ])
+      expect(cam).toHaveProperty(k);
+    expect(cam.skipped1m).toBe(1); // MESMA semântica de antes: pulos na janela de 60s
+    expect(cam.skippedTotal).toBe(9); // acumulado do boot, intocado
+    expect(cam.motion).toBe(0.03); // último ratio, intocado
+    expect(cam.gate.skipMoving1m).toBe(1); // e o campo novo ao lado, sem tocar nos velhos
+  });
+});
+
+describe("buildStatus — agregação por câmera (auto-máscara e tracker)", () => {
   it("câmera COM auto-máscara ganha automasked1m + autoMask (rects via automask.statusOf)", () => {
     const am = createAutoMask();
     const cell = 9 * AM_COLS + 12;

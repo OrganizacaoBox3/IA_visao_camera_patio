@@ -218,8 +218,19 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
    * C1 — overlay nunca esfomeado (spec-tracking-pessoa-parada §2): em rodada
    * PULADA pelo gate de movimento o engine re-emite o ÚLTIMO payload com ts
    * fresco e a flag ADITIVA `coasting:true` (nenhum campo removido — contrato
-   * `analysis-tracks` intacto). É verdadeiro por construção: o gate só pula com
-   * a cena ESTÁTICA, logo os tracks estão congelados no último estado observado.
+   * `analysis-tracks` intacto).
+   *
+   * O QUE O COASTING AFIRMA: "o motor NÃO OBSERVOU nada de novo nesta rodada" —
+   * e SÓ isso. NÃO afirma "nada aconteceu". (O comentário anterior dizia "é
+   * verdadeiro por construção: o gate só pula com a cena ESTÁTICA": era FALSO. O
+   * gate pula sempre que o ratio MEDIDO fica abaixo do limiar, o que inclui
+   * pessoa pequena/distante em movimento — poucas células mudadas nas 3072 do
+   * thumbnail 64×48 ficam abaixo de PRECISION.gate.motionRatio.) Ou seja: a
+   * caixa congelada é a ÚLTIMA OBSERVAÇÃO, não uma afirmação sobre o presente;
+   * quem garante que a defasagem é limitada é o piso de PROBE, não o coasting.
+   * Quanto isso acontece deixou de ser opinião: `perCamera[].gate.skipMoving1m`
+   * (telemetry.js) conta os pulos com gente NÃO estacionária viva em quadro.
+   *
    * Só emite com espectador (mesmo hasViewers da emissão normal — sem banda à
    * toa) e só se há snapshot (dashboard que abriu no meio de um skip espera no
    * máximo o probe do gate, ≤6s, pela 1ª inferência).

@@ -4,13 +4,67 @@
 // injetado: o engine junta o wiring vivo (states/config/stats) e este módulo
 // agrega por câmera e dá forma — testável sem subir o motor (telemetry.test.js).
 //
-// Efeito colateral DELIBERADO: poda o skipLog (janela rolante 60s) de cada
+// Efeito colateral DELIBERADO: poda o gateLog (janela rolante 60s) de cada
 // câmera ao medir — a mesma poda que o pipeline faz; medir aqui mantém o log
 // enxuto em câmeras paradas (sem rodada não haveria poda).
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
 const automask = require("./automask");
+
+// ── Sensor do GATE de movimento (engine.recordGateRound alimenta st.gateLog) ──
+// Chaves SEMPRE presentes em reasons1m (zero-fill) — um "0" declarado vale mais que
+// um campo ausente que o consumidor tem de adivinhar. Motivos raros observados
+// (decode-error, gate-off) entram ADITIVAMENTE só quando ocorrem: a soma de
+// reasons1m é sempre o total de rodadas gateadas na janela (sanity check de graça).
+const GATE_REASONS = ["baseline", "motion", "probe", "skip"];
+
+/** Percentil por NEAREST-RANK (sem interpolação) — determinístico e testável. */
+function percentileOf(sorted, p) {
+  if (!sorted.length) return 0;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[i];
+}
+
+const r4 = (v) => Math.round(v * 10000) / 10000;
+
+/**
+ * Agrega a janela de 60s de rodadas GATEADAS de uma câmera.
+ * @returns {{skipped1m:number, skipMoving1m:number, ratioP50:number, ratioP95:number, reasons1m:object}}
+ *
+ * `skipMoving1m` É O NÚMERO QUE FALTAVA: rodadas PULADAS em que havia ≥1 track vivo
+ * NÃO estacionário. Pulo com a cena de fato parada é ECONOMIA; pulo com gente andando
+ * em quadro é CEGUEIRA — e até aqui os dois iam somados no mesmo `skipped1m`.
+ *
+ * Os percentis usam SÓ os ratios MEDIDOS (rodada com decode ok e gate ligado — o
+ * engine grava ratio=0 com reason "decode-error"/"gate-off" quando não mediu). Contar
+ * esses zeros puxaria os percentis PARA BAIXO justamente onde eles serão lidos p/
+ * decidir o limiar: seria medir o instrumento, não a cena (regra 9 do CLAUDE.md).
+ * Janela sem NENHUMA medição devolve 0 — leia junto com reasons1m antes de concluir
+ * "cena parada" (0 aqui pode ser "não medi nada", e a diferença está lá).
+ */
+function gateStatsOf(log) {
+  const ratios = [];
+  const reasons1m = {};
+  for (const k of GATE_REASONS) reasons1m[k] = 0;
+  let skipped1m = 0;
+  let skipMoving1m = 0;
+  for (const g of log) {
+    reasons1m[g.reason] = (reasons1m[g.reason] || 0) + 1;
+    if (g.reason !== "decode-error" && g.reason !== "gate-off") ratios.push(g.ratio || 0);
+    if (g.infer) continue;
+    skipped1m += 1;
+    if (g.moving > 0) skipMoving1m += 1; // ← pulou COM gente se movendo: cegueira MEDIDA
+  }
+  ratios.sort((a, b) => a - b);
+  return {
+    skipped1m,
+    skipMoving1m,
+    ratioP50: r4(percentileOf(ratios, 0.5)),
+    ratioP95: r4(percentileOf(ratios, 0.95)),
+    reasons1m,
+  };
+}
 
 /**
  * @param {object} snap  snapshot vivo do engine:
@@ -36,17 +90,32 @@ function buildStatus(snap) {
       reassoc1m += d.r || 0;
     }
     const cutoff = now - 60_000;
-    while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
-    skipped1mAll += st.skipLog.length;
+    // Poda deliberada (ver cabeçalho) + agregação da janela. Leitura DEFENSIVA do
+    // gateLog: estado antigo/parcial não pode derrubar o /status inteiro.
+    const gateLog = Array.isArray(st.gateLog) ? st.gateLog : [];
+    while (gateLog.length && gateLog[0].t < cutoff) gateLog.shift();
+    const gate = gateStatsOf(gateLog);
+    skipped1mAll += gate.skipped1m;
     skippedAll += st.skipped;
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
       targetFps: targetFpsOf(st), // cadência efetiva (foco > linha > normal); 0 se fadiga
       focused: focusedCams.has(id), // aberta em tela cheia por ≥1 dashboard
       queue: st.slots.count() + (st.latest ? 1 : 0), // inferências em voo (foco pode ter >1) + frame pendente
-      skipped1m: st.skipLog.length, // rodadas puladas pelo gate nos últimos 60s
+      skipped1m: gate.skipped1m, // rodadas puladas pelo gate nos últimos 60s
       skippedTotal: st.skipped, // total pulado desde o boot
-      motion: Math.round(st.motionRatio * 10000) / 10000, // último ratio de movimento (0..1)
+      motion: r4(st.motionRatio), // último ratio de movimento (0..1)
+      // SENSOR do gate (ADITIVO — nada acima mudou de shape). `skipMoving1m` responde
+      // "o gate está me cegando?" com DADO: pulos com gente NÃO estacionária viva em
+      // quadro. Os percentis do ratio existem p/ calibrar o limiar medindo, não
+      // chutando (o limiar em si NÃO muda aqui — precision.js é dono, e mexer nele
+      // passa pelo eval/). `reasons1m` = por que cada rodada rodou (ou não).
+      gate: {
+        skipMoving1m: gate.skipMoving1m,
+        ratioP50: gate.ratioP50,
+        ratioP95: gate.ratioP95,
+        reasons1m: gate.reasons1m,
+      },
       lastMs: st.lastMs,
       dets1m,
       excluded1m, // dets de pessoa suprimidas por zona de exclusão em 60s

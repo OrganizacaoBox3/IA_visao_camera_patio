@@ -342,7 +342,7 @@ function createState(id) {
     lastInferAt: 0, // última rodada REALMENTE despachada ao worker (base do piso de PROBE)
     gating: false, // decode de thumbnail em voo → o tick não reentra nesta câmera
     skipped: 0, // total de inferências PULADAS pelo gate (prova do ganho no status)
-    skipLog: [], // timestamps dos pulos (janela 60s → skipped1m)
+    gateLog: [], // janela rolante 60s de TODA rodada gateada (sensor do gate — recordGateRound)
     longRange: longRangeOf(id), // true → pedido ao worker leva tiles (LR_TILES)
     fadiga: isFadiga(id), // câmera modo=fadiga NÃO é analisada no hub (roda no cliente)
     lastTracks: null, // último payload de analysis-tracks emitido — re-emissão coasting no skip (C1)
@@ -440,6 +440,79 @@ function dispatchToWorker(st, frame, now) {
   }
 }
 
+// ── SENSOR DO GATE (o pulo é medido, não presumido) ──────────────────────────
+// A LACUNA QUE ISTO FECHA: até aqui o gate só tinha sensor de CUSTO (`skipped1m` —
+// quanto se economizou). Quanto ele CEGA não tinha número nenhum: uma pessoa DISTANTE
+// andando move poucas células das 3072 do thumbnail 64×48 e pode ficar ABAIXO de
+// PRECISION.gate.motionRatio (0,005 ≈ 16 células) — a rodada é pulada e a câmera só
+// volta a olhar no piso de probe. O README do diretório admitia a lacuna ("o gate NÃO
+// tem sensor direto de recall do pulo"). Este log é a medição: TODA rodada gateada
+// entra, pulada ou não, com o que permite responder "o gate está me cegando?".
+//   { t, ratio, infer, reason, moving }
+//   • ratio  — motionRatio MEDIDO; 0 quando NÃO houve medição (decode falhou, gate
+//              desligado) — o `reason` diz qual dos dois (telemetry.js exclui esses
+//              zeros do percentil: zero não medido enviesaria PARA BAIXO exatamente o
+//              número que se usaria p/ mexer no limiar).
+//   • infer/reason — rodou? e POR QUÊ (baseline|motion|probe|skip|decode-error|gate-off).
+//   • moving — quanta GENTE se movendo havia NO INSTANTE da decisão (movingOf).
+// Sem knob novo: MEDIR VEM ANTES DE MEXER (nenhum limiar mudou nesta frente).
+const GATE_LOG_MS = 60_000;
+
+/**
+ * Tracks VIVOS e NÃO ESTACIONÁRIOS agora — "gente se movendo em quadro" no instante
+ * da decisão do gate. É o denominador da pergunta do dono: pulo com `moving ≥ 1` é
+ * cegueira MEDIDA (o motor deixou de olhar uma cena com gente andando).
+ *
+ * CT-4 (contrato com a frente do tracker): `stats()` devolve `alive` além de
+ * `{reassociations, lost, stationary}`. LEITURA DEFENSIVA e DEGRADAÇÃO DECLARADA —
+ * nunca lança, e cada degrau diz o que passa a medir:
+ *   1. `alive - stationary` — o número certo (inclui LOST oculto: pessoa oclusa segue pessoa).
+ *   2. `tracks().length - stationary` — MESMA semântica pelo snapshot interno (tracks()
+ *      é API do bytetrack.js): exato, não degradado.
+ *   3. `lost` — LIMITE INFERIOR (só os ocultos; sub-reporta cegueira).
+ *   4. 0 — tracker estranho/sem sensor: "não observado". Sub-reporta.
+ * SEMÂNTICA DO `alive` (o ponto onde os degraus poderiam divergir em silêncio): o
+ * bytetrack.js publica `alive = tracks.length` — tracks VIVOS internos, LOST incluído.
+ * É o que este sensor quer: quem sumiu do overlay por oclusão NÃO virou ausência, e
+ * pular a rodada dela é o pior caso da cegueira. Se um dia `alive` passar a significar
+ * "emitíveis", o número CAI sem que este arquivo mude — mudança de SEMÂNTICA, e o teste
+ * "pessoa OCLUSA ainda conta" (engine.test.js, contra o tracker REAL) é quem avisa.
+ * PURA (recebe o tracker) — contrato de teste em engine.test.js.
+ */
+function movingOf(tracker) {
+  if (!tracker || typeof tracker.stats !== "function") return 0;
+  let s;
+  try {
+    s = tracker.stats();
+  } catch {
+    return 0; // tracker que LANÇA não pode derrubar a rodada do gate
+  }
+  if (!s) return 0;
+  const stationary = Number.isFinite(s.stationary) ? s.stationary : 0;
+  if (Number.isFinite(s.alive)) return Math.max(0, s.alive - stationary); // CT-4
+  if (typeof tracker.tracks === "function") {
+    try {
+      return Math.max(0, tracker.tracks().length - stationary); // fallback EXATO
+    } catch {
+      /* segue p/ o degrau seguinte */
+    }
+  }
+  return Number.isFinite(s.lost) ? s.lost : 0; // limite INFERIOR
+}
+
+/**
+ * Registra UMA rodada gateada no log rolante de 60s (poda no push — o log não cresce
+ * sob tráfego; telemetry.js poda de novo ao medir, p/ a câmera parada). `moving` é
+ * amostrado AQUI porque é o estado do tracker NO INSTANTE da decisão — medi-lo depois
+ * (no /status) mediria outro instante. PURA quanto ao relógio (now injetado).
+ */
+function recordGateRound(st, now, { ratio, infer, reason }) {
+  const log = st.gateLog || (st.gateLog = []);
+  log.push({ t: now, ratio: ratio || 0, infer: !!infer, reason, moving: movingOf(st.tracker) });
+  const cutoff = now - GATE_LOG_MS;
+  while (log.length && log[0].t < cutoff) log.shift();
+}
+
 // GATE + despacho de UMA câmera. Consome o frame (último-vence), mede o movimento no
 // thumbnail e decide (motion.gateDecision, PURO). NUNCA-CEGO: baseline (1º frame), piso
 // de PROBE (cena estática ainda roda; focada com piso menor) e FAIL-OPEN (erro de decode
@@ -453,6 +526,9 @@ async function gateAndDispatch(st, now) {
   st.gating = true;
   try {
     if (!MOTION_GATE_ON) {
+      // ratio=0 EXPLÍCITO: com o gate desligado não há decode, logo não há medição —
+      // o `reason` distingue "não medido" de "medido zero" (telemetry não percentila isto).
+      recordGateRound(st, now, { ratio: 0, infer: true, reason: "gate-off" });
       dispatchToWorker(st, frame, now); // gate desligado (escape hatch) → comportamento original
       return;
     }
@@ -477,16 +553,24 @@ async function gateAndDispatch(st, now) {
           hasPrev,
         })
       : { infer: true, reason: "decode-error" };
+    // SENSOR: TODA rodada gateada entra no log — a pulada E a que rodou (sem as que
+    // rodaram não há denominador, e sem `ratio` das que rodaram não há como calibrar o
+    // limiar com dado). `ratio` só é o medido quando o decode deu certo.
+    recordGateRound(st, now, { ratio: decodeOk ? ratio : 0, infer: dec.infer, reason: dec.reason });
     if (!dec.infer) {
       st.skipped += 1; // PULA a inferência — economiza o session.run inteiro
-      st.skipLog.push(now);
-      const cutoff = now - 60_000;
-      while (st.skipLog.length && st.skipLog[0] < cutoff) st.skipLog.shift();
       // C1 (spec-tracking §2): rodada PULADA re-emite o último payload com ts fresco
       // e coasting:true — o interpolador do front não expira a caixa (expireMs 2,6s <
       // probe 6s) com o track VIVO. Cadência = a própria rodada gateada (st.roundMs;
       // o slot já foi consumido acima — de graça no laço); volatile e só com
       // espectador, como a emissão normal (pipeline.emitCoasting).
+      //
+      // O QUE O COASTING AFIRMA (e o que NÃO afirma): "o motor NÃO OBSERVOU nada de
+      // novo nesta rodada" — jamais "nada aconteceu". O gate pula sempre que o ratio
+      // medido fica abaixo do limiar, o que INCLUI pessoa pequena/distante em
+      // movimento (poucas células mudadas no thumbnail 64×48). Quanto isso acontece
+      // deixou de ser opinião: `perCamera[].gate.skipMoving1m` no /api/analysis/status
+      // conta exatamente os pulos com gente NÃO estacionária viva em quadro.
       pipeline.emitCoasting(st, now);
       return;
     }
@@ -514,7 +598,16 @@ function logMinute() {
   for (const [id, st] of states) {
     const fps = Math.round((st.rounds.length / 60) * 100) / 100;
     const src = st.source === "go2rtc" ? "[g2r]" : "";
-    const skips = MOTION_GATE_ON && st.skipLog.length ? ` (${st.skipLog.length} pulos/gate)` : "";
+    // Pulos do gate no minuto + quantos deles aconteceram COM gente se movendo em
+    // quadro (cegueira medida — mesmo número do gate.skipMoving1m do /status).
+    let nSkip = 0;
+    let nBlind = 0;
+    for (const g of st.gateLog) {
+      if (g.infer) continue;
+      nSkip += 1;
+      if (g.moving > 0) nBlind += 1;
+    }
+    const skips = MOTION_GATE_ON && nSkip ? ` (${nSkip} pulos/gate${nBlind ? `, ${nBlind} c/ gente em movimento` : ""})` : "";
     parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}`);
   }
   const w = workerHost.stats();
@@ -772,4 +865,9 @@ module.exports = {
   // painel→tracker (knobs 23-26 incluídos) e o piso do paralelismo da focada (CA-3).
   byteTrackerOpts,
   focusInflightFor,
+  // PUROS (contrato de teste — engine.test.js): o SENSOR do gate. `movingOf` é a leitura
+  // defensiva do CT-4 (stats().alive) com degradação declarada; `recordGateRound` é o log
+  // rolante de 60s que o telemetry.js agrega em perCamera[].gate.
+  movingOf,
+  recordGateRound,
 };
