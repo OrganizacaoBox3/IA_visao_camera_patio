@@ -130,9 +130,16 @@ type Keyframe = { bbox: Bbox; zone: string | null; score?: number; vx?: number; 
 // AMPLIFICA (a oscilação de campo de 2026-07-26). wS/hS: tamanho SUAVIZADO p/ exibição — o detector
 // alterna hipóteses de enquadramento (close-up: largura medida 0,41→0,78→1,0 entre frames) e a caixa
 // crua "respira"; a suavização é ancorada no PÉ (bottom-center), o âncora estável da pessoa.
+// hist: HISTÓRICO de keyframes (janela HIST_KEEP_MS) — o MODO SÍNCRONO (decisão do dono
+// 2026-07-26: "nem que coloque alguns segundos de delay no vídeo, mas sem arrasto") renderiza o
+// PASSADO (renderT segundos atrás, casado com o vídeo atrasado): entre dois keyframes REAIS a
+// caixa é interpolação EXATA — zero extrapolação, zero arrasto por construção. Cada kf carrega
+// wS/hS (tamanho suavizado NO INGEST, temporalmente consistente) p/ o passado não "respirar".
+type Keyframe2 = Keyframe & { wS: number; hS: number };
 type Entry = {
   prev: Keyframe | null;
   last: Keyframe;
+  hist: Keyframe2[];
   snapFrom?: [number, number, number, number];
   snapT?: number;
   vxS?: number;
@@ -140,6 +147,10 @@ type Entry = {
   wS?: number;
   hS?: number;
 };
+
+// Janela do histórico por id (cobre o teto do modo síncrono + folga). Memória: ~6fps × 6s × poucos
+// tracks — dezenas de objetos pequenos, irrelevante.
+const HIST_KEEP_MS = 6000;
 
 // Estado por id: 2 keyframes (o penúltimo e o último payload que citaram o id). A VELOCIDADE, quando o
 // hub a emite (vx/vy do Kalman), vem do PRÓPRIO track — DEAD-RECKONING a partir do último bbox (preciso
@@ -217,10 +228,14 @@ export class TrackInterpolator {
         const sa = this.cfg.sizeAlpha;
         e.wS = e.wS === undefined ? tr.bbox[2] : sa * tr.bbox[2] + (1 - sa) * e.wS;
         e.hS = e.hS === undefined ? tr.bbox[3] : sa * tr.bbox[3] + (1 - sa) * e.hS;
+        e.hist.push({ ...kf, wS: e.wS, hS: e.hS }); // tamanho suavizado CONGELADO no kf (consistente no passado)
+        const cutoff = kf.t - HIST_KEEP_MS;
+        while (e.hist.length > 1 && e.hist[0].t < cutoff) e.hist.shift();
       } else {
         this.entries.set(tr.id, {
           prev: null,
           last: kf,
+          hist: [{ ...kf, wS: tr.bbox[2], hS: tr.bbox[3] }],
           vxS: tr.vx,
           vyS: tr.vy,
           wS: tr.bbox[2],
@@ -244,20 +259,26 @@ export class TrackInterpolator {
   sample(now: number, videoLagMs = 0): DrawnTrack[] {
     const c = this.cfg;
     const lag = videoLagMs > 0 ? videoLagMs : 0;
+    const renderT = now - c.delayMs - lag;
     const out: DrawnTrack[] = [];
     for (const [id, e] of this.entries) {
-      const ageMs = now - e.last.t;
-      if (ageMs > c.expireMs) {
+      const ageMs = now - e.last.t; // idade do DADO (exposta — HUD/telemetria)
+      // Fade/expiração pela idade RENDERIZADA (renderT − último kf): no modo síncrono a caixa
+      // tem de viver até o VÍDEO atrasado alcançar o fim do track — expirar pela idade do dado
+      // apagaria a caixa segundos antes da pessoa sumir NA TELA. Com lag 0, ageR == ageMs − delay
+      // (comportamento de sempre nos testes, que usam delayMs 0).
+      const ageR = renderT - e.last.t;
+      if (ageR > c.expireMs) {
         this.entries.delete(id);
         continue;
       }
       const opacity =
-        ageMs <= c.fadeStartMs
+        ageR <= c.fadeStartMs
           ? 1
-          : Math.max(0, 1 - (ageMs - c.fadeStartMs) / (c.expireMs - c.fadeStartMs));
+          : Math.max(0, 1 - (ageR - c.fadeStartMs) / (c.expireMs - c.fadeStartMs));
       out.push({
         id,
-        bbox: this.boxAt(e, now - c.delayMs - lag),
+        bbox: this.boxAt(e, renderT),
         zone: e.last.zone,
         score: e.last.score,
         opacity,
@@ -275,6 +296,30 @@ export class TrackInterpolator {
   private boxAt(e: Entry, renderT: number): [number, number, number, number] {
     const c = this.cfg;
     const last = e.last;
+    // ── MODO SÍNCRONO (renderT no PASSADO, com histórico): interpolação EXATA entre duas
+    // observações REAIS que cercam o instante — zero extrapolação, zero arrasto por construção.
+    // Lerp em (centro-x, PÉ, tamanho suavizado) — os eixos estáveis da pessoa.
+    if (renderT < last.t && e.hist.length > 1) {
+      const h = e.hist;
+      let bi = 0;
+      while (bi < h.length && h[bi].t < renderT) bi++;
+      if (bi === 0) {
+        const k = h[0]; // antes do histórico: clampa na 1ª observação conhecida
+        return [k.bbox[0] + k.bbox[2] / 2 - k.wS / 2, k.bbox[1] + k.bbox[3] - k.hS, k.wS, k.hS];
+      }
+      if (bi < h.length) {
+        const a = h[bi - 1];
+        const b = h[bi];
+        const f = b.t > a.t ? (renderT - a.t) / (b.t - a.t) : 1;
+        const cx = a.bbox[0] + a.bbox[2] / 2 + (b.bbox[0] + b.bbox[2] / 2 - (a.bbox[0] + a.bbox[2] / 2)) * f;
+        const bot = a.bbox[1] + a.bbox[3] + (b.bbox[1] + b.bbox[3] - (a.bbox[1] + a.bbox[3])) * f;
+        const w = a.wS + (b.wS - a.wS) * f;
+        const hh = a.hS + (b.hS - a.hS) * f;
+        return [cx - w / 2, bot - hh, w, hh];
+      }
+      // renderT entre o último kf do hist e last (não deveria ocorrer — last está no hist) →
+      // cai nos ramos ao vivo abaixo (comportamento de sempre).
+    }
     // ── DEAD-RECKONING (velocidade REAL do Kalman) ────────────────────────────────────────────────
     // posição = último bbox + v × dt (dt em segundos desde o keyframe), w/h do keyframe (não escala).
     // dt clampado a [-maxExtrap, +maxExtrap]: à frente limita o overshoot (pessoa que PAROU tem v≈0 do

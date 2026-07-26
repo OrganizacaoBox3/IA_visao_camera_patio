@@ -400,3 +400,28 @@ Defesas (DISPLAY-ONLY — a lógica segue lendo tracks exatos; knobs novos no DE
 
 3 testes novos (v ruidosa amortecida · teto adaptativo rápido×lento · respiração ancorada no
 pé); os 20 existentes passam sem mudança. Mudança 100% cliente — basta recarregar o painel.
+
+## 2026-07-26 (5) — MODO SÍNCRONO: vídeo atrasado, marcação EXATA (decisão do dono)
+
+Decisão de produto (verbatim): "nem que coloque alguns segundos de delay no vídeo, mas não
+podemos ter arrasto nem erro na marcação". Vira arquitetura: com o vídeo atrasado D ms e o
+overlay renderizando o MESMO instante, a caixa deixa de ser PREVISÃO e vira INTERPOLAÇÃO EXATA
+entre duas observações reais — zero arrasto e zero oscilação POR CONSTRUÇÃO (não há mais
+extrapolação a errar).
+
+- `TrackInterpolator`: histórico de keyframes por id (janela 6s; cada kf congela o tamanho
+  suavizado do momento) + `boxAt` com lerp exato entre os dois kfs que cercam `renderT` (eixos
+  estáveis: centro-x, PÉ, tamanho); antes do 1º kf clampa na 1ª observação (não inventa passado).
+  Fade/expiração passam a correr pela idade RENDERIZADA (a caixa vive até o vídeo atrasado
+  alcançar o fim do track). Lag 0 = comportamento ao vivo de sempre (26 testes: 20 antigos + 6).
+- `camera/playoutDelay.ts` (novo): `applyPlayoutDelay` seta jitterBufferTarget (ms) +
+  playoutDelayHint (s, legado) nos receivers do pc do `<video-stream>`; reaplicado a cada 2s
+  (o pc renasce nas reconexões internas do elemento). Tipo `pc` declarado no d.ts vendorizado.
+- Knob `overlay.syncDelayMs` (default **2000** — a decisão do dono é o default; 0 volta ao
+  vivo): consumido pela câmera ABERTA (useWebrtcTransport + drawScene) e pelos TILES WebRTC
+  (TrackOverlay aplica o hint no próprio vídeo). Só WebRTC (MJPEG não tem atraso de reprodução
+  controlável — segue no videoLagMs/dead-reckoning).
+
+RESIDUAL declarado: o hint de playout é aproximado (o navegador pode aplicar ±100-300ms do
+pedido) — o resíduo aparece como offset CONSTANTE e calibra-se ajustando syncDelayMs; medição
+fina exige getStats (fica p/ quando houver queixa). verify verde (1161).

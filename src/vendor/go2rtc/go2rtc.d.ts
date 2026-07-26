@@ -10,6 +10,9 @@ import type { DetailedHTMLProps, HTMLAttributes } from "react";
 export interface VideoStreamElement extends HTMLElement {
   /** WebSocket de sinalização; aceita `/rel`, `http(s)://` ou `ws(s)://`. Ao setar, conecta. */
   src: string;
+  /** RTCPeerConnection interno (video-rtc.js `this.pc`; null fora do transporte WebRTC/entre
+   *  reconexões). Consumidor: camera/playoutDelay (modo síncrono — atraso de reprodução). */
+  pc?: RTCPeerConnection | null;
   /** Ordem de fallback do transporte. Default do componente: "webrtc,mse,hls,mjpeg". */
   mode: string;
   /** Mídias pedidas ("video", "video,audio", …). */

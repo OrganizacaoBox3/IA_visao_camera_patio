@@ -197,6 +197,14 @@ export const APP_CONFIG = {
       mjpeg: 0 as number,
       webrtc: 0 as number,
     },
+    // MODO SÍNCRONO (decisão do dono, 2026-07-26: "nem que coloque alguns segundos de delay no
+    // vídeo, mas não podemos ter arrasto nem erro na marcação"): o vídeo WebRTC é ATRASADO este
+    // tanto (playoutDelayHint/jitterBufferTarget no receiver) e o overlay renderiza o MESMO
+    // instante por interpolação EXATA entre observações reais (TrackInterpolator.hist) — zero
+    // extrapolação ⇒ zero arrasto por construção. Trade-off deliberado: o operador vê o mundo
+    // ~2s atrasado. 0 desliga (volta ao vivo com dead-reckoning). Só vale no transporte WebRTC
+    // (MJPEG não tem atraso de reprodução controlável); teto prático ~4000 (jitter buffer).
+    syncDelayMs: 2000 as number,
   },
 
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS

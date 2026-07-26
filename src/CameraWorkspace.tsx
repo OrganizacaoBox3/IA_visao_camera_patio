@@ -1222,10 +1222,9 @@ export function CameraWorkspace({
         hubCadenceRef.current.observe(hd.ts, nowMs);
         hubLatencyRef.current = typeof hd.latencyMs === "number" ? hd.latencyMs : null;
       }
-      // Onda 2 (CA-4): amostra p/ o instante do QUADRO exibido — lag por transporte (knob, 0=inerte).
-      const vLag = webrtcRef.current
-        ? APP_CONFIG.overlay.videoLagMs.webrtc
-        : APP_CONFIG.overlay.videoLagMs.mjpeg;
+      // Onda 2/modo síncrono: instante do QUADRO exibido (WebRTC atrasado ⇒ interpolação exata).
+      const { syncDelayMs: sy, videoLagMs: vl } = APP_CONFIG.overlay;
+      const vLag = webrtcRef.current ? (sy > 0 ? sy : vl.webrtc) : vl.mjpeg;
       displayTracks = toDisplayTracks(
         hubInterpRef.current.sample(nowMs, vLag),
         hubFirstSeenRef.current,

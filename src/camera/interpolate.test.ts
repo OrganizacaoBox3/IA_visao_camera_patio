@@ -259,6 +259,45 @@ describe("TrackInterpolator — anti-oscilação (v suavizada, teto adaptativo, 
   });
 });
 
+// ── MODO SÍNCRONO (decisão do dono 2026-07-26): vídeo atrasado + interpolação EXATA no passado ──
+describe("TrackInterpolator — modo síncrono (lag grande + histórico = zero arrasto)", () => {
+  it("renderiza o PASSADO por interpolação EXATA entre observações (sem extrapolação)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
+    // pessoa andando: observações reais em t=0 (cx 0.05), t=500 (cx 0.15), t=1000 (cx 0.25)
+    it0.ingest(snap(1, [{ id: 1, bbox: box(0, 0), vx: 0.2, vy: 0 }]), 0);
+    it0.ingest(snap(2, [{ id: 1, bbox: box(0.1, 0), vx: 0.2, vy: 0 }]), 500);
+    it0.ingest(snap(3, [{ id: 1, bbox: box(0.2, 0), vx: 0.2, vy: 0 }]), 1000);
+    // lag 800 em now=1200 → renderT=400 → entre t=0 e t=500 (f=0.8) → cx exato = 0.05+0.8×0.1=0.13
+    const b = it0.sample(1200, 800)[0].bbox;
+    expect(b[0] + b[2] / 2).toBeCloseTo(0.13, 6); // posição EXATA da trajetória observada
+    // e no keyframe em si (renderT=500) senta EXATAMENTE na observação — zero arrasto
+    const onKf = it0.sample(1300, 800)[0].bbox;
+    expect(onKf[0] + onKf[2] / 2).toBeCloseTo(0.15, 6);
+  });
+
+  it("caixa VIVE até o vídeo atrasado alcançar o fim do track (expira por renderT, não por dado)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 }); // fade 1500 / expire 2600 default
+    it0.ingest(snap(1, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), 0);
+    it0.ingest(snap(2, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), 500);
+    // dado tem 3000ms (> expire 2600) MAS renderT=3500-2800=700 → ageR=200 → caixa VIVA e opaca
+    const d = it0.sample(3500, 2800);
+    expect(d).toHaveLength(1);
+    expect(d[0].opacity).toBe(1);
+    // sem lag, a MESMA idade de dado já teria expirado (contrato antigo preservado)
+    const live = new TrackInterpolator({ delayMs: 0 });
+    live.ingest(snap(1, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), 0);
+    expect(live.sample(3000)).toHaveLength(0);
+  });
+
+  it("antes do 1º keyframe conhecido → clampa na 1ª observação (não inventa passado)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, expireMs: 1e6, fadeStartMs: 1e6 });
+    it0.ingest(snap(1, [{ id: 1, bbox: box(0.4, 0.4), vx: 0.5, vy: 0 }]), 1000);
+    it0.ingest(snap(2, [{ id: 1, bbox: box(0.5, 0.4), vx: 0.5, vy: 0 }]), 1500);
+    const b = it0.sample(1600, 1400)[0].bbox; // renderT=200 < 1º kf (t=1000)
+    expect(b[0] + b[2] / 2).toBeCloseTo(0.45, 6); // parada na 1ª observação, sem retro-extrapolar
+  });
+});
+
 describe("TrackInterpolator — fade + expiração", () => {
   it("opacidade cai entre fadeStart e expire; depois some", () => {
     const it0 = new TrackInterpolator({ delayMs: 0 });

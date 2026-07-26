@@ -5,6 +5,7 @@ import { getContentRect, cssVar, personLabel } from "../../camera/draw";
 import { TrackInterpolator } from "../../camera/interpolate";
 import { HUB_TRACKS_STALE_MS } from "../../types/analysis";
 import { APP_CONFIG } from "../../config";
+import { applyPlayoutDelay } from "../../camera/playoutDelay";
 
 // ── Overlay de caixas SOBRE o <video-stream> (tiles WebRTC/go2rtc) ────────────────────────────────
 // Um <canvas> transparente exatamente sobre o vídeo do tile. Desenha as caixas de pessoa vindas do
@@ -78,8 +79,13 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
         interp.ingest(hd, performance.now());
       }
-      // Onda 2 (CA-4): amostra p/ o instante do QUADRO do <video> (knob calibrável; 0 = inerte).
-      const drawn = interp.sample(performance.now(), APP_CONFIG.overlay.videoLagMs.webrtc);
+      // Onda 2/modo síncrono: amostra p/ o instante do QUADRO do <video> (atrasado quando
+      // syncDelayMs>0 — o efeito abaixo aplica o hint no pc deste tile).
+      const lag =
+        APP_CONFIG.overlay.syncDelayMs > 0
+          ? APP_CONFIG.overlay.syncDelayMs
+          : APP_CONFIG.overlay.videoLagMs.webrtc;
+      const drawn = interp.sample(performance.now(), lag);
       if (!drawn.length) return; // sem tracks → nada a sobrepor (sem erro)
 
       ctx.lineWidth = 1.5;
@@ -110,9 +116,15 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
     };
 
     raf = requestAnimationFrame(tick);
+    // MODO SÍNCRONO: atrasa a reprodução do <video> deste tile (o pc renasce a cada reconexão
+    // interna do elemento → reaplica periodicamente; idempotente e barato).
+    const syncMs = APP_CONFIG.overlay.syncDelayMs;
+    const delayTimer =
+      syncMs > 0 ? setInterval(() => applyPlayoutDelay(videoRef.current, syncMs), 2000) : null;
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      if (delayTimer) clearInterval(delayTimer);
     };
   }, [videoRef, getHubAnalysis]);
 

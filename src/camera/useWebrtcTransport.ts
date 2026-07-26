@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 import { APP_CONFIG } from "../config";
 import { type FrameSource } from "../frame";
 import { getVideoTicket } from "../video/ticket";
+import { applyPlayoutDelay } from "./playoutDelay";
 import type { VideoStreamElement } from "../vendor/go2rtc/go2rtc";
 
 let videoStreamModule: Promise<unknown> | null = null;
@@ -128,6 +129,16 @@ export function useWebrtcTransport({
       }
     };
   }, [webrtc, cameraId]);
+
+  // MODO SÍNCRONO (overlay.syncDelayMs — decisão do dono 2026-07-26): atrasa a REPRODUÇÃO do
+  // vídeo p/ o overlay renderizar o MESMO instante por interpolação exata (zero arrasto). O pc
+  // do <video-stream> renasce a cada (re)conexão interna → REAPLICA periodicamente (idempotente).
+  useEffect(() => {
+    const ms = APP_CONFIG.overlay.syncDelayMs;
+    if (!webrtc || ms <= 0) return;
+    const t = setInterval(() => applyPlayoutDelay(videoStreamRef.current, ms), 2000);
+    return () => clearInterval(t);
+  }, [webrtc]);
 
   // ⏸ Pausar / ❄ Congelar: no WebRTC o vídeo é nativo ATRÁS do canvas, então pausamos o <video>
   // (senão ele seguiria correndo sob o overlay congelado). Ao retomar, volta ao vivo. Inerte no MJPEG.
