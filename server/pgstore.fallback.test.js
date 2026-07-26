@@ -85,3 +85,53 @@ describe("pgstore — contrato do fallback JSON (sem Postgres)", () => {
     expect((await store.status()).counts.flow).toBe(0);
   });
 });
+
+// Auditoria de produto 2026-07-26, achado A7: `cameras` era gravada como literal `1` nos DOIS
+// caminhos. A coluna existia para o agregador multi-câmera por Ponto de Leitura, removido no
+// ADR-016 — sem ele o sistema NÃO SABE em quantas câmeras a caixa foi vista, e o `1` era uma
+// afirmação não medida. Agora vai `null` (ausência de INFORMAÇÃO, como o shift_id NULL).
+describe("pgstore — read:read não fabrica mais `cameras` (fallback JSON)", () => {
+  const read = (code, offsetMs) => ({
+    ts: H + offsetMs,
+    ponto: "P1",
+    code,
+    cameraId: "cam-a",
+    cameraLabel: "Doca 1",
+    shift: "A",
+    newBox: true,
+  });
+
+  beforeAll(async () => {
+    await store.clear();
+    await store.ingest("read", "read", read("COD-1", 1000));
+    await store.ingest("read", "read", read("COD-2", 2000));
+  });
+
+  it("o evento gravado traz cameras === null — nunca o literal 1", async () => {
+    const events = await store.events("read");
+    expect(events).toHaveLength(2);
+    for (const e of events) {
+      expect(e.cameras).toBeNull();
+      expect(e.cameras).not.toBe(1);
+    }
+  });
+
+  it("a chave `cameras` continua PRESENTE (null explícito casa com o NULL do PG)", async () => {
+    // O contrato do topo do pgstore.js: o front não distingue PG de JSON. Omitir a chave faria o
+    // JSON.stringify sumir com ela no fallback enquanto o PG mandaria `"cameras": null`.
+    const [e] = await store.events("read");
+    expect(Object.hasOwn(e, "cameras")).toBe(true);
+  });
+
+  it("o resto do evento de leitura segue intacto (ponto/code/shift/ts)", async () => {
+    const events = await store.events("read");
+    expect(events[0]).toMatchObject({ ponto: "P1", code: "COD-2", shift: "A", ts: H + 2000 });
+    expect(events.map((e) => e.ts)).toEqual([H + 2000, H + 1000]); // ts desc, como o SQL
+  });
+
+  it("o bucket de leitura NÃO foi afetado (per_camera é quem conta câmera de verdade)", async () => {
+    const [b] = await store.buckets("read");
+    expect(b).toMatchObject({ id: `P1|${H}`, ponto: "P1", boxes: 2, reads: 2 });
+    expect(b.perCamera["cam-a"]).toMatchObject({ label: "Doca 1", reads: 2 });
+  });
+});

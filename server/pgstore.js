@@ -366,7 +366,12 @@ const J_INGEST = {
         ts: r.ts,
         ponto: r.ponto ?? null,
         code: r.code ?? null,
-        cameras: 1,
+        // `cameras`: OBSOLETA (schema.sql §read_events) — o agregador multi-câmera por Ponto de
+        // Leitura morreu no ADR-016, então NINGUÉM aqui sabe em quantas câmeras a caixa foi vista.
+        // Gravava-se o literal `1`: uma AFIRMAÇÃO não medida. `null` = ausência de INFORMAÇÃO
+        // (mesma semântica do shift_id NULL). Explícito, e não omitido, para o fallback JSON casar
+        // com o NULL do PG — o contrato do topo do arquivo diz que o front não distingue os dois.
+        cameras: null,
         shift: r.shift ?? null,
       });
   },
@@ -594,10 +599,14 @@ const INGEST = {
       [id, r.ponto, hs, r.newBox ? 1 : 0, r.becameMulti ? 1 : 0, r.cameraId, r.cameraLabel],
     );
     if (r.newBox)
-      await db.query(
-        `insert into read_events (ts,ponto,code,cameras,shift) values ($1,$2,$3,1,$4)`,
-        [r.ts, r.ponto, r.code, r.shift],
-      );
+      // `cameras` FORA do insert (coluna OBSOLETA — ver schema.sql §read_events e o gêmeo no
+      // fallback JSON acima): omitir ⇒ NULL = "não medido". Antes ia o literal `1`.
+      await db.query(`insert into read_events (ts,ponto,code,shift) values ($1,$2,$3,$4)`, [
+        r.ts,
+        r.ponto,
+        r.code,
+        r.shift,
+      ]);
   },
   "read:pass": async (p) => {
     const hs = hourOf(p.ts);
@@ -723,6 +732,8 @@ const BUCKET_SQL = {
 };
 const EVENT_SQL = {
   ativ: `select ts, camera, camera_id as "cameraId", area, atividade, duration_min as "durationMin", shift, shift_id as "shiftId", in_pause as "inPause", business_date as "businessDate" from ativ_events order by ts desc`,
+  // `cameras` segue no SELECT (não na escrita): linha ANTIGA tem o `1` legado, linha nova vem NULL.
+  // Tirá-la daqui esconderia o histórico e mudaria a forma da resposta sem necessidade.
   read: `select ts, ponto, code, cameras, shift from read_events order by ts desc`,
   obj: `select ts, type, setor, classe, shift from obj_events order by ts desc`,
   fad: `select ts, posto, type, shift from fad_events order by ts desc`,

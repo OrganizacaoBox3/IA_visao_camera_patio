@@ -32,9 +32,25 @@ create table if not exists read_buckets (
   boxes int default 0, reads int default 0, multi_reads int default 0, passages int default 0,
   per_camera jsonb default '{}'::jsonb
 );
+-- `cameras` está OBSOLETA desde 2026-07-26 (auditoria de produto, achado A7). Ela existia para o
+-- agregador multi-câmera por Ponto de Leitura — REMOVIDO na faxina do ADR-016 (a remoção está
+-- documentada em src/reading/cluster.ts). Sem esse agregador, ninguém no sistema sabe em quantas
+-- câmeras uma caixa foi vista: até hoje o hub gravava o literal `1` nos dois caminhos (SQL e
+-- fallback JSON), um número que AFIRMAVA "exatamente uma câmera" sem ter medido nada. O insert
+-- agora OMITE a coluna ⇒ NULL, que é a ausência de INFORMAÇÃO — a MESMA semântica do `shift_id`
+-- NULL (ver §CARIMBO no topo): não se inventa valor para dado que o sistema não produz mais.
+-- A COLUNA FICA no schema DE PROPÓSITO: `drop column` reescreveria a tabela numa base de cliente e
+-- destruiria as linhas históricas cujo `1` foi gravado de verdade. Se o agregador multi-câmera
+-- voltar, volte a escrevê-la — com valor MEDIDO, nunca com constante.
+-- (A ORDEM das colunas fica como sempre foi: `cameras` NÃO é movida para o fim. Reordenar só
+--  afetaria bases NOVAS — `create table if not exists` é no-op em base existente — e criaria
+--  divergência gratuita de layout entre instalações. Nada aqui é posicional: todo insert/select
+--  nomeia as colunas.)
 create table if not exists read_events (
   id bigserial primary key, ts bigint not null,
-  ponto text, code text, cameras int, shift text
+  ponto text, code text,
+  cameras int,                    -- OBSOLETA (ver acima): NÃO escrever. Só leitura do histórico.
+  shift text
 );
 
 -- ── HISTÓRICO: OBJETOS (contagem/presença por setor × classe) ────────────────
@@ -56,6 +72,14 @@ create table if not exists flow_buckets (
   camera_id text, camera_label text, tripwire_id text, hour_start bigint not null,
   in_count int default 0, out_count int default 0
 );
+-- ⚠ NÃO APAGUE `flow_events` por "parecer morta" (2026-07-26, auditoria de produto). Ela É escrita
+-- a cada cruzamento, mas o front hoje só consome `flow_buckets` (fetchBuckets) — então um grep
+-- superficial a acusa de órfã, exatamente como acusou a app_views que foi removida abaixo. A
+-- diferença é REAL: esta é o ÚNICO lugar onde o cruzamento CRU carrega `shift_id`/`business_date`
+-- corretos, e é por ela que o filtro de TURNO do painel de Fluxo será consertado — `flow_buckets`
+-- agrega por hora e NÃO tem a dimensão de turno na chave (ao contrário de `ativ_buckets`, cujo id
+-- ganhou o segmento `|turno`; ver §CARIMBO no topo). Escrever hoje é o que garante histórico
+-- quando essa onda chegar; apagá-la agora seria começar do zero, sem dado retroativo.
 create table if not exists flow_events (
   id bigserial primary key, ts bigint not null,
   camera_id text, camera_label text, tripwire_id text, dir text, shift text,
@@ -135,14 +159,15 @@ create table if not exists alarm_events (
 );
 
 -- ── CONFIG COMPARTILHADA DAS CÂMERAS (operadores/turnos) ─────────────────────
--- VIEWS: layouts salvos do dashboard (lista global). `cameras` = ids das câmeras (jsonb).
--- `ord` preserva a ordem da lista (a UI substitui a lista inteira no PUT).
-create table if not exists app_views (
-  id text primary key,
-  name text not null,
-  cameras jsonb not null default '[]'::jsonb,
-  ord int default 0
-);
+-- `app_views` (layouts salvos do dashboard) foi REMOVIDA daqui em 2026-07-26: tabela 100% MORTA —
+-- zero INSERT, zero SELECT, zero rota, zero teste no repo inteiro; a UI de "views" que a
+-- justificaria nunca foi implementada. O `create table` era a única ocorrência do nome.
+--
+-- Removido SÓ o CREATE — de propósito NÃO existe um `drop table if exists` aqui. Numa base já
+-- criada a tabela sobrevive órfã e INOFENSIVA (ninguém escreve nem lê nela; ela não entra no
+-- `truncate` do clear() nem em backup crítico), enquanto o DROP seria IRREVERSÍVEL e destruiria
+-- qualquer linha que um operador tenha inserido à mão. Assimetria decisiva: o custo de deixar é
+-- zero; o custo de errar o DROP é dado de cliente perdido. Base NOVA simplesmente não a cria mais.
 -- TRIPWIRES: linhas de contagem por câmera. `data` = array de { id, a:{x,y}, b:{x,y} } (0..1).
 -- SÓ geometria/ids — nunca imagem/frame (LGPD).
 create table if not exists cam_tripwires (
