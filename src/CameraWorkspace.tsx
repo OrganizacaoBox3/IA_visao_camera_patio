@@ -1207,14 +1207,12 @@ export function CameraWorkspace({
     // Ingere só payload FRESCO (mesmo limiar do applyHubAnalysis); modo local não interpola.
     const hubEngine = analysisEngineRef.current === "hub";
     let displayTracks: ReadonlyArray<TrackBox> = tracksRef.current;
-    // Estado da zona PROIBIDA vindo do MOTOR (contrato ADITIVO `zonesProibidas` do payload
-    // `analysis-tracks`): só de payload FRESCO; hub antigo (sem o campo) → null e o desenho
-    // mantém o fallback ARMADA quieta. VIOLADA acende --state-critical ao vivo.
+    // Estado da zona PROIBIDA do MOTOR (`zonesProibidas`, campo do contrato — types/analysis.ts):
+    // só de payload FRESCO; hub antigo (sem o campo) → null e o desenho fica em ARMADA quieta.
     let hubProibidas: ReadonlyArray<HubZoneState> | null = null;
     if (hubEngine) {
       const nowMs = performance.now();
-      const hd = (getHubAnalysisRef.current?.() ?? null) as
-        (HubAnalysis & { zonesProibidas?: HubZoneState[] }) | null;
+      const hd = getHubAnalysisRef.current?.() ?? null;
       if (hd && Date.now() - hd.ts <= HUB_TRACKS_STALE_MS) {
         hubInterpRef.current.ingest(hd, nowMs);
         hubProibidas = hd.zonesProibidas ?? null;
@@ -1300,6 +1298,8 @@ export function CameraWorkspace({
         frameAgeMs: typeof fx.ts === "number" && fx.ts > 0 ? Date.now() - fx.ts : undefined,
         trackIntervalMs: eng === "hub" ? hubCadenceRef.current.intervalMs() : undefined,
         hubLatencyMs: eng === "hub" ? hubLatencyRef.current : undefined,
+        interp: eng === "hub" ? hubInterpRef.current.stats() : null, // ramo do desenho + coasting
+        syncActive: wrtc && APP_CONFIG.overlay.syncDelayMs > 0, // só aí exato<100% é anomalia
         detectMs: st.detect,
         decodeMs: st.decode,
         faceMs: st.face,

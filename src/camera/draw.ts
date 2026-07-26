@@ -253,8 +253,11 @@ export type TrackBox = {
   bbox: [number, number, number, number];
   firstSeen: number;
   zone: string | null;
-  // Opacidade do FADE (interpolate.ts): caixa sumindo desenha esmaecida. OPCIONAL/retrocompatível:
-  // ausente → 1 (opaca). Só a câmera focada (interpolador) a passa; os demais chamadores omitem.
+  // Opacidade vinda do interpolate.ts — DOIS sinais de INCERTEZA no mesmo canal, de propósito:
+  // (a) FADE da caixa que está sumindo e (b) COASTING (marcação sustentada sem observação nova,
+  // piso 0.45). Atenuação é a linguagem que o projeto já usa para "não sei ao certo" — não há cor
+  // nova nem borda tracejada. OPCIONAL/retrocompatível: ausente → 1 (opaca). Só a câmera focada
+  // (interpolador) a passa; os demais chamadores omitem.
   opacity?: number;
 };
 // INVARIANTE DE RENDERIZAÇÃO (decisão do dono, 2026-07-12) — FONTE ÚNICA dos DOIS caminhos de render
@@ -287,8 +290,10 @@ export function drawTracks(
   const scrim = cssVar("--cam-overlay-scrim", "rgba(5,8,12,0.7)");
   const personFg = cssVar("--state-info-fg", "#bae6fd");
   for (const t of tracks) {
-    // Atenuação do slider de confiança (score<conf) × opacidade do fade (caixa sumindo). O fade
-    // é opcional (default 1) → o full agora mostra a caixa esmaecer ao expirar, como a grade.
+    // Atenuação do slider de confiança (score<conf) × opacidade do interpolador (fade da caixa que
+    // some E coasting: marcação sem observação nova). Multiplicativo e aplicado ao CONJUNTO —
+    // contorno, scrim e rótulo — senão a caixa incerta teria um rótulo opaco desmentindo-a.
+    // Gate: draw.test.ts trava a passagem do opacity (uma caixa em coasting DEVE sair esmaecida).
     ctx.globalAlpha = (t.score < conf ? 0.3 : 1) * (t.opacity ?? 1);
     const x = cr.x + t.bbox[0] * cr.w,
       y = cr.y + t.bbox[1] * cr.h,
@@ -412,6 +417,21 @@ export type HudStats = {
   frameAgeMs?: number | null; // idade chegada→draw do frame EXIBIDO (MJPEG; WebRTC não expõe ts)
   trackIntervalMs?: number | null; // intervalo REAL entre payloads analysis-tracks (EMA — cadence.ts)
   hubLatencyMs?: number | null; // idade captura→emissão do último payload (medida NO hub, por perna)
+  // Réguas do INTERPOLADOR de overlay — subset estrutural de `TrackInterpolator.stats()` (aceita o
+  // objeto inteiro; o que sobra é ignorado). Sem elas o RAMO que desenha a caixa é INVISÍVEL: no
+  // modo síncrono a marcação deveria ser 100% interpolação EXATA entre duas observações reais, e
+  // uma volta à extrapolação — o arrasto — passaria em SILÊNCIO. Ausente/null = pipeline local
+  // (não há interpolador a medir).
+  //   exactFrac = fração das caixas desenhadas pelo ramo EXATO (vs. extrapolação/estático)
+  //   coastFrac = fração do fluxo em COASTING: rodada pulada pelo gate ⇒ marcação SEM observação nova
+  // ⚠ UNIDADE: são FRAÇÕES 0..1 (o que stats() emite, apesar do sufixo `Pct`) — a conversão para
+  // percentual é do DESENHO, aqui embaixo. Trocar isto por 0..100 sem trocar lá vira um número
+  // errado calado no HUD (a régua mentindo é pior que régua nenhuma).
+  interp?: { exactFrac: number; coastFrac: number } | null;
+  // MODO SÍNCRONO ativo NESTE transporte (o gate vive no componente — só o WebRTC atrasa a
+  // reprodução). Modificador da régua acima: SÓ sob ele 100% de exato é o CONTRATO, e só aí um
+  // `exato` baixo é anormalidade. Ignorado sem `interp`.
+  syncActive?: boolean;
   // Telemetria POR ESTÁGIO dos processadores (última medição; ausente/null = estágio inativo).
   // Campos ADITIVOS/opcionais — a régua por estágio que precede qualquer ajuste de cadência.
   detectMs?: number | null; // objetos: OWL-ViT (worker)
@@ -426,6 +446,9 @@ const HUD_FPS_LOW = 12; // abaixo disso o vídeo "pula"
 const HUD_MS_HI = 8; // meta do plano: <8 ms/frame na main-thread
 const HUD_OVERLAY_STALE_MS = 1200; // overlay mais velho que isto = caixa congelada visível
 const HUD_FRAME_AGE_HI = 500; // frame exibido mais velho que isto = vídeo visivelmente atrasado
+// No MODO SÍNCRONO o overlay renderiza o PASSADO entre duas observações reais: exato tem de ser
+// ~100%. Abaixo disto voltou-se a EXTRAPOLAR (= arrasto) — a régua satura para não passar calada.
+const HUD_EXACT_LOW = 95;
 export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: HudStats) {
   const neutral = cssVar("--cam-overlay-fg", "#cbd5e1");
   const warn = cssVar("--state-warn", "#eab308");
@@ -446,6 +469,15 @@ export function drawTelemetryHud(ctx: CanvasRenderingContext2D, cr: Rect, s: Hud
     lines.push([`vid +${Math.round(s.frameAgeMs)}ms`, s.frameAgeMs > HUD_FRAME_AGE_HI]);
   if (s.trackIntervalMs != null) lines.push([`trk ${Math.round(s.trackIntervalMs)}ms`, false]);
   if (s.hubLatencyMs != null) lines.push([`hub ${Math.round(s.hubLatencyMs)}ms`, false]);
+  // RAMO do desenho + COASTING (as duas réguas que faltavam). `exato` só SATURA sob modo síncrono —
+  // é lá que 100% é o contrato; fora dele extrapolar é o PROJETO, não anormalidade. `coast` é
+  // sempre NEUTRO: coasting é o gate de movimento funcionando numa cena parada, não defeito —
+  // saturá-lo seria falar sem ter o que dizer (o número, esse sim, é a régua).
+  if (s.interp) {
+    const ex = s.interp.exactFrac * 100; // frações do stats() → percentual só na EXIBIÇÃO
+    lines.push([`exato ${Math.round(ex)}%`, !!s.syncActive && ex < HUD_EXACT_LOW]);
+    lines.push([`coast ${Math.round(s.interp.coastFrac * 100)}%`, false]);
+  }
   // Estágios dos processadores + fila (neutros: régua de medição, não anormalidade — going-gray).
   if (s.detectMs != null) lines.push([`owl ${Math.round(s.detectMs)} ms`, false]);
   if (s.decodeMs != null) lines.push([`zxing ${Math.round(s.decodeMs)} ms`, false]);

@@ -91,6 +91,10 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
       ctx.lineWidth = 1.5;
       ctx.font = "10px monospace";
       for (const t of drawn) {
+        // Opacidade do interpolador: carrega DOIS sinais de incerteza — o FADE da caixa que está
+        // sumindo e o COASTING (marcação sustentada sem observação nova, piso 0.45). Aplicada ao
+        // CONJUNTO (contorno + scrim + rótulo), a mesma linguagem do drawTracks/MJPEG: atenuação =
+        // "não sei ao certo". Não separar por cor nem por traço é decisão — a imagem é soberana.
         ctx.globalAlpha = t.opacity;
         const x = cr.x + t.bbox[0] * cr.w,
           y = cr.y + t.bbox[1] * cr.h,
