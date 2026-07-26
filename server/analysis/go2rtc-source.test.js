@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 // Antes do require: encurta o debounce de descoberta de streams p/ o piso (1000ms) — deixa o
 // teste re-descobrir "stream sumiu" rápido sem esperar os 4000ms default. (Só afeta este teste.)
 process.env.ANALYSIS_GO2RTC_STREAMS_MS = "1000";
+process.env.ANALYSIS_GO2RTC_AGE_MS = "150"; // idade estimada do pull (testada no ingest do stream)
 const { createGo2rtcSource } = require("./go2rtc-source");
 
 const tick = () => new Promise((r) => setTimeout(r, 0)); // deixa o refreshStreams (async) assentar
@@ -168,6 +169,7 @@ describe("streamArgs — comando PURO do ffmpeg do pull", () => {
     const args = streamArgs("cam1", { host: "127.0.0.1", port: 8554 }, 8, 1280);
     expect(args).toContain("rtsp://127.0.0.1:8554/cam1");
     expect(args).toContain("-an");
+    expect(args).toContain("nobuffer"); // baixa latência: o buffer default do RTSP segurava ~0,5-1,5s
     expect(args.join(" ")).toContain("fps=8,scale=1280:-2");
     expect(args[args.length - 1]).toBe("pipe:1");
   });
@@ -228,6 +230,11 @@ describe("streamLoop via pullTick — ffmpeg rtsp→mjpeg: ingest, anti-dobra e 
     expect(st).toBeTruthy();
     expect(st.source).toBe("go2rtc");
     expect(st.latest.buf.equals(JPG("b"))).toBe(true); // último do chunk vence
+    // Idade estimada do pull (ANALYSIS_GO2RTC_AGE_MS=150 no topo) descontada do carimbo:
+    // o latencyMs do payload passa a incluí-la e o cliente extrapola a caixa p/ o agora real.
+    const age = Date.now() - st.latest.ts;
+    expect(age).toBeGreaterThanOrEqual(140);
+    expect(age).toBeLessThan(400);
   });
 
   it("frame PARCIAL entre chunks completa no seguinte (parser acumula o resto)", async () => {

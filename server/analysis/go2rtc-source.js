@@ -42,6 +42,13 @@ const STREAM_MODE = !/^(0|false|off|no)$/i.test(String(process.env.ANALYSIS_GO2R
 const STREAM_FPS = Math.min(15, Math.max(1, Number(process.env.ANALYSIS_GO2RTC_FPS) || 8));
 // largura do frame puxado (paridade com o relé webcam; o worker squasha p/ 640 de todo jeito).
 const STREAM_WIDTH = Math.min(1920, Math.max(320, Number(process.env.ANALYSIS_GO2RTC_WIDTH) || 1280));
+// IDADE estimada do caminho de pull (câmera→WebRTC→go2rtc→ffmpeg→pipe), descontada do carimbo
+// do frame no ingest — vira parte do latencyMs do payload e o CLIENTE extrapola a caixa esse
+// tanto mais à frente (mecanismo da Onda 2, já no ar). ⚠ ESTIMATIVA DE ENGENHARIA, não medição
+// (não há relógio comum câmera⇄hub): 200ms cobre o jitter WebRTC + decode com nobuffer ligado.
+// CALIBRAR EM CAMPO: caixa ainda ATRÁS da pessoa andando → suba; caixa PASSANDO à frente ao
+// parar/virar → desça. 0 desliga (comportamento anterior). Clamp [0,1000].
+const STREAM_AGE_MS = Math.min(1000, Math.max(0, Number(process.env.ANALYSIS_GO2RTC_AGE_MS ?? 200)));
 // Timeout do fetch: 2000→5000 default (MEDIDO: o snapshot leva ~2,0s esperando keyframe —
 // timeout IGUAL ao tempo de serviço abortava na borda e jogava a câmera em backoff eterno).
 const PULL_TIMEOUT_MS = Math.max(500, Number(process.env.ANALYSIS_GO2RTC_TIMEOUT_MS) || 5000);
@@ -85,6 +92,15 @@ function extractJpegs(buf) {
 function streamArgs(id, { host, port }, fps = STREAM_FPS, width = STREAM_WIDTH) {
   return [
     "-hide_banner", "-loglevel", "error",
+    // BAIXA LATÊNCIA (pedido do dono 2026-07-26: "a marcação fica atrás da pessoa"): o
+    // buffering default do demuxer RTSP segura ~0,5-1,5s antes do 1º frame sair do pipe —
+    // idade INVISÍVEL que a compensação de latência não enxerga (o carimbo nasce no ingest).
+    // nobuffer+low_delay desligam a bufferização; probesize/analyzeduration curtos encurtam
+    // o probe inicial (500KB/0,5s bastam p/ H264 com SPS no keyframe — go2rtc os reenvia).
+    "-fflags", "nobuffer",
+    "-flags", "low_delay",
+    "-probesize", "500000",
+    "-analyzeduration", "500000",
     "-rtsp_transport", "tcp",
     "-i", `rtsp://${host}:${port}/${id}`,
     "-an",
@@ -132,15 +148,17 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spa
     return running() && !PULL_OPT_OUT && go2rtc.enabled();
   }
 
-  /** Frame PUXADO do go2rtc: mesmo destino do relé (st.latest, último-vence). NÃO mexe em lastRelayAt. */
-  function ingestPulled(cameraId, buf) {
+  /** Frame PUXADO do go2rtc: mesmo destino do relé (st.latest, último-vence). NÃO mexe em lastRelayAt.
+   *  `ageMs` (modo stream): idade estimada do caminho de pull descontada do carimbo — o worker ecoa o
+   *  ts e o latencyMs do payload passa a incluí-la → o cliente extrapola a caixa p/ o AGORA real. */
+  function ingestPulled(cameraId, buf, ageMs = 0) {
     if (!running()) return;
     const id = String(cameraId);
     const st = states.get(id) || createState(id);
     const now = Date.now();
     st.lastFrameAt = now;
     st.source = "go2rtc";
-    st.latest = { buf, ts: now };
+    st.latest = { buf, ts: now - ageMs };
   }
 
   /** GET /api/streams → conjunto de ids que o go2rtc conhece (RTSP do yaml + WHIP dinâmicos). */
@@ -221,7 +239,7 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spa
         ps.fails = 0;
         ps.nextAt = 0;
         ps.lastFrameAt = Date.now();
-        ingestPulled(id, Buffer.from(frames[frames.length - 1])); // último-vence já no chunk
+        ingestPulled(id, Buffer.from(frames[frames.length - 1]), STREAM_AGE_MS); // último-vence já no chunk
       }
     });
     proc.stderr.on("data", (d) => {

@@ -361,3 +361,19 @@ fraca (0,31–0,35) em 4/10, e a duplicata é a caixa LARGA contendo a principal
 → exatamente o caso que a guarda birthContainment (knob 8b, ontem) descarta. Inspeção visual do
 f08 anotado confirma: nenhum FP de objeto na cena; o D-FINE + guarda está correto. O sintoma
 visto era 100% o detector local por falta de frames no motor.
+
+## 2026-07-26 (3) — "Marcação atrás da pessoa": latência do pull cortada + idade compensada
+
+Pedido do dono: "pode aumentar o delay entre câmera e monitor?" — analisado; atrasar o VÍDEO
+(playoutDelayHint do WebRTC) fica como ÚLTIMO recurso (atrasa a reação do operador). O ataque
+certo tem duas pontas, ambas no pull:
+1. **Cortar a latência real:** flags de baixa latência no ffmpeg do pull (`-fflags nobuffer
+   -flags low_delay -probesize/analyzeduration 500k`) — o demuxer RTSP default segura ~0,5-1,5s.
+2. **Compensar a idade restante:** `ANALYSIS_GO2RTC_AGE_MS` (default 200 — ESTIMATIVA de
+   engenharia declarada, não medição: cobre jitter WebRTC+decode com nobuffer; clamp [0,1000])
+   é descontado do carimbo do frame no ingest do stream → vira parte do `latencyMs` do payload
+   → o CLIENTE extrapola a caixa esse tanto mais à frente (mecanismo da Onda 2, já no ar).
+   Calibração em campo documentada no knob: caixa atrás andando → sobe; passando à frente ao
+   parar → desce.
+
+Testes atualizados (flags + carimbo com idade); verify verde.
