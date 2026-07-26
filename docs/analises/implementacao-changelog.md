@@ -425,3 +425,26 @@ extrapolação a errar).
 RESIDUAL declarado: o hint de playout é aproximado (o navegador pode aplicar ±100-300ms do
 pedido) — o resíduo aparece como offset CONSTANTE e calibra-se ajustando syncDelayMs; medição
 fina exige getStats (fica p/ quando houver queixa). verify verde (1161).
+
+## 2026-07-26 (6) — "Parte do corpo vira várias pessoas em movimento": extensão por rodada + fade adaptativo
+
+Bancada com a pessoa EM MOVIMENTO (30 frames reais): o detector FRAGMENTA em movimento — frame
+m09 tem 3 "pessoas" (0,80 hipótese larga corpo+braço · 0,60 a MÃO isolada · 0,51 o rosto),
+todas ≥ highScore. Anotado e inspecionado: a mão é DISJUNTA do rosto — quando o track está com
+a caixa do rosto, a larga morre por contenção mas a MÃO nascia "2ª pessoa". Agravante medido:
+um nascimento espúrio de 1 rodada ficava 1,5-2,6s na tela (fade do interpolador calibrado p/
+payload de 1fps; a 6fps isso amplifica cada fragmento).
+
+Dois consertos:
+- **Tracker — EXTENSÃO POR RODADA** (front → port 1:1 hub): dets acusadas pela guarda (a
+  hipótese larga descartada) AMPLIAM a área de contenção do track NA RODADA (união de caixas);
+  nascimentos processados em ordem de SCORE (a larga entra antes da mão) → a mão cai na
+  extensão e morre na guarda. A extensão NUNCA persiste entre rodadas (teste trava). Custo
+  declarado: pessoa real surgindo INTEIRAMENTE dentro da hipótese larga de outra só nasce ao
+  se separar (mesma classe do birthContainment). Sensor: bytetrack.test espelhados (cenário
+  m09 REAL com as caixas medidas) + eval:counting OK.
+- **Interpolador — fade/expiração ADAPTATIVOS à cadência** (display): efetivo = min(teto config,
+  max(piso, intervalo×fator)) — a 6fps o fragmento pisca ~400ms e expira em ~700ms; a 1fps da
+  grade valem os tetos de sempre (teste trava os dois regimes).
+
+verify verde (1167).

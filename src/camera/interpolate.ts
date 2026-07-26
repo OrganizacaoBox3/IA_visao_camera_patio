@@ -76,6 +76,14 @@ export type InterpConfig = {
    *  1fps), extrapola-se longe como antes. */
   extrapIntervalFactor: number;
   extrapFloorMs: number;
+  /** Fade/expiração ADAPTATIVOS à cadência observada (bug de campo m09: nascimento espúrio de 1
+   *  rodada — mão detectada como "pessoa" — ficava fadeStart→expire na tela, 1,5-2,6s). Efetivo =
+   *  min(teto do config, max(piso, intervalo×fator)): a 1fps valem os tetos (grade inalterada);
+   *  a 6fps ~400/700ms — o fragmento pisca e some. */
+  fadeIntervalFactor: number;
+  expireIntervalFactor: number;
+  fadeFloorMs: number;
+  expireFloorMs: number;
 };
 
 // Defaults calibrados p/ payload a ~1fps: fade só depois de 1,5s (não pisca entre payloads),
@@ -105,6 +113,10 @@ export const DEFAULT_INTERP: InterpConfig = {
   sizeAlpha: 0.5,
   extrapIntervalFactor: 1.25,
   extrapFloorMs: 250,
+  fadeIntervalFactor: 2.5,
+  expireIntervalFactor: 4,
+  fadeFloorMs: 400,
+  expireFloorMs: 700,
 };
 
 /** Clamp escalar (sem alocar), usado no hot-path do dead-reckoning. */
@@ -267,15 +279,19 @@ export class TrackInterpolator {
       // tem de viver até o VÍDEO atrasado alcançar o fim do track — expirar pela idade do dado
       // apagaria a caixa segundos antes da pessoa sumir NA TELA. Com lag 0, ageR == ageMs − delay
       // (comportamento de sempre nos testes, que usam delayMs 0).
+      // Janelas ADAPTATIVAS à cadência (nascimento espúrio de 1 rodada pisca e some a 6fps;
+      // a 1fps da grade os tetos do config valem — nada regride no caso lento).
+      const iv = this.intervalEma;
+      const fadeEff =
+        iv == null ? c.fadeStartMs : Math.min(c.fadeStartMs, Math.max(c.fadeFloorMs, iv * c.fadeIntervalFactor));
+      const expEff =
+        iv == null ? c.expireMs : Math.min(c.expireMs, Math.max(c.expireFloorMs, iv * c.expireIntervalFactor));
       const ageR = renderT - e.last.t;
-      if (ageR > c.expireMs) {
+      if (ageR > expEff) {
         this.entries.delete(id);
         continue;
       }
-      const opacity =
-        ageR <= c.fadeStartMs
-          ? 1
-          : Math.max(0, 1 - (ageR - c.fadeStartMs) / (c.expireMs - c.fadeStartMs));
+      const opacity = ageR <= fadeEff ? 1 : Math.max(0, 1 - (ageR - fadeEff) / (expEff - fadeEff));
       out.push({
         id,
         bbox: this.boxAt(e, renderT),

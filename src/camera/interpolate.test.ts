@@ -94,8 +94,9 @@ describe("TrackInterpolator — interpolação linear por id", () => {
     it0.ingest(snap(2, [{ id: 5, bbox: box(0.1, 0) }]), 1000); // v = 0.1 / 1000ms
     // 500ms além do último → +0.05 (meio intervalo)
     expect(it0.sample(1500)[0].bbox[0]).toBeCloseTo(0.15, 6);
-    // 5000ms além → clampado ao teto (maxExtrap 500ms = +0.05), não dispara
-    expect(it0.sample(6000)[0].bbox[0]).toBeCloseTo(0.15, 6);
+    // 2500ms além → clampado ao teto (maxExtrap 500ms = +0.05), não dispara. (Amostrado aquém
+    // da expiração ADAPTATIVA — com cadência 1s ela expira em 4×intervalo = 4s, antes do 1e6.)
+    expect(it0.sample(3500)[0].bbox[0]).toBeCloseTo(0.15, 6);
   });
 });
 
@@ -233,7 +234,8 @@ describe("TrackInterpolator — anti-oscilação (v suavizada, teto adaptativo, 
     let t = 0;
     for (let i = 0; i < 6; i++) it0.ingest(snap(i + 1, [{ id: 1, bbox: box(0.2, 0.2), vx: 0.4, vy: 0 }]), (t += 160));
     // intervalo observado ~160ms → cap = max(250, 160×1.25) = 250ms → avanço máx = 0.4×0.25 = 0.1
-    const far = it0.sample(t + 5000)[0].bbox[0]; // MUITO além do último payload
+    // (amostra a +600ms: além do cap de extrapolação, aquém da expiração adaptativa ~700ms)
+    const far = it0.sample(t + 600)[0].bbox[0];
     expect(far).toBeLessThanOrEqual(0.2 + 0.4 * 0.26);
     // …e na grade LENTA (1s) o comportamento antigo permanece (extrapola o gap inteiro)
     const slow = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
@@ -295,6 +297,35 @@ describe("TrackInterpolator — modo síncrono (lag grande + histórico = zero a
     it0.ingest(snap(2, [{ id: 1, bbox: box(0.5, 0.4), vx: 0.5, vy: 0 }]), 1500);
     const b = it0.sample(1600, 1400)[0].bbox; // renderT=200 < 1º kf (t=1000)
     expect(b[0] + b[2] / 2).toBeCloseTo(0.45, 6); // parada na 1ª observação, sem retro-extrapolar
+  });
+});
+
+describe("TrackInterpolator — fade/expiração ADAPTATIVOS (fragmento não mora na tela)", () => {
+  it("a 6fps, track que some do payload expira em ~700ms (não 2,6s)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    let t = 0;
+    // cadência 160ms estabelecida; id 9 (o "fragmento") aparece UMA vez e some dos payloads
+    for (let i = 0; i < 5; i++) it0.ingest(snap(i + 1, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), (t += 160));
+    it0.ingest(snap(9, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }, { id: 9, bbox: box(0.8, 0.6), vx: 0, vy: 0 }]), (t += 160));
+    for (let i = 0; i < 3; i++) it0.ingest(snap(20 + i, [{ id: 1, bbox: box(0.3, 0.3), vx: 0, vy: 0 }]), (t += 160));
+    const born = t - 480; // último payload que citou o id 9
+    // 500ms após o fragmento: já em fade (fadeEff ≈ 400ms) — visivelmente morrendo
+    const at500 = it0.sample(born + 500).find((d) => d.id === 9);
+    expect(at500 && at500.opacity).toBeLessThan(1);
+    // 800ms após: EXPIRADO (expEff ≈ 700ms) — com o teto antigo (2600) ficaria 2,6s na tela
+    expect(it0.sample(born + 800).find((d) => d.id === 9)).toBeUndefined();
+    // e o track REAL segue vivo e opaco
+    expect(it0.sample(born + 800).find((d) => d.id === 1)?.opacity).toBe(1);
+  });
+
+  it("a 1fps (grade), os tetos do config valem — nada regride no caso lento", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0 });
+    it0.ingest(snap(1, [{ id: 1, bbox: box(0.3, 0.3) }]), 0);
+    it0.ingest(snap(2, [{ id: 1, bbox: box(0.3, 0.3) }]), 1000); // cadência 1000ms
+    // idade 1400ms: abaixo do fadeStart de config (1500) → ainda opaca (fadeEff = min(1500, 2500))
+    expect(it0.sample(2400)[0].opacity).toBe(1);
+    // expira só no teto de config (2600), como sempre
+    expect(it0.sample(1000 + 2700)).toHaveLength(0);
   });
 });
 

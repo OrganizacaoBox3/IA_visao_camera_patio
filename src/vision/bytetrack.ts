@@ -474,7 +474,30 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
     //     GRANDE sobre track que nasceu parcial também acusa (e o recover corrige a caixa).
     // Track acusado LIVRE → recupera a associação (atualiza); ocupado (inclusive
     // recém-nascido nesta rodada) → duplicata, descarta.
-    for (const di of high) {
+    //
+    // EXTENSÃO POR RODADA (bug de campo 2026-07-26, medido no m09 da bancada): em movimento o
+    // detector FRAGMENTA a pessoa — hipótese LARGA (0.80, corpo+braço) + rosto (0.51) + MÃO
+    // isolada (0.60, disjunta do rosto). Se o track está com a caixa do ROSTO, a larga é
+    // descartada pela contenção, mas a MÃO não toca o rosto e NASCIA "2ª pessoa". A GEOMETRIA
+    // da larga descartada é informação: "a pessoa plausivelmente se estende por aqui". Cada
+    // descarte/pareamento AMPLIA a extensão do track NA RODADA (união de caixas), e os
+    // nascimentos rodam em ordem de SCORE (a larga entra antes da mão) — a mão cai DENTRO da
+    // extensão e morre na guarda. Custo declarado: pessoa REAL que surge inteiramente dentro
+    // da hipótese larga de outra só nasce ao se separar (mesma classe de trade-off do
+    // birthContainment; a extensão vive UMA rodada, nunca persiste).
+    const extent = new Map<number, [number, number, number, number]>(); // ti → união desta RODADA
+    const unionBox = (
+      a: readonly [number, number, number, number],
+      b: readonly [number, number, number, number],
+    ): [number, number, number, number] => {
+      const x0 = Math.min(a[0], b[0]);
+      const y0 = Math.min(a[1], b[1]);
+      const x1 = Math.max(a[0] + a[2], b[0] + b[2]);
+      const y1 = Math.max(a[1] + a[3], b[1] + b[3]);
+      return [x0, y0, x1 - x0, y1 - y0];
+    };
+    const highBirth = high.filter((di) => !detUsed.has(di)).sort((a, b) => dets[b].score - dets[a].score);
+    for (const di of highBirth) {
       if (detUsed.has(di)) continue;
       const d = dets[di];
       let bestTi = -1;
@@ -488,9 +511,14 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
         // nascem da mesma pessoa em rodadas adjacentes). Track já em miss + det de escala
         // muito diferente é o caso do 2º estágio ("escala não muda tão rápido" → id novo)
         // — sem este gate a contenção o engoliria e re-identificaria o que não devia.
+        const ext = extent.get(ti);
         const cont =
           birthContainment > 0 && tracks[ti].misses === 0
-            ? Math.max(containmentOf(obs, d.bbox), pb ? containmentOf(pb, d.bbox) : 0)
+            ? Math.max(
+                containmentOf(obs, d.bbox),
+                pb ? containmentOf(pb, d.bbox) : 0,
+                ext ? containmentOf(ext, d.bbox) : 0, // fragmento dentro da EXTENSÃO da rodada
+              )
             : 0;
         // qualifica por QUALQUER eixo; o melhor candidato é o de maior evidência
         const v = Math.max(
@@ -503,6 +531,9 @@ export function createByteTracker(opts: ByteTrackerOptions = {}): ByteTracker {
         }
       }
       if (bestTi >= 0) {
+        // A det acusada AMPLIA a extensão do track nesta rodada (fragmentos seguintes,
+        // processados em ordem de score, caem dentro dela — ex.: a mão após a hipótese larga).
+        extent.set(bestTi, unionBox(extent.get(bestTi) ?? tracks[bestTi].bbox, d.bbox));
         if (!trkUsed.has(bestTi)) {
           trkUsed.add(bestTi);
           applyObservation(tracks[bestTi], d, now);

@@ -517,3 +517,33 @@ describe("createByteTracker — LIMITAÇÃO DECLARADA: sem re-ID", () => {
     expect(r3.find((t) => Math.abs(t.cx - 0.5) < 1e-6).id).toBe(idAt05); // (troca de identidade real)
   });
 });
+
+// ── EXTENSÃO POR RODADA (bug de campo 2026-07-26 — frame m09 da bancada visual) ──────────────
+// Em movimento o detector FRAGMENTA a pessoa: hipótese LARGA (corpo+braço, 0.80) + rosto (0.51)
+// + MÃO isolada (0.60, DISJUNTA do rosto). Track na caixa do ROSTO: a larga morre por contenção,
+// mas a mão não toca o rosto e nascia "2ª pessoa". A larga descartada AMPLIA a extensão do track
+// na rodada (nascimentos em ordem de score) → a mão cai dentro dela e morre na guarda.
+describe("createByteTracker — EXTENSÃO por rodada (fragmentos de corpo não viram pessoas)", () => {
+  const rosto = { score: 0.84, bbox: [0.18, 0.24, 0.45, 0.75] };
+  const larga = { score: 0.8, bbox: [0.17, 0.24, 0.83, 0.75] };
+  const mao = { score: 0.6, bbox: [0.84, 0.65, 0.16, 0.24] }; // dentro da LARGA, fora do ROSTO
+
+  it("cenário m09 REAL: rosto trackeado + [larga, mão, rosto] na rodada → 1 pessoa só", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0.7 });
+    tk.update([rosto], 0); // track nasce com a caixa do rosto
+    const out = tk.update([larga, mao, { ...rosto, score: 0.51 }], 350);
+    expect(out).toHaveLength(1); // larga → extensão; mão → contida na extensão; rosto → contido
+    expect(out[0].id).toBe(1);
+  });
+
+  it("a extensão NÃO persiste entre rodadas: pessoa real onde a mão estava nasce depois", () => {
+    const tk = createByteTracker({ birthIouThreshold: 0.55, birthContainment: 0.7 });
+    tk.update([rosto], 0);
+    // rodada COM o rosto presente (track fica na caixa do ROSTO): larga vira extensão, mão morre
+    expect(tk.update([rosto, larga, mao], 350)).toHaveLength(1);
+    // rodada seguinte SEM a larga: track/pred = ROSTO (a extensão morreu com a rodada) — uma
+    // pessoa REAL surgindo onde a mão estava é DISJUNTA do rosto → NASCE (recall preservado)
+    const out = tk.update([rosto, { score: 0.7, bbox: [0.8, 0.55, 0.2, 0.4] }], 700);
+    expect(out).toHaveLength(2);
+  });
+});

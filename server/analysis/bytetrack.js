@@ -366,12 +366,20 @@ function createByteTracker(opts = {}) {
     }
 
     // Nascimento: SÓ detecção de score alto sem par (baixa sem par é descartada).
-    // GUARDA DE NASCIMENTO em DOIS eixos (port 1:1 do TS — racional lá):
-    //   • SOBREPOSIÇÃO (birthIouThr): IoU alto com a bbox OBSERVADA ou PREDITA;
-    //   • CONTENÇÃO (birthContainment): caixa PARCIAL (query duplicada do D-FINE)
-    //     dentro da caixa do track tem IoU BAIXO e passava — a contenção a pega.
-    // Track acusado LIVRE → recupera (atualiza); ocupado → duplicata, descarta.
-    for (const di of high) {
+    // GUARDA DE NASCIMENTO em DOIS eixos + EXTENSÃO POR RODADA (port 1:1 do TS — racional
+    // completo lá; bug de campo m09: mão isolada nascia "2ª pessoa" quando o track estava
+    // com a caixa do rosto e a hipótese LARGA era descartada). Dets acusadas AMPLIAM a
+    // extensão do track na rodada; nascimentos rodam em ordem de SCORE (a larga antes da mão).
+    const extent = new Map(); // ti → união das caixas acusadas nesta RODADA (nunca persiste)
+    const unionBox = (a, b) => {
+      const x0 = Math.min(a[0], b[0]);
+      const y0 = Math.min(a[1], b[1]);
+      const x1 = Math.max(a[0] + a[2], b[0] + b[2]);
+      const y1 = Math.max(a[1] + a[3], b[1] + b[3]);
+      return [x0, y0, x1 - x0, y1 - y0];
+    };
+    const highBirth = high.filter((di) => !detUsed.has(di)).sort((a, b) => dets[b].score - dets[a].score);
+    for (const di of highBirth) {
       if (detUsed.has(di)) continue;
       const d = dets[di];
       let bestTi = -1;
@@ -382,9 +390,14 @@ function createByteTracker(opts = {}) {
         const iou = Math.max(iouOf(obs, d.bbox), pb ? iouOf(pb, d.bbox) : 0);
         // Contenção SÓ contra track FRESCO (misses 0): duplicata é fenômeno de cena
         // fresca; track em miss + escala diferente é o caso do 2º estágio (id novo).
+        const ext = extent.get(ti);
         const cont =
           birthContainment > 0 && tracks[ti].misses === 0
-            ? Math.max(containmentOf(obs, d.bbox), pb ? containmentOf(pb, d.bbox) : 0)
+            ? Math.max(
+                containmentOf(obs, d.bbox),
+                pb ? containmentOf(pb, d.bbox) : 0,
+                ext ? containmentOf(ext, d.bbox) : 0,
+              )
             : 0;
         const v = Math.max(
           iou > birthIouThr ? iou : 0,
@@ -396,6 +409,7 @@ function createByteTracker(opts = {}) {
         }
       }
       if (bestTi >= 0) {
+        extent.set(bestTi, unionBox(extent.get(bestTi) ?? tracks[bestTi].bbox, d.bbox));
         if (!trkUsed.has(bestTi)) {
           trkUsed.add(bestTi);
           applyObservation(tracks[bestTi], d, now);
