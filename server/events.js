@@ -214,8 +214,9 @@ async function forward(id, by) {
   return { event: ev };
 }
 
-// Lista filtrada (sempre ts desc). { limit, since, state, priority }.
-function query({ limit, since, state, priority } = {}) {
+// Aplica os FILTROS da consulta, sem cortar (o universo da pergunta, sempre ts desc).
+// Separado do corte de propósito: `total` só é honesto se contar DEPOIS do filtro e ANTES do limite.
+function match({ since, state, priority } = {}) {
   let out = list;
   if (since != null && !Number.isNaN(Number(since))) {
     const s = Number(since);
@@ -223,10 +224,44 @@ function query({ limit, since, state, priority } = {}) {
   }
   if (state && STATES.has(state)) out = out.filter((e) => e.state === state);
   if (priority && PRIORITIES.has(priority)) out = out.filter((e) => e.priority === priority);
+  return out;
+}
+
+// Tamanho da página: default 200; teto na RETENÇÃO (pedir mais do que se guarda é impossível).
+function pageSize(limit) {
   let n = Number(limit);
   if (!Number.isFinite(n) || n <= 0) n = 200;
-  n = Math.min(n, RETENTION);
-  return out.slice(0, n);
+  return Math.min(n, RETENTION);
+}
+
+// Página + META DOS DOIS CORTES que a lista sofre (contrato aditivo — ver routes/alarms.js).
+// Existe porque KPI/tendência calculados sobre página cortada SUBCONTAM EM SILÊNCIO:
+//   1) `truncated`/`total` — o corte do `limit` (quem consome precisa poder dizer "500 de N");
+//   2) `retentionClipped`  — o corte INVISÍVEL: a fila só guarda RETENTION eventos, então o que é
+//      mais antigo já foi descartado e nem entra no `total`. Só acusamos quando isso REALMENTE
+//      afeta a janela pedida (o mais antigo guardado é mais novo que o `since`) — senão viraria
+//      aviso permanente em qualquer instalação movimentada, que é ruído, não informação.
+function page(opts = {}) {
+  const out = match(opts);
+  const n = pageSize(opts.limit);
+  const items = out.slice(0, n);
+  const oldestTs = list.length ? list[list.length - 1].ts : null;
+  const since = Number(opts.since);
+  return {
+    events: items,
+    total: out.length, // universo APÓS os filtros e ANTES do corte
+    truncated: out.length > items.length,
+    limit: n,
+    retention: RETENTION,
+    oldestTs,
+    retentionClipped:
+      list.length >= RETENTION && Number.isFinite(since) && oldestTs != null && oldestTs > since,
+  };
+}
+
+// Lista filtrada (sempre ts desc). { limit, since, state, priority }. CONTRATO ORIGINAL: array puro.
+function query(opts = {}) {
+  return page(opts).events;
 }
 
 function get(id) {
@@ -239,6 +274,7 @@ module.exports = {
   ack,
   forward,
   query,
+  page, // página + meta do corte (limit/retenção) — contrato aditivo de GET /api/alarms?meta=1
   get,
   all: () => list,
   persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)

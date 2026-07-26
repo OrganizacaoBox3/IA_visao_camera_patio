@@ -8,19 +8,21 @@ async function handle(req, res, ctx) {
   const path0 = req.url ? req.url.split("?")[0] : "";
 
   // Fila acionável. Qualquer usuário autenticado lê/opera.
+  // CONTRATO ADITIVO (`meta=1`): sem o parâmetro a resposta segue sendo o ARRAY de eventos
+  // (clientes existentes intactos — ex.: o painel da Central, listAlarms({limit:200})). Com
+  // `meta=1` vem o envelope { events, total, truncated, limit, retention, oldestTs,
+  // retentionClipped }: quem calcula KPI sobre a lista PRECISA saber que houve corte, senão
+  // subconta em silêncio (o relatório fazia 500-de-N sem nunca dizer o N).
   if (path0 === "/api/alarms" && req.method === "GET") {
     if (!requireAuth(req, res)) return true;
     const q = new URL(req.url, "http://x").searchParams;
-    json(
-      res,
-      200,
-      events.query({
-        limit: q.get("limit"),
-        since: q.get("since"),
-        state: q.get("state"),
-        priority: q.get("priority"),
-      }),
-    );
+    const args = {
+      limit: q.get("limit"),
+      since: q.get("since"),
+      state: q.get("state"),
+      priority: q.get("priority"),
+    };
+    json(res, 200, q.get("meta") === "1" ? events.page(args) : events.query(args));
     return true;
   }
 

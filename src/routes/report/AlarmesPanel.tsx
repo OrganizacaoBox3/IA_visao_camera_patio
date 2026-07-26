@@ -9,8 +9,9 @@ import {
   type AlarmPriority,
   type AlarmState,
 } from "../../types/alarm";
-import { Badge, EmptyState, ScrollArea, type Tone } from "../../ui";
+import { Alert, Badge, EmptyState, ScrollArea, type Tone } from "../../ui";
 import { RepLens, HistoryFooter, Insight, SectionTitle } from "./chrome";
+import { useAlarmsLoadMeta, type AlarmsLoadMeta } from "./useReportData";
 import { KpiRow, Kpi } from "./KpiRow";
 import { Heatmap } from "./Heatmap";
 import { TrendSection } from "./TrendChart";
@@ -36,6 +37,42 @@ const STATE_TONE: Record<AlarmState, Tone | undefined> = {
   acknowledged: "ok",
   forwarded: "info",
 };
+
+// ── Aviso de COBERTURA da carga (bug B3) ──────────────────────────────────────────────────────
+// KPI, tendência e mapa de horas são calculados sobre a lista QUE CHEGOU. Se ela veio cortada
+// (limit) ou se a retenção do servidor já descartou o começo do período, os números abaixo
+// SUBCONTAM — e subcontar calado é pior que não mostrar. Aqui o teto vira texto.
+// Exportado p/ teste (renderToStaticMarkup, molde da casa).
+export function alarmsLoadWarnings(meta: AlarmsLoadMeta): string[] {
+  const w: string[] = [];
+  if (meta.truncated === true && meta.total != null)
+    w.push(
+      `Mostrando os ${meta.limit} alarmes mais recentes de ${meta.total} no período consultado — os números abaixo (KPIs, tendência e mapa de horas) cobrem só esses ${meta.limit}.`,
+    );
+  else if (meta.truncated === null)
+    w.push(
+      `O servidor não informou o total de alarmes: a lista pode estar cortada em ${meta.limit} — os números abaixo podem subcontar.`,
+    );
+  if (meta.retentionClipped)
+    w.push(
+      `A fila do servidor guarda no máximo ${meta.retention ?? "N"} alarmes e o período consultado começa antes do mais antigo guardado: eventos mais antigos já foram descartados.`,
+    );
+  return w;
+}
+
+export function AlarmsLoadNote({ meta }: { meta: AlarmsLoadMeta }) {
+  const warnings = alarmsLoadWarnings(meta);
+  if (warnings.length === 0) return null;
+  return (
+    <Alert tone="warn">
+      <span className="flex flex-col gap-1">
+        {warnings.map((t) => (
+          <span key={t}>{t}</span>
+        ))}
+      </span>
+    </Alert>
+  );
+}
 
 export function AlarmesPanel({
   periodLabel,
@@ -82,9 +119,12 @@ export function AlarmesPanel({
     `Alarmes · ${periodLabel}` +
     (alarmPriority !== "Todas" ? ` · ${ALARM_PRIORITY_LABEL[alarmPriority]}` : "") +
     (alarmState !== "Todos" ? ` · ${ALARM_STATE_LABEL[alarmState]}` : "");
+  // Cobertura da carga (não é estado do modo — vem da carga única do relatório).
+  const loadMeta = useAlarmsLoadMeta();
   return (
     <>
       <RepLens lens={lens} />
+      <AlarmsLoadNote meta={loadMeta} />
       {alarms.length === 0 ? (
         <EmptyState>
           <b>Sem alarmes registrados.</b>
