@@ -63,6 +63,19 @@ export type InterpConfig = {
   fadeStartMs: number;
   /** Idade em que a caixa some de vez (removida do estado). */
   expireMs: number;
+  /** EMA da VELOCIDADE entre keyframes (0..1; peso do dado NOVO). O hub manda delta cru — a 6fps o
+   *  jitter de geometria vira ruído de velocidade que a extrapolação amplifica (oscilação de campo
+   *  2026-07-26). 1 = sem suavização (comportamento antigo). */
+  vAlpha: number;
+  /** EMA do TAMANHO exibido (w/h), ancorada no PÉ — o detector alterna hipóteses de enquadramento e a
+   *  caixa crua "respira". Display-only (a lógica lê tracks exatos). 1 = sem suavização. */
+  sizeAlpha: number;
+  /** Teto ADAPTATIVO de extrapolação: não prever além de `extrapIntervalFactor × intervalo OBSERVADO
+   *  entre payloads` (piso extrapFloorMs; teto segue maxExtrapMs). Prever 3× além do PRÓXIMO dado só
+   *  amplifica ruído — quando a cadência é alta, renderiza-se perto do dado; quando é baixa (grade
+   *  1fps), extrapola-se longe como antes. */
+  extrapIntervalFactor: number;
+  extrapFloorMs: number;
 };
 
 // Defaults calibrados p/ payload a ~1fps: fade só depois de 1,5s (não pisca entre payloads),
@@ -84,6 +97,14 @@ export const DEFAULT_INTERP: InterpConfig = {
   snapMs: 180,
   fadeStartMs: 1500,
   expireMs: 2600,
+  // Anti-oscilação (2026-07-26 — payloads a 6fps expuseram o trio ruído-de-v × caixa-que-respira ×
+  // extrapolação-longa): v suavizada a 0.4 (≈ últimos 3-4 payloads mandam), tamanho a 0.5, e o teto
+  // de extrapolação vira função da cadência OBSERVADA (1.25× o intervalo, piso 250ms) — a 6fps
+  // prevê-se ~210ms à frente (estável); a 1fps, os mesmos ~1000ms de antes (nada regride na grade).
+  vAlpha: 0.4,
+  sizeAlpha: 0.5,
+  extrapIntervalFactor: 1.25,
+  extrapFloorMs: 250,
 };
 
 /** Clamp escalar (sem alocar), usado no hot-path do dead-reckoning. */
@@ -104,11 +125,20 @@ export function lerpBbox(a: Bbox, b: Bbox, t: number): [number, number, number, 
 type Keyframe = { bbox: Bbox; zone: string | null; score?: number; vx?: number; vy?: number; t: number };
 // snapFrom/snapT: origem do EASING de correção (posição EXIBIDA no instante do payload novo), capturada
 // no ingest a partir do keyframe ANTIGO. Só populada no ramo dead-reckoning (vx/vy); undefined no legacy.
+// vxS/vyS: velocidade SUAVIZADA (EMA entre keyframes) usada no dead-reckoning — o hub manda o delta
+// CRU ((bbox−prev)/dt): a 6fps o jitter de geometria vira ruído de velocidade e a extrapolação o
+// AMPLIFICA (a oscilação de campo de 2026-07-26). wS/hS: tamanho SUAVIZADO p/ exibição — o detector
+// alterna hipóteses de enquadramento (close-up: largura medida 0,41→0,78→1,0 entre frames) e a caixa
+// crua "respira"; a suavização é ancorada no PÉ (bottom-center), o âncora estável da pessoa.
 type Entry = {
   prev: Keyframe | null;
   last: Keyframe;
   snapFrom?: [number, number, number, number];
   snapT?: number;
+  vxS?: number;
+  vyS?: number;
+  wS?: number;
+  hS?: number;
 };
 
 // Estado por id: 2 keyframes (o penúltimo e o último payload que citaram o id). A VELOCIDADE, quando o
@@ -119,9 +149,20 @@ export class TrackInterpolator {
   private readonly cfg: InterpConfig;
   private readonly entries = new Map<number, Entry>();
   private lastTs = Number.NEGATIVE_INFINITY;
+  // Cadência OBSERVADA entre payloads distintos (EMA da chegada local) — alimenta o teto
+  // ADAPTATIVO de extrapolação (extrapCapMs): prever 3× além do próximo dado só amplifica ruído.
+  private lastRecvT = Number.NEGATIVE_INFINITY;
+  private intervalEma: number | null = null;
 
   constructor(cfg: Partial<InterpConfig> = {}) {
     this.cfg = { ...DEFAULT_INTERP, ...cfg };
+  }
+
+  /** Teto de extrapolação da rodada: função da cadência observada (piso/teto do cfg). */
+  private extrapCapMs(): number {
+    const c = this.cfg;
+    if (this.intervalEma == null) return c.maxExtrapMs; // 1 payload só: sem cadência medida ainda
+    return clampNum(this.intervalEma * c.extrapIntervalFactor, c.extrapFloorMs, c.maxExtrapMs);
   }
 
   /**
@@ -133,6 +174,12 @@ export class TrackInterpolator {
   ingest(snap: Snapshot, recvT: number): void {
     if (snap.ts === this.lastTs) return;
     this.lastTs = snap.ts;
+    // Cadência observada (payloads DISTINTOS — o dedupe acima garante): EMA leve, robusta a jitter.
+    if (Number.isFinite(this.lastRecvT)) {
+      const dt = recvT - this.lastRecvT;
+      if (dt > 0) this.intervalEma = this.intervalEma == null ? dt : 0.3 * dt + 0.7 * this.intervalEma;
+    }
+    this.lastRecvT = recvT;
     // Latência captura→emissão do hub: ancora o keyframe ATRÁS de recvT nesse tanto, p/ a extrapolação
     // prever pro AGORA real (a caixa nasceria ~latencyMs atrás). Capada ao teto de extrapolação
     // (maxExtrapMs) — não adianta compensar mais do que se extrapola, e limita a inflação da idade
@@ -163,8 +210,22 @@ export class TrackInterpolator {
         }
         e.prev = e.last;
         e.last = kf;
+        // EMAs anti-oscilação: velocidade (o hub manda delta CRU) e tamanho (a caixa "respira").
+        const va = this.cfg.vAlpha;
+        e.vxS = tr.vx === undefined ? undefined : e.vxS === undefined ? tr.vx : va * tr.vx + (1 - va) * e.vxS;
+        e.vyS = tr.vy === undefined ? undefined : e.vyS === undefined ? tr.vy : va * tr.vy + (1 - va) * e.vyS;
+        const sa = this.cfg.sizeAlpha;
+        e.wS = e.wS === undefined ? tr.bbox[2] : sa * tr.bbox[2] + (1 - sa) * e.wS;
+        e.hS = e.hS === undefined ? tr.bbox[3] : sa * tr.bbox[3] + (1 - sa) * e.hS;
       } else {
-        this.entries.set(tr.id, { prev: null, last: kf });
+        this.entries.set(tr.id, {
+          prev: null,
+          last: kf,
+          vxS: tr.vx,
+          vyS: tr.vy,
+          wS: tr.bbox[2],
+          hS: tr.bbox[3],
+        });
       }
     }
   }
@@ -220,9 +281,18 @@ export class TrackInterpolator {
     // Kalman → não dispara; e mesmo com v alto a previsão não foge além de meio intervalo); atrás cobre
     // o atraso de reprodução (delayMs). Move já no 1º keyframe (não precisa do penúltimo).
     if (last.vx !== undefined && last.vy !== undefined) {
-      const dtSec = clampNum(renderT - last.t, -c.maxExtrapMs, c.maxExtrapMs) / 1000;
-      const bx = last.bbox[0] + last.vx * dtSec;
-      const by = last.bbox[1] + last.vy * dtSec;
+      // Velocidade SUAVIZADA (EMA — anti-oscilação) + teto de extrapolação ADAPTATIVO à cadência.
+      const vx = e.vxS ?? last.vx;
+      const vy = e.vyS ?? last.vy;
+      const dtSec = clampNum(renderT - last.t, -c.maxExtrapMs, this.extrapCapMs()) / 1000;
+      const px = last.bbox[0] + vx * dtSec;
+      const py = last.bbox[1] + vy * dtSec;
+      // Tamanho SUAVIZADO ancorado no PÉ (bottom-center estável da pessoa): a caixa cresce/encolhe
+      // em volta do pé, sem arrastar o topo nem o chão — mata o "respirar" da geometria do detector.
+      const w = e.wS ?? last.bbox[2];
+      const h = e.hS ?? last.bbox[3];
+      const bx = px + last.bbox[2] / 2 - w / 2; // mesmo centro-x do movimento
+      const by = py + last.bbox[3] - h; // mesmo pé (bottom)
       // EASING no snap: enquanto k<1, transita da posição exibida no payload (snapFrom) p/ a nova reta.
       const s = e.snapFrom;
       if (s && e.snapT !== undefined) {
@@ -231,12 +301,12 @@ export class TrackInterpolator {
           return [
             s[0] + (bx - s[0]) * k,
             s[1] + (by - s[1]) * k,
-            s[2] + (last.bbox[2] - s[2]) * k,
-            s[3] + (last.bbox[3] - s[3]) * k,
+            s[2] + (w - s[2]) * k,
+            s[3] + (h - s[3]) * k,
           ];
         }
       }
-      return [bx, by, last.bbox[2], last.bbox[3]];
+      return [bx, by, w, h];
     }
     // ── LEGACY (sem vx/vy — hub antigo): estimativa por 2 keyframes, comportamento de antes ──────────
     // Sem penúltimo (id recém-visto): 1 amostra só → caixa estática (nada a interpolar).

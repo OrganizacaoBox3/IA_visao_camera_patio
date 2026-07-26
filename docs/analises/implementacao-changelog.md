@@ -377,3 +377,26 @@ certo tem duas pontas, ambas no pull:
    parar → desce.
 
 Testes atualizados (flags + carimbo com idade); verify verde.
+
+## 2026-07-26 (4) — "Marcador oscilando": anti-oscilação no interpolador (revisão crítica)
+
+Com o pull rápido, os payloads passaram a chegar a ~6fps e EXPUSERAM três amplificadores de
+ruído empilhados no interpolador (calibrado p/ 1fps):
+1. a velocidade que o hub emite é DELTA CRU ((bbox−prev)/dt, não filtrada) — a 6fps o jitter de
+   geometria vira ruído grande de v;
+2. a geometria do D-FINE em close-up é instável POR NATUREZA (bancada: largura da caixa principal
+   alternando 0,41→0,78→1,0 entre frames — a caixa "respira");
+3. extrapolava-se ~400-500ms à frente (latência+AGE) com dado novo chegando a cada ~167ms —
+   prever 3× além do próximo payload só amplifica o ruído; o easing de 180ms nunca terminava
+   antes do payload seguinte → oscilação perpétua.
+
+Defesas (DISPLAY-ONLY — a lógica segue lendo tracks exatos; knobs novos no DEFAULT_INTERP):
+- vAlpha 0.4 — EMA da velocidade entre keyframes (≈ últimos 3-4 payloads mandam);
+- sizeAlpha 0.5 — EMA do TAMANHO exibido, ancorada no PÉ (bottom-center estável da pessoa:
+  a caixa cresce/encolhe em volta do chão, sem chacoalhar topo nem pé);
+- teto de extrapolação ADAPTATIVO à cadência OBSERVADA (1.25× o intervalo EMA, piso 250ms,
+  teto maxExtrapMs): a 6fps prevê ~210-250ms à frente (estável); a 1fps da GRADE, os mesmos
+  ~1000ms de antes — NADA regride no caso lento (teste trava os dois regimes).
+
+3 testes novos (v ruidosa amortecida · teto adaptativo rápido×lento · respiração ancorada no
+pé); os 20 existentes passam sem mudança. Mudança 100% cliente — basta recarregar o painel.

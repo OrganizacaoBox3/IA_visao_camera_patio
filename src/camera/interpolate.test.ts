@@ -214,6 +214,51 @@ describe("TrackInterpolator — dead-reckoning por velocidade do Kalman (vx/vy)"
   });
 });
 
+// ── Anti-oscilação (2026-07-26): payloads a 6fps expuseram ruído de v × caixa que respira ×
+// extrapolação longa. Estes testes travam as três defesas (display-only; lógica lê tracks exatos).
+describe("TrackInterpolator — anti-oscilação (v suavizada, teto adaptativo, tamanho no pé)", () => {
+  it("velocidade RUIDOSA (alternando ±) é amortecida pela EMA — a caixa não chacoalha", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
+    // pessoa PARADA com v ruidosa alternando ±0.6/s (o delta cru de geometria instável a 6fps)
+    let t = 0;
+    for (let i = 0; i < 8; i++) it0.ingest(snap(i + 1, [{ id: 1, bbox: box(0.5, 0.5), vx: i % 2 ? 0.6 : -0.6, vy: 0 }]), (t += 160));
+    // amostra logo após o último payload +100ms: com v CRUA seria ±0.06 de swing por rodada;
+    // com a EMA (0.4) o |v| efetivo cai ~3× e o teto adaptativo (~200ms) limita o resto.
+    const x = it0.sample(t + 100)[0].bbox[0];
+    expect(Math.abs(x - 0.5)).toBeLessThan(0.03);
+  });
+
+  it("teto ADAPTATIVO: cadência rápida (160ms) NÃO extrapola 1s à frente (ruído não amplifica)", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
+    let t = 0;
+    for (let i = 0; i < 6; i++) it0.ingest(snap(i + 1, [{ id: 1, bbox: box(0.2, 0.2), vx: 0.4, vy: 0 }]), (t += 160));
+    // intervalo observado ~160ms → cap = max(250, 160×1.25) = 250ms → avanço máx = 0.4×0.25 = 0.1
+    const far = it0.sample(t + 5000)[0].bbox[0]; // MUITO além do último payload
+    expect(far).toBeLessThanOrEqual(0.2 + 0.4 * 0.26);
+    // …e na grade LENTA (1s) o comportamento antigo permanece (extrapola o gap inteiro)
+    const slow = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
+    slow.ingest(snap(1, [{ id: 1, bbox: box(0, 0), vx: 0.1, vy: 0 }]), 0);
+    slow.ingest(snap(2, [{ id: 1, bbox: box(0.1, 0), vx: 0.1, vy: 0 }]), 1000);
+    expect(slow.sample(1900)[0].bbox[0]).toBeCloseTo(0.19, 6); // 0.1 + 0.1×0.9s — como antes
+  });
+
+  it("caixa que RESPIRA (w alterna 0.4/0.8) → exibida converge no meio, ancorada no PÉ", () => {
+    const it0 = new TrackInterpolator({ delayMs: 0, snapMs: 1, expireMs: 1e6, fadeStartMs: 1e6 });
+    // pessoa parada; detector alterna a LARGURA e a ALTURA cresce junto do topo (pé fixo em y=0.9)
+    let t = 0;
+    for (let i = 0; i < 8; i++) {
+      const w = i % 2 ? 0.8 : 0.4;
+      const h = i % 2 ? 0.7 : 0.5;
+      it0.ingest(snap(i + 1, [{ id: 1, bbox: [0.5 - w / 2, 0.9 - h, w, h] as [number, number, number, number], vx: 0, vy: 0 }]), (t += 160));
+    }
+    const b = it0.sample(t + 50)[0].bbox;
+    expect(b[2]).toBeGreaterThan(0.45); // largura exibida entre as hipóteses…
+    expect(b[2]).toBeLessThan(0.75);
+    expect(b[0] + b[2] / 2).toBeCloseTo(0.5, 2); // …centrada no mesmo cx
+    expect(b[1] + b[3]).toBeCloseTo(0.9, 2); // …e o PÉ não sai do chão (âncora estável)
+  });
+});
+
 describe("TrackInterpolator — fade + expiração", () => {
   it("opacidade cai entre fadeStart e expire; depois some", () => {
     const it0 = new TrackInterpolator({ delayMs: 0 });
