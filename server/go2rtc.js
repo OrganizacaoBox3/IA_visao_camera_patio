@@ -500,6 +500,10 @@ module.exports = {
   proxyRequest,
   proxyUpgrade,
   ffmpegEnvFor, // PURO (contrato de teste): PATH do sidecar com o ffmpeg resolvido
+  // Alvo RTSP do sidecar (porta do módulo rtsp do go2rtc). Consumidor: analysis/go2rtc-source
+  // no modo STREAM — o pull contínuo lê rtsp://host:porta/<id> com ffmpeg próprio (o
+  // stream.mjpeg do go2rtc NÃO transcodifica H264 → devolve 200/0b — medido 2026-07-26).
+  rtspTarget: () => ({ host: "127.0.0.1", port: RTSP_PORT }),
 
   generateYaml, // exportado p/ teste/unit
   onLogLine, // observador do log do sidecar (auto-cadastro RTMP)

@@ -151,17 +151,29 @@ describe("extractJpegs — parser PURO do multipart", () => {
   });
 });
 
-// Body fake: web ReadableStream de chunks (o `for await` do streamLoop consome).
-function bodyOf(chunks, { close = true } = {}) {
-  return new ReadableStream({
-    start(c) {
-      for (const ch of chunks) c.enqueue(ch);
-      if (close) c.close();
-    },
-  });
+// Proc fake: EventEmitter com stdout/stderr (o streamLoop consome ffmpeg por pipe).
+import { EventEmitter } from "node:events";
+
+function fakeProc() {
+  const p = new EventEmitter();
+  p.stdout = new EventEmitter();
+  p.stderr = new EventEmitter();
+  p.kill = vi.fn(() => p.emit("exit", 0));
+  return p;
 }
 
-describe("streamLoop via pullTick — ingest contínuo, anti-dobra e backoff", () => {
+describe("streamArgs — comando PURO do ffmpeg do pull", () => {
+  const { streamArgs } = require("./go2rtc-source");
+  it("rtsp do go2rtc → mjpeg no pipe, fps/scale capados, sem áudio", () => {
+    const args = streamArgs("cam1", { host: "127.0.0.1", port: 8554 }, 8, 1280);
+    expect(args).toContain("rtsp://127.0.0.1:8554/cam1");
+    expect(args).toContain("-an");
+    expect(args.join(" ")).toContain("fps=8,scale=1280:-2");
+    expect(args[args.length - 1]).toBe("pipe:1");
+  });
+});
+
+describe("streamLoop via pullTick — ffmpeg rtsp→mjpeg: ingest, anti-dobra e backoff", () => {
   beforeEach(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -170,13 +182,25 @@ describe("streamLoop via pullTick — ingest contínuo, anti-dobra e backoff", (
     vi.restoreAllMocks();
   });
 
-  function makeStreamSource({ chunks, states = new Map() }) {
+  const JPG = (label) =>
+    Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from(`corpo-${label}`), Buffer.from([0xff, 0xd9])]);
+
+  function makeStreamSource({ states = new Map() } = {}) {
     global.fetch = vi.fn(async (url) => {
       if (url.includes("/api/streams")) return { ok: true, json: async () => ({ cam1: {} }) };
-      if (url.includes("/api/stream.mjpeg")) return { ok: true, body: bodyOf(chunks) };
       return { ok: false, status: 503 };
     });
-    const go2rtc = { enabled: () => true, apiTarget: () => ({ host: "h", port: 1 }) };
+    const procs = [];
+    const spawn = vi.fn(() => {
+      const p = fakeProc();
+      procs.push(p);
+      return p;
+    });
+    const go2rtc = {
+      enabled: () => true,
+      apiTarget: () => ({ host: "h", port: 1 }),
+      rtspTarget: () => ({ host: "127.0.0.1", port: 8554 }),
+    };
     const src = createGo2rtcSource({
       go2rtc,
       states,
@@ -187,53 +211,62 @@ describe("streamLoop via pullTick — ingest contínuo, anti-dobra e backoff", (
       },
       running: () => true,
       roundMs: 1000,
+      spawn,
+      ffmpegBin: () => "ffmpeg-fake",
     });
-    return { src, states };
+    return { src, states, procs, spawn };
   }
 
-  it("frames do stream alimentam st.latest (último-vence) e marcam source go2rtc", async () => {
-    const { src, states } = makeStreamSource({ chunks: [Buffer.concat([JPG("a"), JPG("b")])] });
-    src.pullTick(); // descobre
+  it("frames do pipe alimentam st.latest (último-vence do chunk) e marcam source go2rtc", async () => {
+    const { src, states, procs } = makeStreamSource();
+    src.pullTick(); // descobre streams
     await tick();
-    src.pullTick(); // abre o stream
-    await tick();
-    await tick();
+    src.pullTick(); // abre o ffmpeg do pull
+    expect(procs).toHaveLength(1);
+    procs[0].stdout.emit("data", Buffer.concat([JPG("a"), JPG("b")]));
     const st = states.get("cam1");
     expect(st).toBeTruthy();
     expect(st.source).toBe("go2rtc");
     expect(st.latest.buf.equals(JPG("b"))).toBe(true); // último do chunk vence
   });
 
-  it("stream que FECHA agenda backoff (nextAt no futuro) — reconecta depois, não martela", async () => {
-    const { src } = makeStreamSource({ chunks: [JPG("a")] });
+  it("frame PARCIAL entre chunks completa no seguinte (parser acumula o resto)", async () => {
+    const { src, states, procs } = makeStreamSource();
     src.pullTick();
     await tick();
     src.pullTick();
-    await tick();
-    await tick(); // body fechou → catch → backoff
-    const stats = src.stats();
-    expect(stats.transport).toBe("stream");
-    expect(stats.streaming).toBe(0); // conexão caiu
-    // reconecta só após o backoff: o próximo tick imediato NÃO reabre (fetch não é chamado de novo p/ mjpeg)
-    const calls = global.fetch.mock.calls.filter(([u]) => String(u).includes("stream.mjpeg")).length;
-    src.pullTick();
-    await tick();
-    expect(global.fetch.mock.calls.filter(([u]) => String(u).includes("stream.mjpeg")).length).toBe(calls);
+    const full = JPG("c");
+    procs[0].stdout.emit("data", full.subarray(0, 6));
+    expect(states.get("cam1")).toBeUndefined(); // nada ingerido ainda
+    procs[0].stdout.emit("data", full.subarray(6));
+    expect(states.get("cam1").latest.buf.equals(full)).toBe(true);
   });
 
-  it("ANTI-DOBRA: relé FRESCO derruba o stream aberto (não paga aquisição dupla)", async () => {
-    const { src, states } = makeStreamSource({ chunks: [] }); // stream sem frames (fica aberto? close=true fecha — ok p/ o caso)
+  it("ffmpeg que SAI agenda backoff (não martela) e reconecta só depois", async () => {
+    const { src, procs, spawn } = makeStreamSource();
     src.pullTick();
     await tick();
     src.pullTick();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    procs[0].stderr.emit("data", "conexão recusada\n");
+    procs[0].emit("exit", 1); // caiu → fails=1, nextAt no futuro
+    src.pullTick(); // tick imediato NÃO respawna (backoff)
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(src.stats().transport).toBe("stream");
+    expect(src.stats().streaming).toBe(0);
+  });
+
+  it("ANTI-DOBRA: relé FRESCO mata o ffmpeg do pull (parada intencional, sem backoff)", async () => {
+    const { src, states, procs, spawn } = makeStreamSource();
+    src.pullTick();
     await tick();
-    const st = states.get("cam1") || (states.set("cam1", { id: "cam1", latest: null, lastFrameAt: 0, lastRelayAt: 0 }), states.get("cam1"));
+    src.pullTick();
+    procs[0].stdout.emit("data", JPG("a")); // cria o state via ingest
+    const st = states.get("cam1");
     st.lastRelayAt = Date.now(); // relé voltou AGORA
-    src.pullTick(); // câmera com relé fresco: stopStream + não reabre
-    await tick();
-    const mjpegCalls = global.fetch.mock.calls.filter(([u]) => String(u).includes("stream.mjpeg")).length;
     src.pullTick();
-    await tick();
-    expect(global.fetch.mock.calls.filter(([u]) => String(u).includes("stream.mjpeg")).length).toBe(mjpegCalls);
+    expect(procs[0].kill).toHaveBeenCalled(); // stream solto
+    src.pullTick(); // e não reabre enquanto o relé estiver fresco
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 });

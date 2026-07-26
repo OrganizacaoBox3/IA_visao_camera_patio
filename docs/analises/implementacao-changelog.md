@@ -343,3 +343,21 @@ interpolador expira antes do payload seguinte (a "outra caixa que fica na tela")
 
 **Validação:** verify verde (1153). **Pendente de campo:** reiniciar o hub p/ carregar o código
 novo + recarregar /camera; conferir no dashboard caixa única acompanhando a ~1fps+ e HUD `trk`.
+
+## 2026-07-26 (2) — Pull STREAM v2: ffmpeg do hub lendo o RTSP do go2rtc (o stream.mjpeg era beco)
+
+MEDIDO na sequência do incidente: o /api/stream.mjpeg do go2rtc NÃO transcodifica H264→MJPEG —
+devolve 200 com 0 bytes na hora (só serve fonte que JÁ tem mjpeg). A v1 do modo stream (commit
+674d213) nunca conectava: o motor seguia cego e o "várias pessoas onde tem uma" era o detector
+LOCAL do navegador. A v2 troca o transporte: UM ffmpeg DO HUB por câmera puxada lendo
+rtsp://go2rtc:8554/<id> e cuspindo MJPEG no pipe (fps=ANALYSIS_GO2RTC_FPS default 8, scale
+ANALYSIS_GO2RTC_WIDTH default 1280, -an, tcp) — provado ao vivo (10 frames < 8s da câmera WHIP).
+Mesma máquina de estados da v1 (extractJpegs/backoff/stall-watchdog/anti-dobra/dropPull);
+`streamArgs` puro + go2rtc.rtspTarget() novos; 12 testes (fake de spawn).
+
+**Bancada visual na cena REAL (motor de marcação revisado, pedido do dono):** worker de produção
+sobre 10 frames da câmera aberta — 1 pessoa forte (0,76–0,97) em TODOS os frames + duplicata
+fraca (0,31–0,35) em 4/10, e a duplicata é a caixa LARGA contendo a principal (contenção ~1,0)
+→ exatamente o caso que a guarda birthContainment (knob 8b, ontem) descarta. Inspeção visual do
+f08 anotado confirma: nenhum FP de objeto na cena; o D-FINE + guarda está correto. O sintoma
+visto era 100% o detector local por falta de frames no motor.

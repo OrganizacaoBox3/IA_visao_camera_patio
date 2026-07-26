@@ -30,11 +30,18 @@ const PULL_OPT_OUT = /^(0|false|off|no)$/i.test(String(process.env.ANALYSIS_GO2R
 // o snapshot frame.jpeg espera KEYFRAME a cada foto (MEDIDO ~2,0s/frame na câmera WHIP) →
 // motor limitado a ~0,5fps, acima do gap de re-associação do tracker (2,5s) → cada rodada
 // virava ID NOVO ("aparece outra caixa") e o interpolador expirava antes do próximo payload
-// ("fica na tela"). O stream.mjpeg mantém UMA conexão por câmera (um ffmpeg contínuo no
-// go2rtc) e entrega frames na cadência da fonte — o engine consome no ritmo dele (último-
-// vence). Custo declarado: transcode MJPEG contínuo no go2rtc por câmera puxada (só câmera
-// relay-less/WHIP paga; CFTV RTSP segue no relé ffmpeg do hub).
+// ("fica na tela"). O stream contínuo: UM ffmpeg DO HUB por câmera lendo o RTSP do go2rtc
+// (rtsp://…:8554/<id>) e cuspindo MJPEG no pipe — frames a ANALYSIS_GO2RTC_FPS, latência
+// sub-segundo. POR QUE ffmpeg próprio e não o /api/stream.mjpeg do go2rtc: MEDIDO — o
+// go2rtc NÃO transcodifica H264→MJPEG nesse endpoint (devolve 200 com 0 bytes na hora);
+// o RTSP dele serve o H264 cru e o ffmpeg do hub (já resolvido p/ o relé RTSP) decodifica.
+// Custo declarado: 1 processo ffmpeg por câmera puxada (só relay-less/WHIP paga; CFTV
+// RTSP segue no relé rtsp.js de sempre).
 const STREAM_MODE = !/^(0|false|off|no)$/i.test(String(process.env.ANALYSIS_GO2RTC_STREAM || ""));
+// fps do transcode do pull: cobre o FOCO (6fps) com folga; subir só encarece o mjpeg.
+const STREAM_FPS = Math.min(15, Math.max(1, Number(process.env.ANALYSIS_GO2RTC_FPS) || 8));
+// largura do frame puxado (paridade com o relé webcam; o worker squasha p/ 640 de todo jeito).
+const STREAM_WIDTH = Math.min(1920, Math.max(320, Number(process.env.ANALYSIS_GO2RTC_WIDTH) || 1280));
 // Timeout do fetch: 2000→5000 default (MEDIDO: o snapshot leva ~2,0s esperando keyframe —
 // timeout IGUAL ao tempo de serviço abortava na borda e jogava a câmera em backoff eterno).
 const PULL_TIMEOUT_MS = Math.max(500, Number(process.env.ANALYSIS_GO2RTC_TIMEOUT_MS) || 5000);
@@ -71,14 +78,43 @@ function extractJpegs(buf) {
 }
 
 /**
+ * Argumentos do ffmpeg do PULL STREAM — PURO (contrato de teste): rtsp do go2rtc →
+ * MJPEG no stdout, fps/width capados. `-an` (sem áudio), tcp (sem perda de pacote UDP
+ * local), q:v 4 (mesmo default de qualidade do relé rtsp.js).
+ */
+function streamArgs(id, { host, port }, fps = STREAM_FPS, width = STREAM_WIDTH) {
+  return [
+    "-hide_banner", "-loglevel", "error",
+    "-rtsp_transport", "tcp",
+    "-i", `rtsp://${host}:${port}/${id}`,
+    "-an",
+    "-vf", `fps=${fps},scale=${width}:-2`,
+    "-f", "mjpeg", "-q:v", "4",
+    "pipe:1",
+  ];
+}
+
+/**
  * @param {object} deps
- * @param {object} deps.go2rtc           módulo go2rtc (enabled(), apiTarget())
+ * @param {object} deps.go2rtc           módulo go2rtc (enabled(), apiTarget(), rtspTarget())
  * @param {Map} deps.states              câmeraId → estado (decisão anti-dobra do pull)
  * @param {(id) => object} deps.createState  materializa a câmera puxada (mesmo do relé)
  * @param {() => boolean} deps.running   true enquanto o motor está ligado (enabled && !stopping)
  * @param {number} deps.roundMs          ROUND_MS — base do PULL_STALE_MS
+ * @param {Function} [deps.spawn]        injeção de teste (default child_process.spawn)
+ * @param {() => string} [deps.ffmpegBin] injeção de teste (default rtsp.resolveFfmpegBin)
  */
-function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
+function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spawn, ffmpegBin }) {
+  const doSpawn = spawn || require("node:child_process").spawn;
+  const binOf =
+    ffmpegBin ||
+    (() => {
+      try {
+        return require("../rtsp").ffmpegBin(); // FFMPEG_PATH > PATH > locais comuns (dono: rtsp.js)
+      } catch {
+        return "ffmpeg";
+      }
+    });
   // Relé considerado PARADO após isto sem onFrame → câmera vira elegível ao pull. Maior que
   // ROUND_MS p/ um relé só levemente atrasado não disparar pull redundante.
   const PULL_STALE_MS = Math.max(3000, roundMs * 3);
@@ -155,57 +191,65 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
     }
   }
 
-  // ── MODO STREAM: uma conexão stream.mjpeg persistente por câmera elegível ────
-  // O loop lê chunks, extrai JPEGs (extractJpegs) e alimenta st.latest (último-
-  // vence — o engine consome na cadência DELE; frame extra custa só a atribuição).
-  // Falha/fechamento → backoff exponencial (mesma régua do snapshot); parada
-  // INTENCIONAL (relé voltou/engine parou) não conta como falha.
-  async function streamLoop(id, ps) {
+  // ── MODO STREAM: um ffmpeg rtsp→mjpeg POR CÂMERA elegível ────────────────────
+  // stdout do ffmpeg → extractJpegs → st.latest (último-vence — o engine consome
+  // na cadência DELE). Saída/erro do processo → backoff exponencial (mesma régua
+  // do snapshot); parada INTENCIONAL (relé voltou/dropPull) não conta como falha.
+  function streamLoop(id, ps) {
     ps.streaming = true;
     ps.stopping = false;
     ps.lastFrameAt = Date.now();
-    const ctrl = new AbortController();
-    ps.ctrl = ctrl;
-    const { host, port } = go2rtc.apiTarget();
+    const rtsp = go2rtc.rtspTarget ? go2rtc.rtspTarget() : { host: "127.0.0.1", port: 8554 };
+    let proc;
     try {
-      const res = await fetch(`http://${host}:${port}/api/stream.mjpeg?src=${encodeURIComponent(id)}`, {
-        signal: ctrl.signal, // SEM timeout global: a conexão é longa por desenho; o stall watchdog cobre
-      });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-      let acc = Buffer.alloc(0);
-      for await (const chunk of res.body) {
-        acc = acc.length ? Buffer.concat([acc, Buffer.from(chunk)]) : Buffer.from(chunk);
-        const { frames, rest } = extractJpegs(acc);
-        acc = rest.length > STREAM_BUF_CAP ? Buffer.alloc(0) : rest; // anti-OOM: resíduo gigante = lixo
-        if (frames.length) {
-          ps.fails = 0;
-          ps.nextAt = 0;
-          ps.lastFrameAt = Date.now();
-          ingestPulled(id, Buffer.from(frames[frames.length - 1])); // último-vence já aqui (frames velhos do mesmo chunk não interessam)
-        }
-      }
-      throw new Error("stream encerrou"); // fim normal do body sem abort = go2rtc fechou → reconecta
+      proc = doSpawn(binOf(), streamArgs(id, rtsp), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     } catch (e) {
-      if (ps.stopping) return; // parada intencional (relé voltou / dropPull / motor parou): sem backoff
+      ps.streaming = false;
+      ps.fails += 1;
+      ps.nextAt = Date.now() + Math.min(PULL_BACKOFF_BASE_MS * 2 ** (ps.fails - 1), PULL_BACKOFF_MAX_MS);
+      console.warn(`[analysis:${id}] spawn do ffmpeg do pull falhou: ${e.message}`);
+      return;
+    }
+    ps.proc = proc;
+    let acc = Buffer.alloc(0);
+    let errTail = ""; // última linha do stderr — diagnóstico no log de queda
+    proc.stdout.on("data", (chunk) => {
+      acc = acc.length ? Buffer.concat([acc, chunk]) : chunk;
+      const { frames, rest } = extractJpegs(acc);
+      acc = rest.length > STREAM_BUF_CAP ? Buffer.alloc(0) : rest; // anti-OOM: resíduo gigante = lixo
+      if (frames.length) {
+        ps.fails = 0;
+        ps.nextAt = 0;
+        ps.lastFrameAt = Date.now();
+        ingestPulled(id, Buffer.from(frames[frames.length - 1])); // último-vence já no chunk
+      }
+    });
+    proc.stderr.on("data", (d) => {
+      errTail = String(d).trim().split("\n").pop() || errTail;
+    });
+    proc.on("error", () => {
+      /* exit cobre o ciclo de vida; erro de spawn tardio cai lá */
+    });
+    proc.on("exit", () => {
+      ps.streaming = false;
+      ps.proc = null;
+      if (ps.stopping || !running()) return; // parada intencional: sem backoff
       ps.fails += 1;
       const delay = Math.min(PULL_BACKOFF_BASE_MS * 2 ** (ps.fails - 1), PULL_BACKOFF_MAX_MS);
       ps.nextAt = Date.now() + delay;
       if (ps.fails <= 2 || ps.fails % 20 === 0)
-        console.warn(`[analysis:${id}] stream go2rtc caiu (${ps.fails}): ${e && e.message ? e.message : e}`);
-    } finally {
-      ps.streaming = false;
-      ps.ctrl = null;
-    }
+        console.warn(`[analysis:${id}] stream do pull caiu (${ps.fails})${errTail ? `: ${errTail}` : ""}`);
+    });
   }
 
-  /** Aborta o stream de UMA câmera sem penalizar (parada intencional). */
+  /** Mata o ffmpeg do pull de UMA câmera sem penalizar (parada intencional). */
   function stopStream(ps) {
     if (!ps || !ps.streaming) return;
     ps.stopping = true;
     try {
-      ps.ctrl?.abort();
+      ps.proc?.kill();
     } catch {
-      /* já fechado */
+      /* já saiu */
     }
   }
 
@@ -224,16 +268,16 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
         if (ps) stopStream(ps); // stream aberto de câmera cujo relé VOLTOU: solta a conexão
         continue;
       }
-      if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0, lastAt: now, streaming: false, stopping: false, ctrl: null, lastFrameAt: 0 }));
+      if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0, lastAt: now, streaming: false, stopping: false, proc: null, lastFrameAt: 0 }));
       ps.lastAt = now; // marca atividade recente (stream ainda conhecido/elegível) p/ o prunePulls
       if (STREAM_MODE) {
         if (ps.streaming) {
-          // STALL WATCHDOG (nunca-cego): conexão viva sem frame novo → derruba; o catch agenda backoff.
+          // STALL WATCHDOG (nunca-cego): processo vivo sem frame novo → derruba; o exit agenda backoff.
           if (now - ps.lastFrameAt > STREAM_STALL_MS) {
             try {
-              ps.ctrl?.abort();
+              ps.proc?.kill();
             } catch {
-              /* já fechado */
+              /* já saiu */
             }
           }
           continue;
@@ -290,4 +334,4 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs }) {
   return { pullActive, pullTick, dropPull, prunePulls, stats, pullCount };
 }
 
-module.exports = { createGo2rtcSource, extractJpegs };
+module.exports = { createGo2rtcSource, extractJpegs, streamArgs };
