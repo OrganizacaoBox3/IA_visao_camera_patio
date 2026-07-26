@@ -21,9 +21,26 @@ export type HubTrack = {
 };
 
 export type HubZone = { id: string; label: string; people: number; occupied: boolean };
+
+/** Zona PROIBIDA no FIO (`analysis-tracks.zonesProibidas`): `presenca` é o estado VIOLADA da
+ *  MÁQUINA do motor (histerese/dwell), não `people > 0` cru. Estruturalmente compatível com o
+ *  `HubZoneState` de `camera/draw.ts` — lá é o que o DESENHO exige; aqui, o que o FIO carrega. */
+export type HubProhibitedZone = { id: string; label: string; people: number; presenca: boolean };
+
 // latencyMs (aditivo): idade captura→emissão do frame no hub (ms). O interpolador ancora o keyframe
 // em `recvT - latencyMs` e extrapola pro AGORA → a caixa senta na pessoa (07-diagnostico-overlay-lag).
-export type HubAnalysis = { ts: number; tracks: HubTrack[]; zones: HubZone[]; latencyMs?: number };
+export type HubAnalysis = {
+  ts: number;
+  tracks: HubTrack[];
+  zones: HubZone[];
+  latencyMs?: number;
+  /** RE-EMISSÃO de rodada pulada pelo gate de movimento (pipeline `emitCoasting`): a bbox é a da
+   *  ÚLTIMA observação, não dado novo. Opcional: hub antigo não coasting ⇒ ausente ≡ `false`. */
+  coasting?: boolean;
+  /** Estado por zona proibida da câmera (o canvas acende VIOLADA). Opcional: hub antigo não emite o
+   *  campo ⇒ AUSENTE (≠ `[]`, que é "câmera sem zona proibida") e o desenho fica em ARMADA quieta. */
+  zonesProibidas?: HubProhibitedZone[];
+};
 
 // Payload do hub mais velho que isto é STALE (motor reiniciando/rede caída): não desenhar caixa
 // morta — deixa expirar/limpar. FONTE ÚNICA (Onda 4 da spec-overlay-tempo-real): era duplicado em

@@ -4,11 +4,12 @@
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { APP_CONFIG } from "../../config";
-import {
-  type HubAnalysis,
-  type HubTrack,
-  type HubZone,
-} from "../../CameraWorkspace";
+import type {
+  HubAnalysis,
+  HubProhibitedZone,
+  HubTrack,
+  HubZone,
+} from "../../types/analysis";
 import { loadCamConfig } from "../../cameraConfig";
 import { type AlarmEvent } from "../../api";
 import { type Camera, type CameraStatus } from "./types";
@@ -44,6 +45,56 @@ export type DashboardSocket = {
   // revByCamera: `camcfg-updated {kind:"calibration"}` incrementa; a câmera re-busca o H.
   calibrationRevByCamera: Map<string, number>;
 };
+
+/** Payload do evento `analysis-tracks` COMO CHEGA DO FIO. Só o `cameraId` é declarado — o resto é
+ *  `unknown` de propósito: o hub pode ser de qualquer versão, e quem promove ao tipo do domínio
+ *  (validando campo a campo) é `toHubAnalysis`. Shape esperado: HubTrack[]/HubZone[]/HubProhibitedZone[]. */
+export type AnalysisTracksPayload = {
+  cameraId: string;
+  ts?: unknown;
+  tracks?: unknown;
+  zones?: unknown;
+  latencyMs?: unknown;
+  coasting?: unknown;
+  zonesProibidas?: unknown;
+};
+
+/**
+ * FIO → domínio do `analysis-tracks` (ADR-009). PURA (testável fora do socket) e DEFENSIVA: campo
+ * ausente/torto degrada para o default seguro — a tile fica sem caixa, nunca quebra a central.
+ * O `ts` do hub é IGNORADO: vale o `recvT` (Date.now da RECEPÇÃO), porque o gate de stale (~5s) do
+ * CameraWorkspace compara com o relógio LOCAL e assim fica imune a skew hub×cliente.
+ * Todo campo do fio passa adiante — descartar campo calado já custou a zona proibida que não acendia.
+ */
+export function toHubAnalysis(p: AnalysisTracksPayload, recvT: number): HubAnalysis {
+  const out: HubAnalysis = {
+    ts: recvT,
+    tracks: Array.isArray(p.tracks) ? (p.tracks as HubTrack[]) : [],
+    zones: Array.isArray(p.zones) ? (p.zones as HubZone[]) : [],
+    // Idade do frame no hub (captura→emissão) → o interpolador compensa o overlay lag.
+    latencyMs: typeof p.latencyMs === "number" && p.latencyMs >= 0 ? p.latencyMs : 0,
+    // Re-emissão de rodada pulada pelo gate (bbox da última observação) ≠ dado novo. Normalizado
+    // p/ boolean: hub antigo nunca faz coasting, então `false` ali é verdade, não suposição.
+    coasting: p.coasting === true,
+  };
+  // Zonas proibidas: só entra se veio LISTA (ausente ≠ vazia — ver HubAnalysis) e só a entrada com
+  // `id` string, que é o que casa com a zona no desenho; sem id não há o que acender.
+  if (Array.isArray(p.zonesProibidas))
+    out.zonesProibidas = (p.zonesProibidas as unknown[])
+      .filter(
+        (z): z is Record<string, unknown> =>
+          !!z && typeof z === "object" && typeof (z as { id?: unknown }).id === "string",
+      )
+      .map((z): HubProhibitedZone => ({
+        id: z.id as string,
+        label: typeof z.label === "string" ? z.label : "",
+        people: typeof z.people === "number" && z.people >= 0 ? z.people : 0,
+        // "VIOLADA" (string do fio antigo) também é violada: virar `false` calado apagaria um
+        // alarme real — falso-OK é pior que erro.
+        presenca: z.presenca === true || z.presenca === "VIOLADA",
+      }));
+  return out;
+}
 
 export function useDashboardSocket({
   token,
@@ -126,23 +177,13 @@ export function useDashboardSocket({
         prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
       );
     });
-    // Overlays servidos (ADR-009): guarda o último payload por câmera no REF (sem setState —
-    // ver hubAnalysisRef). `ts` = RECEPÇÃO local (Date.now): o gate de stale (~5s) no
-    // CameraWorkspace compara com o relógio local e fica imune a skew hub×cliente. Payload
-    // defensivo: campos ausentes viram lista vazia (tile fica sem caixas, nunca quebra).
-    socket.on(
-      "analysis-tracks",
-      (p: { cameraId: string; ts?: number; tracks?: HubTrack[]; zones?: HubZone[]; latencyMs?: number }) => {
-        if (!p || typeof p.cameraId !== "string") return;
-        hubAnalysisRef.current.set(p.cameraId, {
-          ts: Date.now(),
-          tracks: Array.isArray(p.tracks) ? p.tracks : [],
-          zones: Array.isArray(p.zones) ? p.zones : [],
-          // Idade do frame no hub (captura→emissão) → o interpolador compensa o overlay lag.
-          latencyMs: typeof p.latencyMs === "number" && p.latencyMs >= 0 ? p.latencyMs : 0,
-        });
-      },
-    );
+    // Overlays servidos (ADR-009): guarda o último payload por câmera no REF (sem setState — ver
+    // hubAnalysisRef). O mapeamento fio→domínio é a função PURA `toHubAnalysis` (testada); aqui só
+    // sobra o roteamento por cameraId.
+    socket.on("analysis-tracks", (p: AnalysisTracksPayload) => {
+      if (!p || typeof p.cameraId !== "string") return;
+      hubAnalysisRef.current.set(p.cameraId, toHubAnalysis(p, Date.now()));
+    });
     socket.on("frame", (p: { id: string; buf: ArrayBuffer; w?: number; h?: number }) => {
       let f = framesRef.current.get(p.id);
       if (!f) {
