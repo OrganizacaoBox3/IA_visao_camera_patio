@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { MapPin } from "lucide-react";
-import { Button, Checkbox, Select, Dialog, Tooltip, ScrollArea, Badge, StatusDot, EmptyState, type Tone } from "../../ui";
+import { Alert, Button, Checkbox, Select, Dialog, Tooltip, ScrollArea, Badge, StatusDot, EmptyState, type Tone } from "../../ui";
 import { type AlarmEvent, type AlarmPriority, type AlarmState } from "../../api";
 // Rótulos/cores por prioridade/estado: fonte única em types/alarm.ts.
 import {
@@ -24,6 +24,23 @@ const STATE_TONE: Record<AlarmState, Tone | undefined> = {
   forwarded: "info",
 };
 
+/**
+ * Quantos alarmes CRÍTICOS NOVOS os filtros locais estão escondendo. Existe porque o drawer passou
+ * a ABRIR SOZINHO quando um crítico chega (useAlarms): se o operador tinha deixado um filtro
+ * ligado (ex.: "Informativo"), ele abriria VAZIO — falso-OK na tela do alarme mais grave do
+ * produto. Só exibição: nada é suprimido, o cartão continua na lista assim que o filtro sai.
+ * Puro/testável.
+ */
+export function hiddenNewCriticalCount(
+  alarms: readonly AlarmEvent[],
+  visible: readonly AlarmEvent[],
+): number {
+  if (alarms.length === visible.length) return 0;
+  const shown = new Set(visible.map((a) => a.id));
+  return alarms.filter((a) => a.priority === "critical" && a.state === "new" && !shown.has(a.id))
+    .length;
+}
+
 type AlarmDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -37,6 +54,8 @@ type AlarmDrawerProps = {
 // lateral (e bottom-sheet no mobile) em alarms.css, escopado por :has(.alarm-drawer__list)
 // para não afetar os demais diálogos. Filtros de exibição (prioridade/estado/ocultar
 // reconhecidos) são locais deste drawer (não apagam nada no servidor).
+// NOTA: desde a notificação interruptiva de crítico (useAlarms · ADR-004), este drawer ABRE
+// SOZINHO quando um `alarm-event` crítico chega — daí o aviso de "crítico oculto pelos filtros".
 export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: AlarmDrawerProps) {
   const [fPriority, setFPriority] = useState<"all" | AlarmPriority>("all");
   const [fState, setFState] = useState<"all" | AlarmState>("all");
@@ -52,6 +71,12 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
           (!hideAcked || a.state === "new"),
       ),
     [alarms, fPriority, fState, hideAcked],
+  );
+
+  // Crítico novo escondido pelos filtros → aviso + saída em 1 clique (ver hiddenNewCriticalCount).
+  const hiddenCritical = useMemo(
+    () => hiddenNewCriticalCount(alarms, visibleAlarms),
+    [alarms, visibleAlarms],
   );
 
   function renderAlarmCard(a: AlarmEvent) {
@@ -161,6 +186,29 @@ export function AlarmDrawer({ open, onOpenChange, alarms, newCount, onAct }: Ala
           Limpar reconhecidos
         </label>
       </div>
+      {hiddenCritical > 0 && (
+        /* Tom `alert` do design system (tokens --state-critical-*), role="alert" do wrapper.
+           Going-gray: saturado só para anormalidade — crítico oculto é exatamente o caso. */
+        <div className="px-[var(--sp-4)] pb-[var(--sp-2)] pt-[var(--sp-2)]">
+          <Alert tone="alert">
+            <span className="flex-1">
+              {hiddenCritical === 1
+                ? "1 alarme crítico novo está oculto pelos filtros."
+                : `${hiddenCritical} alarmes críticos novos estão ocultos pelos filtros.`}
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                setFPriority("all");
+                setFState("all");
+                setHideAcked(false);
+              }}
+            >
+              Limpar filtros
+            </Button>
+          </Alert>
+        </div>
+      )}
       <ScrollArea className="alarm-drawer__scroll">
         <div className="alarm-drawer__list">
           {visibleAlarms.length === 0 ? (
