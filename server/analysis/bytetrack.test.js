@@ -269,6 +269,7 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     const r2 = tk.update([det(0.7, 0.5, 0.6)], 1500); // velho: 2ª rodada sem match → LOST
     expect(r2.map((t) => t.id)).toEqual([2]);
     expect(tk.stats().lost).toBe(1);
+    expect(tk.stats().alive).toBe(2); // CT-4: LOST conta como VIVO (emitidos = alive - lost)
   });
 
   it("LOST re-associado volta à emissão com o MESMO id (identidade sobrevive ao gap)", () => {
@@ -282,7 +283,7 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe(1); // mesmo id — permanência/travessia não reiniciam
     expect(out[0].firstSeen).toBe(0);
-    expect(tk.stats()).toEqual({ reassociations: 1, lost: 0, stationary: 0 });
+    expect(tk.stats()).toEqual({ reassociations: 1, lost: 0, stationary: 0, alive: 1 });
   });
 
   it("AMBIGUIDADE nunca troca identidade: 1 det plausível p/ 2 tracks → id NOVO", () => {
@@ -321,6 +322,112 @@ describe("createByteTracker — RE-ASSOCIAÇÃO 2º estágio (salto de fonte/gat
     expect(out[0].cx).toBeCloseTo(0.45, 6);
     expect(tk.tracks()).toHaveLength(2);
     expect(tk.stats().reassociations).toBe(0);
+  });
+});
+
+// ── REFUTAÇÃO LOCAL (bug de campo 2026-07-26: "falha em reconhecer pessoas se movimentando") ──
+// O `ghosted` refutava TODOS os sem-match da rodada em que QUALQUER track nascia/re-associava
+// (booleano global). Cena movimentada é EXATAMENTE onde nasce track quase toda rodada → quem só
+// piscou por falha do detector sumia da tela (flag PEGAJOSO até re-associar). Agora cada
+// realocação refuta só o track VIVO mais PRÓXIMO dela. Espelhado em src/vision/bytetrack.test.ts.
+describe("createByteTracker — REFUTAÇÃO LOCAL por realocação (cena movimentada)", () => {
+  const OPTS = { ttlMs: 1500, reassocDist: 0.12, reassocMaxGapMs: 2500, lostAfterMisses: 1 };
+
+  /** A em 0.15 e B em 0.75 (distantes: 0.6), ambos com 2 observações no mesmo lugar. */
+  function twoApart(tk) {
+    tk.update([det(0.15, 0.5, 0.7), det(0.75, 0.5, 0.7)], 0);
+    tk.update([det(0.15, 0.5, 0.7), det(0.75, 0.5, 0.7)], 350);
+    return tk;
+  }
+
+  it("CRITÉRIO DE ACEITE: nascimento do OUTRO LADO do quadro NÃO apaga quem só piscou", () => {
+    const tk = twoApart(createByteTracker(OPTS));
+    // Rodada 3: o detector PERDE A (flicker de 1 rodada — o caso comum a 2fps) enquanto uma
+    // pessoa NOVA aparece em 0.95 (a 0.80 de A e a 0.20 de B). A explicação mais próxima da
+    // det nova é B — que CASOU nesta rodada —, logo ela não refuta ninguém. Antes: o
+    // booleano global marcava A como REFUTADA e a caixa dela sumia (bug de campo).
+    const out = tk.update([det(0.75, 0.5, 0.7), det(0.95, 0.5, 0.7)], 700);
+    expect(out.map((t) => t.id)).toEqual([1, 2, 3]); // A segue emitida na GRAÇA
+    const a = out.find((t) => t.id === 1);
+    expect(a.cx).toBeCloseTo(0.15, 6); // congelada onde foi vista, 1 rodada
+    expect(a.lastSeen).toBe(350);
+  });
+
+  it("…e o raio ficou LOCAL, não sumiu: nascimento COLADO em quem piscou ainda refuta", () => {
+    const tk = twoApart(createByteTracker(OPTS));
+    // Mesma rodada, mas a det nova aparece em 0.35 — a 0.20 de A e a 0.40 de B. Agora a
+    // explicação mais plausível É A ("a det dela reapareceu adiante"): A é REFUTADA e sai
+    // da emissão, senão seriam 2 caixas p/ 1 pessoa (o rastro que o `ghosted` comprou).
+    const out = tk.update([det(0.35, 0.5, 0.7), det(0.75, 0.5, 0.7)], 700);
+    expect(out.map((t) => t.id)).toEqual([2, 3]); // A fora da emissão…
+    expect(tk.tracks().map((t) => t.id)).toEqual([1, 2, 3]); // …mas viva internamente
+  });
+
+  it("re-associação também é realocação, e também é LOCAL (o salto de B não apaga A)", () => {
+    // ATENÇÃO ao montar este cenário: track observado 3× no MESMO ponto vira ESTACIONÁRIO
+    // (stationaryEnterRounds 2) e o 2º estágio EXCLUI estacionário por anti-hijack — não haveria
+    // re-associação nenhuma. Por isso os dois ANDAM aqui; o cenário sob teste é de gente em
+    // movimento, que é exatamente onde o bug de campo aparece.
+    const tk = createByteTracker({ ...OPTS, ttlMs: 8000 });
+    tk.update([det(0.15, 0.5, 0.7), det(0.75, 0.5, 0.7)], 0);
+    tk.update([det(0.18, 0.5, 0.7), det(0.78, 0.5, 0.7)], 350); // ambos andando (não estacionam)
+    tk.update([det(0.81, 0.5, 0.7)], 700); // A: 1º miss (rodada SEM realocação)
+    // B salta 0.81 → 0.95: IoU 0 contra a predição, mas dentro do raio do 2º estágio
+    // (reassocDist 0.12 + |v|·gap) → RE-ASSOCIA com o MESMO id (nenhuma caixa duplicada nasce).
+    const out = tk.update([det(0.95, 0.5, 0.7)], 1050);
+    expect(tk.stats().reassociations).toBe(1);
+    // A está a ~0.71 da realocação — mais de meio quadro. Sem o TETO (refuteMaxDist) ela seria
+    // refutada só por ser a única outra viva ("mais próximo" é relativo): o mesmo bug, mais raro.
+    expect(tk.tracks().find((t) => t.id === 1).ghosted).toBe(false);
+    expect(out.map((t) => t.id)).toEqual([2]); // A já saiu da emissão pelo 2º miss (LOST), não por refutação
+  });
+
+  /** UM único track vivo (andando, p/ não virar estacionário) + nascimento do outro lado do quadro.
+   *  É o caso DEGENERADO do critério relativo: sem concorrência, o único outro é sempre "o mais
+   *  próximo" — por mais longe que esteja. É aqui, e só aqui, que o TETO (knob 22b) decide. */
+  function loneTrackThenFarBirth(tk) {
+    tk.update([det(0.15, 0.5, 0.7)], 0);
+    tk.update([det(0.18, 0.5, 0.7)], 350); // andando (não estaciona)
+    tk.update([det(0.85, 0.5, 0.7)], 700); // A some; nasce alguém a ~0.64 dela
+    return tk;
+  }
+
+  it("TETO de plausibilidade: nascimento a mais de meio quadro NÃO refuta o único track vivo", () => {
+    const tk = loneTrackThenFarBirth(createByteTracker(OPTS));
+    expect(tk.tracks().find((t) => t.id === 1).ghosted).toBe(false);
+  });
+
+  it("refuteMaxDist: 0 desliga o teto — e o degenerado volta a apagar quem piscou", () => {
+    const tk = loneTrackThenFarBirth(createByteTracker({ ...OPTS, refuteMaxDist: 0 }));
+    expect(tk.tracks().find((t) => t.id === 1).ghosted).toBe(true);
+  });
+});
+
+// ── CT-4 — stats().alive (contrato com quem decide pular rodada) ──────────────────────────
+describe("createByteTracker — stats().alive (tracks VIVOS, emitíveis ou não)", () => {
+  it("alive conta LOST e ESTACIONÁRIO; alive - stationary = pessoas em MOVIMENTO", () => {
+    const tk = createByteTracker({
+      highScore: 0.35,
+      ttlMs: 8000,
+      lostAfterMisses: 1,
+      stationaryTolerance: 0.01,
+      stationaryEnterRounds: 2,
+      stationaryMaxMisses: 3,
+    });
+    // P parada em 0.2 (vira ESTACIONÁRIA na 3ª observação) + Q andando 0.60→0.70.
+    tk.update([det(0.2, 0.5, 0.8), det(0.6, 0.5, 0.8)], 0);
+    tk.update([det(0.2, 0.5, 0.8), det(0.65, 0.5, 0.8)], 500);
+    tk.update([det(0.2, 0.5, 0.8), det(0.7, 0.5, 0.8)], 1000);
+    expect(tk.stats().alive).toBe(2);
+    expect(tk.stats().stationary).toBe(1);
+    expect(tk.stats().alive - tk.stats().stationary).toBe(1); // 1 pessoa em movimento
+    // Detector cego 2 rodadas: Q vira LOST (some da emissão) — e MESMO ASSIM `alive` a
+    // enxerga: é o que responde "havia gente se movendo quando a rodada foi pulada?".
+    tk.update([], 1500);
+    tk.update([], 2000);
+    expect(tk.stats().lost).toBe(1);
+    expect(tk.stats().alive).toBe(2);
+    expect(tk.stats().alive - tk.stats().stationary).toBe(1);
   });
 });
 

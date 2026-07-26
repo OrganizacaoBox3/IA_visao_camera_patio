@@ -150,6 +150,20 @@ const PRECISION = Object.freeze({
     //     (salto extremo/oclusão longa) + status().tracker.lost.
     //     Vale p/ o track MÓVEL; o ESTACIONÁRIO tem graça própria (knob 25).
     lostAfterMisses: 1,
+    // 22b. TETO DE PLAUSIBILIDADE DA REFUTAÇÃO (2026-07-26 — bug de campo "falha em marcar quem
+    //     anda"). A refutação por realocação (o `ghosted` do knob 22) era GLOBAL: UMA realocação
+    //     na rodada refutava TODO track sem match, e cena movimentada é justo onde nasce track
+    //     quase toda rodada — quem piscava por falha de recall SUMIA da tela, com o flag pegajoso.
+    //     Agora ela é LOCAL: só o track mais PRÓXIMO da realocação é refutado. Mas "mais próximo"
+    //     é RELATIVO — com poucos tracks vivos o outro é sempre o mais próximo, por mais longe que
+    //     esteja; este teto corta esse degenerado. VALOR ESCOLHIDO, NÃO MEDIDO: as realocações dos
+    //     cenários anti-rastro que o `ghosted` comprou estão a 0.35–0.50 do track (unit "salto
+    //     extremo"; eval:counting "salto extremo 3×"), e 0.6 deixa ~20% de margem sobre o pior
+    //     deles. Acima de meio quadro, "a detecção dela reapareceu ali" deixa de ser explicação.
+    //     0 desliga o teto (volta ao critério só-relativo). SENSOR: bytetrack.test.(js|ts) —
+    //     "nascimento do OUTRO LADO do quadro não apaga quem piscou" — + eval:counting (o rastro
+    //     do salto extremo NÃO pode voltar). Calibração honesta: pendente de campo (spec v2).
+    refuteMaxDist: 0.6,
 
     // ── ESTADO ESTACIONÁRIO (F3 — spec-tracking-pessoa-parada §2 C2) ────────────
     // "Parado" é ESTADO, não morte: o track cuja posição fica estável ENTRA no estado

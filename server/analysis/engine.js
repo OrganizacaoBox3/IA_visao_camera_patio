@@ -295,6 +295,7 @@ function byteTrackerOpts() {
     reassocDist: t.reassocDist,
     reassocMaxGapMs: t.reassocMaxGapMs,
     lostAfterMisses: t.lostAfterMisses,
+    refuteMaxDist: t.refuteMaxDist, // knob 22b — teto da refutação LOCAL por realocação
     // Estado ESTACIONÁRIO (knobs 23-26 — spec-tracking-pessoa-parada §2 C2): pessoa parada é
     // ESTADO, não morte — isenta do TTL de relógio, morre por EVIDÊNCIA. Sensor: eval/stationary.mjs.
     stationaryTolerance: t.stationaryTolerance,

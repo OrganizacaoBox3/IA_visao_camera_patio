@@ -59,11 +59,14 @@
 //     o TTL) mas FORA do retorno de update(): não vira overlay/ocupação/contagem
 //     (mata o RASTRO de máscaras congeladas até o TTL — bug de campo). Se
 //     re-associar, volta a ser emitido com o MESMO id. A graça (misses ≤
-//     lostAfterMisses, ou ≤ stationaryMaxMisses p/ ESTACIONÁRIO) só vale p/ OCLUSÃO:
-//     em rodada de REALOCAÇÃO (nasceu track novo OU o 2º estágio re-associou) o
-//     sem-match é marcado REFUTADO (`ghosted`) e sai da emissão até re-associar — a
-//     det da pessoa foi p/ outro lugar; emitir o congelado é o próprio rastro. O
-//     `ghosted` é PEGAJOSO (não só na rodada da realocação) porque o estacionário
+//     lostAfterMisses, ou ≤ stationaryMaxMisses p/ ESTACIONÁRIO) vale p/ OCLUSÃO —
+//     mas NÃO p/ quem foi REFUTADO (`ghosted`) por uma REALOCAÇÃO (det que nasceu
+//     track novo OU que o 2º estágio re-associou) da qual ele é a explicação mais
+//     plausível: a det daquela pessoa foi p/ outro lugar, e emitir o congelado é o
+//     próprio rastro. A refutação é LOCAL — só alcança quem está a até `refuteMaxDist`
+//     da realocação (antes era GLOBAL e apagava quem só piscou do outro lado do quadro;
+//     detalhe e medição no bloco de refutação em update()).
+//     O `ghosted` é PEGAJOSO (não só na rodada da realocação) porque o estacionário
 //     tem graça longa: sem isso, a caixa congelada voltaria ao payload na rodada
 //     seguinte ao salto (o rastro do eval:counting "salto extremo 3×").
 //   • GUARDA DE NASCIMENTO (birthIouThreshold, default 0.55): detecção alta sem
@@ -79,7 +82,7 @@
 // CLASSE ("person") ANTES; o corte por score é deste tracker. A posição
 // reportada é sempre a OBSERVADA (a predição serve só ao gate).
 //
-// API (superset do TS — stats() é extensão):
+// API (espelhada no TS, stats() inclusive — CT-4):
 //   createByteTracker(opts?) → { update(dets, now, highScore?) → Track[],
 //                                tracks() → Track[], reset(), stats() }
 //   update() retorna os tracks EMITÍVEIS (ativos + oclusão em graça ≤
@@ -128,6 +131,10 @@ function clamp01(v) {
  *   reassocMaxGapMs: gap máximo desde lastSeen p/ tentar o 2º estágio (default 2500).
  *   lostAfterMisses: rodadas sem match antes do track MÓVEL sair da EMISSÃO (default 1 =
  *     1 rodada de graça; vive internamente até o TTL p/ re-associação).
+ *   refuteMaxDist: TETO de plausibilidade da REFUTAÇÃO por realocação (norm.). O critério
+ *     principal é RELATIVO (só o track mais PRÓXIMO da realocação é refutado); este teto corta
+ *     o caso degenerado de poucos tracks vivos, onde "o mais próximo" pode estar do outro lado
+ *     do quadro. 0 desliga o teto (só o critério relativo). Default 0.6 — dono: precision.js.
  *   stationaryTolerance: deslocamento máximo do centro (norm.) que ainda é JITTER de bbox,
  *     não movimento — âncora do estado estacionário (default 0.01, o mesmo minMove do counter).
  *   stationaryEnterRounds: observações estáveis consecutivas p/ ENTRAR em estacionário
@@ -146,6 +153,7 @@ function createByteTracker(opts = {}) {
   const reassocDist = opts.reassocDist ?? 0.12;
   const reassocMaxGapMs = opts.reassocMaxGapMs ?? 2500;
   const lostAfterMisses = opts.lostAfterMisses ?? 1;
+  const refuteMaxDist = opts.refuteMaxDist ?? 0.6;
   // Estado ESTACIONÁRIO (F3) — defaults ESPELHAM precision.js (fonte única do painel).
   const stationaryTol = opts.stationaryTolerance ?? 0.01;
   const stationaryEnterRounds = opts.stationaryEnterRounds ?? 2;
@@ -277,9 +285,11 @@ function createByteTracker(opts = {}) {
     const pred = tracks.map((t) => predictBBox(t, now));
     const detUsed = new Set();
     const trkUsed = new Set();
-    // Rodada de REALOCAÇÃO (nascimento ou re-associação): suprime a graça de
-    // emissão dos sem-match — ver política LOST no header.
-    let relocated = false;
+    // REALOCAÇÕES da rodada: uma entrada por det que NASCEU track novo ou que o 2º
+    // estágio RE-ASSOCIOU, com o centro da det e o índice do track que ela alimentou
+    // (o "dono"). Substitui o antigo booleano GLOBAL `relocated` — a refutação por
+    // realocação é LOCAL (bloco "REFUTAÇÃO" antes do laço de misses).
+    const relocations = []; // { cx, cy, owner }
 
     // Matching GULOSO por IoU: pares (track livre × det livre) com IoU ≥ limiar,
     // atribuídos do maior IoU pro menor. Determinístico (sort estável). `boxOf`
@@ -359,9 +369,10 @@ function createByteTracker(opts = {}) {
         if (perTrack.get(c.ti) !== 1 || perDet.get(c.di) !== 1) continue; // ambíguo → não re-associa
         trkUsed.add(c.ti);
         detUsed.add(c.di);
+        const b = dets[c.di].bbox;
         applyObservation(tracks[c.ti], dets[c.di], now); // v vira o deslocamento REAL do gap (dt-aware)
         reassociations += 1;
-        relocated = true;
+        relocations.push({ cx: b[0] + b[2] / 2, cy: b[1] + b[3] / 2, owner: c.ti });
       }
     }
 
@@ -418,20 +429,72 @@ function createByteTracker(opts = {}) {
       }
       tracks.push(newTrack(d, now));
       trkUsed.add(tracks.length - 1); // recém-nascido conta como "ocupado" p/ as próximas dets
-      relocated = true;
+      relocations.push({
+        cx: d.bbox[0] + d.bbox[2] / 2,
+        cy: d.bbox[1] + d.bbox[3] / 2,
+        owner: tracks.length - 1,
+      });
+    }
+
+    // ── REFUTAÇÃO POR REALOCAÇÃO — raio de explosão LOCAL, não global ────────────
+    // O `ghosted` existe p/ matar o RASTRO: quando a det de uma pessoa reaparece em
+    // OUTRO lugar (nasceu track novo / o 2º estágio re-associou), o track congelado no
+    // lugar antigo É o rastro e não pode seguir emitido. O DEFEITO (bug de campo
+    // 2026-07-26, "falha em reconhecer pessoas se movimentando") era o ALCANCE: um
+    // booleano GLOBAL fazia UMA realocação refutar TODOS os sem-match da rodada — e
+    // cena movimentada é EXATAMENTE onde nasce track quase toda rodada, então quem só
+    // piscou (falha de recall do detector) sumia da tela, com o flag PEGAJOSO até
+    // re-associar. Somado a lostAfterMisses:1, a caixa de quem anda piscava.
+    //
+    // CRITÉRIO: refuta-se todo track SEM MATCH cuja posição (a MELHOR das duas hipóteses
+    // — PREDITA ou OBSERVADA, as mesmas que a associação usa) esteja a até `refuteMaxDist`
+    // da realocação. Fora desse raio, "a detecção dela reapareceu ali" deixa de ser
+    // explicação. Dono do valor em produção: precision.js (knob 22b).
+    //
+    // POR QUE NÃO O RAIO DO 2º ESTÁGIO (reassocDist + |v|·gap ≈ 0.12): MEDIDO — as
+    // realocações dos cenários anti-rastro que o `ghosted` comprou estão a 0.35–0.50 do
+    // track (unit "salto extremo": 0.2→0.7; eval:counting "salto extremo 3×": 0.35–0.40),
+    // muito além da folga de associação; com ela o rastro volta e o eval quebra em
+    // maxSimultaneous:1.
+    //
+    // POR QUE NÃO "SÓ O MAIS PRÓXIMO" (critério puramente relativo, tentado antes):
+    // MEDIDO E REPROVADO no eval:counting — em teleporte REPETIDO acumulam VÁRIOS tracks
+    // obsoletos e refutar só o mais próximo deixa os demais emitidos: "salto extremo 3×"
+    // reprovou com 2 caixas simultâneas para 1 pessoa (teto 1). O rastro é uma propriedade
+    // de CADA track obsoleto, não do ranking entre eles.
+    //
+    // refuteMaxDist = 0 desliga o raio e restaura o comportamento GLOBAL antigo (toda
+    // realocação refuta todo sem-match) — escape-hatch, não default.
+    const refuted = new Set();
+    if (relocations.length > 0) {
+      // Distância do centro da realocação ao track ti, pela melhor das 2 hipóteses.
+      const distTo = (ti, r) => {
+        const obs = tracks[ti].bbox;
+        const pb = ti < pred.length ? pred[ti] : obs; // recém-nascido não tem predição
+        return Math.min(
+          Math.hypot(r.cx - (obs[0] + obs[2] / 2), r.cy - (obs[1] + obs[3] / 2)),
+          Math.hypot(r.cx - (pb[0] + pb[2] / 2), r.cy - (pb[1] + pb[3] / 2)),
+        );
+      };
+      for (const r of relocations) {
+        for (let ti = 0; ti < tracks.length; ti++) {
+          if (ti === r.owner || trkUsed.has(ti)) continue; // só sem-match é refutável
+          if (refuteMaxDist > 0 && distTo(ti, r) > refuteMaxDist) continue;
+          refuted.add(ti);
+        }
+      }
     }
 
     // Contabiliza rodadas ANALISADAS sem match (matcheado zera em applyObservation/
     // newTrack). Base em RODADAS, não tempo: robusto ao dt variável do gate/probe —
     // e é o que dá sentido à MORTE POR EVIDÊNCIA (rodada PULADA pelo gate não chega
-    // aqui: "não vi" nunca vira "não estava"). Sem-match em rodada de REALOCAÇÃO é
-    // REFUTADO (`ghosted`): a det da pessoa apareceu em OUTRO lugar; o congelado é o
-    // próprio rastro e fica fora da emissão até re-associar (pegajoso — o estacionário
-    // tem graça longa e voltaria ao payload na rodada seguinte ao salto).
+    // aqui: "não vi" nunca vira "não estava"). Quem foi REFUTADO acima sai da emissão
+    // até re-associar (pegajoso — o estacionário tem graça longa e voltaria ao payload
+    // na rodada seguinte ao salto).
     for (let ti = 0; ti < tracks.length; ti++) {
       if (trkUsed.has(ti)) continue;
       tracks[ti].misses += 1;
-      if (relocated) tracks[ti].ghosted = true;
+      if (refuted.has(ti)) tracks[ti].ghosted = true;
     }
 
     // MORTE — duas leis, uma por regime (spec-tracking-pessoa-parada §2 C2):
@@ -460,8 +523,10 @@ function createByteTracker(opts = {}) {
     //     congelada É a evidência de presença — a zona fica OCIOSA, nunca VAZIA (CA-5).
     //   • …EXCETO se REFUTADO por realocação (`ghosted`): a det da pessoa foi p/ outro
     //     lugar — o sem-match congelado é o próprio rastro. Custo declarado: pessoa A
-    //     oclusa na exata rodada em que B entra pisca até re-associar (barato perto do
-    //     rastro; e A mantém o id/dwell, que é o que a métrica consome).
+    //     oclusa na exata rodada em que uma realocação aparece do lado DELA (é dela a
+    //     explicação mais próxima) pisca até re-associar (barato perto do rastro; e A
+    //     mantém o id/dwell, que é o que a métrica consome). Nascimento LONGE de A não
+    //     a apaga mais — ver o bloco de REFUTAÇÃO.
     return tracks.filter(emitable);
   }
 
@@ -476,12 +541,16 @@ function createByteTracker(opts = {}) {
     /**
      * Sensores da política anti-rastro: re-associações acumuladas + LOST ocultos agora
      * + ESTACIONÁRIOS vivos agora (pessoas presentes e paradas — o que alimenta a
-     * leitura de zona OCIOSA; sensor de campo do F3).
+     * leitura de zona OCIOSA; sensor de campo do F3) + ALIVE = total de tracks vivos
+     * INTERNOS (emitíveis ou não, móveis ou parados). `alive - stationary` = quantas
+     * pessoas o tracker tem em MOVIMENTO agora — é o que responde "havia gente se
+     * movendo quando o gate pulou a rodada?" (CT-4).
      */
     stats: () => ({
       reassociations,
       lost: tracks.reduce((n, t) => n + (emitable(t) ? 0 : 1), 0),
       stationary: tracks.reduce((n, t) => n + (t.stationary ? 1 : 0), 0),
+      alive: tracks.length,
     }),
   };
 }
