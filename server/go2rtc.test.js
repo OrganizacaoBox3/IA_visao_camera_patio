@@ -97,3 +97,38 @@ describe("generateYaml — ingest RTMP (câmera que só faz PUSH)", () => {
     expect(text).not.toContain("rtmp:");
   });
 });
+
+// ── ffmpeg no PATH do sidecar (incidente 2026-07-26) ─────────────────────────
+// O go2rtc invoca "ffmpeg" do PATH p/ frame.jpeg/stream.mjpeg. Em daemon
+// (launchd/systemd) o PATH não tem /opt/homebrew/bin etc. → snapshot falha →
+// o PULL de análise da câmera WHIP cega EM SILÊNCIO. ffmpegEnvFor prepara o
+// PATH do filho com o dir do binário RESOLVIDO (rtsp.ffmpegBin).
+import path from "node:path";
+
+describe("ffmpegEnvFor — PATH do sidecar com o ffmpeg resolvido", () => {
+  const D = path.delimiter;
+
+  it("bin absoluto fora do PATH → dir vai PARA A FRENTE (sem mutar o env recebido)", () => {
+    const base = { PATH: `/usr/bin${D}/bin`, OUTRA: "x" };
+    const env = go2rtc.ffmpegEnvFor(base, "/opt/homebrew/bin/ffmpeg");
+    expect(env.PATH).toBe(`/opt/homebrew/bin${D}/usr/bin${D}/bin`);
+    expect(env.OUTRA).toBe("x");
+    expect(base.PATH).toBe(`/usr/bin${D}/bin`); // imutável
+  });
+
+  it("dir JÁ no PATH → env intacto (dedupe; nada de PATH crescendo a cada respawn)", () => {
+    const base = { PATH: `/opt/homebrew/bin${D}/usr/bin` };
+    expect(go2rtc.ffmpegEnvFor(base, "/opt/homebrew/bin/ffmpeg")).toBe(base);
+  });
+
+  it('bin "ffmpeg" (relativo — já resolve pelo PATH herdado) ou vazio → env intacto', () => {
+    const base = { PATH: "/usr/bin" };
+    expect(go2rtc.ffmpegEnvFor(base, "ffmpeg")).toBe(base);
+    expect(go2rtc.ffmpegEnvFor(base, "")).toBe(base);
+  });
+
+  it("env sem PATH nenhum → cria com o dir do bin (daemon de PATH vazio)", () => {
+    const env = go2rtc.ffmpegEnvFor({}, "/usr/local/bin/ffmpeg");
+    expect(env.PATH.startsWith(`/usr/local/bin${D}`)).toBe(true);
+  });
+});

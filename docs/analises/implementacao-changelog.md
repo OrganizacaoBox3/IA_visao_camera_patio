@@ -317,3 +317,29 @@ O binário do Mac tinha sido instalado À MÃO na sessão (irreproduzível — p
 Catálogo ganhou os dois zips mac do MESMO release v1.9.14, sha256 pinado, extração pela rota de
 zip que o win64 já usava + chmod +x da rota linux; detectPlatform resolve darwin. PROVA: binário
 manual apagado e recriado do zero pelo script (sha ok, `go2rtc version 1.9.14 darwin/arm64`).
+
+## 2026-07-26 — Incidente: motor CEGO p/ câmera WHIP (ffmpeg ausente) + pull lento → stream persistente
+
+**Sintoma (dono):** "identifica pessoas onde não tem e vice-versa" + "demora atualizar, aparece
+outra caixa e fica na tela". **Causa-raiz (medida ao vivo):** cadeia WHIP→análise quebrada em DOIS
+elos: (1) go2rtc SEM ffmpeg no host → frame.jpeg HTTP 500 → pull em backoff eterno → motor nunca
+criou estado da câmera → `engine:"hub"` nunca anunciado → o navegador caiu no detector LOCAL
+(coco-ssd) — as caixas ruins eram DELE, não do D-FINE; (2) mesmo com ffmpeg, o snapshot espera
+KEYFRAME a cada foto (MEDIDO ~2,0s/frame) com timeout default de 2000ms — aborto na borda +
+backoff; e a >2,5s entre rodadas cada detecção vira ID NOVO (gap > reassocMaxGapMs) e o
+interpolador expira antes do payload seguinte (a "outra caixa que fica na tela").
+
+**Consertos:**
+- ffmpeg instalado no dev (brew) e a dependência ENDURECIDA no código: `rtsp.resolveFfmpegBin`
+  ganha locais comuns unix (/opt/homebrew/bin etc. — daemons não têm esse PATH) e é exportado
+  (`ffmpegBin()`); `go2rtc.js` spawna o sidecar com PATH preparado (`ffmpegEnvFor`, puro + 4
+  testes) e AVISA ALTO no boot quando não há ffmpeg ("análise de câmera WHIP fica CEGA").
+- `go2rtc-source.js`: transporte STREAM (default) — UMA conexão `stream.mjpeg` persistente por
+  câmera elegível (parser SOI/EOI puro `extractJpegs`, último-vence, stall watchdog 10s, backoff
+  na queda, anti-dobra derruba o stream quando o relé volta, dropPull solta a conexão).
+  `ANALYSIS_GO2RTC_STREAM=0` volta ao snapshot legado. Timeout default 2000→5000 (timeout igual
+  ao tempo de serviço = aborto na borda). Custo declarado: transcode MJPEG contínuo no go2rtc por
+  câmera puxada (só relay-less/WHIP paga). 6 testes novos (parser + ingest + backoff + anti-dobra).
+
+**Validação:** verify verde (1153). **Pendente de campo:** reiniciar o hub p/ carregar o código
+novo + recarregar /camera; conferir no dashboard caixa única acompanhando a ~1fps+ e HUD `trk`.

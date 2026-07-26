@@ -28,6 +28,13 @@ function resolveFfmpegBin() {
   };
   if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH; // override explícito (erro aparece no spawn se inválido)
   if (works("ffmpeg")) return "ffmpeg"; // já no PATH
+  // macOS/Linux: locais comuns FORA do PATH de processos launchd/systemd (o Homebrew
+  // instala em /opt/homebrew/bin, que shells de login enxergam mas daemons não — foi
+  // exatamente assim que o pull do go2rtc cegou o motor em 2026-07-26).
+  if (process.platform !== "win32") {
+    for (const c of ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"])
+      if (fs.existsSync(c)) return c;
+  }
   if (process.platform === "win32") {
     const cands = [];
     const local = process.env.LOCALAPPDATA;
@@ -585,6 +592,10 @@ module.exports = {
   statuses,
   loadSources,
   redact, // exposto p/ teste: é o controle de segurança que impede credencial no camera-status
+  // Binário do ffmpeg RESOLVIDO (FFMPEG_PATH > PATH > locais comuns). Consumidor: go2rtc.js
+  // prepara o PATH do sidecar com ele — o go2rtc invoca "ffmpeg" do PATH p/ frame.jpeg/MJPEG,
+  // e sem isso o pull de análise de câmera WHIP cegava em silêncio (incidente 2026-07-26).
+  ffmpegBin: () => FFMPEG_BIN,
   FFMPEG_BIN,
   resolveFfmpegBin,
 };

@@ -21,7 +21,7 @@
 // efêmeros. O YAML gerado pode conter credenciais (URL rtsp://user:pass@...) → é escrito FORA do
 // repositório (ao lado do binário, ex.: /opt/go2rtc em prod), nunca versionado.
 
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const http = require("node:http");
 const net = require("node:net");
 const fs = require("node:fs");
@@ -231,6 +231,42 @@ function scheduleUptimeReset(child) {
   }, UPTIME_RESET_MS);
 }
 
+// ── ffmpeg no PATH do sidecar (incidente 2026-07-26: pull de análise cego) ───
+// PURO (contrato de teste): env do sidecar com o DIR do ffmpeg resolvido à frente do
+// PATH. `bin` absoluto → prepend (com dedupe); "ffmpeg"/relativo → env intacto (já
+// resolve pelo PATH herdado). Nunca muta o env recebido.
+function ffmpegEnvFor(env, bin) {
+  if (!bin || !path.isAbsolute(bin)) return env;
+  const dir = path.dirname(bin);
+  const cur = String(env.PATH || "");
+  if (cur.split(path.delimiter).includes(dir)) return env;
+  return { ...env, PATH: dir + path.delimiter + cur };
+}
+
+let warnedNoFfmpeg = false;
+function ffmpegEnv(baseEnv) {
+  let bin = "ffmpeg";
+  try {
+    bin = require("./rtsp").ffmpegBin(); // FFMPEG_PATH > PATH > locais comuns (dono: rtsp.js)
+  } catch {
+    /* rtsp indisponível (teste isolado) → segue com o PATH cru */
+  }
+  const env = ffmpegEnvFor(baseEnv, bin);
+  if (!warnedNoFfmpeg) {
+    try {
+      execFileSync(bin, ["-version"], { stdio: "ignore", env });
+    } catch {
+      warnedNoFfmpeg = true; // avisa 1× — o respawn do sidecar não vira spam
+      console.warn(
+        "[go2rtc] ⚠ ffmpeg NÃO encontrado — frame.jpeg/stream.mjpeg do sidecar vão falhar e o " +
+          "PULL de análise de câmera WHIP fica CEGO (o navegador cai no detector local, pior). " +
+          "Instale ffmpeg ou aponte FFMPEG_PATH.",
+      );
+    }
+  }
+  return env;
+}
+
 function spawnProc() {
   if (stopped || !enabled()) return;
   let child;
@@ -239,6 +275,13 @@ function spawnProc() {
       cwd: path.dirname(YAML_PATH),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // PATH preparado p/ o ffmpeg RESOLVIDO (incidente 2026-07-26): o go2rtc invoca
+      // "ffmpeg" do PATH p/ frame.jpeg/stream.mjpeg — em daemon (launchd/systemd) o PATH
+      // não tem /opt/homebrew/bin etc. e o snapshot falha → o PULL de análise da câmera
+      // WHIP cega EM SILÊNCIO (o navegador cai no detector local, muito pior). O rtsp.js
+      // já resolve o binário (FFMPEG_PATH > PATH > locais comuns); aqui só garantimos
+      // que o dir dele esteja no PATH do sidecar.
+      env: ffmpegEnv(process.env),
     });
   } catch (e) {
     console.error("[go2rtc] spawn falhou:", e.message);
@@ -456,6 +499,8 @@ module.exports = {
   apiBase,
   proxyRequest,
   proxyUpgrade,
+  ffmpegEnvFor, // PURO (contrato de teste): PATH do sidecar com o ffmpeg resolvido
+
   generateYaml, // exportado p/ teste/unit
   onLogLine, // observador do log do sidecar (auto-cadastro RTMP)
   isRunning: () => Boolean(proc),
