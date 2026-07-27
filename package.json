@@ -23,6 +23,7 @@
     "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run audit",
     "eval": "node eval/gate.mjs",
     "eval:counting": "node eval/counting.mjs",
+    "eval:gate-recall": "node eval/gate-recall.mjs",
     "probe": "node scripts/probe-hardware.mjs"
   },
   "engines": {

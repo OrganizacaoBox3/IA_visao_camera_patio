@@ -126,6 +126,17 @@ jobs:
       - name: Install (npm ci)
         run: npm ci
 
+      # Recall do GATE DE MOVIMENTO (CA-9 da spec-marcacao-tempo-real-v2). Vem ANTES dos passos
+      # de modelo de propósito: não precisa de ONNX, de rede nem de dataset — é cena SINTÉTICA
+      # sobre a função de decisão REAL (motion.js + knobs de precision.js), ~3 s, PRNG semeado
+      # (determinístico: não é fonte de flake). É o único sensor que olha PESSOA PEQUENA ANDANDO
+      # sob o gate — persons-cftv.mjs declara que não roda o gate e stationary.mjs mede pessoa
+      # PARADA. Reprova por REGRESSÃO RELATIVA contra a baseline MEDIDA embutida no script (faixa
+      # cega, recall por tamanho, buraco de observação); a economia de CPU só AVISA, porque é o
+      # outro lado do mesmo knob e a escolha é de produto.
+      - name: Eval — recall do gate de movimento (sintético, determinístico)
+        run: npm run eval:gate-recall
+
       # Modelo D-FINE-S (~40 MB, HuggingFace) keyed no catálogo: model.js carrega file+sha256,
       # então trocar de modelo muda a key e força download novo; senão restaura do cache.
       - name: Cache do modelo ONNX
