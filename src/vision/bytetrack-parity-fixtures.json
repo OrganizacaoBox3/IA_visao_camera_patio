@@ -1,0 +1,2362 @@
+{
+  "$comment": "GOLDEN VECTOR DE PARIDADE TS↔JS do ByteTrack-lite — o 2º sensor de paridade da casa (depois de src/zones-polygon-fixtures.json). O MESMO arquivo é consumido por src/vision/bytetrack.parity.test.ts (front) E server/analysis/bytetrack.parity.test.js (hub). Os dois trackers são ports 1:1 DECLARADOS e até aqui a paridade era mantida por REVISÃO EM PAR, sem sensor — residual admitido no cabeçalho dos dois arquivos (\"NÃO há teste cross-language TS↔JS\"). Este arquivo É o sensor. Expectativas GERADAS por EXECUÇÃO do lado JS (server/analysis/bytetrack.js) e CONFIRMADAS rodando o lado TS — nunca escritas por palpite. Geração/confirmação: 2026-07-27.",
+  "$contrato": "A PARIDADE É DE POLÍTICA, NÃO DE NÚMERO. Todo caso declara os 13 knobs EXPLICITAMENTE (campo `knobs`; os dois testes ASSERTAM que nenhum caso omite algum). Sob os MESMOS opts, os dois lados têm de emitir o MESMO resultado. Comparado, por RODADA: os tracks que update() EMITE — `id`, `bbox` OBSERVADA e `stationary` —, ordenados por id.",
+  "$naoComparado": "DEFAULTS (opts omitidos) — divergem DE PROPÓSITO: stationaryEnterRounds é 2 no hub e 3 no front (cadência de rodada diferente: sob o gate 2 probes ≈ 12s; no front rodada ≈ 350ms). É exatamente por isso que todo caso é explícito — um default vazado aqui transformaria divergência INTENCIONAL em falso vermelho. Também FORA da comparação: campos derivados (cx/cy/foot — função pura do bbox), score/firstSeen/lastSeen (cópia da entrada), o snapshot INTERNO tracks() (inclui LOST ocultos — por definição não-contrato) e stats() (telemetria). A ORDEM de emissão não é contrato: os dois lados ordenam por id antes de comparar.",
+  "$novoCaso": "COMO ACRESCENTAR UM CASO: (1) escreva `name`, `contract` (o comportamento PROMETIDO que o caso discrimina) e `opts` com os 13 knobs; (2) escreva as `rounds` ({t, dets, highScore?}) SEM o `expect`; (3) rode UM dos lados e grave o `expect` emitido; (4) RODE O OUTRO — se não bater, você achou uma divergência REAL: PARE, NÃO ajuste a fixture (isso petrificaria o bug) e documente. (5) O caso tem de DISCRIMINAR: monte a geometria de modo que SÓ o mecanismo alvo explique o resultado (ex.: reassocDist:0 isola a predição do 2º estágio; birthContainment:0 isola o eixo IoU da guarda de nascimento). Caso que passaria com o mecanismo DESLIGADO não é sensor. (6) Poucos casos ROBUSTOS > muitos frágeis: um caso que quebra por mudança legítima destrói a confiança no sensor inteiro.",
+  "knobs": [
+    "highScore",
+    "iouThreshold",
+    "ttlMs",
+    "birthIouThreshold",
+    "birthContainment",
+    "reassocDist",
+    "reassocMaxGapMs",
+    "lostAfterMisses",
+    "refuteMaxDist",
+    "stationaryTolerance",
+    "stationaryEnterRounds",
+    "stationaryMaxMisses",
+    "stationaryMaxMs"
+  ],
+  "cases": [
+    {
+      "name": "nascimento por score alto, graca de 1 rodada, LOST e morte por TTL",
+      "contract": "det BAIXA sozinha nunca cria track; det ALTA cria. Sem match: 1 rodada de graca (emitido), depois LOST (vivo, fora da emissao), depois morte por ttlMs.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.3,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": []
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.6,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1050,
+          "dets": [],
+          "expect": []
+        },
+        {
+          "t": 2000,
+          "dets": [],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "2a passada: score BAIXO sustenta o track e NUNCA nasce",
+      "contract": "det abaixo de highScore associa (2a passada) e move a caixa do track; det baixa SEM par e descartada — nao vira track novo.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.2,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.2,
+              "bbox": [
+                0.21,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.21,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1050,
+          "dets": [
+            {
+              "score": 0.2,
+              "bbox": [
+                0.24,
+                0.4,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.3,
+              "bbox": [
+                0.75,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.24,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "predicao dt-aware sustenta o id em rodada LENTA (det ALTA e det FRACA)",
+      "contract": "rodada lenta (dt 900ms): o deslocamento real zera o IoU com a caixa OBSERVADA; so a caixa PREDITA (v*dt) casa — na 1a passada (t=1000, score alto) E na 2a (t=1900, score baixo, que so SUSTENTA). 2o estagio DESLIGADO (reassocDist 0) p/ isolar o mecanismo.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 100,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1000,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1900,
+          "dets": [
+            {
+              "score": 0.2,
+              "bbox": [
+                0.72,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.72,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "hipotese de PARADA (det ALTA): a caixa congelada casa na janela de IoU que a guarda de nascimento NAO cobre",
+      "contract": "pessoa PAROU: a predicao (0.45) erra, a caixa OBSERVADA (0.18) casa. IoU com a congelada = 0.43 — ACIMA do iouThreshold (0.25) e ABAIXO do birthIouThreshold (0.55), a janela em que SO a passada congelada explica o id: sem ela a det NASCERIA id novo (a guarda de nascimento nao a pegaria). 2o estagio DESLIGADO p/ isolar.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 100,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1000,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.22,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.22,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "hipotese de PARADA (det FRACA): a pessoa SENTADA com score baixo — o caso de campo",
+      "contract": "mesma geometria, det ABAIXO de highScore: a passada congelada da 2a passada e a unica chance (det baixa nunca nasce nem e coberta pela guarda de nascimento). Sem ela o track ficaria com a caixa VELHA ate o LOST.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 100,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.18,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1000,
+          "dets": [
+            {
+              "score": 0.2,
+              "bbox": [
+                0.2,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.2,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2o estagio: re-associacao por DISTANCIA e o teto reassocMaxGapMs",
+      "contract": "salto que zera o IoU mas cai no raio (reassocDist + |v|*gap) recupera o MESMO id; gap acima de reassocMaxGapMs nao tenta o estagio — id NOVO (e o obsoleto vira rastro refutado).",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 4000,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0.12,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 3350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.35,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.35,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2o estagio ANTI-TROCA: par ambiguo nao re-associa (ids novos) e o ghost cai na observacao seguinte",
+      "contract": "duas dets plausiveis p/ o MESMO track: ambiguidade => nenhuma re-associacao, as duas NASCEM. O track sem par e refutado pelas realocacoes (fora da emissao) e volta com o MESMO id quando reaparece — e a observacao LIMPA a refutacao (t=1050: ele volta a ter direito a graca de 1 rodada, o que so acontece se o `ghosted` caiu).",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0.12,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.25,
+                0.46,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.05,
+                0.34,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.25,
+                0.46,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 3,
+              "bbox": [
+                0.05,
+                0.34,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.25,
+                0.46,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 3,
+              "bbox": [
+                0.05,
+                0.34,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1050,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "guarda de nascimento por IoU: duplicata descartada, vizinho legitimo nasce",
+      "contract": "det alta SEM par com IoU acima de birthIouThreshold contra track ja pareado e DUPLICATA (descartada). Eixo de contencao DESLIGADO p/ isolar o eixo IoU. Vizinho com IoU baixo nasce normalmente.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.16,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.7,
+              "bbox": [
+                0.23,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.15,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.23,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "guarda de nascimento por CONTENCAO: caixa parcial nao nasce e RECUPERA o track livre",
+      "contract": "caixa PARCIAL (IoU baixo, contencao alta) dentro de um track: se o track ja esta pareado, descarta; se esta LIVRE, a det o ATUALIZA (recupera a associacao). Det adjacente (contencao baixa) nasce.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.45,
+                0.22,
+                0.08,
+                0.12
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.22,
+                0.08,
+                0.12
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.22,
+                0.08,
+                0.12
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1050,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.22,
+                0.08,
+                0.12
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.62,
+                0.22,
+                0.08,
+                0.12
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.22,
+                0.08,
+                0.12
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.62,
+                0.22,
+                0.08,
+                0.12
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "contencao SO contra track FRESCO (misses 0): track em MISS + escala diferente vira id NOVO",
+      "contract": "duplicata do detector e fenomeno de cena FRESCA. Track ja em miss + det de escala muito diferente e o caso do 2o estagio ('escala nao muda tao rapido') => id NOVO. Sem o gate de frescor a contencao engoliria a det e re-identificaria o que nao devia.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 3000,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.2,
+                0.6
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.25,
+                0.05,
+                0.08
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.45,
+                0.25,
+                0.05,
+                0.08
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "EXTENSAO POR RODADA: fragmento dentro da hipotese LARGA descartada nao nasce",
+      "contract": "detector fragmenta a pessoa (larga + rosto + mao). A larga e descartada pela contencao mas AMPLIA a extensao do track NA RODADA; a mao cai dentro da extensao e morre na guarda. Fragmento FORA da extensao nasce. A MAO vem ANTES da larga na lista de dets DE PROPOSITO: so a ordenacao por SCORE do nascimento faz a larga entrar primeiro — sem ela a mao nasceria '2a pessoa' (o bug de campo m09).",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.6,
+              "bbox": [
+                0.5,
+                0.45,
+                0.05,
+                0.05
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.35,
+                0.18,
+                0.22,
+                0.55
+              ]
+            },
+            {
+              "score": 0.51,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.6,
+              "bbox": [
+                0.7,
+                0.45,
+                0.05,
+                0.05
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.35,
+                0.18,
+                0.22,
+                0.55
+              ]
+            },
+            {
+              "score": 0.51,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.4,
+                0.2,
+                0.06,
+                0.08
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.7,
+                0.45,
+                0.05,
+                0.05
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "politica LOST: some da emissao e volta com o MESMO id",
+      "contract": "acima de lostAfterMisses rodadas ANALISADAS sem match o track sai da emissao mas segue vivo ate o ttlMs; reaparecendo, volta a ser emitido com o MESMO id.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 3000,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 4,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [],
+          "expect": []
+        },
+        {
+          "t": 1050,
+          "dets": [],
+          "expect": []
+        },
+        {
+          "t": 1400,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 4500,
+          "dets": [],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "REFUTACAO por realocacao e LOCAL (refuteMaxDist), nao global",
+      "contract": "uma realocacao (nascimento) refuta o sem-match DENTRO do raio (rastro) e NAO alcanca quem esta fora dele (quem so piscou do outro lado do quadro segue emitido). O flag e PEGAJOSO ate a proxima observacao.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 3000,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0.12,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.35,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.1,
+                0.4,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.1,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 3,
+              "bbox": [
+                0.4,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.4,
+                0.4,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "score": 0.8,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 3,
+              "bbox": [
+                0.4,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1050,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.1,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.1,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.8,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            },
+            {
+              "id": 3,
+              "bbox": [
+                0.4,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "estado ESTACIONARIO: entra por stationaryEnterRounds, ignora o TTL, morre por evidencia E relogio",
+      "contract": "posicao estavel (dentro de stationaryTolerance da ANCORA) por stationaryEnterRounds observacoes => estacionario: segue emitido apos o ttlMs (o TTL vira PISO) e so morre com > stationaryMaxMisses rodadas ANALISADAS sem match E ttlMs desde o ultimo match. stationaryEnterRounds e EXPLICITO: o default DIVERGE de proposito (hub 2, front 3).",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 2,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 300,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 600,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.455,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.455,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 900,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.455,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 2500,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.455,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 2800,
+          "dets": [],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.455,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 3100,
+          "dets": [],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "ANTI-HIJACK: track ESTACIONARIO fica FORA do 2o estagio",
+      "contract": "det ALTA dentro do raio de re-associacao de um track ESTACIONARIO NAO herda o id dele (ele nao se moveu — se fosse ele, o IoU com a caixa congelada ja teria casado): nasce id NOVO e a caixa do parado NAO e arrastada. O parado e refutado pela realocacao (pisca 1 rodada) e volta PARADO na observacao seguinte.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0.12,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 2,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 300,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 600,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 900,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.55,
+                0.46,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.55,
+                0.46,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1200,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            },
+            {
+              "id": 2,
+              "bbox": [
+                0.55,
+                0.46,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ANCORA da imobilidade: DERIVA lenta nao vira estacionario",
+      "contract": "o gate de imobilidade mede contra a ANCORA (onde a imobilidade comecou), NAO contra a observacao anterior: passos de 0.008 (cada um DENTRO da tolerancia 0.01) ACUMULAM e estouram a ancora => o track NUNCA fica estacionario. Medir contra a observacao anterior o declararia parado — e quem escorrega pela cena viraria 'presenca parada'.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 300,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.458,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.458,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 600,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.466,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.466,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 900,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.474,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.474,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 1200,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.482,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.482,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "stationaryMaxMs: teto opcional de vida do estacionario (escape-hatch)",
+      "contract": "com stationaryMaxMs > 0 o estacionario morre por RELOGIO desde stationarySince mesmo RE-OBSERVADO na rodada (a det seguinte nasce id NOVO). E o escape-hatch documentado do caso patologico — 0 (o default dos demais casos) desliga o teto.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 2,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 1000
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 300,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 600,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 900,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": true
+            }
+          ]
+        },
+        {
+          "t": 1700,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": []
+        },
+        {
+          "t": 2050,
+          "dets": [
+            {
+              "score": 0.9,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "bbox": [
+                0.45,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "highScore por RODADA sobrepoe o da criacao",
+      "contract": "o 3o argumento de update() troca o corte alto/baixo naquela rodada: 0.35 NASCE sob highScore 0.3 e vira det BAIXA (so sustenta) sob o 0.4 da criacao.",
+      "opts": {
+        "highScore": 0.4,
+        "iouThreshold": 0.25,
+        "ttlMs": 1500,
+        "birthIouThreshold": 0.55,
+        "birthContainment": 0.7,
+        "reassocDist": 0,
+        "reassocMaxGapMs": 2500,
+        "lostAfterMisses": 1,
+        "refuteMaxDist": 0.6,
+        "stationaryTolerance": 0.01,
+        "stationaryEnterRounds": 3,
+        "stationaryMaxMisses": 3,
+        "stationaryMaxMs": 0
+      },
+      "rounds": [
+        {
+          "t": 0,
+          "highScore": 0.3,
+          "dets": [
+            {
+              "score": 0.35,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.25,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 350,
+          "dets": [
+            {
+              "score": 0.35,
+              "bbox": [
+                0.27,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.27,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        },
+        {
+          "t": 700,
+          "dets": [
+            {
+              "score": 0.35,
+              "bbox": [
+                0.65,
+                0.4,
+                0.1,
+                0.2
+              ]
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "bbox": [
+                0.27,
+                0.4,
+                0.1,
+                0.2
+              ],
+              "stationary": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
