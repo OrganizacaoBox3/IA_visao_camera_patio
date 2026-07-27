@@ -281,6 +281,64 @@ describe("camcfg — modo de zona desconhecido (escrita 400 × leitura tolerante
   });
 });
 
+// ── MODO DA CÂMERA: a MESMA assimetria (a onda passada consertou só o da ZONA) ───────────────
+// `ZONE_MODES.has(c.modo) ? c.modo : "atividade"` no cleanCamConfig rebaixava calado, e este
+// campo tem consumidor no HUB: engine.isFadiga/index.js leem `modo === "fadiga"` p/ NÃO detectar
+// pessoa na câmera de fadiga. Modo corrompido → "atividade" mudo → a câmera de fadiga voltava a
+// ser analisada e contada como pátio, sem uma linha de log dizendo isso.
+describe("camcfg — modo de CÂMERA desconhecido (escrita rejeitada × leitura tolerante)", () => {
+  const { cleanCamConfig } = camcfg;
+
+  it("LEITURA (sem strict): preserva o modo verbatim — NÃO rebaixa p/ atividade", () => {
+    const cfg = cleanCamConfig({ modo: "fadigaX" });
+    expect(cfg.modo).toBe("fadigaX"); // ← o rebaixamento silencioso morreu aqui
+    expect(cfg.modo).not.toBe("atividade");
+    // e sobrevive ao round-trip (rollback de hub não destrói a escolha do operador)
+    expect(cleanCamConfig(JSON.parse(JSON.stringify(cfg))).modo).toBe("fadigaX");
+  });
+
+  it("LEITURA: o modo desconhecido não casa com o ramo de fadiga → câmera INERTE, não rebaixada", () => {
+    expect(cleanCamConfig({ modo: "fadigaX" }).modo).not.toBe("fadiga"); // engine.isFadiga = false
+    expect(cleanCamConfig({ modo: "fadigaX" }).modo).not.toBe("atividade"); // e nem virou pátio
+  });
+
+  it("ESCRITA (strict): modo fora do enum LANÇA badRequest com o modo e a lista de válidos", () => {
+    expect(() => cleanCamConfig({ modo: "fadigaX" }, true)).toThrow(/fadigaX/);
+    try {
+      cleanCamConfig({ modo: "fadigaX" }, true);
+      throw new Error("deveria ter lançado");
+    } catch (e) {
+      expect(e.badRequest).toBe(true);
+      expect(e.message).toContain("fadigaX");
+      expect(e.message).toContain("fadiga"); // a lista de modos válidos ajuda o operador
+    }
+  });
+
+  it("ESCRITA: modo AUSENTE/vazio segue valendo o default 'atividade' (retrocompat, não é erro)", () => {
+    for (const modo of [undefined, null, ""])
+      expect(cleanCamConfig({ modo }, true).modo, String(modo)).toBe("atividade");
+    for (const modo of ["atividade", "leitura", "objetos", "fadiga", "exclusao", "proibida"])
+      expect(cleanCamConfig({ modo }, true).modo, modo).toBe(modo);
+  });
+
+  it("ESCOPO: capture/transport inválidos seguem normalizando em silêncio (não viram 400)", () => {
+    const cfg = cleanCamConfig({ capture: "ultra", transport: "quic" }, true);
+    expect(cfg.capture).toBe("maxima");
+    expect(cfg.transport).toBe("auto");
+  });
+
+  // Mesma restrição do teste de saveZones acima: SÓ o caminho REJEITADO pode rodar aqui — um
+  // payload VÁLIDO persistiria no camcfg.json REAL. A validação roda ANTES de mutar/persistir.
+  it("saveCamConfig REJEITA com badRequest e não muta/persiste nada", async () => {
+    await expect(
+      camcfg.saveCamConfig("cam-teste-modo-cam", { modo: "fadigaX" }),
+    ).rejects.toMatchObject({
+      badRequest: true,
+    });
+    expect(camcfg.getCamConfig("cam-teste-modo-cam")).toBeNull(); // estado anterior intacto
+  });
+});
+
 // Os 4 cantos que a MIGRAÇÃO semeia p/ um retângulo, na ordem TL → TR → BR → BL (horária, y p/
 // baixo). É a forma canônica do preset — o teste a escreve à mão de propósito (se ele importasse
 // o rectPreset do camcfg, provaria só que a função é igual a si mesma).

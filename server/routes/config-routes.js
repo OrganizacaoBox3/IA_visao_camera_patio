@@ -73,7 +73,21 @@ async function handle(req, res, ctx) {
     if (req.method === "PUT") {
       if (!requireConfigurer(req, res)) return true;
       const body = JSON.parse((await readBody(req, 200_000)) || "{}");
-      const saved = await camcfg.saveCamConfig(cameraId, body && body.config);
+      // MESMO padrão do PUT de zonas: `saveCamConfig` REJEITA modo de câmera inválido com
+      // `badRequest` (antes rebaixava calado para "atividade" — e uma câmera de FADIGA que
+      // perdesse o modo voltava a ser analisada e contada como pátio, sem erro e sem log).
+      // Sem este catch a rejeição saía como 500 "erro interno": o servidor recusava certo e
+      // MENTIA sobre o porquê, deixando o operador sem a mensagem que diz o que corrigir.
+      let saved;
+      try {
+        saved = await camcfg.saveCamConfig(cameraId, body && body.config);
+      } catch (e) {
+        if (e && e.badRequest) {
+          json(res, 400, { error: e.message });
+          return true;
+        }
+        throw e;
+      }
       if (!saved) {
         json(res, 400, { error: "config inválida" });
         return true;

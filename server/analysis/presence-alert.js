@@ -34,7 +34,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-const { attributeZone } = require("./zones");
+// resolveZone (a ZONA) e NÃO attributeZone (o RÓTULO): aqui a pergunta é de PERTINÊNCIA
+// ("esta pessoa está nesta zona?"), e a resposta do wrapper de rótulo é `label ?? null` —
+// uma zona de label vazio/ausente responderia "fora" para TODO MUNDO, e a vigilância sumiria
+// EM SILÊNCIO (o falso-OK que a casa mais teme, agora num caminho de segurança). Hoje o
+// cleanZone garante label não-vazio ("Área" é o default), então o bug é inalcançável pela
+// config saneada — mas a bomba fica armada para qualquer caminho que injete zona crua
+// (teste, migração, hub futuro). resolveZone devolve a IDENTIDADE e não depende do rótulo.
+const { resolveZone } = require("./zones");
 
 // Dwell default quando a zona não traz presencaAlertMs (contrato pinado da spec E2).
 const DWELL_DEFAULT_MS = 10_000;
@@ -77,12 +84,12 @@ function createPresenceAlert({ raiseAlarm, cameraLabelOf }) {
     const seen = new Set();
     for (const z of zones) {
       seen.add(z.id);
-      // Contagem INDEPENDENTE por zona (mesmo critério do attributeZone: centro do
-      // bbox + máscara) — zonas proibidas SOBREPOSTAS veem a mesma pessoa cada uma
-      // (violação é por zona; o desempate do attributeZone serve à atribuição
+      // Contagem INDEPENDENTE por zona (mesmo critério do resolveZone: centro do
+      // bbox + máscara/polígono) — zonas proibidas SOBREPOSTAS veem a mesma pessoa cada
+      // uma (violação é por zona; o desempate do resolveZone serve à atribuição
       // exclusiva das zonas de atividade, não à vigilância).
       let people = 0;
-      for (const t of tracks) if (attributeZone(t.bbox, [z]) !== null) people += 1;
+      for (const t of tracks) if (resolveZone(t.bbox, [z]) !== null) people += 1;
       let m = st.presence.get(z.id);
       if (!m) {
         m = { state: "armada", presentSince: null, absentSince: null, violatedAt: 0, durationMs: 0, people: 0 };

@@ -25,7 +25,7 @@ const zone = (over = {}) => ({
 // Estado mínimo por câmera (os campos que o observe usa do createState do engine).
 const makeSt = (zonesProib) => ({ id: "cam1", zonesProib, presence: new Map() });
 
-// Track com CENTRO do bbox em (cx, cy) — a âncora do attributeZone.
+// Track com CENTRO do bbox em (cx, cy) — a âncora do resolveZone.
 const track = (cx, cy) => ({ id: 1, bbox: [cx - 0.05, cy - 0.2, 0.1, 0.4] });
 const inside = () => [track(0.25, 0.5)]; // centro na zona (x<0.5)
 const outside = () => [track(0.75, 0.5)]; // centro fora da zona
@@ -181,6 +181,45 @@ describe("zonas múltiplas e independência", () => {
     expect(raiseAlarm).toHaveBeenCalledTimes(2); // uma violação POR zona
     const zonas = raiseAlarm.mock.calls.map((c) => c[0].zona).sort();
     expect(zonas).toEqual(["Sobreposta", "Área Restrita"].sort());
+  });
+});
+
+// ── PERTINÊNCIA não é RÓTULO (bomba desarmada 2026-07-27) ────────────────────────────────────
+// A contagem usava attributeZone, que devolve `label ?? null`: uma zona proibida SEM rótulo
+// responderia "ninguém dentro" para TODA pessoa — a zona nunca violaria e o alarme NUNCA
+// dispararia, sem erro, sem log, sem 400. Hoje o cleanZone garante label não-vazio (default
+// "Área"), então o caminho SANEADO nunca chegava lá — mas o produtor não pode depender de uma
+// garantia de OUTRO módulo para vigiar. Com resolveZone (a ZONA, identidade) o rótulo deixa de
+// participar da decisão e só decora o texto.
+// MEDIDO (rodando estes 3 casos contra o attributeZone antigo): só o caso `label` AUSENTE
+// falhava — `"" ?? null` é `""`, e `"" !== null` é verdadeiro, então a string vazia passava por
+// acidente do operador `??`, não por desenho. Os outros dois são guarda de regressão, não prova;
+// a prova é o `label: undefined`. Distinguir os dois é o que separa medição de inferência.
+describe("presença NÃO depende do rótulo da zona (resolveZone, não attributeZone)", () => {
+  it("zona de label VAZIO conta presença e alarma igual (o rótulo só decora o texto)", () => {
+    const st = makeSt([zone({ label: "" })]);
+    presence.observe(st, inside(), 0);
+    presence.observe(st, inside(), 12_000);
+    expect(raiseAlarm).toHaveBeenCalledTimes(1);
+    expect(raiseAlarm.mock.calls[0][0].zona).toBe("");
+    expect(st.presence.get("p1").state).toBe("violada");
+    expect(st.presence.get("p1").people).toBe(1);
+  });
+
+  it("zona SEM campo label (config crua/legada) idem — violada com a contagem certa", () => {
+    const st = makeSt([zone({ label: undefined })]);
+    presence.observe(st, inside(), 0);
+    presence.observe(st, inside(), 12_000);
+    expect(raiseAlarm).toHaveBeenCalledTimes(1);
+    expect(stateOf(st).get("p1")).toMatchObject({ violada: true, people: 1 });
+  });
+
+  it("o rótulo vazio não afrouxa o critério: quem está FORA segue fora (sem alerta)", () => {
+    const st = makeSt([zone({ label: "" })]);
+    presence.observe(st, outside(), 0);
+    presence.observe(st, outside(), 12_000);
+    expect(raiseAlarm).not.toHaveBeenCalled();
+    expect(st.presence.get("p1").people).toBe(0);
   });
 });
 

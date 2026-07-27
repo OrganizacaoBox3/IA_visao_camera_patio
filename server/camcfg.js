@@ -296,11 +296,49 @@ function validateZoneShifts(list, shifts) {
   return null;
 }
 
+// ── MODO DA CÂMERA: a MESMA assimetria do modo de ZONA (zoneMode) ────────────────────────────
+// Mesma política porque é o mesmo defeito: rebaixar p/ "atividade" em silêncio apagava
+// configuração SEM erro, SEM log e SEM 400. E aqui não é só cosmético — o hub LÊ este campo:
+// engine.isFadiga/index.js decidem por `modo === "fadiga"` que a câmera roda no cliente e que o
+// hub NÃO detecta pessoa nela. Um modo corrompido virava "atividade" calado e a câmera de fadiga
+// passava a ser analisada (e contada no relatório) como pátio — o operador vendo número onde
+// não deveria haver nenhum. Falso-OK é pior que erro.
+// ESCRITA (strict, saveCamConfig ⇒ PUT): modo fora do enum é ERRO DO CLIENTE → badRequest.
+// LEITURA (lenient, init/boot): preserva VERBATIM + WARN alto — nunca derruba o boot, nunca
+//   reinterpreta. Consequência (intencional, idêntica à da zona): a câmera fica INERTE nos ramos
+//   que comparam por igualdade exata (isFadiga = false) e o front cai no seu próprio default.
+//   Preservar (em vez de rebaixar) é o que protege o rollback: hub antigo lendo config de hub
+//   novo ignora o modo futuro sem DESTRUIR a escolha do operador ao regravar o arquivo.
+// ESCOPO deliberado (só o modo): `capture`/`transport` seguem normalizando em silêncio de
+//   propósito — são preferência de apresentação (qualidade do preset, transporte do tile), a
+//   degradação é VISÍVEL na hora e não apaga vigilância nenhuma. Endurecê-los seria inventar
+//   política que ninguém pediu e transformar payload legado em 400.
+// ⚠ PENDÊNCIA CROSS-FRENTE (não é deste arquivo): a rota do camconfig
+//   (server/routes/config-routes.js, PUT /api/camconfig/:id) ainda NÃO tem o try/catch que a de
+//   zonas tem, então este badRequest sai como 500 "erro interno" em vez de 400 com a mensagem.
+//   O PUT já é REJEITADO e NADA é persistido — que é o ponto — só o status/texto ficam devendo;
+//   o conserto é as mesmas 6 linhas do bloco de zonas (config-routes.js:47-55) na rota do
+//   camconfig. Residual DECLARADO, não descoberto depois.
+function camMode(c, strict) {
+  const raw = c.modo;
+  if (raw == null || raw === "") return "atividade"; // ausente = default de sempre (retrocompat)
+  if (ZONE_MODES.has(raw)) return raw;
+  if (strict)
+    throw badRequest(
+      `config da câmera: modo ${JSON.stringify(raw)} é desconhecido — modos válidos: ${[...ZONE_MODES].join(", ")}`,
+    );
+  console.warn(
+    `[camcfg] câmera com modo desconhecido ${JSON.stringify(raw)} — preservado como está; a câmera fica INERTE nos ramos por modo (não roda fadiga) neste hub`,
+  );
+  return raw;
+}
+
 // Config de câmera (src/cameraConfig.ts CameraCfg): modo + ponto de leitura + preset + classes.
-function cleanCamConfig(c) {
+// `strict` = caminho de ESCRITA (ver camMode): LANÇA badRequest em vez de normalizar em silêncio.
+function cleanCamConfig(c, strict) {
   if (!c || typeof c !== "object") return null;
   return {
-    modo: ZONE_MODES.has(c.modo) ? c.modo : "atividade",
+    modo: camMode(c, strict),
     pontoLeitura: str(c.pontoLeitura),
     capture: CAPTURE_PRESETS.has(c.capture) ? c.capture : "maxima",
     transport: TRANSPORTS.has(c.transport) ? c.transport : "auto",
@@ -515,10 +553,13 @@ function getCamConfig(cameraId) {
   return camConfigs.get(str(cameraId)) || null;
 }
 // Substitui a config de uma câmera e persiste; devolve a config salva (ou null se inválida).
+// REJEITA (throw com badRequest) modo FORA do enum — falhar alto em vez de rebaixar em silêncio
+// (mesma política do saveZones; ver camMode). NADA é mutado nem persistido antes de validar:
+// save inválido deixa o estado anterior intacto (e o teste roda sem tocar disco).
 async function saveCamConfig(cameraId, input) {
   const id = str(cameraId);
   if (!id) return null;
-  const cfg = cleanCamConfig(input);
+  const cfg = cleanCamConfig(input, true);
   if (!cfg) return null;
   camConfigs.set(id, cfg);
   await persistCamConfig(id);
@@ -555,6 +596,9 @@ module.exports = {
   // Idem, para a calibração. Sem este round-trip, a allowlist descarta campo novo em SILÊNCIO —
   // foi como `stations` (multi-antena) passou meses sendo salvo pela UI e jogado fora pelo hub.
   cleanCalibration,
+  // Idem, para a config de câmera: a assimetria leitura/escrita do MODO (camMode) só é
+  // verificável chamando a função pura nos dois caminhos — sem disco, sem Postgres.
+  cleanCamConfig,
   // Puro (cadastro de turnos por parâmetro): a regra de overlap da grade da zona (CA-4).
   validateZoneShifts,
   // Puro (lista já saneada): a regra de RÓTULO ÚNICO por câmera nos modos atividade/proibida.
