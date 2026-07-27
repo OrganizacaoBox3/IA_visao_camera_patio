@@ -12,9 +12,11 @@ import { fmtDuration } from "../../format";
 import { sensitivityFactor } from "../../processors/atividade";
 import { objClass } from "../../objects/catalog";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
-import { Badge, HelpTip, Kpi, Loading, SectionTitle, Tooltip } from "../../ui";
+import { Alert, Badge, HelpTip, Kpi, Loading, SectionTitle, Tooltip } from "../../ui";
 import { MetricCell } from "../../components/Sparkline";
 import { restritaSummary, type LegendItem } from "../derive";
+import { objectBackendNotice } from "../objectBackendNotice";
+import type { ObjBackend } from "../../objects/detector";
 import { RISK_LABEL, stateVar, type ZoneResult } from "../draw";
 import {
   EAR_HI,
@@ -59,6 +61,9 @@ type Props = {
   legend: LegendItem[];
   setCfgZoneId: (id: string) => void;
   removeZone: (id: string) => void;
+  // Detector do modo Objetos (singleton do cliente — objects/detector.ts), levado até aqui pelo
+  // CameraWorkspace. Sem ele a contagem 0 é AMBÍGUA: "não tem caixa" × "o modelo nunca carregou".
+  objBackend: ObjBackend;
 };
 
 export function ZonasTab({
@@ -70,6 +75,7 @@ export function ZonasTab({
   legend,
   setCfgZoneId,
   removeZone,
+  objBackend,
 }: Props) {
   return (
     <>
@@ -106,6 +112,10 @@ export function ZonasTab({
       {zones.map((z) => {
         const r = panel.get(z.id);
         const st = r?.modo === "atividade" ? r.view.state : "ATIVA";
+        // Aviso do DETECTOR (só o modo Objetos tem detector próprio). `null` no caminho saudável
+        // — o aviso não pode virar decoração permanente (ver objectBackendNotice.ts).
+        const detAviso =
+          z.modo === "objetos" ? objectBackendNotice(objBackend, z.selectedClasses) : null;
         return (
           <div key={z.id} className={`zone ${st}`}>
             <div className="row">
@@ -259,6 +269,17 @@ export function ZonasTab({
 
             {z.modo === "objetos" && (
               <>
+                {/* ANTES do número, não depois: quem lê "0" já leu por que o 0 pode não ser
+                    observação. Tom = token de estado que JÁ existe (going gray — modelo caído É
+                    anormalidade); nenhum número sobre a imagem, o aviso vive no painel. */}
+                {detAviso && (
+                  <Alert tone={detAviso.tone}>
+                    <span>
+                      {detAviso.text}{" "}
+                      <HelpTip label="Ajuda do detector de objetos">{detAviso.help}</HelpTip>
+                    </span>
+                  </Alert>
+                )}
                 <div className="ws-counts">
                   {z.selectedClasses.length === 0 && (
                     <span className="muted">nenhuma classe — use “Configurar zona”</span>

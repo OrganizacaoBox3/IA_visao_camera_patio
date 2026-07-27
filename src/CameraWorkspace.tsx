@@ -50,6 +50,8 @@ import { schedulerStats } from "./vision/scheduler";
 import { shouldIngest } from "./camera/ingestPolicy";
 import { panelSig, twSig, dominantMode, legendFor } from "./camera/derive";
 import { holderFor as holderForZone, type Holder } from "./camera/holders";
+import { cropZone } from "./camera/cropZone";
+import type { ObjBackend } from "./objects/detector";
 import { useFocusTrap } from "./camera/useFocusTrap";
 import type { HubAnalysis, Track } from "./types/analysis";
 import { useCineLoop } from "./camera/useCineLoop";
@@ -278,6 +280,11 @@ export function CameraWorkspace({
     setHudState(v);
   };
   const [detBackend, setDetBackend] = useState<string | null>(null); // null até o worker reportar
+  // Detector do modo OBJETOS: o processador já reportava o backend a cada rodada e o resultado era
+  // DESCARTADO aqui — por isso "0 caixas" e "o modelo nunca carregou" ficavam idênticos na tela
+  // (falso-OK). Vira estado (o ref evita re-render: muda 2-3× na vida da página).
+  const [objBackend, setObjBackend] = useState<ObjBackend>("carregando");
+  const objBackendRef = useRef<ObjBackend>("carregando");
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
@@ -536,26 +543,9 @@ export function CameraWorkspace({
     return holderForZone(holdersRef.current, cropsRef.current, z, longRangeRef.current);
   }
 
-  // Recorte da ROI da zona (cap ~480px) → FrameSource alimentado ao FadigaProcessor.
+  // Recorte da ROI da zona (cap ~480px) → FrameSource do FadigaProcessor · ./camera/cropZone.
   // Reusa o canvas por zona (identidade estável); o newFrame usa a identidade do frame real (srcEl).
-  function cropFor(z: Zone, f: FrameSource): FrameSource {
-    let cv = cropsRef.current.get(z.id);
-    if (!cv) {
-      cv = document.createElement("canvas");
-      cropsRef.current.set(z.id, cv);
-    }
-    const sw = Math.max(1, Math.round(z.w * f.w)),
-      sh = Math.max(1, Math.round(z.h * f.h));
-    const scale = Math.min(1, 480 / sw),
-      cw = Math.max(1, Math.round(sw * scale)),
-      ch = Math.max(1, Math.round(sh * scale));
-    if (cv.width !== cw || cv.height !== ch) {
-      cv.width = cw;
-      cv.height = ch;
-    }
-    cv.getContext("2d")!.drawImage(f.el, z.x * f.w, z.y * f.h, sw, sh, 0, 0, cw, ch);
-    return { el: cv, w: cw, h: ch };
-  }
+  const cropFor = (z: Zone, f: FrameSource): FrameSource => cropZone(cropsRef.current, z, f);
 
   // Rastreio anônimo de pessoas (IDs efêmeros, sem identidade) — base da "Presença".
   // ByteTrack-lite (vision/bytetrack.ts): 2 passadas por IoU — score alto associa/nasce; score
@@ -967,6 +957,9 @@ export function CameraWorkspace({
             { frame: f, now },
           );
           if (r.detectMs != null) stageMsRef.current.detect = r.detectMs;
+          // O backend do detector PARA DE SER DESCARTADO: sobe ao estado que a aba Zonas lê.
+          if (r.backend !== objBackendRef.current)
+            setObjBackend((objBackendRef.current = r.backend));
           // Objetos segue no cliente (o motor não cobre o modo) → sempre ingerido (ADR-009).
           if (shouldIngest("object", engine)) {
             r.events.forEach((e) => recordObjectEvent(e));
@@ -1585,6 +1578,7 @@ export function CameraWorkspace({
             legend,
             setCfgZoneId,
             removeZone,
+            objBackend,
           }}
           linhas={{
             tripwireMode,
