@@ -421,3 +421,106 @@ export const deleteCamera = (id: string) =>
 export type ConnectedCamera = { id: string; label: string; online: boolean };
 export const getConnectedCameras = () =>
   apiGet<{ cameras: ConnectedCamera[] }>("/api/cameras/connected");
+
+// ── SAÚDE DO MOTOR DE ANÁLISE (ADR-009) — GET /api/analysis/status ───────────────────────────
+// O motor mede muita coisa e, até esta onda, NINGUÉM no front consumia: motor desligado, worker
+// morrendo em loop, gate cegando a câmera e Postgres caído se pareciam todos com "0 pessoas".
+// Falso-OK — a classe que a doutrina põe acima de erro. Este é o cliente do sensor.
+//
+// O shape é CONTRATO ADITIVO do hub (server/analysis/telemetry.js, com telemetry.test.js
+// travando-o lá). AQUI ele é lido DEFENSIVAMENTE: tudo que nasceu depois do primeiro corte
+// (`gate`, `autoscale`, `worker`, `tracker`, `autoMask`, `go2rtcPull`) é OPCIONAL no tipo —
+// um hub mais antigo não manda, e "campo ausente" tem de virar "não sei", nunca "está bom".
+// SÓ NÚMEROS/METADADOS (LGPD): nenhuma imagem trafega por aqui.
+// Auth: qualquer usuário autenticado (requireAuth em server/routes/analysis.js).
+
+/** Pool de workers de inferência (worker-host.stats()). */
+export type AnalysisWorker = {
+  ready: boolean; // ≥1 worker pronto
+  size: number; // workers no pool
+  readyCount: number; // quantos estão prontos AGORA
+  cpuPct: number; // agregado do pool (soma dos N; 100% = 1 core inteiro)
+  respawns: number; // reinícios acumulados desde o boot do hub
+  pids?: (number | null)[];
+  workers?: {
+    id: number;
+    ready: boolean;
+    pid: number | null;
+    cpuPct: number;
+    respawns: number;
+    load: number;
+  }[];
+};
+
+/** Auto-dimensionamento do modelo (autoscale.js): tier ativo + histerese. */
+export type AnalysisAutoscale = {
+  mode: "auto" | "pin"; // "pin" = fixado por ANALYSIS_MODEL/PATH
+  tier: "n" | "s" | "m" | null; // null sob override de path (fora do catálogo)
+  pin: string | null; // por que está fixo, se estiver
+  choked: number; // janelas afogadas acumuladas (rumo a rebaixar)
+  idle: number; // janelas folgadas acumuladas (rumo a subir)
+  lastSwitchAt: number;
+};
+
+/** Sensor do gate de movimento POR CÂMERA — janela rolante de 60 SEGUNDOS (não "última hora"). */
+export type AnalysisGate = {
+  /** Rodadas PULADAS com ≥1 track vivo NÃO estacionário: cegueira medida, não opinião. */
+  skipMoving1m: number;
+  ratioP50: number;
+  ratioP95: number;
+  /** Motivo de cada rodada da janela (gateada ou não). A SOMA = total de rodadas em 60s. */
+  reasons1m: Record<string, number>;
+};
+
+export type AnalysisCamera = {
+  fps: number; // inferências CONCLUÍDAS por segundo nos últimos 60s (0 = nada analisado)
+  targetFps: number; // cadência efetiva pretendida (foco > linha > normal; 0 se fadiga)
+  focused: boolean;
+  queue: number;
+  skipped1m: number; // rodadas puladas pelo gate em 60s (economia + cegueira somadas)
+  skippedTotal?: number;
+  motion: number; // último ratio de movimento (0..1)
+  gate?: AnalysisGate;
+  lastMs: number; // duração da última inferência
+  dets1m: number;
+  excluded1m: number; // pessoas suprimidas por zona de exclusão (60s)
+  automasked1m?: number; // pessoas suprimidas pela auto-máscara (60s)
+  autoMask?: { mode: string; suppressed: number; suggestions?: unknown[] };
+  longRange?: boolean;
+  fadiga: boolean; // câmera modo=Operador: analisada NO NAVEGADOR, não no hub (por desenho)
+  source?: string; // "relay" | "go2rtc"
+  tracker?: { reassoc1m: number; reassocTotal: number; lost: number };
+};
+
+export type AnalysisStatus = {
+  enabled: boolean; // motor ligado no hub
+  model: string; // arquivo do modelo ativo
+  targetFps: number;
+  lineFps: number;
+  focusFps: number;
+  focused: string[];
+  autoMask?: { mode: string };
+  motionGate: {
+    enabled: boolean;
+    ratio: number;
+    probeMs: number;
+    probeFocusMs: number;
+    thumb: string;
+    skipped1m: number;
+    skippedTotal: number;
+  };
+  autoscale?: AnalysisAutoscale;
+  worker?: AnalysisWorker;
+  go2rtcPull?: {
+    active: boolean;
+    mode: string;
+    streams: number;
+    transport?: string;
+    streaming?: number;
+  };
+  /** Uma entrada por câmera VIVA no motor. Câmera sem frame há >5 min SAI daqui (prune). */
+  perCamera: Record<string, AnalysisCamera>;
+};
+
+// GET /api/analysis/status — instantâneo do motor. Auth: logado.
+export const getAnalysisStatus = () => apiGet<AnalysisStatus>("/api/analysis/status");

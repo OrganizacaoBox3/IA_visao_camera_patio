@@ -1,0 +1,222 @@
+/* Saúde do MOTOR de análise (N1b do Relatório) — irmã da .ah-strip (health.css), que cobre a
+   saúde do ALARME. Mesma fundação de tokens (--state-*, --sp-*, --mono); arquivo separado de
+   propósito: são dois sensores de fontes diferentes e ninguém precisa reler o CSS do alarme para
+   mexer no do motor.
+
+   GOING-GRAY. O nível vive no atributo data-level do <section> e só COLORE fora do normal:
+     ok       → neutro (a faixa saudável não acende; verde permanente é decoração)
+     warn     → âmbar
+     down     → vermelho
+     unknown  → vermelho TAMBÉM: estado desconhecido não pode parecer calmo (é a regra que este
+                painel inteiro existe para defender).
+   A cor NUNCA é a única informação: cada verdito e cada achado carregam ícone + palavra + texto. */
+
+.eh-strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  /* Fio à esquerda: marca o bloco como "outro relógio" (não obedece ao filtro de período). */
+  border-left: 3px solid var(--state-neutral-border);
+}
+.eh-strip[data-level="warn"] {
+  border-left-color: var(--state-warn);
+}
+.eh-strip[data-level="down"],
+.eh-strip[data-level="unknown"] {
+  border-left-color: var(--state-critical);
+}
+
+.eh-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+/* Carimbo da escala ("agora · janela de 1 min") — em texto, nunca em nota de rodapé. */
+.eh-now {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.eh-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+/* ── O VEREDITO: manchete + o que significa. É a única linha que o operador precisa ler. ── */
+.eh-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.eh-verdict__icon {
+  display: inline-flex;
+  flex: none;
+  margin-top: 1px;
+  color: var(--state-neutral-fg);
+}
+.eh-verdict__icon[data-level="warn"] {
+  color: var(--state-warn-fg);
+}
+.eh-verdict__icon[data-level="down"],
+.eh-verdict__icon[data-level="unknown"] {
+  color: var(--state-critical-fg);
+}
+.eh-verdict__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.eh-verdict__headline {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.eh-verdict__meaning {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--state-neutral-fg);
+}
+
+/* ── ACHADOS: existem SÓ na anormalidade (+ os 2 casos `info` que explicam um zero
+      estrutural). Motor saudável não desenha lista nenhuma. ── */
+.eh-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.eh-finding {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--state-neutral-border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+.eh-finding[data-level="down"] {
+  border-left-color: var(--state-critical);
+  background: var(--state-critical-bg);
+}
+.eh-finding[data-level="warn"] {
+  border-left-color: var(--state-warn);
+  background: var(--state-warn-bg);
+}
+.eh-finding[data-level="info"] {
+  border-left-color: var(--state-neutral-fg);
+  background: var(--state-neutral-bg);
+}
+.eh-finding__icon {
+  display: inline-flex;
+  flex: none;
+  margin-top: 2px;
+  color: var(--state-neutral-fg);
+}
+.eh-finding[data-level="down"] .eh-finding__icon {
+  color: var(--state-critical-fg);
+}
+.eh-finding[data-level="warn"] .eh-finding__icon {
+  color: var(--state-warn-fg);
+}
+.eh-finding__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.eh-finding__what {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+/* Nome da câmera como prefixo — o id cru só aparece quando não há rótulo. */
+.eh-finding__cam {
+  font-weight: 600;
+  margin-right: var(--sp-2);
+}
+.eh-finding__cam::after {
+  content: "·";
+  margin-left: var(--sp-2);
+  color: var(--state-neutral-fg);
+  font-weight: 400;
+}
+/* A metade que faz a linha valer: o que isso faz com o DADO. */
+.eh-finding__so {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--state-neutral-fg);
+}
+
+/* Perda de cobertura declarada (a lista de câmeras da central não respondeu). */
+.eh-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* ── Detalhe técnico (canConfigure) ── */
+.eh-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: flex-start;
+}
+.eh-tech {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 100%;
+}
+.eh-tech__globals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--state-neutral-fg);
+}
+.eh-tech__globals b {
+  color: var(--text-muted);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-right: var(--sp-1);
+}
+.eh-tech__tag {
+  margin-left: var(--sp-2);
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--state-neutral-border);
+  font-size: 10px;
+  color: var(--state-neutral-fg);
+}
+
+@media print {
+  /* Não vai para o PDF: "agora · janela de 1 min" seria falso no papel, lido horas depois —
+     mesma razão pela qual a faixa de alarme (.ah-strip) também some na impressão. */
+  .eh-strip {
+    display: none;
+  }
+}

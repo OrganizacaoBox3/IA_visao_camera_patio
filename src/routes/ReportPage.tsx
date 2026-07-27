@@ -4,12 +4,19 @@
 //
 // A HIERARQUIA (o que o gestor lê primeiro):
 //   N1  saúde do detector  — AlarmHealthStrip (janela de ~10 min, EM MEMÓRIA; NÃO obedece ao
-//                            filtro de período, e diz isso na cara; é o ÚNICO relógio da tela)
+//                            filtro de período, e diz isso na cara)
+//   N1b saúde do MOTOR     — SaudeMotorPanel (/api/analysis/status, janela de 1 min): "as
+//                            contagens estão sendo FEITAS?". Mesmo relógio-próprio, mesma
+//                            regra de escala. Até esta onda o dado existia no hub e ninguém o
+//                            consumia — motor desligado, worker em loop e gate cegando a câmera
+//                            se pareciam com "0 pessoas · tudo normal" (falso-OK).
 //   N2  resumo executivo   — só as dimensões COM DADO + o 5º cartão (Alarmes)
 //   N3  alarmes            — tendência clicável + heatmap prioridade×hora + fila com ack
 //   N4  dimensão           — só as que têm dado; o filtro do recorte é ANCORADO NA SEÇÃO
 //   N5  ferramentas        — silenciamentos · limpar histórico · fonte (canConfigure)
-// Razão de N1 vir primeiro: se o alarme está inundando, TODO número abaixo é suspeito.
+// Razão de N1/N1b virem primeiro: se o alarme está inundando — ou se o motor está parado —, TODO
+// número abaixo é suspeito. As duas faixas respondem "posso confiar no que vou ler?"; o corpo
+// histórico responde "o que aconteceu". Nessa ordem, e nunca sob o mesmo relógio.
 //
 // A carga do histórico é ÚNICA (useReportData); o pipeline de cada modo vive num view-model hook
 // (routes/report/use*VM) que computa SÓ a visão atual ("off"/"summary"/"full"); as agregações
@@ -60,6 +67,7 @@ import { useFadigaVM } from "./report/useFadigaVM";
 import { useAlarmesVM } from "./report/useAlarmesVM";
 import { EmptyHistory } from "./report/EmptyHistory";
 import { AlarmHealthStrip } from "./report/AlarmHealthStrip";
+import { SaudeMotorPanel } from "./report/SaudeMotorPanel";
 import { ReportTools } from "./report/ReportTools";
 import { ResumoPanel } from "./report/ResumoPanel";
 import { AtividadePanel } from "./report/AtividadePanel";
@@ -496,6 +504,14 @@ export function ReportPage() {
       {/* N1 — a saúde do detector. Fora do filtro de período (outra escala temporal) e dona do
           ÚNICO timer da tela: o corpo histórico abaixo é carga única e não pode piscar. */}
       <AlarmHealthStrip />
+
+      {/* N1b — a saúde do MOTOR. O alarme acima responde "o detector está confiável?"; esta
+          responde a pergunta anterior a ela: "as contagens estão sendo FEITAS?". Sem entrada nova
+          na navegação de propósito — rota órfã é o código morto que a auditoria já achou; e é
+          nesta tela, cuja razão de existir são os números do motor, que a resposta muda a decisão.
+          RBAC: o ACHADO é de todos (muda a confiança no número que o operador lê); só o número
+          CRU (fps/cpu/respawn/p95) fica sob canConfigure — ver cabeçalho do SaudeMotorPanel. */}
+      <SaudeMotorPanel canConfigure={canConfigure} />
 
       <FilterBar
         period={period}
