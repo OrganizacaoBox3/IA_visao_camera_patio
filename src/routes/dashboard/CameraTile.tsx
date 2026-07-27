@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { TriangleAlert } from "lucide-react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
@@ -6,6 +7,7 @@ import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
 import { getVideoTicket } from "../../video/ticket";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
+import { HUB_TRACKS_STALE_MS } from "../../types/analysis";
 import { Tooltip, StatusDot } from "../../ui";
 import { TrackOverlay } from "./TrackOverlay";
 import { type Camera, type CameraStatus } from "./types";
@@ -195,6 +197,133 @@ function statusInfo(s: CameraStatus | undefined): {
   return { text, dot, border, normal: state === "online", fps: s?.fps };
 }
 
+// ── ZONA RESTRITA VIOLADA no TILE (o alarme mais grave que o produto gera) ────────────────────
+// O motor do hub calcula 24/7 e manda no `analysis-tracks.zonesProibidas`; até aqui esse estado só
+// existia DENTRO da câmera aberta em tela cheia (badge ARMADA/VIOLADA desenhado por camera/draw.ts)
+// — na GRADE, que é a tela que o operador olha o dia inteiro, a violação era invisível. Pior no
+// transporte "auto"/WebRTC (o default com go2rtc no ar): ali o CameraWorkspace nem monta, então nem
+// o polígono desenhado existe; o tile mostrava só caixas de pessoa.
+//
+// ESCOPO (deliberado): o tile NÃO desenha o polígono da zona. A geometria não vem neste payload
+// (viria de `camcfg` por câmera — carga nova no dashboard) e, no tamanho de um tile de mosaico,
+// polígono é ruído. O que o mosaico precisa responder é "QUAL câmera tem violação AGORA e em QUAL
+// área" — para o operador ABRIR a câmera e ver o resto. Isso é sinal de estado, não geometria.
+//
+// GOING-GRAY: ARMADA é operação NORMAL e não acende NADA (se toda câmera com zona restrita ficasse
+// marcada o tempo todo, o sinal morre). Só VIOLADA satura (--state-critical).
+
+/** Rótulo genérico quando a zona vem sem `label` — NUNCA o id (detalhe interno, como o id de track). */
+const ZONA_SEM_NOME = "Área restrita";
+
+/** Cadência da amostragem do payload (ms) — ver `useViolatedZones`. */
+const RESTRICTED_POLL_MS = 1000;
+
+/**
+ * Zonas proibidas VIOLADAS no último payload do hub. TRI-ESTADO deliberado (o `undefined` do
+ * contrato NÃO é `[]` — types/analysis.ts):
+ *   • `null`  → NÃO SEI (sem payload · payload STALE · hub antigo sem o campo). O tile não acende
+ *               e — invariante — também não afirma que está tudo bem.
+ *   • `[]`    → sei, e a câmera está quieta (sem zona restrita, ou nenhuma violada) → silêncio legítimo.
+ *   • [labels] → violadas AGORA, na ordem em que o motor mandou.
+ * PURA (recebe `now`): o gate de STALE é o mesmo do overlay/CameraWorkspace (HUB_TRACKS_STALE_MS)
+ * — motor reiniciando não pode virar "violação eterna". Indicador crítico travado aceso é PIOR que
+ * indicador nenhum, porque ensina o operador a ignorá-lo.
+ */
+export function violatedZoneLabels(
+  a: HubAnalysis | null | undefined,
+  now: number,
+): string[] | null {
+  if (!a || !Array.isArray(a.zonesProibidas)) return null; // ausente ≠ vazio: "não sei"
+  if (now - a.ts > HUB_TRACKS_STALE_MS) return null; // payload velho → apaga (não trava aceso)
+  const out: string[] = [];
+  for (const z of a.zonesProibidas) {
+    // `presenca` é a MÁQUINA do motor (histerese/dwell), não `people > 0` cru — e a normalização
+    // do fio (incl. a string "VIOLADA" do hub antigo) já aconteceu em toHubAnalysis.
+    if (z?.presenca === true) out.push(z.label?.trim() || ZONA_SEM_NOME);
+  }
+  return out;
+}
+
+/** Igualdade rasa do tri-estado — preserva a referência p/ não re-renderizar o tile à toa. */
+function sameLabels(a: string[] | null, b: string[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((x, i) => x === b[i]);
+}
+
+/**
+ * Amostra o `zonesProibidas` do último payload do hub. AMOSTRAGEM (e não re-render por evento) é
+ * imposta pelo desenho do ADR-009: `analysis-tracks` chega ~1fps e mora num REF (`hubAnalysisRef`)
+ * justamente para não re-renderizar a grade inteira — o getter não notifica ninguém. 1 leitura/s
+ * por tile é ruído perto do rAF do vídeo, e é o que faz a violação APAGAR sozinha quando o payload
+ * envelhece (o gate de stale só vale se alguém reavaliar o relógio).
+ */
+function useViolatedZones(getHubAnalysis?: () => HubAnalysis | null): string[] | null {
+  // Init LAZY (roda também no SSR dos testes): sem janela cega de 1 tick — se o hub já reportava
+  // violação quando o tile montou, o 1º paint já acende.
+  const [labels, setLabels] = useState<string[] | null>(() =>
+    violatedZoneLabels(getHubAnalysis?.() ?? null, Date.now()),
+  );
+  useEffect(() => {
+    if (!getHubAnalysis) {
+      setLabels((prev) => (prev === null ? prev : null)); // câmera sem análise → volta a "não sei"
+      return;
+    }
+    const read = () =>
+      setLabels((prev) => {
+        const next = violatedZoneLabels(getHubAnalysis() ?? null, Date.now());
+        return sameLabels(prev, next) ? prev : next;
+      });
+    read(); // 1ª amostra no commit (o payload pode ter chegado entre o render e o efeito)
+    const t = setInterval(read, RESTRICTED_POLL_MS);
+    return () => clearInterval(t);
+  }, [getHubAnalysis]);
+  return labels;
+}
+
+// Contorno saturado no tile inteiro: é o que o olho pega VARRENDO o mosaico (mesmo idioma do
+// `.tile.alerting`, que já usa --state-critical p/ alerta local). `outline` não empurra layout
+// (border empurraria) e o raio acompanha o da .tile p/ não virar retângulo duro sobre o vídeo.
+const TILE_VIOLADA_OUTLINE: CSSProperties = {
+  outline: "2px solid var(--state-critical)",
+  outlineOffset: "-1px",
+  borderRadius: "10px",
+};
+
+// Pílula da violação: 2ª linha do canto superior esquerdo (logo abaixo da .cam-status-pill, que
+// vive em top:6px) — o canto superior DIREITO é do .tile-badges do CameraWorkspace. Estilo inline
+// (não .css) porque este arquivo é o dono do sinal; tudo por token (nada de hex — lint-tokens).
+// Par bg/fg = o mesmo do padrão crítico da casa (bg escuro + fg claro): contraste AA de sobra,
+// enquanto a SATURAÇÃO fica na borda/contorno. pointer-events:none → o clique atravessa e abre a
+// câmera (a pílula não pode roubar o alvo do operador).
+const VIOLADA_PILL: CSSProperties = {
+  position: "absolute",
+  top: "30px",
+  left: "6px",
+  zIndex: 3, // acima do canvas do TrackOverlay (1) e da pílula de status (2)
+  maxWidth: "calc(100% - 12px)",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "5px",
+  fontFamily: "var(--mono)",
+  fontSize: "11px",
+  background: "var(--state-critical-bg)",
+  color: "var(--state-critical-fg)",
+  border: "1px solid var(--state-critical)",
+  borderRadius: "9999px",
+  padding: "2px 8px",
+  pointerEvents: "none",
+};
+
+// Lista de zonas: uma linha só; se não couber, corta com reticências. O texto ÍNTEGRO continua na
+// região viva (sr-only) — a AT nunca perde zona. NADA de "+N": número sobre a imagem é invariante
+// da casa (a contagem vive no painel).
+const VIOLADA_PILL_ZONES: CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
 type CameraTileProps = {
   camera: Camera;
   isOpen: boolean; // câmera já aberta no painel (overlay full)
@@ -257,6 +386,9 @@ export const CameraTile = memo(function CameraTile({
   // memoizado p/ manter a identidade entre re-renders do próprio tile).
   const openSelf = useCallback(() => onOpen(camera.id), [onOpen, camera.id]);
   const st = statusInfo(status);
+  // Zona restrita VIOLADA agora (null = "não sei"; [] = quieta) — ver useViolatedZones.
+  const violadas = useViolatedZones(getHubAnalysis);
+  const emViolacao = !!violadas && violadas.length > 0;
   const inner = isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
   ) : paused ? (
@@ -304,8 +436,33 @@ export const CameraTile = memo(function CameraTile({
     />
   );
   return (
-    <div className="cam-tile relative grid min-h-0">
+    <div
+      className="cam-tile relative grid min-h-0"
+      // Estado do SINAL (aceso/apagado), não do mundo: "0" cobre tanto "quieta" quanto "não sei"
+      // — o tile nunca afirma normalidade. Gancho estável p/ teste/e2e.
+      data-violada={emViolacao ? 1 : 0}
+      style={emViolacao ? TILE_VIOLADA_OUTLINE : undefined}
+    >
       {inner}
+      {/* SINAL DE VIOLAÇÃO — só quando VIOLADA (ARMADA é normal e fica calada; going-gray).
+          Duas peças, de propósito:
+          (1) a pílula VISÍVEL é aria-hidden — é o duplicado gráfico da frase abaixo, e ler as
+              duas seria repetição na AT. Ela carrega ÍCONE + a palavra "VIOLADA" em TEXTO: cor
+              sozinha não comunica (daltonismo/monitor lavado do CD).
+          (2) a região VIVA (role=status, sr-only) existe SEMPRE e fica VAZIA quando não há
+              violação — região inserida junto com o conteúdo é anunciada de forma irregular pelas
+              ATs. Vazia ela não afirma nada: "não sei" e "quieta" seguem indistinguíveis na
+              saída, que é exatamente o contrato (o tile NUNCA declara normalidade). */}
+      {emViolacao && (
+        <span style={VIOLADA_PILL} aria-hidden="true">
+          <TriangleAlert size={12} strokeWidth={1.75} aria-hidden />
+          VIOLADA
+          <span style={VIOLADA_PILL_ZONES}>· {violadas.join(" · ")}</span>
+        </span>
+      )}
+      <span className="sr-only" role="status">
+        {emViolacao ? `Área restrita violada em ${camera.label}: ${violadas.join(", ")}.` : ""}
+      </span>
       <Tooltip content={status?.lastError || st.text}>
         {/* Pílula de status (.cam-status-pill em go2rtc-tile.css): estático na classe; só a COR da
             borda é dinâmica (token por estado, going-gray) e fica no style.
