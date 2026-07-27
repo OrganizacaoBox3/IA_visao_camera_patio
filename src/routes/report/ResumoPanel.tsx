@@ -69,7 +69,7 @@ export function ResumoPanel({
             <div className="rc-kpis">
               <div className="rc-k">
                 {/* going-gray: verde incondicional removido — cor só condicional a estado */}
-                <b>{atividade.k.activePct}%</b>
+                <b>{atividade.k.activePct === null ? "—" : `${atividade.k.activePct}%`}</b>
                 <span>tempo ativo</span>
               </div>
               <div className="rc-k">

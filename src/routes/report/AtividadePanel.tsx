@@ -157,7 +157,7 @@ export function AtividadePanel({
           label="horário crítico"
         />
         {/* going-gray: cor em valor numérico só condicional a estado — sem verde incondicional */}
-        <Kpi value={`${k.activePct}%`} label="tempo ativo" />
+        <Kpi value={k.activePct === null ? "—" : `${k.activePct}%`} label="tempo ativo" />
       </KpiRow>
       {tips.length > 0 && <Insight label="Oportunidades" tips={tips} />}
       <Tabs

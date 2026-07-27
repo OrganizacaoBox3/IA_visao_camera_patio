@@ -68,7 +68,7 @@ export function resumoSection(p: {
     title: "INDICADORES CONSOLIDADOS",
     headers: ["Dimensão", "Indicador", "Valor"],
     rows: [
-      ["Atividade", "Tempo ativo (%)", k.activePct],
+      ["Atividade", "Tempo ativo (%)", k.activePct ?? "—"],
       ["Atividade", "Tempo parado", fmtMin(k.idleMin)],
       ["Atividade", "Alertas", k.alerts],
       ["Atividade", "Área mais parada", k.topArea],
@@ -106,7 +106,7 @@ export function atividadeSections(p: {
       rows: [
         ["Tempo parado", fmtMin(k.idleMin)],
         ["Alertas", k.alerts],
-        ["Tempo ativo (%)", k.activePct],
+        ["Tempo ativo (%)", k.activePct ?? "—"],
         ["Pico de pessoas", peoplePeak],
         ["Área mais parada", k.topArea],
         ["Horário crítico", `${String(k.peakHour).padStart(2, "0")}h`],

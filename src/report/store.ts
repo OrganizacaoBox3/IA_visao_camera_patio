@@ -1,7 +1,7 @@
 // Persistência de HISTÓRICO do Relatório — I/O contra a API do hub (Postgres/JSON).
 // Somente INDICADORES (LGPD: nunca imagens). record* = POST /api/ingest (fire-and-forget).
 // load* = GET /api/data/*. clearAll = clear. Agregações puras vivem em ./calc.
-import { apiGet, apiSend, listAlarms } from "../api";
+import { apiGet, apiSend } from "../api";
 import {
   legacyShiftOf,
   type ShiftStamp,
@@ -433,7 +433,10 @@ export async function clearAll(): Promise<void> {
   await apiSend("POST", "/api/data/clear");
 }
 
-// ── EVENTOS DE ALARME (consome contrato B1: GET /api/alarms) ──────────────────
-// SÓ METADADOS (sem imagens, LGPD). Erro PROPAGA (mesmo padrão dos load* acima).
-// FONTE ÚNICA: alias do cliente de api.ts — nome público preservado p/ quem importa via store.
-export const loadAlarms = listAlarms;
+// ── EVENTOS DE ALARME (contrato B1: GET /api/alarms) ──────────────────────────
+// NÃO passam por aqui: o cliente é `listAlarms` em ../api, e quem consome (useAlarms do
+// dashboard, com meta/paginação) o importa DIRETO. O alias `loadAlarms` que existia neste
+// arquivo ficou sem UM chamador quando o relatório trocou pelo caminho com meta — dois nomes
+// públicos para a mesma função é a duplicação S4 da auditoria (docs/analises/
+// auditoria-qualidade-codigo.md), e um alias órfão convida a próxima frente a "escolher" o
+// nome errado. Removido em 2026-07-27; se precisar do cliente aqui de novo, importe listAlarms.

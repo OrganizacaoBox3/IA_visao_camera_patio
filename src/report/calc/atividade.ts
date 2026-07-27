@@ -57,12 +57,18 @@ export function windows(ds: Dataset, f: Filters) {
   };
 }
 
+// `activePct` é `number | null` desde 2026-07-27 (auditoria D5): sem célula no recorte não há
+// "tempo ativo" — é ausência de medição, e a casa declara em vez de afirmar 0%. ATENÇÃO a quem
+// mexer: o `tsc` pega só METADE dos call-sites (os de CSV, tipados). Em JSX, `${x}%` com null
+// renderiza "null%" e `{x}%` renderiza "%" — silenciosos. Os 4 estão tratados; visite todos.
 export type Kpis = {
   idleMin: number;
   alerts: number;
   topArea: string;
   peakHour: number;
-  activePct: number;
+  /** `null` = SEM CÉLULA no recorte: não é "0% ativo", é ausência de medição. Os 4 call-sites
+   *  tratam (o `tsc` só pega 2 — os outros renderizariam "null%" e "%"). */
+  activePct: number | null;
 };
 
 export function kpis(cells: Cell[]): Kpis {
@@ -78,7 +84,7 @@ export function kpis(cells: Cell[]): Kpis {
   }
   const topArea = [...byArea.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
   const peakHour = byHour.indexOf(Math.max(...byHour));
-  const activePct = cells.length ? Math.round(pctSum / cells.length) : 0;
+  const activePct = cells.length ? Math.round(pctSum / cells.length) : null;
   return { idleMin, alerts, topArea, peakHour: peakHour < 0 ? 0 : peakHour, activePct };
 }
 
