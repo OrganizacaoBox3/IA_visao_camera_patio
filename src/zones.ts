@@ -70,7 +70,12 @@ export type Zone = {
 
 // Presets do dwell de PRESENÇA (modo proibida) — mesmo padrão dos limitPresetsMs da atividade.
 // Vivem aqui (perto do modelo) porque config.ts é importado por este módulo (evita ciclo).
-export const PRESENCA_ALERT_PRESETS_MS = [5_000, 10_000, 30_000, 60_000, 300_000] as const;
+// O piso de 2s entrou em 2026-08-16 (demonstração ao vivo): com 5s, quem pisa na zona precisa
+// ficar PARADO cinco segundos — pausa longa demais para repetir dezenas de vezes num balcão. 2s
+// preserva o princípio da feature ("quem só atravessa não dispara": travessia a passo normal
+// fica ~1s dentro da zona) e é aceito ponta a ponta — camcfg.js §cleanZone clampa em
+// [0, 86_400_000], sem allowlist de presets, então o servidor persiste o valor como veio.
+export const PRESENCA_ALERT_PRESETS_MS = [2_000, 5_000, 10_000, 30_000, 60_000, 300_000] as const;
 export const DEFAULT_PRESENCA_ALERT_MS = 10_000;
 
 // ── ZONA POLIGONAL (spec zonas-poligonais F1) ─────────────────────────────────
