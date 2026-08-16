@@ -448,3 +448,186 @@ Dois consertos:
   grade valem os tetos de sempre (teste trava os dois regimes).
 
 verify verde (1167).
+
+## 2026-07-26 (7) — Resposta ao "delay + falha em marcar quem anda": 6 frentes paralelas
+
+Pedido do dono: "está com delay e falhando em reconhecer pessoas se movimentando". Leitura
+completa do pipeline (engine.js → pipeline.js → bytetrack.js → interpolate.ts → draw.ts)
+ANTES de mexer — diagnóstico por leitura de código, não por medição de campo (declarado
+como tal na spec). Achados que viraram as 6 frentes:
+
+- **A caixa da pessoa "descartava campo calado"**: `useDashboardSocket` remontava o payload
+  `analysis-tracks` só com `{ts, tracks, zones, latencyMs}` — os campos `coasting` e
+  `zonesProibidas` que o servidor já emitia morriam no cliente. Zona proibida nunca acendia
+  VIOLADA por esse caminho.
+- **`coasting` virava keyframe**: quando o gate de movimento pula uma rodada, o hub re-emite
+  o último payload com `ts` fresco e `coasting:true` (C1 — não deixar a caixa piscar durante
+  o probe). O cliente ingeria isso como observação NOVA: empurrava no histórico, congelava a
+  caixa e — no modo síncrono — teleportava quando o probe finalmente disparava.
+- **`ghosted` era GLOBAL**: uma única realocação (nascimento/re-associação) na rodada
+  refutava TODOS os tracks sem match. Em cena movimentada — onde nasce track quase toda
+  rodada — quem só piscou por falha do detector sumia da tela. Corrigido para LOCAL (só
+  quem está a até `refuteMaxDist` da realocação é refutado); um critério intermediário
+  puramente relativo ("só o mais próximo") foi tentado e **reprovado pelo `eval:counting`**
+  (acumulava tracks obsoletos em teleporte repetido — "salto extremo 3×" com 2 caixas p/ 1
+  pessoa) antes de chegar no final com teto de plausibilidade.
+- **O gate de movimento não tinha sensor de recall**: o README do motor já admitia a lacuna.
+  `telemetry.js` ganhou `gate.skipMoving1m/ratioP50/ratioP95/reasons1m` — o número que
+  responde "o gate está cegando esta câmera enquanto tem gente andando?".
+- **HUD sem sinal de qual ramo desenha**: `exato %` (interpolação exata vs extrapolação) e
+  `coast %` no HUD da câmera — hoje ninguém sabia se o modo síncrono estava realmente ativo
+  ou se tinha caído em silêncio no dead-reckoning.
+
+Commits: `c9d14a7` `8de2019` `b76569c` `208cadd` `9bce992` `3ae105d`.
+Spec completa (achados M1-M7/D1-D4, ondas, trade-offs declarados):
+`docs/analises/spec-marcacao-tempo-real-v2.md`.
+`verify` verde (103 arquivos/1242 testes) + `eval:counting` OK em cada commit (verificado em
+worktree isolado por SHA, não só no HEAD final).
+
+## 2026-07-26 (8) — Auditoria ponta a ponta + Onda 1 de correções (12 frentes)
+
+Pedido do dono: "análise aprofundada de todas as funções que o projeto diz ter... o que está
+oculto... contagem e marcador de caixas validado." 5 frentes de leitura de código com
+evidência arquivo:linha (zonas/alarme · contagem/marcação · informação oculta do motor ·
+front ponta a ponta · documentação × código) — relatório completo em
+`docs/analises/auditoria-produto-2026-07-26.md`.
+
+**O diagnóstico central**: "não estou medindo" é renderizado como resultado, sempre na
+direção perigosa — "0 pessoas" quando o motor está cego, "100% de taxa de leitura" quando o
+período não tem dado nenhum, "os alertas seguem o fluxo normal" quando a chamada de rede
+falhou, "ARMADA" quando a política de turno está calando o alarme. E a confusão nomeada
+pelo dono ("a exclusão que impede o operador de entrar") era o próprio achado: `exclusao`
+SUPRIME detecção (não alarma); `proibida` VIGIA presença (alarme crítico 24/7) — os nomes
+não deixavam a diferença clara em nenhuma superfície permanente.
+
+7 frentes paralelas (G1-G7) corrigiram o que a auditoria mediu:
+
+- **G1 — zonas homônimas somavam contagem uma da outra.** MEDIDO com o pipeline real: 2
+  zonas distintas, rótulo "Doca" nas duas, 1 pessoa em cada → `people:2` nas DUAS (100% de
+  inflação, contaminando `people_peak` no relatório). Causa: agregação por Map chaveado por
+  LABEL. Corrigido para chave por `zoneId` (`resolveZone` novo ao lado de `attributeZone`,
+  que mantém contrato). Mais: rótulo duplicado → 400 no PUT; `modo` de zona inválido → 400
+  na escrita (antes rebaixava calado para "atividade" — zona PROIBIDA corrompida virava
+  contagem sem erro, sem log). `nextZoneLabel` (novo, `src/zones.ts`) fecha o efeito
+  colateral: o naming antigo (`Área ${length+1}`) colidia depois de apagar uma zona do meio.
+- **G2 — vazio virava 100%.** `ratePct`/`okPct` viravam `number|null`; gate de vazio passa a
+  olhar a JANELA filtrada, não o dataset inteiro; "tempo parado" (estruturalmente 0 com o
+  motor no hub, pois `pipeline.js` grava `idleMs:0` de propósito) passa a DECLARAR
+  indisponibilidade em vez de exibir `0m`.
+- **G3 — falha de rede virava "fluxo normal".** `catch { setShelves([]) }` e afins viravam
+  estado de falha explícito; diálogo de "Limpar histórico" parou de prometer apagar alarmes
+  que `pgstore.clear()` nunca tocou; `/api/alarms` ganhou `total`/`truncated` (opt-in
+  `?meta=1`, aditivo) contra o corte silencioso em 500.
+- **G4 — `app_views` (tabela 100% morta, zero consumidor) e `read_events.cameras`** (gravada
+  como literal `1` desde que o agregador multi-câmera saiu na ADR-016) pararam de fingir que
+  carregam informação. Nenhum DROP — só o CREATE saiu, e a coluna virou NULL, nunca reescrita
+  em base existente.
+- **G5 — alarme crítico virava só um número num botão.** Toast SÓ para `priority:"critical"`
+  (advisory continua mudo — EEMUA-191: alarme que sempre toca deixa de ser alarme), com
+  leading-edge + resumo de rajada (teto provado: ≤2 toasts p/ qualquer N).
+- **G6/G7 — rename dos modos + legenda + canal duplo da opacidade.** `exclusao` →
+  "Ignorar área (sem alarme)"; `proibida` → "Área restrita (gera alarme)" (valores gravados
+  intactos — só display, `ZONE_MODE_LABEL` como fonte única). Todo modo passa a declarar
+  ONDE roda (hub 24/7 × só com a aba aberta). A opacidade do marcador, que carregava dois
+  sinais no mesmo canal (confiança × coasting), virou dois canais: tracejado = sem
+  observação nova, opacidade = confiança.
+
+Commits: `aab3230` `a063b7d` `b378493` `547784e` `7648870` `283d5c4` `3a7f4c8`.
+`verify` verde (113 arquivos/1404 testes) + `eval:counting` OK, verificado por commit em
+worktree isolado.
+
+## 2026-07-27 — Onda 2: os sensores que faltavam + a pergunta do runtime + a spec de EPI (9 frentes)
+
+Continuação do plano de correções da auditoria, priorizando o que faltava para "chegar no
+ápice de qualidade": dois sensores que a doutrina do projeto exige e não existiam, mais
+visibilidade do que o motor já mede e ninguém via.
+
+- **H4 — `eval/gate-recall.mjs` (novo).** A lacuna mais grave, admitida pelo próprio README:
+  "o gate NÃO tem sensor direto de recall do pulo". `persons-cftv.mjs` roda com
+  `gateOn:false`; `stationary.mjs` só mede pessoa PARADA. Pessoa pequena ANDANDO sob o gate
+  — o sintoma relatado — não tinha medição nenhuma. MEDIDO (gate real, knobs de
+  `precision.js`, n=16 trials/célula, Wilson 95%): recall de movimento **0,0%** até ~85px de
+  altura de pessoa; buraco de até 5000ms sem observação contra um interpolador que expira a
+  caixa em 2600ms — a prova direta da queixa. Achados que mudam o plano: a câmera FOCADA é
+  o PIOR caso do mecanismo (145px cai de 94,6% p/ 21,9% a 6fps — o gate compara rodadas
+  consecutivas, mais fps = menos deslocamento por rodada); contraste pesa tanto quanto
+  tamanho (Δluma 35 derruba 145px a 76,1% — refuta a correção de "limiar por área mínima"
+  que a spec propunha); a cegueira é propriedade da cena LIMPA (ruído σ≥6 zera a economia de
+  CPU). Entra no CI, reprova por regressão relativa contra baseline MEDIDA (não inventada).
+- **H6 — golden vector cross-language do ByteTrack.** `server/analysis/bytetrack.js` e
+  `src/vision/bytetrack.ts` eram ports 1:1 mantidos "por revisão em par, não por sensor".
+  Fixture única (18 casos, 65 rodadas, knobs EXPLÍCITOS — o contrato é comportamento sob
+  opts idênticos, não igualdade de config, já que defaults divergem de propósito). Nenhuma
+  divergência real encontrada. Sensor validado por mutação: 21 divergências plausíveis de
+  port injetadas em cópias, 21/21 detectadas.
+- **H1 — "0 caixas" era indistinguível de "modelo nunca carregou".** O modo Objetos roda
+  100% no cliente (o motor do hub só conta `person`); o OWL-ViT vem do HuggingFace
+  (`allowLocalModels:false`) e sem internet cai no andaime coco-ssd, que não conhece
+  "caixa" — contagem 0 para sempre. `ObjetosResult.backend`, calculado e descartado, sobe
+  agora ao estado e a zona avisa em linguagem de operador quando o detector ativo não
+  detecta a classe selecionada.
+- **H2 — violação de área restrita, invisível no mosaico.** Com WebRTC (o default), o tile
+  da grade não desenha zona nenhuma — uma violação ficava idêntica ao normal na tela que o
+  operador olha o dia inteiro. Sinal no WRAPPER do tile (funciona nos dois transportes),
+  tri-estado (`null`=não sei · `[]`=quieta · `[labels]`=violada), indicador APAGA com
+  payload stale.
+- **H3 — painel de Saúde do motor.** `GET /api/analysis/status` existia desde o ADR-009 com
+  ZERO consumidores no front. Traduz o estado cru em achados de operador ("gate cegando
+  esta câmera", "modelo rebaixado sob carga", câmera online na central e invisível para o
+  motor). RBAC por severidade (achado é de todo autenticado; número cru é de
+  `canConfigure`), sem rota nova (faixa no Relatório, abaixo do `AlarmHealthStrip`).
+- **H5 — 5 dívidas de uma linha**: Tab preso no drawer de alarme sobre câmera fullscreen
+  (trap agora defere a qualquer camada modal do Radix, não só à da câmera); presença em
+  zona proibida dependendo de truthiness de label (`resolveZone` em vez de `attributeZone`);
+  `cleanCamConfig` com o mesmo rebaixamento silencioso que o modo de ZONA já tinha
+  corrigido; alias morto `loadAlarms`; `Kpis.activePct` anulável (parado e reportado por uma
+  frente antes de propagar erro silencioso para 2 call-sites JSX que o `tsc` não pega —
+  fechado na integração).
+- **P1/P2 — a pergunta "vale trocar o motor para Python?", decidida por medição.**
+  `onnxruntime` 1.27.0 instalado no Python (MESMA versão do Node), alimentado com o MESMO
+  tensor: saída IDÊNTICA bit-a-bit. O que roda em JS puro é 0,89% do frame. Pós-processamento
+  em numpy vetorizado ficou 3,2× MAIS LENTO que o laço JS (premissa refutada, não confirmada).
+  CoreML reprova em dobro (latência E muda a saída). Achado novo: portar mudaria a
+  ACURÁCIA (libvips→PIL altera 82% dos pixels). ReID (OSNet) já roda em `onnxruntime-node`
+  — a capacidade que faltava já é alcançável sem trocar linguagem. `ADR-020` (proposto):
+  critério de reabertura explícito — só reabre com EP inalcançável no Node NA PLATAFORMA DE
+  PRODUÇÃO + paridade de detecção aprovada + ganho ≥2×. Pista registrada (não recomendação):
+  o pool satura em 2 workers e `resolveWorkerCount` escolhe 5 nesta máquina — a confirmar no
+  homolog x86.
+- **E1 — spec de EPI por partes do corpo.** Pedido do dono: reconhecer mãos/tronco/cabeça p/
+  decidir uso de EPI. Aritmética de altura mínima por peça (colete 70px · capacete 125px ·
+  luva 194px · óculos 438px) cruzada com o piso do gate (~90px, corroborado de forma
+  independente pela recomendação da Axis de 8% da altura da imagem). Luva falha por
+  OCLUSÃO+borrão+1fps, não por resolução — câmera melhor não resolve. Licença é o gargalo
+  (as duas únicas bases públicas com luva/óculos são CC BY-NC-SA/AGPL; as limpas cobrem só
+  capacete+colete — convergência com o que a física já permite). 3 decisões devolvidas ao
+  dono: posicionamento ("sem identificação individual" vira falso), evidência (sem print o
+  produto muda de prova p/ indicador — exige ADR contra o ADR-002), custo de anotação
+  (~25-45h humanas só para medir se funciona).
+
+Commits: `3975091` `543b8f5` `c57fd2b` `8a6b24b` `e8443a1` `306f93d` `1d649fe` `a01d4ff`
+`c5ad72b` `9306982`. `verify` verde (122 arquivos/1566 testes) + `eval:counting` +
+`eval:gate-recall` OK. Docs: `docs/analises/decisoes/ADR-020-runtime-de-inferencia.md`,
+`docs/analises/runtime-motor-medicao-2026-07-27.md`, `docs/analises/spec-epi-partes-do-corpo.md`.
+
+## 2026-08-03 — Teste ao vivo do piso de score do modo Objetos (EM ABERTO)
+
+Dono relatou, testando ao vivo com 2 caixas reais em cena: o modo Objetos não marcou nem
+contou. Achado por leitura de código (não hipótese): `objects/detector.ts` roda o OWL-ViT
+com threshold interno 0.1 (generoso) e então filtra com `finalizeOwlDets(..., minScore)`
+onde `minScore = detection.objectScoreThreshold = 0.5` — piso calibrado para o coco-ssd,
+5× acima da faixa que o próprio config documenta para o OWL-ViT ("scores são baixos"). A
+MESMA lista filtrada alimenta desenho e contagem — por isso "não marcou nem contou" juntos.
+
+Sinal a favor: a zona de Objetos não mostrou o aviso de backend (novo desta sessão, H1) —
+o único caso silencioso é backend `owlvit` já carregado, o que pesa contra "modelo não
+carregou" e a favor do piso de score.
+
+Teste em andamento: `src/config.ts objectScoreThreshold` baixado ao vivo (HMR do Vite dev,
+NÃO commitado) para validar a hipótese com dado real em vez de frame sintético. **Resultado
+ainda não confirmado pelo dono** — o valor no working tree foi ajustado manualmente por ele
+durante o teste (de 0.15 para 0.1) e segue sem commit. Pendências:
+1. Confirmar se a contagem passou a funcionar com o piso baixo.
+2. Se confirmado, medir a CURVA precisão×recall (não só o ponto) com frames reais antes de
+   fixar um novo default — a doutrina do projeto exige a curva, nunca o ponto isolado.
+3. Decidir se o novo piso também deve valer para o perfil `longRange` (hoje 0.3, não tocado).
