@@ -197,14 +197,28 @@ export const APP_CONFIG = {
       mjpeg: 0 as number,
       webrtc: 0 as number,
     },
-    // MODO SÍNCRONO (decisão do dono, 2026-07-26: "nem que coloque alguns segundos de delay no
-    // vídeo, mas não podemos ter arrasto nem erro na marcação"): o vídeo WebRTC é ATRASADO este
-    // tanto (playoutDelayHint/jitterBufferTarget no receiver) e o overlay renderiza o MESMO
-    // instante por interpolação EXATA entre observações reais (TrackInterpolator.hist) — zero
-    // extrapolação ⇒ zero arrasto por construção. Trade-off deliberado: o operador vê o mundo
-    // ~2s atrasado. 0 desliga (volta ao vivo com dead-reckoning). Só vale no transporte WebRTC
+    // MODO SÍNCRONO: o vídeo WebRTC é ATRASADO este tanto (playoutDelayHint/jitterBufferTarget
+    // no receiver) e o overlay renderiza o MESMO instante por interpolação EXATA entre
+    // observações reais (TrackInterpolator.hist) — zero extrapolação ⇒ zero arrasto por
+    // construção. 0 desliga (volta ao vivo com dead-reckoning). Só vale no transporte WebRTC
     // (MJPEG não tem atraso de reprodução controlável); teto prático ~4000 (jitter buffer).
-    syncDelayMs: 2000 as number,
+    //
+    // HISTÓRICO E DECISÃO ATUAL:
+    // · 2026-07-26 — ficou 2000 (decisão do dono: "nem que coloque alguns segundos de delay no
+    //   vídeo, mas não podemos ter arrasto nem erro na marcação"). A premissa era o MOSAICO, que
+    //   roda a ANALYSIS_FPS=1: extrapolar ~1s de dead-reckoning arrastava visivelmente.
+    // · 2026-08-16 — vai a 0 (decisão do dono, contexto: demonstração ao vivo em feira). Quem
+    //   olha a CÂMERA ABERTA aciona o modo FOCO no motor (ANALYSIS_FPS_FOCUS=6; ~2-2,5fps reais
+    //   medidos no tier S), então a janela de extrapolação cai de ~1000ms para ~165-400ms — faixa
+    //   em que o arrasto não é perceptível. Em troca, quem para na frente da câmera vê o mundo
+    //   AGORA, e não 2s atrás (num balcão de feira, 2s de defasagem lê-se como "travou").
+    //
+    // RESIDUAL DECLARADO: a garantia de exatidão-por-construção valia para QUALQUER cadência.
+    // Com 0, o MOSAICO (1 fps, sem foco) volta a depender de dead-reckoning com janela de até
+    // ~1s — é lá, não na câmera aberta, que o arrasto pode reaparecer. Se voltar a incomodar na
+    // operação do CD, o caminho não é ressuscitar os 2000 globais: é tornar este valor
+    // dependente da cadência efetiva da câmera (foco × normal), que hoje o front não conhece.
+    syncDelayMs: 0 as number,
   },
 
   // Central (dashboard): paginação dos feeds — só os feeds da página atual são PROCESSADOS

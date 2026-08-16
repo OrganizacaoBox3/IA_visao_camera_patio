@@ -130,12 +130,15 @@ export function useWebrtcTransport({
     };
   }, [webrtc, cameraId]);
 
-  // MODO SÍNCRONO (overlay.syncDelayMs — decisão do dono 2026-07-26): atrasa a REPRODUÇÃO do
-  // vídeo p/ o overlay renderizar o MESMO instante por interpolação exata (zero arrasto). O pc
-  // do <video-stream> renasce a cada (re)conexão interna → REAPLICA periodicamente (idempotente).
+  // ALVO DE REPRODUÇÃO do vídeo (overlay.syncDelayMs). >0 = MODO SÍNCRONO (decisão do dono
+  // 2026-07-26): atrasa a reprodução p/ o overlay renderizar o MESMO instante por interpolação
+  // exata (zero arrasto). **0 = pedido explícito de buffer MÍNIMO** (2026-08-16): não é o mesmo
+  // que não pedir nada — sem o hint o navegador usa o jitter buffer adaptativo dele. Ver o
+  // cabeçalho de playoutDelay.ts. O pc do <video-stream> renasce a cada (re)conexão interna →
+  // REAPLICA periodicamente (idempotente e barato).
   useEffect(() => {
     const ms = APP_CONFIG.overlay.syncDelayMs;
-    if (!webrtc || ms <= 0) return;
+    if (!webrtc || !Number.isFinite(ms) || ms < 0) return;
     const t = setInterval(() => applyPlayoutDelay(videoStreamRef.current, ms), 2000);
     return () => clearInterval(t);
   }, [webrtc]);

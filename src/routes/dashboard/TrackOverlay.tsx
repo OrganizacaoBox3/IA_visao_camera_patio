@@ -124,11 +124,14 @@ export function TrackOverlay({ videoRef, getHubAnalysis }: TrackOverlayProps) {
     };
 
     raf = requestAnimationFrame(tick);
-    // MODO SÍNCRONO: atrasa a reprodução do <video> deste tile (o pc renasce a cada reconexão
-    // interna do elemento → reaplica periodicamente; idempotente e barato).
+    // ALVO DE REPRODUÇÃO do <video> deste tile: >0 atrasa (modo síncrono), **0 pede buffer
+    // MÍNIMO** — pedir 0 é diferente de não pedir (playoutDelay.ts §"zero é um pedido"). O pc
+    // renasce a cada reconexão interna do elemento → reaplica periodicamente; idempotente.
     const syncMs = APP_CONFIG.overlay.syncDelayMs;
     const delayTimer =
-      syncMs > 0 ? setInterval(() => applyPlayoutDelay(videoRef.current, syncMs), 2000) : null;
+      Number.isFinite(syncMs) && syncMs >= 0
+        ? setInterval(() => applyPlayoutDelay(videoRef.current, syncMs), 2000)
+        : null;
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
