@@ -128,6 +128,10 @@ describe("buildStatus — agregação por câmera", () => {
       skippedTotal: 0,
       motion: 0.1235, // arredondado a 4 casas
       lastMs: 380,
+      // IDADE DO QUADRO (aditivo, 2026-08-16): `null` porque este estado não tem ageLog — e
+      // `null` é o valor CERTO para "não medi nada na janela". Se um dia virar 0 aqui, é
+      // regressão: ausência de medição passando por medição de zero é o falso-OK da casa.
+      frameAge: null,
       dets1m: 5,
       excluded1m: 1,
       longRange: true,

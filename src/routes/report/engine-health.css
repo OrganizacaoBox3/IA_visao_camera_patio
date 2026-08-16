@@ -213,6 +213,16 @@
   color: var(--state-neutral-fg);
 }
 
+/* Idade do quadro (transporte câmera→hub). SEM data-level a célula fica neutra como qualquer
+   outro número da tabela — "going gray": cor é informação, e o normal não é informação. */
+.eh-age[data-level="warn"] {
+  color: var(--state-warn-fg);
+}
+.eh-age[data-level="down"] {
+  color: var(--state-critical-fg);
+  font-weight: 600;
+}
+
 @media print {
   /* Não vai para o PDF: "agora · janela de 1 min" seria falso no papel, lido horas depois —
      mesma razão pela qual a faixa de alarme (.ah-strip) também some na impressão. */

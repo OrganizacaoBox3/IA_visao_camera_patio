@@ -67,6 +67,34 @@ function gateStatsOf(log) {
 }
 
 /**
+ * Agrega a janela de 60s de IDADE DO QUADRO no despacho (engine.recordFrameAge → st.ageLog).
+ * @returns {{p50:number, p90:number, n:number, trend:number}|null}  null = nada medido na janela.
+ *
+ * `trend` = média da 2ª metade menos a da 1ª metade, em ms. É o campo que decide, e ele existe
+ * porque FILA É FENÔMENO CUMULATIVO: ela não aparece na mediana (a 1ª metade a segura), aparece
+ * na TENDÊNCIA. Idade alta e ESTÁVEL é latência constante (câmera/encoder/rede) — outro
+ * problema, outra ação. Idade que SOBE é fila, e fila não se conserta lendo mais rápido, se
+ * conserta descartando o quadro velho. Mesmo critério de `scripts/diagnose-source.mjs`.
+ */
+function frameAgeStatsOf(log) {
+  if (!Array.isArray(log) || !log.length) return null;
+  const ages = log.map((e) => e.a);
+  const sorted = [...ages].sort((a, b) => a - b);
+  let trend = 0;
+  if (ages.length >= 8) {
+    const meio = Math.floor(ages.length / 2);
+    const media = (arr) => arr.reduce((s, x) => s + x, 0) / arr.length;
+    trend = Math.round(media(ages.slice(meio)) - media(ages.slice(0, meio)));
+  }
+  return {
+    p50: Math.round(percentileOf(sorted, 0.5)),
+    p90: Math.round(percentileOf(sorted, 0.9)),
+    n: ages.length,
+    trend,
+  };
+}
+
+/**
  * @param {object} snap  snapshot vivo do engine:
  *   { now, states:Map, focusedCams:Set, targetFpsOf(st), enabled, modelFile,
  *     fps:{normal,line,focus}, motionGate:{enabled,ratio,probeMs,probeFocusMs,thumb},
@@ -95,6 +123,10 @@ function buildStatus(snap) {
     const gateLog = Array.isArray(st.gateLog) ? st.gateLog : [];
     while (gateLog.length && gateLog[0].t < cutoff) gateLog.shift();
     const gate = gateStatsOf(gateLog);
+    // Idade do quadro: mesma poda deliberada do gateLog (câmera parada não deixa log velho).
+    const ageLog = Array.isArray(st.ageLog) ? st.ageLog : [];
+    while (ageLog.length && ageLog[0].t < cutoff) ageLog.shift();
+    const frameAge = frameAgeStatsOf(ageLog);
     skipped1mAll += gate.skipped1m;
     skippedAll += st.skipped;
     perCamera[id] = {
@@ -117,6 +149,10 @@ function buildStatus(snap) {
         reasons1m: gate.reasons1m,
       },
       lastMs: st.lastMs,
+      // IDADE DO QUADRO no despacho (ADITIVO). Leia JUNTO com `lastMs`: este é o transporte
+      // (câmera→hub), aquele é a inferência — a soma é o que o operador sente. `null` = nenhuma
+      // rodada despachada na janela (câmera parada/gateada), que NÃO é o mesmo que "idade 0".
+      frameAge,
       dets1m,
       excluded1m, // dets de pessoa suprimidas por zona de exclusão em 60s
       longRange: st.longRange, // true = rodada com tiling no worker

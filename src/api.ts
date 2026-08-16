@@ -472,6 +472,20 @@ export type AnalysisGate = {
   reasons1m: Record<string, number>;
 };
 
+/**
+ * IDADE DO QUADRO no despacho ao worker (transporte câmera→hub, SEM o custo da inferência —
+ * esse é o `lastMs`). `null` no payload = nenhuma rodada despachada na janela de 60s (câmera
+ * parada ou gateada), que NÃO é o mesmo que idade zero.
+ */
+export type AnalysisFrameAge = {
+  p50: number; // mediana, ms
+  p90: number; // ms
+  n: number; // rodadas medidas na janela
+  /** 2ª metade da janela menos a 1ª, em ms. **Positivo e grande = FILA** (o atraso acumula) —
+   *  fila não aparece na mediana, aparece na tendência. Ver server/analysis/telemetry.js. */
+  trend: number;
+};
+
 export type AnalysisCamera = {
   fps: number; // inferências CONCLUÍDAS por segundo nos últimos 60s (0 = nada analisado)
   targetFps: number; // cadência efetiva pretendida (foco > linha > normal; 0 se fadiga)
@@ -482,6 +496,7 @@ export type AnalysisCamera = {
   motion: number; // último ratio de movimento (0..1)
   gate?: AnalysisGate;
   lastMs: number; // duração da última inferência
+  frameAge?: AnalysisFrameAge | null; // idade captura→despacho (aditivo — hubs antigos não mandam)
   dets1m: number;
   excluded1m: number; // pessoas suprimidas por zona de exclusão (60s)
   automasked1m?: number; // pessoas suprimidas pela auto-máscara (60s)

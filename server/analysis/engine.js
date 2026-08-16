@@ -355,6 +355,7 @@ function createState(id) {
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
     window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
     rounds: [], // timestamps das rodadas (p/ fps real no status)
+    ageLog: [], // { t, a } idade captura→despacho por rodada (janela 60s — recordFrameAge)
     detsLog: [], // { t, n, x, a, r } pessoas/exclusões/re-associações por rodada (p/ *1m)
     reassocSeen: 0, // acumulado de re-associações já lançado no detsLog (delta por rodada — pipeline)
     lastMs: 0,
@@ -421,6 +422,7 @@ function dispatchToWorker(st, frame, now) {
   const jobId = ++seq;
   st.slots.begin(jobId); // ocupa um slot de inferência em voo (inflight.js: contador + órfã + ordem)
   st.lastInferAt = now;
+  recordFrameAge(st, now, frame.ts);
   try {
     workerHost.send({
       type: "detect",
@@ -438,6 +440,33 @@ function dispatchToWorker(st, frame, now) {
   } catch {
     st.slots.abort(jobId); // send falhou (canal fechado) → libera o slot p/ re-despacho
   }
+}
+
+// ── SENSOR DE IDADE DO QUADRO (transporte, isolado do custo da inferência) ───
+// A LACUNA QUE ISTO FECHA: `latencyMs` (captura→resposta) já era CALCULADO no worker-host e
+// enviado ao cliente no analysis-tracks, mas só para o interpolador extrapolar a caixa — ele
+// nunca era RETIDO nem agregado, então ninguém conseguia responder "o quadro está chegando em
+// dia?" sem abrir o navegador. E `lastMs` no /status é a duração da INFERÊNCIA, outro número.
+//
+// Aqui a idade é medida no DESPACHO (captura→despacho), de propósito: isso é o transporte PURO
+// (câmera → ffmpeg/go2rtc → hub → amostragem), sem somar os ~64ms da própria inferência. Junto
+// com `lastMs`, dá a decomposição — e é a decomposição que separa "o modelo está ruim" de "a
+// rede está ruim".
+//
+// POR QUE IMPORTA (medido no repo irmão `mvp_maos`, inspecao_biscoito/fonte.py, e reproduzido
+// aqui por `scripts/diagnose-source.mjs`): quando a fonte entrega mais rápido do que o consumidor
+// processa, a fila cresce e o atraso CRESCE SEM LIMITE — +5,3 s em 12 s lá, +4,1 s em 10 s na
+// reprodução daqui. O último-vence de `st.latest` protege contra isso, mas nada PROVAVA que a
+// proteção estava funcionando em campo. Agora prova: idade que sobe ao longo do tempo é fila.
+const AGE_WINDOW_MS = 60_000;
+
+/** Registra a idade do quadro no despacho, em janela rolante de 60s (podada no push — o log
+ *  não pode crescer sem teto em deploy que nunca consulta o /status). */
+function recordFrameAge(st, now, frameTs) {
+  if (!Array.isArray(st.ageLog)) st.ageLog = []; // leitura defensiva: estado antigo/parcial
+  st.ageLog.push({ t: now, a: Math.max(0, now - (frameTs || now)) });
+  const cutoff = now - AGE_WINDOW_MS;
+  while (st.ageLog.length && st.ageLog[0].t < cutoff) st.ageLog.shift();
 }
 
 // ── SENSOR DO GATE (o pulo é medido, não presumido) ──────────────────────────

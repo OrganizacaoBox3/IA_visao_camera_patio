@@ -79,6 +79,20 @@ const LEVEL_WORD: Record<Finding["level"], string> = {
   info: "informação",
 };
 
+// IDADE DO QUADRO → nível de estado. "Going gray" (ADR-003): neutro é o normal, cor só para
+// ANORMALIDADE — daí o default `undefined` (sem data-level = sem cor).
+//
+// ⚠ LIMIARES ESCOLHIDOS, NÃO MEDIDOS EM CAMPO. 200/400 ms é o que se espera de uma LAN com
+// go2rtc local; o número honesto sai da primeira campanha com câmera real (a coluna existe
+// justamente para produzi-lo). Já a TENDÊNCIA é qualitativa e não depende de calibração: idade
+// que sobe ao longo da janela é FILA acumulando, e isso é defeito em qualquer piso — por isso
+// ela é `critical` enquanto o valor absoluto é só `warn`.
+export function frameAgeLevel(a: { p50: number; p90: number; trend: number }): string | undefined {
+  if (a.trend >= 250) return "down"; // fila: o atraso está CRESCENDO, não só alto
+  if (a.p50 > 200 || a.p90 > 400) return "warn";
+  return undefined;
+}
+
 export function SaudeMotorPanel({ canConfigure }: { canConfigure: boolean }) {
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [cameras, setCameras] = useState<ConnectedCamera[] | null>(null);
@@ -276,6 +290,7 @@ function TechDetail({ status }: { status: AnalysisStatus }) {
           { label: "fps / alvo", className: "whitespace-nowrap text-right" },
           { label: "fila", className: "text-right" },
           { label: "última (ms)", className: "whitespace-nowrap text-right" },
+          { label: "idade p50/p90", className: "whitespace-nowrap text-right" },
           { label: "pulos 60s", className: "whitespace-nowrap text-right" },
           { label: "cegos 60s", className: "whitespace-nowrap text-right" },
           { label: "ratio p50/p95", className: "whitespace-nowrap text-right" },
@@ -298,6 +313,16 @@ function TechDetail({ status }: { status: AnalysisStatus }) {
                 </td>
                 <td className="text-right">{c.queue}</td>
                 <td className="text-right">{c.lastMs}</td>
+                <td className="text-right">
+                  {c.frameAge ? (
+                    <span className="eh-age" data-level={frameAgeLevel(c.frameAge)}>
+                      {c.frameAge.p50} / {c.frameAge.p90}
+                      {c.frameAge.trend > 0 ? ` ↑${c.frameAge.trend}` : ""}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className="text-right">{c.skipped1m}</td>
                 <td className="text-right">{c.gate ? c.gate.skipMoving1m : "—"}</td>
                 <td className="text-right">
