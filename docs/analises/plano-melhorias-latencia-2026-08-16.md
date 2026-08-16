@@ -3,8 +3,12 @@
 > **STATUS — ONDA 0 CONCLUÍDA em 2026-08-16.** Os quatro itens estão fechados; o detalhe do que
 > cada um virou e do veredito do tier N está em [§Execução da Onda 0](#execução-da-onda-0).
 > Gate do estado combinado: **lint 0 erros · typecheck 0 · 1598 testes verdes** (eram 1566) ·
-> build ok · `eval:counting` e `eval:gate-recall` verdes com **Δ 0,0pp**. O `audit` segue
-> vermelho pelo motivo pré-existente do item 2.1 — nada disso foi commitado.
+> build ok · `eval:counting` e `eval:gate-recall` verdes com **Δ 0,0pp**.
+>
+> **Itens 2.1 e 2.2 também FECHADOS** no mesmo dia, fora de ordem, porque o `audit` vermelho
+> deixou de ser dívida de fundo e virou o que travava o gate do repo inteiro (o `dev` estava
+> vermelho desde 15/08, antes desta sessão). **`npm run verify` agora fecha VERDE nos cinco
+> passos** — o primeiro verde do repo desde então.
 
 > Origem: [`comparativo-mvp-maos-2026-08-16.md`](comparativo-mvp-maos-2026-08-16.md) (medição) e
 > [`runbook-feira-sick.md`](runbook-feira-sick.md) (o evento que define o prazo).
@@ -175,23 +179,35 @@ a medição, não para pré-aprovar a conclusão.
 
 ## ONDA 2 — dívida e processo
 
-### 2.1 · Destravar o gate `[M]`
+### 2.1 · Destravar o gate `[M]` — ✅ FEITO (2026-08-16)
 
-`npm run verify` está vermelho no `audit`: exceção do `react-router` **vencida em 2026-08-15**
-(por design — o gate força re-avaliação) mais `brace-expansion`, `nanoid` e `socket.io-parser`
-sem exceção. E `node_modules` está **fora de sincronia com o `package.json`**
-(`brace-expansion@5.0.6` contra override `^5.0.8`; `react-router@7.17.0` contra `^7.18.1`), com
-`react-router-dom` declarado **duas vezes** (linha 51 em devDependencies, linha 83 em
-dependencies). Ou seja: **o que roda localmente não é o que o `package.json` descreve.**
+Eram **três** problemas empilhados, não um:
 
-Ordem: remover a declaração duplicada → `npm install` → re-medir o `audit` → só então decidir
-sobre as exceções que sobrarem. Fechamento = `verify` verde, não "menos vermelho".
+1. `react-router-dom` declarado **duas vezes** (devDependencies `^7.18.1`, dependencies
+   `^7.17.0`) — o npm resolvia pela segunda, então o repo instalava 7.17.0 enquanto o
+   `package.json` dizia 7.18.1. A entrada em devDependencies era a duplicata acidental (é
+   dependência de runtime); removida.
+2. `node_modules` **fora de sincronia** com o `package.json` — o que rodava localmente não era o
+   que o repo descrevia, o que contamina qualquer medição feita naquela árvore.
+3. As 4 vulnerabilidades tinham correção **PARA CIMA**, nenhuma exigindo downgrade:
+   `react-router` 7.18.2 · `brace-expansion` 5.0.9 · `socket.io-parser` 4.2.7 · `nanoid` 3.3.18.
+   O override do `brace-expansion` apontava para `^5.0.8` — **o topo da faixa vulnerável**:
+   parecia corrigido e não estava.
 
-### 2.2 · Ligar o hook local `[S]`
+**A aposta da allowlist deu certo.** A exceção do `react-router` foi escrita em 22/07 com
+validade curta porque o único "fix" da época era downgrade para 7.11 (que reabria XSS e open
+redirect). Ela venceu em 15/08 e o backport existe. O gate fez exatamente o que foi desenhado
+para fazer: forçar re-avaliação em data marcada, em vez de deixar a exceção virar permanente.
+A allowlist ficou **vazia** — exceção que sobrevive ao próprio motivo é mitigação fantasma.
 
-`git config core.hooksPath` está **vazio neste clone** — o gate de pre-push que o `CLAUDE.md`
-§6 promete está desligado (o CI cobre, mas a doutrina promete duas camadas).
-Comando: `git config core.hooksPath .githooks`.
+`npm run verify` **VERDE nos cinco passos**, 1598 testes.
+
+### 2.2 · Ligar o hook local `[S]` — ✅ FEITO (2026-08-16)
+
+`git config core.hooksPath .githooks` + bit de execução. O pre-push agora roda `verify` antes de
+qualquer push neste clone — as duas camadas que o `CLAUDE.md` §6 promete.
+
+⚠ **É por clone.** Quem clonar de novo começa com o hook desligado; o CI segue como reforço.
 
 ### 2.3 · Adotar a Regra 3 do `PROCESSO.md` `[S]`
 
