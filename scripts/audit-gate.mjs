@@ -8,17 +8,16 @@
 // baixar o nível) está PROIBIDO — a allowlist é pontual e auditável no git.
 import { execSync } from "node:child_process";
 
-const ALLOWLIST = [
-  {
-    id: "GHSA-qwww-vcr4-c8h2",
-    pkg: "react-router",
-    reason:
-      "CSRF do modo RSC (React Server Components) — inaplicável: app é SPA Vite client-side, " +
-      "sem SSR/server actions/RSC. O 'fix' do npm é downgrade p/ 7.11 (reabre GHSA-wrjc-x8rr-h8h6 " +
-      "e outros 3 corrigidos na 7.18.1). Aguardando backport 7.x do upstream.",
-    expires: "2026-08-15",
-  },
-];
+// VAZIA — e é assim que ela deve ficar. Exceção aqui é dívida com data de vencimento, não
+// mobília: enquanto existe, o gate está cego para aquele advisory.
+//
+// Histórico (2026-08-16): a única exceção que já morou aqui era a GHSA-qwww-vcr4-c8h2
+// (react-router, CSRF do modo RSC). Escrita em 22/07 com validade curta porque o único "fix"
+// que o npm oferecia na época era DOWNGRADE p/ 7.11, que reabria XSS + open redirect corrigidos
+// na 7.18.1. A aposta era que o upstream faria o backport antes do vencimento — venceu em 15/08
+// e o 7.18.2 existe. Removida porque o pacote saiu da faixa vulnerável: manter a entrada seria
+// mitigação FANTASMA (parece proteção, não protege nada, e some da vista de quem revisa).
+const ALLOWLIST = [];
 
 let report;
 try {
