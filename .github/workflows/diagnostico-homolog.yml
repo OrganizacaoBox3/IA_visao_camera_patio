@@ -59,6 +59,36 @@ jobs:
           curl -s --max-time 5 http://127.0.0.1:1984/api/streams | head -c 4000 || echo "(api 1984 inacessível)"
           echo
           echo
+          echo "== QUAL RELEASE está no disco (marcadores de código, não git — o servidor não tem clone) =="
+          APP=/var/www/visao-patio
+          printf 'dist/index.html          mtime: %s\n' "$(date -r $APP/dist/index.html '+%F %T' 2>/dev/null || echo '?')"
+          printf 'server/analysis/engine.js mtime: %s\n' "$(date -r $APP/server/analysis/engine.js '+%F %T' 2>/dev/null || echo '?')"
+          # Marcadores de FEATURE: presença do símbolo prova qual release está no disco. Barato,
+          # read-only, e não depende de auth (o /api/analysis/status exige login).
+          for m in \
+            "recordFrameAge:server/analysis/engine.js:sensor de idade do quadro (ago/2026)" \
+            "frameAgeStatsOf:server/analysis/telemetry.js:agregação p50/p90/trend (ago/2026)" \
+            "diagnose-source.mjs:__FILE__:script de diagnóstico de fonte (ago/2026)"; do
+            SYM="${m%%:*}"; REST="${m#*:}"; FILE="${REST%%:*}"; DESC="${REST#*:}"
+            if [ "$FILE" = "__FILE__" ]; then
+              [ -f "$APP/scripts/diagnose-source.mjs" ] && echo "  PRESENTE  $DESC" || echo "  AUSENTE   $DESC"
+            elif grep -qa "$SYM" "$APP/$FILE" 2>/dev/null; then
+              echo "  PRESENTE  $DESC"
+            else
+              echo "  AUSENTE   $DESC"
+            fi
+          done
+          echo "  versões instaladas (as 4 corrigidas em ago/2026):"
+          for pkg in react-router brace-expansion socket.io-parser nanoid; do
+            DIR=$(find "$APP/node_modules" -maxdepth 4 -type d -name "$pkg" 2>/dev/null | head -1)
+            if [ -n "$DIR" ] && [ -f "$DIR/package.json" ]; then
+              V=$(node -e "console.log(require('$DIR/package.json').version)" 2>/dev/null || echo '?')
+            else
+              V='(ausente)'
+            fi
+            printf '    %-18s %s\n' "$pkg" "$V"
+          done
+          echo
           echo "== journal do hub (última 1h): rtmp/go2rtc/rtsp =="
           sudo -n journalctl -u visao-hub --since "-60 min" --no-pager 2>/dev/null | grep -aiE "rtmp|go2rtc|ffmpeg|exec" | tail -120 || echo "(journal indisponível)"
           REMOTE
