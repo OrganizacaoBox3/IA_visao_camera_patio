@@ -4,6 +4,12 @@
 > systemd `visao-hub` na 127.0.0.1:8091 + nginx servindo `dist/`). Aqui só o que MUDA nesta release.
 > **Você executa (WinSCP + SSH); nada é automático.** Gate antes de ação irreversível (CLAUDE.md §8).
 
+> ⚠ **HÁ RELEASE MAIS NOVA.** Para deployar o estado ATUAL do repo, use
+> [`deploy-atualizacao-2026-08.md`](deploy-atualizacao-2026-08.md) — ela traz o delta de agosto
+> (4 vulnerabilidades high corrigidas, vídeo ao vivo puro, sensor de idade do quadro) e a
+> superfície de comando para **macOS**. Este documento segue válido como **procedimento-base**
+> (backup, systemd, nginx, go2rtc, rollback), que é o que a de agosto referencia em vez de copiar.
+
 ## 1. O que esta release muda para o deploy (leia antes)
 
 | Mudança | Impacto no servidor |
@@ -41,11 +47,11 @@ sudo cp /etc/systemd/system/visao-hub.service /root/visao-hub.service.bak
 `server/cameras.json`, `alarms.json`, `camcfg.json`, `wa-auth/`, `data-hist.json` são ESTADO de
 runtime — **não sobrescreva** (o upload do passo 5 não os inclui; confirme).
 
-## 4. Build local (na sua máquina Windows)
+## 4. Build local (máquina de desenvolvimento — aqui em Windows; para macOS ver a release de agosto §5)
 ```powershell
 cd C:\Users\crist\grendene_cd_inovacao\visao_computacional_mvp
 npm install
-npm run verify   # lint + typecheck + build + 210 testes — TEM que passar (gate antes de subir)
+npm run verify   # lint + typecheck + build + test + audit — TEM que passar (gate antes de subir)
 ```
 Isso gera `dist/` novo. Opcional: `npm run eval` (confere que o modelo não regrediu).
 
