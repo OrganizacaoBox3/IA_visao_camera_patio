@@ -77,6 +77,10 @@ jobs:
       # rtsp.sources/wa-auth/go2rtc.yaml/.env). Esses runtime são todos gitignored — não
       # existem no checkout; os --exclude abaixo são trava defensiva (defesa em
       # profundidade) caso algum step passe a criá-los no workspace do runner.
+      # `scripts/feira.sh` está EXCLUÍDO (e travado na auditoria abaixo): ele desliga
+      # anti-flapping e dedup do alarme de propósito — é perfil de BALCÃO (demonstração ao
+      # vivo). Num CD, alarme que repete sem parar é a fadiga de alarme que o ADR-004 existe
+      # para evitar; o arquivo em produção é um pé de armadilha esperando alguém rodá-lo.
       - name: Empacotar release (só o que sobe)
         run: |
           tar -czf release.tar.gz \
@@ -94,6 +98,7 @@ jobs:
             --exclude='server/rtsp.sources.json' \
             --exclude='server/go2rtc.yaml' \
             --exclude='*.gen.yaml' \
+            --exclude='scripts/feira.sh' \
             dist server bin/go2rtc package.json package-lock.json scripts
 
       # Trava auditável sobre o ARTEFATO real: se qualquer arquivo proibido aparecer no
@@ -103,7 +108,7 @@ jobs:
           set -euo pipefail
           test -f dist/index.html
           file bin/go2rtc | grep -q 'ELF 64-bit'   # binário LINUX (não o .exe do Windows)
-          FORBIDDEN='server/(models/|wa-auth/|cameras\.json|alarms\.json|camcfg\.json|alarm-shelves\.json|data-hist\.json|users\.json|recipients\.json|notif-settings\.json|rtsp\.sources\.json|go2rtc\.yaml)|node_modules/|\.env|\.gen\.yaml'
+          FORBIDDEN='server/(models/|wa-auth/|cameras\.json|alarms\.json|camcfg\.json|alarm-shelves\.json|data-hist\.json|users\.json|recipients\.json|notif-settings\.json|rtsp\.sources\.json|go2rtc\.yaml)|node_modules/|\.env|\.gen\.yaml|scripts/feira\.sh'
           # Lista materializada em ARQUIVO: `tar -tzf | head` sob pipefail mata o tar com
           # SIGPIPE ("stdout: write error" — a falha do run #1). Sem pipe, sem SIGPIPE; e a
           # auditoria e a amostra leem o MESMO snapshot completo.

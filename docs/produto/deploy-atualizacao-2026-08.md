@@ -9,6 +9,48 @@
 >
 > **Você executa; nada é automático.** Gate antes de ação irreversível (CLAUDE.md §8).
 
+## 0. O CAMINHO NORMAL É O CD — não os comandos manuais deste documento
+
+Existe **deploy automatizado** desde julho: o workflow **`Deploy Homolog`**
+(`.github/workflows/deploy-homolog.yml`), com disparo **manual** (`workflow_dispatch`) — nunca
+auto-on-push. Ele automatiza este runbook inteiro e é **mais seguro que executar à mão**:
+
+```bash
+gh workflow run deploy-homolog.yml --ref dev     # ou pela aba Actions do GitHub
+gh run watch <id>
+```
+
+O que ele faz e a mão não faz (ou faz pior):
+
+| Etapa | Proteção que o workflow tem |
+|---|---|
+| Gate | `npm run verify` **dentro** do deploy (job `build`) — vermelho aqui e o servidor não é tocado |
+| go2rtc | baixa `linux-amd64` com sha256 **e assere `file bin/go2rtc \| grep ELF 64-bit`** — a armadilha §3.1 já está travada |
+| Pacote | trava **auditável** sobre o tar real: se estado de runtime ou segredo aparecer, aborta antes de tocar o servidor |
+| Binário em uso | swap **atômico** (`cp` p/ `.new` + `mv -f`) — evita `ETXTBSY` com o sidecar rodando |
+| Raio de explosão | nenhum `rm -rf` fora do staging próprio; `cp` **aditivo** (sem `--delete`); `systemctl` só no unit `visao-hub`; nginx **não** é tocado |
+| Health-check | `curl` no `/socket.io/` com retry, após o restart |
+| Rollback | **nunca automático** — o backup fica no servidor e o log imprime as instruções |
+
+Segredos: já cadastrados como **environment secrets** do environment `homolog`
+(`HOMOLOG_SSH_HOST`, `HOMOLOG_SSH_USER`, `HOMOLOG_SSH_KEY`, `HOMOLOG_SSH_KNOWN_HOSTS`). O
+`KNOWN_HOSTS` presente significa **host key pinada**, sem TOFU. Existe também um
+`Diagnóstico Homolog (read-only)` para inspecionar o servidor sem nenhuma escrita.
+
+**Dois fatos que você deve saber antes de disparar:**
+
+1. **O workflow NUNCA foi executado** — zero runs no histórico. O primeiro disparo é também o
+   primeiro teste dele. Rode o `Diagnóstico Homolog` primeiro: ele exercita exatamente o mesmo
+   acesso SSH, sem escrever nada. Se o diagnóstico passa, o acesso está bom.
+2. **O environment `homolog` tem 0 required reviewers configurados.** O cabeçalho do workflow
+   descreve a aprovação humana "entre o build verde e o toque no servidor" como opcional — e ela
+   está **desligada**. O humano no loop hoje é só o disparo manual. Se quiser a segunda camada, é
+   configuração do GitHub (Settings → Environments → homolog), não código.
+
+**Então para que servem as seções 5–7 deste documento?** Como **fallback manual**: Actions fora do
+ar, deploy sem internet no runner, ou depuração passo a passo. O delta da release (§1–§2), as
+armadilhas (§3), a validação (§8) e o diagnóstico (§9) valem para os **dois** caminhos.
+
 ## 1. Por que esta release vale um deploy
 
 **O motivo nº 1 é segurança, não feature.** Quatro vulnerabilidades **high** estavam no ar e foram
@@ -59,7 +101,7 @@ continua no cliente antigo **até recarregar a página**.
       isso que torna o rollback do §7 barato.
 - [ ] Nada de env nova para preparar nesta release.
 
-## 5. Build local (macOS)
+## 5. Build local (macOS) — FALLBACK MANUAL (o CD do §0 faz isto)
 
 ```bash
 cd ~/Documents/projetos/grendene/cd-inovacao/visao_computacional_mvp
@@ -75,7 +117,7 @@ reprovar ali, apareceu vulnerabilidade nova e o deploy espera.
 > ⚠ O `fetch-go2rtc --platform linux-*` **sobrescreve** o `bin/go2rtc` local pelo binário Linux.
 > Para voltar a rodar WebRTC nesta máquina depois, rode o script sem `--platform`.
 
-## 6. Upload (rsync, no lugar do WinSCP)
+## 6. Upload (rsync) — FALLBACK MANUAL (o CD do §0 faz isto)
 
 `rsync` em vez de cópia manual porque ele **não apaga o que não subiu** e mostra o que mudou.
 Note o `--exclude` do estado de runtime: `cameras.json`, `alarms.json`, `camcfg.json`,
@@ -104,7 +146,7 @@ já está lá; só em deploy offline — julho §6B), `.env*`, o estado de runti
 **`scripts/feira.sh`** — ele desliga guardas de fadiga de alarme de propósito (perfil de balcão);
 num CD, alarme que repete sem parar é o defeito que o ADR-004 existe para evitar.
 
-## 7. No servidor
+## 7. No servidor — FALLBACK MANUAL (o CD do §0 faz isto)
 
 ```bash
 sudo systemctl stop visao-hub        # o npm ci abaixo esvazia node_modules; melhor parar antes
