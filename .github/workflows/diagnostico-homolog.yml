@@ -89,6 +89,32 @@ jobs:
             printf '    %-18s %s\n' "$pkg" "$V"
           done
           echo
+          echo "== A FONTE CHEGA EM DIA? (diagnose-source: 8s por câmera, máx 2) =="
+          # Responde a pergunta que o journal NÃO responde: "pull falhou por timeout" é a FONTE
+          # entregando devagar ou é fila NOSSA? O script mede fps efetivo, idade p50/p90 do quadro
+          # e a TENDÊNCIA (idade que sobe = fila). Sai != 0 quando detecta fila.
+          # Read-only: só LÊ o stream (spawna ffmpeg por 8s). A URL NUNCA é impressa aqui — o
+          # script redige usuário/senha na própria saída (mesma função de server/rtsp.js).
+          if [ -f "$APP/scripts/diagnose-source.mjs" ] && [ -f "$APP/server/cameras.json" ]; then
+            node -e '
+              const c = require(process.argv[1]);
+              const arr = Array.isArray(c) ? c : Object.values(c);
+              const urls = arr.map(x => x && x.url).filter(u => typeof u === "string" && u);
+              console.log(urls.slice(0, 2).join("\n"));
+            ' "$APP/server/cameras.json" > /tmp/vs-urls.txt 2>/dev/null || : > /tmp/vs-urls.txt
+            n=0
+            while IFS= read -r u; do
+              [ -z "$u" ] && continue
+              n=$((n+1))
+              echo "--- câmera $n"
+              (cd "$APP" && node scripts/diagnose-source.mjs "$u" 8) || echo "  (código != 0 — ver o veredito acima)"
+            done < /tmp/vs-urls.txt
+            rm -f /tmp/vs-urls.txt
+            [ "$n" -eq 0 ] && echo "(nenhuma URL de câmera em cameras.json)" || true
+          else
+            echo "(diagnose-source.mjs ou cameras.json ausente — release antiga?)"
+          fi
+          echo
           echo "== journal do hub (última 1h): rtmp/go2rtc/rtsp =="
           sudo -n journalctl -u visao-hub --since "-60 min" --no-pager 2>/dev/null | grep -aiE "rtmp|go2rtc|ffmpeg|exec" | tail -120 || echo "(journal indisponível)"
           REMOTE
