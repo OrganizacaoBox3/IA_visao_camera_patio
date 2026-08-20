@@ -553,7 +553,86 @@ async function handle(req, res, ctx) {
   // Aditivo, no mesmo molde de overview/site-link (contratos.md §6). Duas superfícies de auth:
   // enrollment = token de usuário + canAccess (integrador); registro = site_key do coletor.
   if (collection === "dvr") {
-    const action = id; // seg[2]: 'coletores' | 'registrar' | 'frp-login' | 'sessao'
+    const action = id; // seg[2]: 'coletores' | 'registrar' | 'frp-login' | 'sessao' | 'dvrs' | 'auditoria'
+
+    // ── GET /api/dvr/dvrs — LISTA de DVRs por cliente + status da sessão (C-fe-1, UI do técnico) ──
+    // LEITURA por TOKEN de usuário + canAccess no cliente (mesmo filtro do CRUD/coletores). Junta
+    // dvr → coletor (nome/empresa) → cliente (nome) e ANEXA a sessão ATIVA (se houver): é o que a UI
+    // usa p/ casar DVR↔sessão↔"Abrir DVR" (nova aba, só com sessão ativa, via host_publico) e
+    // "Encerrar" (sessaoId). NENHUMA credencial (site_key) trafega aqui.
+    if (action === "dvrs" && !seg[3] && method === "GET") {
+      const claims = requireScope(req, res);
+      if (!claims) return true;
+      const tree = await access.buildFullTree();
+      const [linhas, ativas] = await Promise.all([stores.dvrs.listComContexto(), stores.sessoes.listAtivas()]);
+      const sessaoPorColetor = new Map();
+      for (const s of ativas) if (!sessaoPorColetor.has(s.coletor_id)) sessaoPorColetor.set(s.coletor_id, s);
+      const rows = linhas
+        .filter((d) => auth.canAccess(claims, { type: "cliente", id: d.cliente_id }, tree))
+        .map((d) => {
+          const s = sessaoPorColetor.get(d.coletor_id) || null;
+          return {
+            id: d.id,
+            coletor_id: d.coletor_id,
+            coletor_nome: d.coletor_nome,
+            empresa_id_box3: d.empresa_id_box3,
+            coletor_revogado: d.coletor_revogado,
+            cliente_id: d.cliente_id,
+            cliente_nome: d.cliente_nome,
+            partner_id: d.partner_id,
+            marca: d.marca,
+            modelo: d.modelo,
+            ip: d.ip,
+            porta: d.porta,
+            criado_em: d.criado_em,
+            atualizado_em: d.atualizado_em,
+            sessao: s
+              ? {
+                  sessaoId: s.id,
+                  status: s.status,
+                  remotePort: s.remote_port,
+                  hostPublico: s.host_publico,
+                  aberta_em: s.aberta_em,
+                  ultima_atividade: s.ultima_atividade,
+                }
+              : null,
+          };
+        });
+      json(res, 200, rows);
+      return true;
+    }
+
+    // ── GET /api/dvr/auditoria — HISTÓRICO por DVR/cliente (C-fe-2) ──────────────
+    // Token + canAccess no cliente do coletor auditado. Cobre enrollment/registro/sessão (abrir/
+    // encerrar/timeout)/acesso do técnico — quem/qual/quando. Filtros opcionais ?coletor=<id> e
+    // ?limit=. Linha sem cliente (coletor sumido) só é vista por platform (canAccess nega escopo).
+    if (action === "auditoria" && !seg[3] && method === "GET") {
+      const claims = requireScope(req, res);
+      if (!claims) return true;
+      const q = new URL(req.url, "http://x").searchParams;
+      const coletorId = q.get("coletor") || null;
+      const limitRaw = q.get("limit");
+      const tree = await access.buildFullTree();
+      const linhas = await stores.auditoriaDvr.listComContexto({
+        limit: limitRaw ? Number(limitRaw) : 200,
+        coletorId,
+      });
+      const rows = linhas
+        .filter((a) => auth.canAccess(claims, { type: "cliente", id: a.cliente_id }, tree))
+        .map((a) => ({
+          id: a.id,
+          ator: a.ator,
+          dvr_id: a.dvr_id,
+          coletor_id: a.coletor_id,
+          coletor_nome: a.coletor_nome,
+          cliente_id: a.cliente_id,
+          acao: a.acao,
+          detalhe: a.detalhe,
+          em: a.em,
+        }));
+      json(res, 200, rows);
+      return true;
+    }
 
     // ── POST /api/dvr/frp-login — LOGIN-PLUGIN do frps (C-be-4) ──────────────────
     // Protocolo de server-plugin do frp: body { version, op, content }; a DECISÃO vai no CORPO

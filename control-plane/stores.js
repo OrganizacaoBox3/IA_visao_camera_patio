@@ -223,6 +223,24 @@ const dvrs = {
     );
     return r.rows[0] || null;
   },
+  // LEITURA da UI do técnico (C-fe-1): DVR + contexto do coletor (nome/empresa) + cliente (nome).
+  // JOIN em vez de N queries; o canAccess do técnico filtra por cliente_id NO HANDLER (routes.js).
+  // NENHUMA credencial trafega (não há site_key aqui — nem da tabela dvr, nem do coletor).
+  async listComContexto() {
+    const r = await db.query(
+      `select d.id, d.coletor_id, d.cliente_id, d.marca, d.modelo, d.ip, d.porta,
+              d.consentimento_aceito, d.consentimento_em, d.consentimento_versao,
+              d.criado_em, d.atualizado_em,
+              col.nome as coletor_nome, col.empresa_id_box3, col.coletor_id_box3,
+              col.revogado as coletor_revogado,
+              cli.nome as cliente_nome, cli.partner_id
+       from dvr d
+       join coletor col on col.id = d.coletor_id
+       join cliente cli on cli.id = d.cliente_id
+       order by d.criado_em asc`,
+    );
+    return r.rows;
+  },
   async upsert({ coletor_id, cliente_id, marca, modelo, ip, porta, consentimento }) {
     const ts = now();
     const existing = await this.getByColetor(coletor_id);
@@ -255,6 +273,31 @@ const auditoriaDvr = {
   async list(limit = 100) {
     const lim = Math.min(Math.max(Number(limit) || 100, 1), 1000);
     const r = await db.query("select id,ator,dvr_id,coletor_id,acao,detalhe,em from auditoria_dvr order by em desc limit $1", [lim]);
+    return r.rows;
+  },
+  // LEITURA da UI do técnico (C-fe-2): auditoria + cliente_id/coletor_nome do coletor (LEFT JOIN —
+  // um dia um coletor pode ter sumido). O canAccess por cliente é aplicado NO HANDLER (routes.js);
+  // linha sem coletor/cliente (não deveria ocorrer) fica visível só p/ platform. Filtro opcional
+  // por coletorId. `detalhe` já volta como objeto (jsonb) do node-pg.
+  async listComContexto({ limit = 200, coletorId = null } = {}) {
+    const lim = Math.min(Math.max(Number(limit) || 200, 1), 1000);
+    const params = [];
+    let where = "";
+    if (coletorId) {
+      params.push(String(coletorId));
+      where = `where a.coletor_id = $${params.length}`;
+    }
+    params.push(lim);
+    const r = await db.query(
+      `select a.id, a.ator, a.dvr_id, a.coletor_id, a.acao, a.detalhe, a.em,
+              col.cliente_id, col.nome as coletor_nome
+       from auditoria_dvr a
+       left join coletor col on col.id = a.coletor_id
+       ${where}
+       order by a.em desc
+       limit $${params.length}`,
+      params,
+    );
     return r.rows;
   },
 };
@@ -291,6 +334,12 @@ const sessoes = {
   async portasAtivas() {
     const r = await db.query("select remote_port from sessao where status='ativa'");
     return r.rows.map((x) => x.remote_port);
+  },
+  // Todas as sessões ATIVAS (a UI do técnico casa DVR↔sessão por coletor_id — C-fe-1). Uma linha
+  // ativa por coletor (UNIQUE parcial), então mapear coletor_id → sessão é 1:1.
+  async listAtivas() {
+    const r = await db.query(`select ${SESSAO_COLS} from sessao where status='ativa' order by aberta_em desc`);
+    return r.rows;
   },
   // Abre a sessão alocando um remote_port LIVRE. Corrida-safe pelas UNIQUE parciais do schema:
   //  • porta duplicada (23505 em sessao_remote_port_ativa_uidx) → recomputa e tenta outra;
