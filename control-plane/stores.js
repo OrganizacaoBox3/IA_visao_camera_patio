@@ -168,4 +168,94 @@ const memberships = {
   },
 };
 
-module.exports = { genId, partners, clientes, sites, users, memberships, publicUser };
+// ── PONTE DVR (Fase 2) ─────────────────────────────────────────────────────--
+// coletor = o ENROLLMENT (empresa box3 ↔ cliente visão) + credencial site_key. Guarda SÓ o
+// hash; a chave crua sai UMA vez no enrollment (padrão API key, como o site). getWithHash é
+// uso INTERNO (authColetor) — o hash NUNCA sai em resposta pública.
+const coletores = {
+  async create({ cliente_id, empresa_id_box3, nome, coletorIdBox3, siteKeyHash }) {
+    const id = genId("col");
+    const ts = now();
+    await db.query(
+      "insert into coletor(id,cliente_id,empresa_id_box3,coletor_id_box3,nome,site_key_hash,revogado,criado_em) values ($1,$2,$3,$4,$5,$6,false,$7)",
+      [id, cliente_id, empresa_id_box3, coletorIdBox3 ?? null, nome ?? null, siteKeyHash, ts],
+    );
+    return { id, cliente_id, empresa_id_box3, coletor_id_box3: coletorIdBox3 ?? null, nome: nome ?? null, revogado: false, revogado_em: null, criado_em: ts };
+  },
+  async list() {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,revogado,revogado_em,criado_em from coletor order by criado_em asc",
+    );
+    return r.rows;
+  },
+  async get(id) {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,revogado,revogado_em,criado_em from coletor where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+  // uso interno (authColetor): inclui site_key_hash + revogado. NÃO expor em resposta pública.
+  async getWithHash(id) {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,site_key_hash,revogado,criado_em from coletor where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+};
+
+// dvr = o aparelho registrado pelo coletor. upsert idempotente por coletor_id (1 DVR/coletor,
+// contratos §3) — devolve { dvr, inserido } p/ o handler auditar registrar × atualizar.
+const dvrs = {
+  async getByColetor(coletorId) {
+    const r = await db.query(
+      "select id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em from dvr where coletor_id=$1",
+      [coletorId],
+    );
+    return r.rows[0] || null;
+  },
+  async get(id) {
+    const r = await db.query(
+      "select id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em from dvr where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+  async upsert({ coletor_id, cliente_id, marca, modelo, ip, porta, consentimento }) {
+    const ts = now();
+    const existing = await this.getByColetor(coletor_id);
+    if (!existing) {
+      const id = genId("dvr");
+      await db.query(
+        `insert into dvr(id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+        [id, coletor_id, cliente_id, marca ?? null, modelo ?? null, ip ?? null, porta ?? null, consentimento.aceito, consentimento.quando, consentimento.versaoTexto ?? null, ts],
+      );
+      return { dvr: await this.get(id), inserido: true };
+    }
+    await db.query(
+      `update dvr set marca=$2, modelo=$3, ip=$4, porta=$5, consentimento_aceito=$6, consentimento_em=$7, consentimento_versao=$8, atualizado_em=$9 where coletor_id=$1`,
+      [coletor_id, marca ?? null, modelo ?? null, ip ?? null, porta ?? null, consentimento.aceito, consentimento.quando, consentimento.versaoTexto ?? null, ts],
+    );
+    return { dvr: await this.getByColetor(coletor_id), inserido: false };
+  },
+};
+
+// auditoria_dvr = quem/qual DVR/qual ação/quando (a auditoria que o control-plane não tinha).
+const auditoriaDvr = {
+  async registrar({ ator, dvr_id, coletor_id, acao, detalhe }) {
+    const r = await db.query(
+      "insert into auditoria_dvr(ator,dvr_id,coletor_id,acao,detalhe,em) values ($1,$2,$3,$4,$5,$6) returning id,ator,dvr_id,coletor_id,acao,em",
+      [String(ator || ""), dvr_id ?? null, coletor_id ?? null, String(acao || ""), detalhe ? JSON.stringify(detalhe) : null, now()],
+    );
+    return r.rows[0];
+  },
+  async list(limit = 100) {
+    const lim = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+    const r = await db.query("select id,ator,dvr_id,coletor_id,acao,detalhe,em from auditoria_dvr order by em desc limit $1", [lim]);
+    return r.rows;
+  },
+};
+
+module.exports = { genId, partners, clientes, sites, users, memberships, publicUser, coletores, dvrs, auditoriaDvr };

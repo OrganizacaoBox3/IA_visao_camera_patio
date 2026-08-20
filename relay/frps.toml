@@ -1,0 +1,52 @@
+# ════════════════════════════════════════════════════════════════════════════
+# Ponte DVR — RELAY (frp server) · SKELETON (B-1)
+# frp >= 0.52 (formato TOML novo). Roda numa VPS DEDICADA e isolada do control-plane
+# (ver README.md ao lado). Base do de-risking: ../../box3-mobile/planejamento/ponte-dvr/
+# de-risking/relay-proxy.md §4.1 e contratos.md §2.
+#
+# ⚠️ SKELETON: só o servidor frp (túnel + loopback + menor privilégio). O login-plugin
+# (valida a site_key do coletor contra o control-plane do visão — B-2/C-be-4) e o nginx
+# de front (auth_request + sub_filter — B-3) são das próximas ondas; ficam como TODO abaixo.
+#
+# ⚠️ NENHUM segredo real no repo (invariante 6): tokens/senhas vêm de env/secret manager
+# na VPS. Os {{PLACEHOLDERS}} são substituídos no deploy (envsubst/secret manager).
+# ════════════════════════════════════════════════════════════════════════════
+
+bindAddr = "0.0.0.0"
+bindPort = 7000                 # ÚNICA porta de entrada do frp que fica pública (fora a 443 do nginx)
+
+# --- Onde as portas de proxy nascem: LOOPBACK. Este é o coração da segurança (contratos §2). ---
+# Toda porta que um frpc expõe (type=tcp/remotePort) escuta só em 127.0.0.1 → o DVR só é
+# alcançável de dentro da VPS, pelo nginx, atrás do login. NUNCA na internet.
+proxyBindAddr = "127.0.0.1"
+
+# NÃO habilitamos vhostHTTPPort/vhostHTTPSPort: o proxy HTTP do frp fica DESLIGADO — o nginx
+# é o único front (contratos §2: frp TCP puro, não o vhost HTTP do frp).
+
+# --- Autenticação grossa: token compartilhado, obrigatório, e TLS forçado entre frpc↔frps ---
+auth.method = "token"
+auth.token  = "{{FRP_TOKEN}}"   # injetado por env/secret na VPS — nunca no git
+transport.tls.force = true       # recusa frpc sem TLS
+
+# --- Menor privilégio: 1 DVR por coletor (contratos §2) ---
+maxPortsPerClient = 1
+allowPorts = [
+  { start = 20000, end = 20099 } # faixa de loopback reservada aos túneis de sessão
+]
+
+# --- Dashboard do frps: SÓ em loopback (observação/auditoria; nunca público) ---
+[webServer]
+addr = "127.0.0.1"
+port = 7500
+user = "{{FRP_DASH_USER}}"
+password = "{{FRP_DASH_PASS}}"
+
+# ── TODO (F3 — B-2/C-be-4): login-plugin que valida a site_key do coletor ────────────────
+# A cada Login/NewProxy o frps chamará um endpoint que confere a site_key (metadatas) contra
+# o control-plane do visão (Opção A, contratos §8). site_key inválida/revogada ⇒ conexão
+# recusada. NÃO habilitar ainda — é a próxima onda.
+# [[httpPlugins]]
+# name = "ponte-dvr-login"
+# addr = "127.0.0.1:9001"
+# path = "/frp/login"
+# ops  = ["Login", "NewProxy"]

@@ -12,6 +12,7 @@ const password = require("./password");
 const sitekey = require("./sitekey");
 const login = require("./login");
 const overview = require("./overview");
+const dvr = require("./dvr");
 const db = require("./db");
 
 async function readJson(req, ctx) {
@@ -32,6 +33,23 @@ async function authSite(req) {
     return { code: 401, error: "site_key inválida" };
   }
   return { site: s, siteId: s.id };
+}
+
+// ── autenticação do COLETOR (domínio DVR da Ponte DVR), por header — análogo a authSite ──
+// Contrato (contratos.md §8, Opção A): a MESMA site_key emitida no enrollment autentica a API
+// DVR (e, na F3, o login-plugin do frps). Headers: x-coletor-id + x-coletor-key (chave em
+// texto; o plane compara com o HASH guardado, timing-safe). coletor inexistente → 404;
+// revogado (enrollment obsoleto/drift) → 403; chave errada/ausente → 401.
+async function authColetor(req) {
+  const coletorId = req.headers["x-coletor-id"];
+  const key = req.headers["x-coletor-key"];
+  const c = coletorId ? await stores.coletores.getWithHash(String(coletorId)) : null;
+  if (!c) return { code: 404, error: "coletor inexistente" };
+  if (c.revogado) return { code: 403, error: "coletor revogado (enrollment obsoleto)" };
+  if (!c.site_key_hash || !sitekey.verifySiteKey(String(key || ""), c.site_key_hash)) {
+    return { code: 401, error: "site_key inválida" };
+  }
+  return { coletor: c, coletorId: c.id, clienteId: c.cliente_id };
 }
 
 async function handle(req, res, ctx) {
@@ -445,7 +463,101 @@ async function handle(req, res, ctx) {
     }
   }
 
+  // ═══ /api/dvr — PONTE DVR (Fase 2: enrollment + registro) ══════════════════════
+  // Aditivo, no mesmo molde de overview/site-link (contratos.md §6). Duas superfícies de auth:
+  // enrollment = token de usuário + canAccess (integrador); registro = site_key do coletor.
+  if (collection === "dvr") {
+    const action = id; // seg[2]: 'coletores' | 'registrar'
+
+    // ── POST /api/dvr/registrar — DEVICE (auth por site_key do coletor) ──
+    // Grava/atualiza o DVR (marca/modelo/ip/porta) + consentimento; IDEMPOTENTE por coletor
+    // (1 DVR/coletor); AUDITA. A credencial do DVR NUNCA trafega (contratos §3): o corpo só
+    // traz o que o app validou localmente (marca/modelo/ip/porta) + o aceite do consentimento.
+    if (action === "registrar" && method === "POST") {
+      const a = await authColetor(req);
+      if (a.error) {
+        json(res, a.code, { error: a.error });
+        return true;
+      }
+      const parsed = dvr.normalizeRegistro(await readJson(req, ctx));
+      if (!parsed.ok) {
+        json(res, 400, { error: parsed.error });
+        return true;
+      }
+      const v = parsed.value;
+      const { dvr: row, inserido } = await stores.dvrs.upsert({
+        coletor_id: a.coletorId,
+        cliente_id: a.clienteId, // derivado do coletor autenticado (não confia em corpo)
+        marca: v.marca,
+        modelo: v.modelo,
+        ip: v.ip,
+        porta: v.porta,
+        consentimento: v.consentimento,
+      });
+      await stores.auditoriaDvr.registrar({
+        ator: a.coletorId,
+        dvr_id: row.id,
+        coletor_id: a.coletorId,
+        acao: inserido ? "dvr.registrar" : "dvr.atualizar",
+        detalhe: { marca: v.marca, modelo: v.modelo, consentimentoVersao: v.consentimento.versaoTexto },
+      });
+      json(res, inserido ? 201 : 200, { ok: true, dvr: row });
+      return true;
+    }
+
+    // ── /api/dvr/coletores — ENROLLMENT (integrador/técnico: token + canAccess no cliente) ──
+    if (action === "coletores") {
+      const claims = requireScope(req, res);
+      if (!claims) return true;
+      const coletorId = seg[3];
+
+      // GET — lista os coletores no ESCOPO do chamador (mesmo filtro canAccess do CRUD).
+      if (!coletorId && method === "GET") {
+        const tree = await access.buildFullTree();
+        const rows = (await stores.coletores.list()).filter((k) => auth.canAccess(claims, { type: "cliente", id: k.cliente_id }, tree));
+        json(res, 200, rows);
+        return true;
+      }
+
+      // POST — o ENROLLMENT: liga empresa(box3) ↔ cliente(visão) e EMITE a site_key crua (1x).
+      if (!coletorId && method === "POST") {
+        const parsed = dvr.validateEnrollment(await readJson(req, ctx));
+        if (!parsed.ok) {
+          json(res, 400, { error: parsed.error });
+          return true;
+        }
+        const v = parsed.value;
+        if (!(await access.guardAccess(claims, { type: "cliente", id: v.cliente_id }))) {
+          json(res, 403, { error: "sem acesso a este cliente" });
+          return true;
+        }
+        if (!(await stores.clientes.get(v.cliente_id))) {
+          json(res, 404, { error: "cliente inexistente" });
+          return true;
+        }
+        // site_key: nasce aqui, guardamos SÓ o hash, devolvemos a chave CRUA UMA vez (como o site).
+        const rawKey = sitekey.generateSiteKey();
+        const k = await stores.coletores.create({
+          cliente_id: v.cliente_id,
+          empresa_id_box3: v.empresa_id_box3,
+          nome: v.nome,
+          coletorIdBox3: v.coletor_id_box3,
+          siteKeyHash: sitekey.hashSiteKey(rawKey),
+        });
+        await stores.auditoriaDvr.registrar({
+          ator: claims.id,
+          dvr_id: null,
+          coletor_id: k.id,
+          acao: "enrollment",
+          detalhe: { cliente_id: v.cliente_id, empresa_id_box3: v.empresa_id_box3 },
+        });
+        json(res, 201, { ...k, site_key: rawKey });
+        return true;
+      }
+    }
+  }
+
   return false; // nenhuma rota casou → o index responde 404
 }
 
-module.exports = { handle, authSite };
+module.exports = { handle, authSite, authColetor };

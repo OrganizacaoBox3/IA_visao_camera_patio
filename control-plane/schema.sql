@@ -128,3 +128,78 @@ begin
       with check (site_id = current_setting('app.current_tenant', true));
   end if;
 end$$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- PONTE DVR (Fase 2) — domínio de acesso remoto ao DVR do cliente via túnel.
+-- Ver box3-mobile/planejamento/ponte-dvr/contratos.md (§3 registro, §8 identidade Opção A).
+--
+-- Modelo: o COLETOR (device box3 rodando o app-ponte-dvr) é o edge-gateway do domínio DVR
+-- (contratos §8). Ele NÃO é reusado da tabela `site` (que é o hub silo de CÂMERAS + RLS de
+-- alarm_event) — são dois parques distintos; misturá-los poluiria a frota de câmeras. Em vez
+-- disso, `coletor` é um "site" próprio do domínio DVR, com a MESMA mecânica de site_key
+-- (sitekey.js): guarda só o HASH; a chave crua sai UMA vez no enrollment (padrão API key).
+--
+-- SEM tabela de SESSÃO aqui (decisão): o registro/enrollment não a exercitam. O ciclo de
+-- sessão (abrir/estado/encerrar + remote_port + timeout de inatividade) é a C-be-5 e entra
+-- com a sua própria lógica e testes — criá-la agora seria schema especulativo e não revisável
+-- pelos testes desta onda. Aditivo/idempotente como o resto do arquivo.
+--
+-- LGPD/sigilo: NENHUMA credencial do DVR mora aqui (contratos §3) — a validação da senha é
+-- efêmera no app; o backend só guarda marca/modelo/ip/porta + o consentimento.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ── coletor: o ENROLLMENT — liga empresa(box3) ↔ cliente(visão) + credencial site_key ──
+-- empresa_id_box3 é o ELO com o outro backend (a empresa homologada no box3); a fonte de
+-- verdade do DEVICE segue no box3 (contratos §8). site_key_hash é a credencial que autentica
+-- a API DVR (e, futuramente, o login-plugin do frps). `revogado` cobre a mitigação de drift
+-- (coletor reatribuído no box3 ⇒ enrollment obsoleto ⇒ site_key revogada).
+create table if not exists coletor (
+  id text primary key,
+  cliente_id text not null references cliente(id) on delete restrict,
+  empresa_id_box3 text not null,               -- o elo: id da empresa homologada no box3
+  coletor_id_box3 text,                         -- id do device no box3 (pode chegar depois/drift)
+  nome text,
+  site_key_hash text not null,                  -- hash da site_key do coletor (sitekey.js)
+  revogado boolean not null default false,      -- enrollment obsoleto ⇒ túnel e API DVR recusados
+  revogado_em bigint,
+  criado_em bigint not null
+);
+create index if not exists coletor_cliente_idx on coletor(cliente_id);
+create index if not exists coletor_empresa_idx on coletor(empresa_id_box3);
+
+-- ── dvr: o aparelho registrado pelo coletor — 1 por coletor (idempotência do registro) ──
+-- cliente_id é DENORMALIZADO do coletor (âncora direta para o canAccess do técnico na F4).
+-- consentimento_* guarda o aceite (aceito/quando/versaoTexto). NENHUMA credencial do DVR.
+create table if not exists dvr (
+  id text primary key,
+  coletor_id text not null references coletor(id) on delete cascade,
+  cliente_id text not null references cliente(id) on delete restrict,
+  marca text,
+  modelo text,
+  ip text,
+  porta integer,
+  consentimento_aceito boolean not null default false,
+  consentimento_em bigint,
+  consentimento_versao text,
+  criado_em bigint not null,
+  atualizado_em bigint
+);
+-- 1 DVR por coletor: o UNIQUE torna o registro idempotente por (coletorId) (contratos §3).
+create unique index if not exists dvr_coletor_uidx on dvr(coletor_id);
+create index if not exists dvr_cliente_idx on dvr(cliente_id);
+
+-- ── auditoria_dvr: quem/qual DVR/qual ação/quando (a auditoria que o visão não tinha) ──
+-- ator = coletorId (device) ou user_id (integrador/técnico). Cobre enrollment (dvr_id NULL),
+-- registro e — nas próximas ondas — abrir/encerrar sessão e acesso do técnico.
+create table if not exists auditoria_dvr (
+  id bigserial primary key,
+  ator text not null,
+  dvr_id text,
+  coletor_id text,
+  acao text not null,
+  detalhe jsonb,
+  em bigint not null
+);
+create index if not exists auditoria_dvr_dvr_idx on auditoria_dvr(dvr_id);
+create index if not exists auditoria_dvr_coletor_idx on auditoria_dvr(coletor_id);
+create index if not exists auditoria_dvr_em_idx on auditoria_dvr(em);
