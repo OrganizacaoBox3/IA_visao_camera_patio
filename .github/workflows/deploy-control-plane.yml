@@ -1,0 +1,171 @@
+name: Deploy Control-Plane (homolog)
+
+# CD do CONTROL-PLANE (processo separado do hub — node control-plane/index.js na CP_PORT, atrás do
+# nginx em cam.box3.software). Espelha o deploy-homolog.yml do hub. Disparo MANUAL (workflow_dispatch)
+# — humano no loop, NUNCA auto-on-push. Roda na infra do GitHub (não passa por filtros de rede locais).
+#
+# ── ANTES DO 1º USO, confirme (o control-plane JÁ RODA na VPS, mas o deploy dele não estava no repo):
+#   Secrets (environment "homolog" — os MESMOS do hub, mesma VPS):
+#     HOMOLOG_SSH_HOST · HOMOLOG_SSH_USER · HOMOLOG_SSH_KEY · HOMOLOG_SSH_PORT? · HOMOLOG_SSH_KNOWN_HOSTS?
+#   Variáveis do repo (Settings → Variables) — os fatos da VPS que só você sabe:
+#     CP_SERVICE   = nome do unit systemd do control-plane (ex.: control-plane, visao-control-plane)
+#     CP_APP_PATH  = pasta do control-plane na VPS (a que o ExecStart do unit usa; ex.: /var/www/visao-control-plane)
+#     CP_PORT?     = porta do /health (default 4100)
+#   O schema NÃO precisa de passo de migração: db.init() aplica control-plane/schema.sql (idempotente) no
+#   boot — reiniciar o unit já cria as tabelas DVR. O CP_DATABASE_URL/CP_PG* já vivem no unit da VPS.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-control-plane
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build + gate (control-plane + web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # O control-plane declara suas próprias deps (pg, ws). O portal (web) é um app Vite à parte.
+      - name: Install (control-plane + web)
+        run: |
+          npm --prefix control-plane ci || npm --prefix control-plane install --no-audit --no-fund
+          npm --prefix control-plane/web ci
+
+      # Gate: testes PUROS do control-plane (sem Postgres) + build do portal. Os *.pg.test.js exigem
+      # banco e ficam para o gate local/PR (docker-compose); aqui provamos a fundação + o build da SPA.
+      - name: Gate — testes puros do CP + build do portal
+        run: |
+          node --test control-plane/*.test.js
+          npm --prefix control-plane/web run build
+
+      # Sobe: control-plane/ (código + schema.sql + package*.json), SEM node_modules (reinstala na VPS),
+      # e a SPA buildada (control-plane/web/dist) que o CP serve via serveStatic (Fase 2).
+      - name: Empacotar release (só o que sobe)
+        run: |
+          set -euo pipefail
+          test -f control-plane/index.js
+          test -f control-plane/schema.sql
+          test -f control-plane/web/dist/index.html
+          tar -czf cp-release.tar.gz \
+            --exclude='**/node_modules' \
+            --exclude='**/.env' \
+            control-plane
+
+      - name: Auditar pacote (nada de node_modules/segredo)
+        run: |
+          set -euo pipefail
+          tar -tzf cp-release.tar.gz > /tmp/cp-list.txt
+          if grep -E 'node_modules/|/\.env$|\.env\.' /tmp/cp-list.txt; then
+            echo "::error::cp-release.tar.gz contém arquivo proibido — abortando"; exit 1
+          fi
+          echo "sha256: $(sha256sum cp-release.tar.gz)"; head -n 20 /tmp/cp-list.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cp-release
+          path: cp-release.tar.gz
+          retention-days: 3
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy no VPS (control-plane)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: homolog
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cp-release
+
+      - name: Preparar SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?HOMOLOG_SSH_KEY ausente}"; : "${SSH_HOST:?HOMOLOG_SSH_HOST ausente}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null; fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
+
+      - name: Enviar release (scp)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          : "${SSH_USER:?HOMOLOG_SSH_USER ausente}"
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            cp-release.tar.gz "$SSH_USER@$SSH_HOST:cp-release.tar.gz"
+
+      - name: Deploy remoto (idempotente) + health-check
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          CP_SERVICE: ${{ vars.CP_SERVICE }}
+          CP_APP_PATH: ${{ vars.CP_APP_PATH }}
+          CP_PORT: ${{ vars.CP_PORT || '4100' }}
+        run: |
+          set -euo pipefail
+          : "${CP_SERVICE:?defina a variável de repo CP_SERVICE (nome do unit systemd do control-plane)}"
+          : "${CP_APP_PATH:?defina a variável de repo CP_APP_PATH (pasta do control-plane na VPS)}"
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 \
+            "$SSH_USER@$SSH_HOST" "CP_SERVICE='$CP_SERVICE' CP_APP_PATH='$CP_APP_PATH' CP_PORT='$CP_PORT' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP="$CP_APP_PATH"; SERVICE="$CP_SERVICE"; TAR="$HOME/cp-release.tar.gz"
+          STAGE=/tmp/cp-deploy-staging
+          if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+          trap 'rm -rf "$STAGE" 2>/dev/null || true; rm -f "$TAR"' EXIT
+
+          echo "== pré-checagens =="
+          test -f "$TAR" || { echo "ERRO: release não encontrado"; exit 1; }
+          test -d "$APP" || { echo "ERRO: $APP não existe (o control-plane já deveria rodar aí)"; exit 1; }
+          $SUDO systemctl cat "$SERVICE" >/dev/null || { echo "ERRO: unit $SERVICE não instalada"; exit 1; }
+
+          echo "== backup aditivo =="
+          $SUDO cp -a "$APP" "$APP.bak-$(date +%F-%H%M%S)"
+
+          echo "== staging + posicionar (aditivo; .env/node_modules preservados) =="
+          $SUDO rm -rf "$STAGE"; mkdir "$STAGE"
+          tar -xzf "$TAR" -C "$STAGE"                 # cria $STAGE/control-plane/...
+          $SUDO cp -r "$STAGE/control-plane/." "$APP/"
+
+          echo "== deps de produção (pg, ws) =="
+          cd "$APP"
+          $SUDO npm ci --omit=dev --no-audit --no-fund || $SUDO npm install --omit=dev --no-audit --no-fund
+
+          echo "== restart (schema.sql auto-migra no boot via db.init) =="
+          $SUDO systemctl restart "$SERVICE"
+
+          echo "== health-check (/health) =="
+          OK=0
+          for _ in $(seq 1 20); do
+            if curl -fsS -m 5 "http://127.0.0.1:${CP_PORT}/health" | grep -q '"ok":true'; then OK=1; break; fi
+            sleep 3
+          done
+          if [ "$OK" -eq 1 ]; then
+            echo "HEALTH OK — control-plane respondendo em /health."; exit 0
+          fi
+          echo "HEALTH FALHOU — deploy VERMELHO. Reverter: sudo systemctl stop $SERVICE; restaurar do backup .bak-*; start."
+          $SUDO journalctl -u "$SERVICE" -n 40 --no-pager || true
+          exit 1
+          REMOTE
