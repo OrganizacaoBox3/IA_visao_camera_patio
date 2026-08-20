@@ -41,12 +41,21 @@ port = 7500
 user = "{{FRP_DASH_USER}}"
 password = "{{FRP_DASH_PASS}}"
 
-# ── TODO (F3 — B-2/C-be-4): login-plugin que valida a site_key do coletor ────────────────
-# A cada Login/NewProxy o frps chamará um endpoint que confere a site_key (metadatas) contra
-# o control-plane do visão (Opção A, contratos §8). site_key inválida/revogada ⇒ conexão
-# recusada. NÃO habilitar ainda — é a próxima onda.
+# ── TODO (F3 — B-2): WIRE do login-plugin que valida a site_key do coletor ───────────────
+# O endpoint de validação JÁ EXISTE no control-plane do visão (C-be-4, feito): fala o protocolo
+# de server-plugin do frp — POST { version, op, content }, resposta { reject, reject_reason } |
+# { unchange:true } — em `POST /api/dvr/frp-login`:
+#   • Login    → confere metadatas.coletorId + metadatas.siteKey (Opção A, contratos §8);
+#                site_key inválida/revogada/inexistente ⇒ reject.
+#   • NewProxy → menor privilégio (contratos §2): só proxy TCP, com sessão ativa, e a porta
+#                pedida = a porta alocada à sessão do coletor.
+# Falta só APONTAR o frps para ele (B-2). Como o control-plane roda noutra máquina (VPS do relay
+# ≠ control-plane), o padrão é um shim de loopback (127.0.0.1:9001) que repassa ao control-plane,
+# OU apontar o addr direto para o control-plane. Se este endpoint for exposto publicamente, ligue
+# a trava CP_FRP_PLUGIN_TOKEN no control-plane e injete o header x-frp-plugin-token aqui.
+# NÃO habilitar ainda — é a próxima onda (B-2).
 # [[httpPlugins]]
 # name = "ponte-dvr-login"
-# addr = "127.0.0.1:9001"
+# addr = "127.0.0.1:9001"           # shim loopback → control-plane POST /api/dvr/frp-login
 # path = "/frp/login"
 # ops  = ["Login", "NewProxy"]

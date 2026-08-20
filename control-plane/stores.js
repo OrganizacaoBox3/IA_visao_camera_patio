@@ -6,6 +6,7 @@
 // a única tabela com RLS. Estas queries são todas parametrizadas ($1..$n) — nunca interpoladas.
 const crypto = require("node:crypto");
 const db = require("./db");
+const dvrDom = require("./dvr"); // helpers PUROS (proximaPortaLivre) — sem ciclo (dvr.js não requer nada)
 
 // ids text, com prefixo por entidade (mesmo idioma do genId do hub: prefixo + randomBytes hex).
 function genId(prefix) {
@@ -258,4 +259,100 @@ const auditoriaDvr = {
   },
 };
 
-module.exports = { genId, partners, clientes, sites, users, memberships, publicUser, coletores, dvrs, auditoriaDvr };
+// sessao = o ciclo do acesso remoto (F3 backend, C-be-5). A linha ativa É o mapa de rota que o
+// nginx (B-3) vai consumir (host_publico → remote_port → dvr). Faixa de portas via env (casa com
+// o allowPorts do frps: relay/frps.toml, 20000..20099).
+const PORTA_INICIO = Number(process.env.CP_DVR_PORT_START || 20000);
+const PORTA_FIM = Number(process.env.CP_DVR_PORT_END || 20099);
+const SESSAO_COLS =
+  "id,dvr_id,coletor_id,cliente_id,ator,status,remote_port,host_publico,aberta_em,encerrada_em,ultima_atividade";
+
+const sessoes = {
+  async get(id) {
+    const r = await db.query(`select ${SESSAO_COLS} from sessao where id=$1`, [id]);
+    return r.rows[0] || null;
+  },
+  async ativaPorColetor(coletorId) {
+    const r = await db.query(
+      `select ${SESSAO_COLS} from sessao where coletor_id=$1 and status='ativa' order by aberta_em desc limit 1`,
+      [coletorId],
+    );
+    return r.rows[0] || null;
+  },
+  async portasAtivas() {
+    const r = await db.query("select remote_port from sessao where status='ativa'");
+    return r.rows.map((x) => x.remote_port);
+  },
+  // Abre a sessão alocando um remote_port LIVRE. Corrida-safe pelas UNIQUE parciais do schema:
+  //  • porta duplicada (23505 em sessao_remote_port_ativa_uidx) → recomputa e tenta outra;
+  //  • coletor já com sessão ativa (23505 em sessao_coletor_ativa_uidx) → reusa a existente
+  //    (abrir idempotente: 1 túnel por coletor). Devolve { sessao, reusada }.
+  async abrir({ dvr_id, coletor_id, cliente_id, ator, host_publico }) {
+    const ts = now();
+    for (let tentativa = 0; tentativa < 25; tentativa++) {
+      const porta = dvrDom.proximaPortaLivre(await this.portasAtivas(), PORTA_INICIO, PORTA_FIM);
+      if (porta == null) {
+        const e = new Error("faixa de portas de sessão esgotada");
+        e.semPorta = true;
+        throw e;
+      }
+      const id = genId("sess");
+      try {
+        await db.query(
+          `insert into sessao(id,dvr_id,coletor_id,cliente_id,ator,status,remote_port,host_publico,aberta_em,ultima_atividade)
+           values ($1,$2,$3,$4,$5,'ativa',$6,$7,$8,$8)`,
+          [id, dvr_id, coletor_id, cliente_id, ator, porta, host_publico, ts],
+        );
+        return { sessao: await this.get(id), reusada: false };
+      } catch (e) {
+        if (e && e.code === "23505") {
+          if (e.constraint === "sessao_coletor_ativa_uidx") {
+            const existente = await this.ativaPorColetor(coletor_id);
+            if (existente) return { sessao: existente, reusada: true };
+          }
+          continue; // corrida na porta (ou coletor sem linha ainda) → recomputa
+        }
+        throw e;
+      }
+    }
+    const e = new Error("não foi possível alocar sessão (corrida nas portas)");
+    e.semPorta = true;
+    throw e;
+  },
+  // Encerra (idempotente): só afeta 'ativa'. Devolve a linha encerrada, ou null se já encerrada/inexistente.
+  async encerrar(id, { encerradaEm } = {}) {
+    const ts = encerradaEm || now();
+    const r = await db.query(
+      `update sessao set status='encerrada', encerrada_em=$2 where id=$1 and status='ativa' returning ${SESSAO_COLS}`,
+      [id, ts],
+    );
+    return r.rows[0] || null;
+  },
+  // Renova a atividade (o /_dvr_auth chamará isto a cada acesso do técnico — F4, próxima onda).
+  async tocarAtividade(id, ts) {
+    const r = await db.query("update sessao set ultima_atividade=$2 where id=$1 and status='ativa' returning id", [id, ts || now()]);
+    return r.rowCount > 0;
+  },
+  // Varredura do TIMEOUT (§4/§7): encerra em lote as sessões ativas ociosas há mais de idleMs.
+  // Devolve as encerradas (p/ o chamador auditar 'sessao.timeout'). Base = ultima_atividade || aberta_em.
+  async varrerOciosas({ idleMs, agora } = {}) {
+    const nowTs = agora || now();
+    const cutoff = nowTs - Number(idleMs);
+    const r = await db.query(
+      `update sessao set status='encerrada', encerrada_em=$2
+       where status='ativa' and coalesce(ultima_atividade, aberta_em) < $1
+       returning id,dvr_id,coletor_id,cliente_id,remote_port,host_publico`,
+      [cutoff, nowTs],
+    );
+    return r.rows;
+  },
+  // O MAPA DE ROTA que o nginx (B-3) vai ler: host → porta → dvr das sessões ATIVAS.
+  async rotasAtivas() {
+    const r = await db.query(
+      "select host_publico, remote_port, dvr_id, cliente_id, coletor_id from sessao where status='ativa' order by aberta_em asc",
+    );
+    return r.rows;
+  },
+};
+
+module.exports = { genId, partners, clientes, sites, users, memberships, publicUser, coletores, dvrs, auditoriaDvr, sessoes };

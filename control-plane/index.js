@@ -7,6 +7,7 @@ const { createServer } = require("node:http");
 const db = require("./db");
 const auth = require("./auth");
 const routes = require("./routes");
+const stores = require("./stores");
 const { serveStatic } = require("./static");
 const { siteLink } = require("./site-link");
 
@@ -109,8 +110,38 @@ httpServer.on("upgrade", (req, socket, head) => {
   socket.destroy();
 });
 
+// VARREDURA de sessões OCIOSAS (Ponte DVR / C-be-5): encerra as sessões ativas sem atividade há
+// mais de CP_DVR_IDLE_MS (default 20 min — contratos §7). É a rede de segurança do timeout de
+// inatividade; a `ultima_atividade` será renovada pelo /_dvr_auth a cada acesso do técnico (F4).
+// unref() p/ não segurar o processo; só liga com PG configurado (sem banco não há o que varrer).
+function iniciarVarreduraSessoes() {
+  const idleMs = Number(process.env.CP_DVR_IDLE_MS ?? 20 * 60 * 1000);
+  const everyMs = Number(process.env.CP_DVR_SWEEP_MS ?? 60 * 1000);
+  if (!db.configured() || !(idleMs > 0) || !(everyMs > 0)) return null;
+  const timer = setInterval(async () => {
+    try {
+      const encerradas = await stores.sessoes.varrerOciosas({ idleMs, agora: Date.now() });
+      for (const s of encerradas) {
+        await stores.auditoriaDvr.registrar({
+          ator: "sistema",
+          dvr_id: s.dvr_id,
+          coletor_id: s.coletor_id,
+          acao: "sessao.timeout",
+          detalhe: { sessaoId: s.id, remotePort: s.remote_port },
+        });
+      }
+      if (encerradas.length) console.log(`[cp] varredura: ${encerradas.length} sessão(ões) ociosa(s) encerrada(s)`);
+    } catch (e) {
+      console.error("[cp] varredura de sessões falhou:", e.message);
+    }
+  }, everyMs);
+  timer.unref?.();
+  return timer;
+}
+
 async function start() {
   await db.init(); // aditivo: PG ausente → inerte (log e segue), o /health continua de pé
+  iniciarVarreduraSessoes();
   httpServer.listen(PORT, HOST, () => {
     console.log(`[cp] control-plane no ar em http://${HOST}:${PORT} (/health)`);
   });

@@ -35,14 +35,12 @@ async function authSite(req) {
   return { site: s, siteId: s.id };
 }
 
-// ── autenticação do COLETOR (domínio DVR da Ponte DVR), por header — análogo a authSite ──
-// Contrato (contratos.md §8, Opção A): a MESMA site_key emitida no enrollment autentica a API
-// DVR (e, na F3, o login-plugin do frps). Headers: x-coletor-id + x-coletor-key (chave em
-// texto; o plane compara com o HASH guardado, timing-safe). coletor inexistente → 404;
-// revogado (enrollment obsoleto/drift) → 403; chave errada/ausente → 401.
-async function authColetor(req) {
-  const coletorId = req.headers["x-coletor-id"];
-  const key = req.headers["x-coletor-key"];
+// ── verificação da credencial do COLETOR (a site_key da Opção A, contratos §8) ──
+// A MESMA site_key emitida no enrollment autentica a API DVR, o login-plugin do frps (F3) e a
+// sessão. Por isso a lógica é UMA só (aqui), consumida por: authColetor (headers x-coletor-*),
+// pelo login-plugin (metas do frp) e pelas rotas de sessão. coletor inexistente → 404; revogado
+// (enrollment obsoleto/drift) → 403; chave errada/ausente → 401.
+async function verifyColetor(coletorId, key) {
   const c = coletorId ? await stores.coletores.getWithHash(String(coletorId)) : null;
   if (!c) return { code: 404, error: "coletor inexistente" };
   if (c.revogado) return { code: 403, error: "coletor revogado (enrollment obsoleto)" };
@@ -50,6 +48,11 @@ async function authColetor(req) {
     return { code: 401, error: "site_key inválida" };
   }
   return { coletor: c, coletorId: c.id, clienteId: c.cliente_id };
+}
+
+// autenticação do COLETOR por header (ingest-style): x-coletor-id + x-coletor-key.
+async function authColetor(req) {
+  return verifyColetor(req.headers["x-coletor-id"], req.headers["x-coletor-key"]);
 }
 
 async function handle(req, res, ctx) {
@@ -467,7 +470,182 @@ async function handle(req, res, ctx) {
   // Aditivo, no mesmo molde de overview/site-link (contratos.md §6). Duas superfícies de auth:
   // enrollment = token de usuário + canAccess (integrador); registro = site_key do coletor.
   if (collection === "dvr") {
-    const action = id; // seg[2]: 'coletores' | 'registrar'
+    const action = id; // seg[2]: 'coletores' | 'registrar' | 'frp-login' | 'sessao'
+
+    // ── POST /api/dvr/frp-login — LOGIN-PLUGIN do frps (C-be-4) ──────────────────
+    // Protocolo de server-plugin do frp: body { version, op, content }; a DECISÃO vai no CORPO
+    // e o HTTP é SEMPRE 200 (reject:true no corpo barra a conexão; unchange:true aceita). Ops que
+    // não gerenciamos (Ping, NewWorkConn, …) → aceita sem mudança.
+    //   • Login    → valida site_key + coletorId (em content.metas) contra a tabela `coletor`
+    //                (mesma verificação do enrollment/authColetor; revogado ⇒ reject).
+    //   • NewProxy → menor privilégio (contratos §2): só proxy TCP, coletor válido, e a porta
+    //                pedida = a porta ALOCADA à sessão ativa do coletor (o coletor só expõe o DVR dele).
+    // Trava opcional de rede: se CP_FRP_PLUGIN_TOKEN estiver setado, exige x-frp-plugin-token
+    // (o relay injeta; sem env, aberto — o de-risking prevê o plugin em loopback na VPS).
+    if (action === "frp-login" && method === "POST") {
+      const guard = process.env.CP_FRP_PLUGIN_TOKEN;
+      if (guard && req.headers["x-frp-plugin-token"] !== guard) {
+        json(res, 401, { error: "plugin token inválido" });
+        return true;
+      }
+      const body = await readJson(req, ctx);
+      const op = body && body.op ? String(body.op) : new URL(req.url, "http://x").searchParams.get("op") || "";
+      const content = (body && body.content) || {};
+      if (op !== "Login" && op !== "NewProxy") {
+        json(res, 200, dvr.frpAccept());
+        return true;
+      }
+      if (op === "NewProxy") {
+        const perm = dvr.frpProxyPermitido(content); // só tcp (puro)
+        if (!perm.ok) {
+          json(res, 200, dvr.frpReject(perm.error));
+          return true;
+        }
+      }
+      const { coletorId, siteKey } = dvr.frpIdentidade(op, content);
+      const v = await verifyColetor(coletorId, siteKey);
+      if (v.error) {
+        json(res, 200, dvr.frpReject(v.error)); // 404/403/401 → reject no corpo (HTTP 200)
+        return true;
+      }
+      if (op === "NewProxy") {
+        // amarra o túnel à sessão: sem sessão ativa não há porta; e a porta pedida tem de ser a alocada.
+        const sess = await stores.sessoes.ativaPorColetor(v.coletorId);
+        if (!sess) {
+          json(res, 200, dvr.frpReject("sem sessão ativa para este coletor"));
+          return true;
+        }
+        const pedido = Number(content.remote_port ?? content.remotePort);
+        if (Number.isFinite(pedido) && pedido !== sess.remote_port) {
+          json(res, 200, dvr.frpReject(`remote_port ${pedido} != porta alocada ${sess.remote_port}`));
+          return true;
+        }
+      }
+      json(res, 200, dvr.frpAccept());
+      return true;
+    }
+
+    // ── /api/dvr/sessao — SESSÃO do acesso remoto (C-be-5) ───────────────────────
+    if (action === "sessao") {
+      const sub = seg[3]; // 'abrir' | <sessaoId>
+
+      // POST /api/dvr/sessao/abrir — o COLETOR (app) abre (§4: pessoa no site libera acesso).
+      // Autentica por site_key (authColetor). Aloca remotePort, persiste a sessão (= mapa de rota
+      // que o nginx/B-3 vai ler) e devolve { sessaoId, relay, remotePort, hostPublico }. Idempotente:
+      // sessão ativa existente é reusada (1 túnel por coletor). Audita a abertura.
+      if (sub === "abrir" && method === "POST") {
+        const a = await authColetor(req);
+        if (a.error) {
+          json(res, a.code, { error: a.error });
+          return true;
+        }
+        const dvrRow = await stores.dvrs.getByColetor(a.coletorId);
+        if (!dvrRow) {
+          json(res, 409, { error: "coletor sem DVR registrado (registre o DVR antes de abrir sessão)" });
+          return true;
+        }
+        let sessao = await stores.sessoes.ativaPorColetor(a.coletorId);
+        let criada = false;
+        if (!sessao) {
+          const cli = await stores.clientes.get(a.clienteId);
+          const host = dvr.hostPublico(cli ? cli.nome : a.clienteId, dvrRow.id);
+          const r = await stores.sessoes.abrir({
+            dvr_id: dvrRow.id,
+            coletor_id: a.coletorId,
+            cliente_id: a.clienteId,
+            ator: a.coletorId, // quem abriu = o coletor (app)
+            host_publico: host,
+          });
+          sessao = r.sessao;
+          criada = !r.reusada;
+          if (criada) {
+            await stores.auditoriaDvr.registrar({
+              ator: a.coletorId,
+              dvr_id: dvrRow.id,
+              coletor_id: a.coletorId,
+              acao: "sessao.abrir",
+              detalhe: { sessaoId: sessao.id, remotePort: sessao.remote_port, hostPublico: sessao.host_publico },
+            });
+          }
+        }
+        json(res, criada ? 201 : 200, {
+          sessaoId: sessao.id,
+          relay: dvr.relayConfig(),
+          remotePort: sessao.remote_port,
+          hostPublico: sessao.host_publico,
+        });
+        return true;
+      }
+
+      const sessaoId = sub;
+
+      // GET /api/dvr/sessao/:id — ESTADO (o app faz poll; autentica como o coletor DONO da sessão).
+      if (sessaoId && !seg[4] && method === "GET") {
+        const a = await authColetor(req);
+        if (a.error) {
+          json(res, a.code, { error: a.error });
+          return true;
+        }
+        const s = await stores.sessoes.get(sessaoId);
+        if (!s || s.coletor_id !== a.coletorId) {
+          json(res, 404, { error: "sessão não encontrada" });
+          return true;
+        }
+        json(res, 200, {
+          sessaoId: s.id,
+          status: s.status,
+          remotePort: s.remote_port,
+          hostPublico: s.host_publico,
+          aberta_em: s.aberta_em,
+          ultima_atividade: s.ultima_atividade,
+          encerrada_em: s.encerrada_em,
+        });
+        return true;
+      }
+
+      // POST /api/dvr/sessao/:id/encerrar — §4: pessoa no APP (coletor) OU técnico no BO (token).
+      // Marca encerrada (libera o mapa de rota) e audita. Idempotente (2ª chamada não re-audita).
+      if (sessaoId && seg[4] === "encerrar" && method === "POST") {
+        const s = await stores.sessoes.get(sessaoId);
+        if (!s) {
+          json(res, 404, { error: "sessão não encontrada" });
+          return true;
+        }
+        let ator;
+        if (req.headers["x-coletor-id"] != null) {
+          const a = await authColetor(req);
+          if (a.error) {
+            json(res, a.code, { error: a.error });
+            return true;
+          }
+          if (s.coletor_id !== a.coletorId) {
+            json(res, 403, { error: "sessão de outro coletor" });
+            return true;
+          }
+          ator = a.coletorId;
+        } else {
+          const claims = requireScope(req, res);
+          if (!claims) return true;
+          if (!(await access.guardAccess(claims, { type: "cliente", id: s.cliente_id }))) {
+            json(res, 403, { error: "sem acesso a este cliente" });
+            return true;
+          }
+          ator = claims.id;
+        }
+        const encerrada = await stores.sessoes.encerrar(sessaoId);
+        if (encerrada) {
+          await stores.auditoriaDvr.registrar({
+            ator,
+            dvr_id: s.dvr_id,
+            coletor_id: s.coletor_id,
+            acao: "sessao.encerrar",
+            detalhe: { sessaoId },
+          });
+        }
+        json(res, 200, { ok: true, sessaoId, status: "encerrada" });
+        return true;
+      }
+    }
 
     // ── POST /api/dvr/registrar — DEVICE (auth por site_key do coletor) ──
     // Grava/atualiza o DVR (marca/modelo/ip/porta) + consentimento; IDEMPOTENTE por coletor
