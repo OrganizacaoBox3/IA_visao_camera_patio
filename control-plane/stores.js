@@ -279,6 +279,15 @@ const sessoes = {
     );
     return r.rows[0] || null;
   },
+  // Sessão ativa por HOST público — o /_dvr_auth (C-be-6) descobre o DVR pelo Host do nginx e casa
+  // com a sessão ativa (host_publico é único por DVR; a UNIQUE parcial garante ≤1 ativa por porta).
+  async ativaPorHost(hostPublico) {
+    const r = await db.query(
+      `select ${SESSAO_COLS} from sessao where host_publico=$1 and status='ativa' order by aberta_em desc limit 1`,
+      [String(hostPublico || "")],
+    );
+    return r.rows[0] || null;
+  },
   async portasAtivas() {
     const r = await db.query("select remote_port from sessao where status='ativa'");
     return r.rows.map((x) => x.remote_port);

@@ -158,12 +158,28 @@ function relayConfig() {
 }
 
 // Regra do TIMEOUT de inatividade (contratos §4/§7): sessão ativa sem atividade há mais de idleMs.
-// A `ultima_atividade` é renovada pelo /_dvr_auth a cada acesso do técnico (F4, próxima onda);
-// no abrir, nasce = aberta_em. A varredura real é em SQL (stores.sessoes.varrerOciosas).
+// A `ultima_atividade` é renovada pelo /_dvr_auth a cada acesso do técnico (F4); no abrir, nasce =
+// aberta_em. A varredura real é em SQL (stores.sessoes.varrerOciosas); o /_dvr_auth também aplica
+// esta MESMA regra como gate imediato (camada 1 do de-risking/relay-proxy §5).
 function sessaoOciosa(sessao, agora, idleMs) {
   if (!sessao || sessao.status !== "ativa") return false;
   const ref = Number(sessao.ultima_atividade || sessao.aberta_em || 0);
   return agora - ref > Number(idleMs);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// F4 backend — /_dvr_auth (C-be-6) · helper PURO do THROTTLE de auditoria de acesso
+// ════════════════════════════════════════════════════════════════════════════
+// Auditar o acesso do técnico é do contrato (§5). Mas o auth_request do nginx dispara a CADA
+// request (inclui todo asset/poll da UI do DVR) — auditar literalmente cada um inundaria a
+// auditoria_dvr. Throttle barato SEM coluna nova: usa a PRÓPRIA `ultima_atividade` (lida antes de
+// renovar) — audita no máximo 1×/janela por sessão. throttleMs<=0 → audita sempre (fiel ao "cada
+// acesso" do de-risking, ao custo de volume). Ver a divergência documentada no routes.js.
+function deveAuditarAcesso(sessao, agora, throttleMs) {
+  const janela = Number(throttleMs);
+  if (!(janela > 0)) return true;
+  const ref = Number((sessao && sessao.ultima_atividade) || (sessao && sessao.aberta_em) || 0);
+  return agora - ref >= janela;
 }
 
 module.exports = {
@@ -182,4 +198,6 @@ module.exports = {
   hostPublico,
   relayConfig,
   sessaoOciosa,
+  // /_dvr_auth (C-be-6)
+  deveAuditarAcesso,
 };

@@ -4,9 +4,8 @@
 # (ver README.md ao lado). Base do de-risking: ../../box3-mobile/planejamento/ponte-dvr/
 # de-risking/relay-proxy.md §4.1 e contratos.md §2.
 #
-# ⚠️ SKELETON: só o servidor frp (túnel + loopback + menor privilégio). O login-plugin
-# (valida a site_key do coletor contra o control-plane do visão — B-2/C-be-4) e o nginx
-# de front (auth_request + sub_filter — B-3) são das próximas ondas; ficam como TODO abaixo.
+# Túnel (frps) + login-plugin (B-2) ligado. O nginx de front (auth_request + sub_filter — B-3)
+# fica em relay/nginx/ (ver relay/nginx/README.md).
 #
 # ⚠️ NENHUM segredo real no repo (invariante 6): tokens/senhas vêm de env/secret manager
 # na VPS. Os {{PLACEHOLDERS}} são substituídos no deploy (envsubst/secret manager).
@@ -41,21 +40,28 @@ port = 7500
 user = "{{FRP_DASH_USER}}"
 password = "{{FRP_DASH_PASS}}"
 
-# ── TODO (F3 — B-2): WIRE do login-plugin que valida a site_key do coletor ───────────────
-# O endpoint de validação JÁ EXISTE no control-plane do visão (C-be-4, feito): fala o protocolo
-# de server-plugin do frp — POST { version, op, content }, resposta { reject, reject_reason } |
-# { unchange:true } — em `POST /api/dvr/frp-login`:
+# ── B-2: LOGIN-PLUGIN — valida a site_key do coletor a cada Login/NewProxy ────────────────
+# O frps chama este endpoint (server manage plugin do frp) e obedece à decisão NO CORPO
+# (POST { version, op, content } → { reject, reject_reason } | { reject:false, unchange:true }).
+# A lógica JÁ EXISTE no control-plane do visão (C-be-4), em `POST /api/dvr/frp-login`:
 #   • Login    → confere metadatas.coletorId + metadatas.siteKey (Opção A, contratos §8);
 #                site_key inválida/revogada/inexistente ⇒ reject.
-#   • NewProxy → menor privilégio (contratos §2): só proxy TCP, com sessão ativa, e a porta
+#   • NewProxy → menor privilégio (contratos §2): só proxy TCP, com SESSÃO ATIVA, e a porta
 #                pedida = a porta alocada à sessão do coletor.
-# Falta só APONTAR o frps para ele (B-2). Como o control-plane roda noutra máquina (VPS do relay
-# ≠ control-plane), o padrão é um shim de loopback (127.0.0.1:9001) que repassa ao control-plane,
-# OU apontar o addr direto para o control-plane. Se este endpoint for exposto publicamente, ligue
-# a trava CP_FRP_PLUGIN_TOKEN no control-plane e injete o header x-frp-plugin-token aqui.
-# NÃO habilitar ainda — é a próxima onda (B-2).
-# [[httpPlugins]]
-# name = "ponte-dvr-login"
-# addr = "127.0.0.1:9001"           # shim loopback → control-plane POST /api/dvr/frp-login
-# path = "/frp/login"
-# ops  = ["Login", "NewProxy"]
+#
+# `addr` — DUAS opções (o control-plane roda noutra máquina que NÃO a VPS do relay):
+#   (A) SHIM DE LOOPBACK [recomendado] — um forwarder mínimo em 127.0.0.1:9001 na própria VPS
+#       que repassa a chamada ao control-plane e INJETA o header `x-frp-plugin-token`. Necessário
+#       porque o frp NÃO adiciona headers custom à chamada do plugin — logo a trava
+#       CP_FRP_PLUGIN_TOKEN (control-plane) só dá para armar via shim. Ref.: relay/frp-login-shim.mjs
+#       (dependency-free; CP_URL + CP_FRP_PLUGIN_TOKEN vêm de env/secret na VPS).
+#   (B) DIRETO ao control-plane — addr = "http(s)://control-plane:4100", path = "/api/dvr/frp-login".
+#       Só quando o control-plane for alcançável em rede privada/loopback E a trava de token não
+#       for necessária (o frp não consegue mandar o header). Menos isolado; preferir (A).
+#
+# Abaixo: opção (A). Troque {{...}} no deploy (envsubst/secret manager) — nada de segredo no git.
+[[httpPlugins]]
+name = "ponte-dvr-login"
+addr = "http://127.0.0.1:9001"     # shim loopback → repassa ao control-plane e injeta o token
+path = "/frp/login"                 # o shim expõe este path; ele chama /api/dvr/frp-login no visão
+ops  = ["Login", "NewProxy"]        # Login = identidade (site_key); NewProxy = menor privilégio (porta)

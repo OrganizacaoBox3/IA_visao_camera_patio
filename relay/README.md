@@ -5,9 +5,13 @@ que expõe **só a porta web do DVR** para uma porta de **loopback** nesta VPS; 
 essa porta **sempre atrás de login** (nginx `auth_request` → control-plane do visão). Desenho
 completo: `../../box3-mobile/planejamento/ponte-dvr/de-risking/relay-proxy.md`.
 
-> **Estado:** SKELETON (tarefa B-1). Só `frps.toml` (túnel + loopback + menor privilégio). O
-> login-plugin (B-2/C-be-4) e o nginx de front com `auth_request`/`sub_filter` (B-3) são das
-> próximas ondas.
+> **Estado:** B-1 + **B-2** (login-plugin ligado) + **B-3** (nginx de front) feitos. Falta a **VPS**
+> (infra do dono) e a **emissão do cert wildcard** (DNS-01). Peças:
+> - `frps.toml` — túnel + loopback + menor privilégio + **server-plugin de login** ligado (B-2).
+> - `frp-login-shim.mjs` — shim de loopback que repassa o login-plugin ao control-plane e injeta o
+>   `x-frp-plugin-token` (o frp não adiciona headers custom).
+> - `nginx/` — site do front: subdomínio por DVR, TLS wildcard (DNS-01), `auth_request → /_dvr_auth`,
+>   `sub_filter` do WebSocket hardcoded, **upstream dinâmico** por `auth_request_set`. Ver `nginx/README.md`.
 
 ## Regra-mãe (contratos §2 / spec)
 - O `frps`/porta bruta **nunca** exposto publicamente. As portas de túnel nascem em
@@ -29,8 +33,21 @@ VPS **dedicada e isolada** do control-plane. Firewall: só **443** (nginx, onda 
 Smoke local (sem VPS): `frps -c relay/frps.toml` deve subir, escutar em `:7000` e o dashboard
 em `127.0.0.1:7500` (com os placeholders trocados por valores de teste).
 
-## Próximas ondas
-- **B-2 / C-be-4:** login-plugin do `frps` valida a `site_key` do coletor contra o control-plane
-  do visão (Opção A, contratos §8). Placeholder comentado no fim do `frps.toml`.
-- **B-3:** nginx (subdomínio por DVR, TLS wildcard DNS-01, `auth_request` → `/_dvr_auth`,
-  `sub_filter` p/ host/porta de WebSocket hardcoded do DVR).
+## Login-plugin (B-2)
+O `frps.toml` liga o server-plugin (`ops = ["Login","NewProxy"]`) apontando para o **shim de
+loopback** (`frp-login-shim.mjs`, `127.0.0.1:9001`), que repassa a chamada ao control-plane
+(`POST /api/dvr/frp-login`) **injetando** `x-frp-plugin-token` — necessário porque o frp **não**
+adiciona headers custom ao plugin. A decisão (accept/reject da `site_key`) é 100% do control-plane
+(C-be-4). `addr` alternativo (direto ao control-plane) documentado no `frps.toml`. Subir o shim:
+```sh
+CP_URL=https://coletor.box3.software CP_FRP_PLUGIN_TOKEN=... node relay/frp-login-shim.mjs
+```
+
+## nginx de front (B-3)
+Em `nginx/` — subdomínio por DVR, TLS wildcard (DNS-01), `auth_request → /_dvr_auth`, `sub_filter`
+do WebSocket hardcoded e **upstream dinâmico** alimentado pelo `/_dvr_auth`. Validado com `nginx -t`.
+Ver [`nginx/README.md`](./nginx/README.md).
+
+## Falta (infra do dono / hardware)
+- **VPS dedicada** (frps + shim + nginx + hardening) e a **emissão do cert wildcard** (DNS-01).
+- Homologação com **DVR real** (WS 7681/7682, live view) — spike de hardware (F5).

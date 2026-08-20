@@ -13,6 +13,7 @@ const sitekey = require("./sitekey");
 const login = require("./login");
 const overview = require("./overview");
 const dvr = require("./dvr");
+const cookie = require("./cookie");
 const db = require("./db");
 
 async function readJson(req, ctx) {
@@ -60,6 +61,81 @@ async function handle(req, res, ctx) {
   const path = new URL(req.url, "http://x").pathname;
   const seg = path.split("/").filter(Boolean); // ['api','partners','p1']
   const method = req.method;
+
+  // ── /_dvr_auth — SUBREQUISIÇÃO de auth do nginx (C-be-6, Ponte DVR / contratos §5) ───────────
+  // NÃO é /api/ de propósito: o nginx (B-3) faz auth_request AQUI num subdomínio *.dvr.box3.software
+  // (≠ origem do portal), então o técnico chega pelo COOKIE de sessão no domínio pai .box3.software
+  // (C-be-7). Por isso resolvemos ANTES do guard `seg[0]==='api'`. auth_request usa a subrequisição
+  // como porteiro: 2xx libera o proxy; 401 → o nginx redireciona ao login; 403 → página de negado.
+  // Casa Host↔DVR↔técnico (contratos §5):
+  //   1) sessão do técnico pelo COOKIE (mesmo verifyToken do Bearer)      → 401 se ausente/inválida
+  //   2) DVR pelo Host (X-Original-Host que o nginx repassa) → sessão ATIVA → 401 se não há túnel
+  //   3) autorização do técnico no cliente daquele DVR (canAccess)        → 403 se sem acesso
+  //   4) timeout de inatividade (§7, camada 1): ociosa ⇒ encerra + audita + 401
+  //   5) renova ultima_atividade (tocarAtividade) + AUDITA o acesso (com throttle — ver nota abaixo)
+  //   6) 200 + headers úteis ao nginx: X-Dvr-Upstream=<loopback>:<remotePort> alimenta o UPSTREAM
+  //      DINÂMICO do proxy (auth_request_set no nginx) — a rota vem do rotasAtivas() lido aqui,
+  //      sem map file nem reload (fonte única = a linha de sessão ativa).
+  // NOTA/divergência (auditoria): o de-risking pede auditar "cada acesso", mas o auth_request dispara
+  // por asset — auditar tudo inundaria a auditoria_dvr. Aplicamos um throttle por sessão
+  // (CP_DVR_AUDIT_THROTTLE_MS, default 60s; 0 = cada acesso). Ver dvr.deveAuditarAcesso.
+  // auth_request IGNORA o corpo; devolvemos JSON só p/ teste/observabilidade direto.
+  if (path === "/_dvr_auth") {
+    const claims = auth.verifyToken(cookie.tokenDoCookie(req));
+    if (!claims) {
+      json(res, 401, { error: "sessão do técnico ausente/inválida (faça login no portal)" });
+      return true;
+    }
+    const host = String(req.headers["x-original-host"] || req.headers["host"] || "")
+      .split(":")[0]
+      .toLowerCase();
+    const sess = host ? await stores.sessoes.ativaPorHost(host) : null;
+    if (!sess) {
+      json(res, 401, { error: "sem sessão ativa para este host (túnel caiu ou foi encerrado)" });
+      return true;
+    }
+    if (!(await access.guardAccess(claims, { type: "cliente", id: sess.cliente_id }))) {
+      json(res, 403, { error: "técnico sem acesso a este DVR" });
+      return true;
+    }
+    const agora = Date.now();
+    const idleMs = Number(process.env.CP_DVR_IDLE_MS ?? 20 * 60 * 1000);
+    if (dvr.sessaoOciosa(sess, agora, idleMs)) {
+      const enc = await stores.sessoes.encerrar(sess.id, { encerradaEm: agora });
+      if (enc) {
+        await stores.auditoriaDvr.registrar({
+          ator: "sistema",
+          dvr_id: sess.dvr_id,
+          coletor_id: sess.coletor_id,
+          acao: "sessao.timeout",
+          detalhe: { sessaoId: sess.id, via: "_dvr_auth" },
+        });
+      }
+      json(res, 401, { error: "sessão expirada por inatividade" });
+      return true;
+    }
+    const throttleMs = Number(process.env.CP_DVR_AUDIT_THROTTLE_MS ?? 60 * 1000);
+    if (dvr.deveAuditarAcesso(sess, agora, throttleMs)) {
+      await stores.auditoriaDvr.registrar({
+        ator: claims.id,
+        dvr_id: sess.dvr_id,
+        coletor_id: sess.coletor_id,
+        acao: "acesso.tecnico",
+        detalhe: { sessaoId: sess.id, host, uri: req.headers["x-original-uri"] || null },
+      });
+    }
+    await stores.sessoes.tocarAtividade(sess.id, agora);
+    if (typeof res.setHeader === "function") {
+      // headers que o nginx copia de volta (auth_request_set): upstream dinâmico + rastros.
+      const loopback = process.env.CP_DVR_UPSTREAM_HOST || "127.0.0.1";
+      res.setHeader("X-Dvr-Upstream", `${loopback}:${sess.remote_port}`);
+      res.setHeader("X-Dvr-Sessao", sess.id);
+      res.setHeader("X-Dvr-Tecnico", String(claims.id));
+    }
+    json(res, 200, { ok: true, sessaoId: sess.id, remotePort: sess.remote_port, host });
+    return true;
+  }
+
   if (seg[0] !== "api") return false;
 
   // ── POST /api/login ─────────────────────────────────────────────────────────
@@ -76,6 +152,13 @@ async function handle(req, res, ctx) {
       return true;
     }
     const token = auth.signToken({ id: u.id, papel: m.role, scope_type: m.scope_type, scope_id: m.scope_id });
+    // C-be-7: ADICIONA um cookie de sessão (HttpOnly+Secure+SameSite, domínio pai .box3.software) —
+    // o MESMO token do Bearer, só para o /_dvr_auth num subdomínio o enxergar (contratos §6b). O
+    // corpo continua devolvendo o token (o portal segue usando Bearer/sessionStorage). O guard de
+    // setHeader é só p/ mocks de teste sem headers; o res real (node http) sempre tem setHeader.
+    if (typeof res.setHeader === "function") {
+      res.setHeader("Set-Cookie", cookie.montarSetCookie(token));
+    }
     json(res, 200, {
       token,
       user: { id: u.id, email: u.email },

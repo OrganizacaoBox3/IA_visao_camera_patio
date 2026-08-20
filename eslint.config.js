@@ -69,13 +69,14 @@ export default tseslint.config(
     },
   },
 
-  // Node: hub server, scripts e arquivos de config/e2e (globals do Node).
+  // Node: hub server, scripts, relay (plumbing do túnel) e arquivos de config/e2e (globals do Node).
   {
     files: [
       "server/**/*.{js,cjs,mjs}",
       "control-plane/**/*.{js,cjs,mjs}",
       "scripts/**/*.{js,mjs,cjs}",
       "eval/**/*.{js,mjs,cjs}",
+      "relay/**/*.{js,mjs,cjs}",
       "e2e/**/*.ts",
       "*.{js,mjs,cjs,ts}",
     ],
