@@ -1,0 +1,108 @@
+name: Ligar Control-Plane (1ª vez / recon)
+
+# Primeira subida do CONTROL-PLANE na VPS (ele nunca foi ligado lá — só o hub roda).
+# REVERSÍVEL e SEM tocar em root/nginx/systemd: sobe o código, liga o processo via pm2 (já presente)
+# na porta 4100, checa /health, e faz um RAIO-X (sudo -l / Postgres / nginx cam.box3 / pm2) pra sabermos
+# o que falta pra deixar o portal visível no navegador (nginx) e logável (banco). Disparo manual.
+# Reverter: pm2 delete control-plane (no VPS). Secrets: environment homolog (HOMOLOG_SSH_*).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ligar-control-plane
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (control-plane + portal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install + build do portal
+        run: |
+          npm --prefix control-plane ci || npm --prefix control-plane install --no-audit --no-fund
+          npm --prefix control-plane/web ci || npm --prefix control-plane/web install --no-audit --no-fund
+          npm --prefix control-plane/web run build
+      - name: Empacotar
+        run: |
+          set -euo pipefail
+          test -f control-plane/index.js && test -f control-plane/web/dist/index.html
+          tar -czf cp-release.tar.gz --exclude='**/node_modules' --exclude='**/.env' control-plane
+      - uses: actions/upload-artifact@v4
+        with: { name: cp-release, path: cp-release.tar.gz, retention-days: 3, if-no-files-found: error }
+
+  ligar:
+    name: Ligar + raio-x no VPS
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: homolog
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: cp-release }
+      - name: Preparar SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?}"; : "${SSH_HOST:?}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null; fi
+      - name: Enviar código
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
+            cp-release.tar.gz "$SSH_USER@$SSH_HOST:cp-release.tar.gz"
+      - name: Raio-x + ligar (pm2, reversível) + /health
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -uo pipefail
+          echo "==================== RAIO-X ===================="
+          echo "-- quem sou / sudo -l (o que posso como root) --"; id; sudo -n -l 2>&1 | head -20 || echo "  (sudo -n negado)"
+          echo "-- de onde o hub roda (visao-hub) --"; systemctl show -p ExecStart,WorkingDirectory visao-hub 2>/dev/null || echo "  (?)"
+          echo "-- node/npm/pm2 disponíveis? --"; command -v node && node -v; command -v npm && npm -v; command -v pm2 && pm2 -v || echo "  (pm2 ausente)"
+          echo "-- Postgres na VPS? --"; command -v pg_isready >/dev/null 2>&1 && pg_isready 2>&1 | head -1; { ss -ltn 2>/dev/null || sudo -n ss -ltn 2>/dev/null; } | grep -E ':5432|:55432' || echo "  (nada em 5432/55432)"
+          echo "-- nginx conhece cam.box3.software? --"; { sudo -n nginx -T 2>/dev/null || cat /etc/nginx/sites-enabled/* 2>/dev/null; } | grep -iE 'cam\.box3|server_name' | head -10 || echo "  (sem match / sem acesso)"
+          echo "-- cert de cam.box3.software? --"; ls -d /etc/letsencrypt/live/*cam* 2>/dev/null || echo "  (sem cert cam.*)"
+          echo
+
+          echo "==================== LIGAR (pm2, reversível) ===================="
+          if ! command -v pm2 >/dev/null 2>&1; then echo "pm2 ausente — pulo o start (uso o raio-x p/ decidir o método)."; exit 0; fi
+          APP="$HOME/ponte-dvr-control-plane"
+          rm -rf "$APP"; mkdir -p "$APP"; tar -xzf "$HOME/cp-release.tar.gz" -C "$APP"   # → $APP/control-plane/...
+          cd "$APP/control-plane"
+          echo "-- deps (pg, ws) --"; npm ci --omit=dev --no-audit --no-fund 2>&1 | tail -3 || npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3
+          echo "-- (re)start via pm2 na 4100 (SEM banco por ora → portal carrega, login só depois do CP_DATABASE_URL) --"
+          pm2 delete ponte-dvr-cp >/dev/null 2>&1 || true
+          CP_PORT=4100 CP_HOST=127.0.0.1 pm2 start index.js --name ponte-dvr-cp --cwd "$APP/control-plane" 2>&1 | tail -5
+          sleep 4
+          echo "-- /health --"; curl -fsS -m 5 http://127.0.0.1:4100/health || echo "  (sem resposta na 4100)"
+          echo
+          echo "== Portal LIGADO localmente na 4100 (via pm2 'ponte-dvr-cp'). Reverter: pm2 delete ponte-dvr-cp =="
+          echo "== Pra ver no navegador falta rotear cam.box3.software→127.0.0.1:4100 no nginx (ver raio-x). =="
+          rm -f "$HOME/cp-release.tar.gz"
+          REMOTE
