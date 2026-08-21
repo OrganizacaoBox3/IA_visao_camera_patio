@@ -598,3 +598,23 @@ export function listDvrAuditoria(params?: { coletor?: string }): Promise<DvrAudi
   const qs = q.toString();
   return apiGet<DvrAuditItem[]>(`/api/dvr/auditoria${qs ? `?${qs}` : ""}`);
 }
+
+// Enrollment (contratos §3/§8): cria um coletor (liga empresa Box3 ↔ cliente do visão) e EMITE um
+// enrollmentToken de USO ÚNICO + curta validade. O token cru sai UMA vez, aqui — vai no QR que o leigo
+// escaneia no app; o hub guarda só o hash. `cliente_id` + `empresa_id_box3` são obrigatórios.
+export type NovoColetor = {
+  cliente_id: string;
+  empresa_id_box3: string;
+  nome?: string;
+};
+export type DvrColetorCriado = {
+  id: string;
+  cliente_id: string;
+  empresa_id_box3: string;
+  nome?: string;
+  enrollmentToken: string; // SENSÍVEL: uso único; só aparece nesta resposta (vai no QR). Nunca relogar.
+  expira: number; // epoch ms — quando o enrollmentToken expira.
+};
+// POST /api/dvr/coletores → cria o coletor e devolve o enrollmentToken. Auth: superadmin.
+export const criarDvrColetor = (dados: NovoColetor) =>
+  apiSend<DvrColetorCriado>("POST", "/api/dvr/coletores", dados);

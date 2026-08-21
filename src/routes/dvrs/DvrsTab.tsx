@@ -11,6 +11,7 @@ import {
   useToast,
 } from "../../ui";
 import { encerrarDvrSessao, type DvrItem } from "../../api";
+import { NovoColetorDialog } from "./NovoColetorDialog";
 
 // Aba "DVRs" do painel do suporte: lista os DVRs por cliente (tag `cliente_id`) com marca/modelo/
 // ip/status. Molde: UsersTab (tabela + ações + confirm + toast). Ações por linha:
@@ -74,9 +75,13 @@ export function DvrsTab({ rows, loading, refresh, setErr }: Props) {
 
   return (
     <section className="panel panel-events flex flex-1 flex-col" aria-busy={loading}>
-      <SectionTitle>
-        {rows.length} {rows.length === 1 ? "DVR" : "DVRs"}
-      </SectionTitle>
+      <div className="flex items-center justify-between gap-[var(--sp-3)]">
+        <SectionTitle>
+          {rows.length} {rows.length === 1 ? "DVR" : "DVRs"}
+        </SectionTitle>
+        {/* Enrollment: gera o QR de ativação de um novo coletor (o app do leigo escaneia). */}
+        <NovoColetorDialog onCriado={refresh} />
+      </div>
       <Table
         ariaLabel="DVRs por cliente"
         className="min-h-[200px] flex-1"
