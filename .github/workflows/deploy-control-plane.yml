@@ -40,10 +40,10 @@ jobs:
         run: |
           npm --prefix control-plane ci || npm --prefix control-plane install --no-audit --no-fund
           npm --prefix control-plane/web ci || npm --prefix control-plane/web install --no-audit --no-fund
-      - name: Gate — testes puros do CP + build do portal
-        run: |
-          node --test control-plane/*.test.js
-          npm --prefix control-plane/web run build
+      # O gate de testes (vitest) roda no ci.yml em todo push (raiz instalada); aqui só buildamos o portal
+      # (Vite) para gerar o control-plane/web/dist que o CP serve. `vite build` não depende de vitest.
+      - name: Build do portal (dist)
+        run: npm --prefix control-plane/web run build
       - name: Empacotar release (só o que sobe)
         run: |
           set -euo pipefail
