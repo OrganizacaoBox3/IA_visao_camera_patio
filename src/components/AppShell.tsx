@@ -251,6 +251,11 @@ export function AppShell() {
         ...(user.papel === "superadmin"
           ? [{ to: "/usuarios", icon: Users, label: "Usuários" }]
           : []),
+        // DVRs (Ponte DVR): acesso remoto de suporte aos DVRs por cliente. Só superadmin (suporte),
+        // mesmo RBAC do painel de Usuários.
+        ...(user.papel === "superadmin"
+          ? [{ to: "/dvrs", icon: Cctv, label: "DVRs" }]
+          : []),
       ],
     },
     {

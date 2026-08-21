@@ -539,3 +539,62 @@ export type AnalysisStatus = {
 
 // GET /api/analysis/status — instantâneo do motor. Auth: logado.
 export const getAnalysisStatus = () => apiGet<AnalysisStatus>("/api/analysis/status");
+
+// ── Ponte DVR (suporte) — plano-hub.md §Frontend + contratos §3/§4/§5 ─────────────────────────
+// Domínio DVR do hub: o SUPORTE lista os DVRs por cliente, abre a web do DVR pelo túnel (nova aba)
+// e encerra a sessão de acesso; a Auditoria registra quem fez o quê. Auth: Bearer do hub (o gate de
+// papel é `superadmin`, como Usuários) — NÃO há auth nova aqui: o coletor tem trilha própria
+// (x-coletor-*, no app), fora do front do suporte. SÓ metadados/hash (LGPD/invariante 6): marca/
+// modelo/ip/porta + estado de sessão; a CREDENCIAL do DVR nunca trafega (contratos §3, §8 Leitura A).
+export type DvrSessaoStatus = "ativa" | "encerrada";
+
+// Sessão de acesso remoto (contratos §4). Existindo e `ativa`, há túnel e a web do DVR é alcançável
+// em https://<hostPublico> — que DEVE abrir em NOVA ABA, nunca em iframe (contratos §5).
+export type DvrSessao = {
+  id: string;
+  status: DvrSessaoStatus; // ⚠ o campo é `status` (não `estado`) — contratos §4
+  hostPublico: string; // subdomínio por DVR: slug(cliente)-<dvr>.dvr.box3.software
+  remotePort?: number;
+  aberta_em?: number; // epoch ms
+  ultima_atividade?: number;
+  encerrada_em?: number | null;
+};
+
+// DVR cadastrado por um coletor de um cliente (contratos §3: marca/modelo/ip/porta; sem senha).
+export type DvrItem = {
+  id: string;
+  cliente_id: string; // campo-tag do agrupamento por cliente (plano-hub.md)
+  cliente_nome?: string;
+  coletor_id?: string;
+  marca: string;
+  modelo: string;
+  ip: string;
+  porta?: number;
+  sessao?: DvrSessao | null; // sessão ATIVA quando existe; null/ausente ⇒ sem acesso aberto
+};
+// GET /api/dvr/dvrs → DVRs visíveis ao técnico (o servidor filtra por canAccess). Auth: superadmin.
+export const listDvrs = () => apiGet<DvrItem[]>("/api/dvr/dvrs");
+// POST /api/dvr/sessao/:id/encerrar → encerra a sessão pelo técnico (idempotente — contratos §4).
+export const encerrarDvrSessao = (sessaoId: string) =>
+  apiSend<{ ok: true }>("POST", `/api/dvr/sessao/${encodeURIComponent(sessaoId)}/encerrar`);
+
+// Auditoria append-only (contratos §4/§5): abrir/encerrar/timeout/acesso do técnico/registro do DVR.
+// Só metadados. `ts` = "quando"; `ator` = "quem"; `coletor_id` = "qual coletor".
+export type DvrAuditItem = {
+  id: string;
+  ts: number; // epoch ms
+  acao: string; // sessao.abrir | sessao.encerrar | sessao.timeout | acesso.tecnico | dvr.registrar | dvr.atualizar
+  ator?: string;
+  coletor_id?: string;
+  cliente_id?: string;
+  dvr_id?: string;
+  detalhe?: string;
+};
+// GET /api/dvr/auditoria?coletor= → eventos ordenados por ts desc. `coletor` opcional (o UI também
+// filtra no cliente a partir dos coletores presentes). Auth: superadmin.
+export function listDvrAuditoria(params?: { coletor?: string }): Promise<DvrAuditItem[]> {
+  const q = new URLSearchParams();
+  if (params?.coletor) q.set("coletor", params.coletor);
+  const qs = q.toString();
+  return apiGet<DvrAuditItem[]>(`/api/dvr/auditoria${qs ? `?${qs}` : ""}`);
+}
