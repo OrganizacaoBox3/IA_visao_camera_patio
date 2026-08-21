@@ -1,21 +1,23 @@
 name: Deploy Control-Plane (homolog)
 
 # CD do CONTROL-PLANE (processo separado do hub — node control-plane/index.js na CP_PORT, atrás do
-# nginx em cam.box3.software). Espelha o deploy-homolog.yml do hub. Disparo MANUAL (workflow_dispatch)
-# — humano no loop, NUNCA auto-on-push. Roda na infra do GitHub (não passa por filtros de rede locais).
+# nginx em cam.box3.software). Espelha o deploy-homolog.yml do hub, mas AUTO-DESCOBRE o serviço na VPS.
+# Disparo MANUAL (workflow_dispatch). Roda na infra do GitHub (SSH via secrets do environment homolog).
 #
-# ── ANTES DO 1º USO, confirme (o control-plane JÁ RODA na VPS, mas o deploy dele não estava no repo):
-#   Secrets (environment "homolog" — os MESMOS do hub, mesma VPS):
-#     HOMOLOG_SSH_HOST · HOMOLOG_SSH_USER · HOMOLOG_SSH_KEY · HOMOLOG_SSH_PORT? · HOMOLOG_SSH_KNOWN_HOSTS?
-#   Variáveis do repo (Settings → Variables) — os fatos da VPS que só você sabe:
-#     CP_SERVICE   = nome do unit systemd do control-plane (ex.: control-plane, visao-control-plane)
-#     CP_APP_PATH  = pasta do control-plane na VPS (a que o ExecStart do unit usa; ex.: /var/www/visao-control-plane)
-#     CP_PORT?     = porta do /health (default 4100)
-#   O schema NÃO precisa de passo de migração: db.init() aplica control-plane/schema.sql (idempotente) no
-#   boot — reiniciar o unit já cria as tabelas DVR. O CP_DATABASE_URL/CP_PG* já vivem no unit da VPS.
+# 1ª vez: rode com dry_run=true (default) — SÓ descobre o unit/caminho + mostra /health, SEM tocar nada.
+# Confirme o alvo no log; depois rode com dry_run=false para o deploy real.
+#
+# Secrets (environment "homolog" — os mesmos do hub): HOMOLOG_SSH_HOST/USER/KEY/PORT?/KNOWN_HOSTS?
+# Variáveis (opcionais, só se a auto-descoberta falhar): CP_SERVICE, CP_APP_PATH, CP_PORT (default 4100).
+# O schema NÃO precisa de migração manual: db.init() aplica control-plane/schema.sql (idempotente) no boot.
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Só descobrir/reportar (não deploya)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -34,33 +36,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      # O control-plane declara suas próprias deps (pg, ws). O portal (web) é um app Vite à parte.
       - name: Install (control-plane + web)
         run: |
           npm --prefix control-plane ci || npm --prefix control-plane install --no-audit --no-fund
-          npm --prefix control-plane/web ci
-
-      # Gate: testes PUROS do control-plane (sem Postgres) + build do portal. Os *.pg.test.js exigem
-      # banco e ficam para o gate local/PR (docker-compose); aqui provamos a fundação + o build da SPA.
+          npm --prefix control-plane/web ci || npm --prefix control-plane/web install --no-audit --no-fund
       - name: Gate — testes puros do CP + build do portal
         run: |
           node --test control-plane/*.test.js
           npm --prefix control-plane/web run build
-
-      # Sobe: control-plane/ (código + schema.sql + package*.json), SEM node_modules (reinstala na VPS),
-      # e a SPA buildada (control-plane/web/dist) que o CP serve via serveStatic (Fase 2).
       - name: Empacotar release (só o que sobe)
         run: |
           set -euo pipefail
           test -f control-plane/index.js
           test -f control-plane/schema.sql
           test -f control-plane/web/dist/index.html
-          tar -czf cp-release.tar.gz \
-            --exclude='**/node_modules' \
-            --exclude='**/.env' \
-            control-plane
-
+          tar -czf cp-release.tar.gz --exclude='**/node_modules' --exclude='**/.env' control-plane
       - name: Auditar pacote (nada de node_modules/segredo)
         run: |
           set -euo pipefail
@@ -69,7 +59,6 @@ jobs:
             echo "::error::cp-release.tar.gz contém arquivo proibido — abortando"; exit 1
           fi
           echo "sha256: $(sha256sum cp-release.tar.gz)"; head -n 20 /tmp/cp-list.txt
-
       - uses: actions/upload-artifact@v4
         with:
           name: cp-release
@@ -105,6 +94,7 @@ jobs:
           test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
 
       - name: Enviar release (scp)
+        if: ${{ inputs.dry_run == false }}
         env:
           SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
           SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
@@ -115,57 +105,69 @@ jobs:
           scp -i ~/.ssh/deploy_key -P "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
             cp-release.tar.gz "$SSH_USER@$SSH_HOST:cp-release.tar.gz"
 
-      - name: Deploy remoto (idempotente) + health-check
+      - name: Descobrir + (deploy) + health-check
         env:
           SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
           SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
           SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          DRY_RUN: ${{ inputs.dry_run }}
           CP_SERVICE: ${{ vars.CP_SERVICE }}
           CP_APP_PATH: ${{ vars.CP_APP_PATH }}
           CP_PORT: ${{ vars.CP_PORT || '4100' }}
         run: |
           set -euo pipefail
-          : "${CP_SERVICE:?defina a variável de repo CP_SERVICE (nome do unit systemd do control-plane)}"
-          : "${CP_APP_PATH:?defina a variável de repo CP_APP_PATH (pasta do control-plane na VPS)}"
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o ConnectTimeout=15 -o ServerAliveInterval=15 \
-            "$SSH_USER@$SSH_HOST" "CP_SERVICE='$CP_SERVICE' CP_APP_PATH='$CP_APP_PATH' CP_PORT='$CP_PORT' bash -s" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" \
+            "DRY_RUN='$DRY_RUN' CP_SERVICE='$CP_SERVICE' CP_APP_PATH='$CP_APP_PATH' CP_PORT='$CP_PORT' bash -s" <<'REMOTE'
           set -euo pipefail
-          APP="$CP_APP_PATH"; SERVICE="$CP_SERVICE"; TAR="$HOME/cp-release.tar.gz"
-          STAGE=/tmp/cp-deploy-staging
           if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+          SERVICE="${CP_SERVICE:-}"; APP="${CP_APP_PATH:-}"
+
+          echo "== AUTO-DESCOBERTA do control-plane (unit que roda control-plane/index.js) =="
+          if [ -z "$SERVICE" ] || [ -z "$APP" ]; then
+            for u in $($SUDO systemctl list-units --type=service --all --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+              frag="$($SUDO systemctl cat "$u" 2>/dev/null || true)"
+              if printf '%s' "$frag" | grep -q 'control-plane/index\.js'; then
+                [ -z "$SERVICE" ] && SERVICE="${u%.service}"
+                exj="$(printf '%s' "$frag" | grep -oE '/[^ ]+/control-plane/index\.js' | head -1 || true)"
+                wd="$(printf '%s' "$frag" | grep -oE 'WorkingDirectory=[^ ]+' | head -1 | cut -d= -f2 || true)"
+                if [ -z "$APP" ] && [ -n "$exj" ]; then APP="$(dirname "$exj")"; fi
+                if [ -z "$APP" ] && [ -n "$wd" ]; then APP="$wd/control-plane"; fi
+                break
+              fi
+            done
+          fi
+          echo "  → CP_SERVICE = ${SERVICE:-'(NÃO ACHADO)'}"
+          echo "  → CP_APP_PATH = ${APP:-'(NÃO ACHADO)'}"
+          [ -n "$SERVICE" ] && [ -n "$APP" ] || { echo "ERRO: não localizei o control-plane. Rode de novo com as vars CP_SERVICE/CP_APP_PATH setadas."; exit 1; }
+          echo "  → /health atual:"; curl -fsS -m 5 "http://127.0.0.1:${CP_PORT}/health" || echo "   (/health não respondeu — CP pode estar em outra porta; ajuste CP_PORT)"
+          echo
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "== DRY-RUN: nada foi alterado. Confirme o alvo acima e rode de novo com dry_run=false. =="
+            exit 0
+          fi
+
+          echo "== DEPLOY REAL =="
+          TAR="$HOME/cp-release.tar.gz"; STAGE=/tmp/cp-deploy-staging
           trap 'rm -rf "$STAGE" 2>/dev/null || true; rm -f "$TAR"' EXIT
-
-          echo "== pré-checagens =="
-          test -f "$TAR" || { echo "ERRO: release não encontrado"; exit 1; }
-          test -d "$APP" || { echo "ERRO: $APP não existe (o control-plane já deveria rodar aí)"; exit 1; }
-          $SUDO systemctl cat "$SERVICE" >/dev/null || { echo "ERRO: unit $SERVICE não instalada"; exit 1; }
-
-          echo "== backup aditivo =="
-          $SUDO cp -a "$APP" "$APP.bak-$(date +%F-%H%M%S)"
-
-          echo "== staging + posicionar (aditivo; .env/node_modules preservados) =="
-          $SUDO rm -rf "$STAGE"; mkdir "$STAGE"
-          tar -xzf "$TAR" -C "$STAGE"                 # cria $STAGE/control-plane/...
+          test -f "$TAR" || { echo "ERRO: release não enviado"; exit 1; }
+          test -d "$APP" || { echo "ERRO: $APP não existe"; exit 1; }
+          echo "-- backup aditivo --"; $SUDO cp -a "$APP" "$APP.bak-$(date +%F-%H%M%S)"
+          echo "-- staging + posicionar (aditivo; .env/node_modules preservados) --"
+          $SUDO rm -rf "$STAGE"; mkdir "$STAGE"; tar -xzf "$TAR" -C "$STAGE"
           $SUDO cp -r "$STAGE/control-plane/." "$APP/"
-
-          echo "== deps de produção (pg, ws) =="
-          cd "$APP"
+          echo "-- deps de produção (pg, ws) --"; cd "$APP"
           $SUDO npm ci --omit=dev --no-audit --no-fund || $SUDO npm install --omit=dev --no-audit --no-fund
-
-          echo "== restart (schema.sql auto-migra no boot via db.init) =="
-          $SUDO systemctl restart "$SERVICE"
-
-          echo "== health-check (/health) =="
-          OK=0
+          echo "-- restart (schema.sql auto-migra via db.init) --"; $SUDO systemctl restart "$SERVICE"
+          echo "-- health-check --"; OK=0
           for _ in $(seq 1 20); do
             if curl -fsS -m 5 "http://127.0.0.1:${CP_PORT}/health" | grep -q '"ok":true'; then OK=1; break; fi
             sleep 3
           done
-          if [ "$OK" -eq 1 ]; then
-            echo "HEALTH OK — control-plane respondendo em /health."; exit 0
-          fi
-          echo "HEALTH FALHOU — deploy VERMELHO. Reverter: sudo systemctl stop $SERVICE; restaurar do backup .bak-*; start."
+          if [ "$OK" -eq 1 ]; then echo "HEALTH OK — control-plane no ar (/health)."; exit 0; fi
+          echo "HEALTH FALHOU — VERMELHO. Reverter: sudo systemctl stop $SERVICE; restaurar $APP.bak-*; start."
           $SUDO journalctl -u "$SERVICE" -n 40 --no-pager || true
           exit 1
           REMOTE
