@@ -1,0 +1,23 @@
+# Ponte DVR — frps (frp server) co-residente no servidor do hub (cam.box3.software).
+# Instale em /etc/systemd/system/frps.service. Segredos NÃO ficam aqui: o /etc/frp/frps.toml é
+# materializado a partir de relay/frps.toml trocando os {{PLACEHOLDERS}} (ver relay/CO-RESIDIR.md).
+[Unit]
+Description=Ponte DVR frps (tunnel server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Ajuste o caminho do binário conforme a instalação (frp >= 0.61 p/ casar com o libfrpc.so v0.61.1).
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
+Restart=on-failure
+RestartSec=3
+# Hardening básico (frps só precisa de rede + ler o toml).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/frp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

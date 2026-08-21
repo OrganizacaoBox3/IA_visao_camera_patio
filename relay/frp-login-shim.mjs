@@ -11,7 +11,7 @@
 // túnel sem validação nunca sobe.
 //
 // Env (na VPS; nada de segredo no git):
-//   CP_URL                — base do control-plane (ex.: https://coletor.box3.software) [default http://127.0.0.1:4100]
+//   CP_URL                — base do HUB do visão (ex.: https://cam.box3.software) [default http://127.0.0.1:4100]
 //   CP_FRP_PLUGIN_TOKEN   — mesma trava do control-plane; injetada como x-frp-plugin-token (opcional)
 //   SHIM_ADDR / SHIM_PORT — bind do shim [default 127.0.0.1:9001]  ·  SHIM_PATH [default /frp/login]
 import http from "node:http";
