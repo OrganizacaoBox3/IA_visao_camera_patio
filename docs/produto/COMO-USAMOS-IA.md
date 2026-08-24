@@ -119,18 +119,18 @@ Sete casos reais. Todos detectados antes de causar dano.
 |---|---|---|---|
 | 1 | Propôs aumentar resolução de análise citando ganho herdado de outro contexto | Medição no conjunto de avaliação | Ganho real 2,1 pp, custo +91% CPU, falso positivo em cena vazia de 0 → 4. **Revertido** |
 | 2 | Avaliou trocar por modelo mais leve | Critério de aceite escrito **antes** de medir | Reprovou em 2 de 3 critérios. **Descartado** |
-| 3 | Escreveu procedimento manual de deploy | Pergunta do arquiteto: *"não tem CI/CD no git?"* | Já existia deploy automatizado, mais seguro. **Documento reescrito** |
-| 4 | Criou perfil de demonstração que desliga proteções de alarme | Pergunta do arquiteto sobre o pacote de publicação | O arquivo iria para produção. **Travado em duas camadas** |
-| 5 | Afirmou que o sistema "não media" a idade do quadro de vídeo | A própria implementação | A medição já existia em trânsito. **Afirmação corrigida no documento** |
-| 6 | Esteve a um passo de anunciar "causa raiz encontrada" para falhas no servidor | Medição | Falhas cessaram por reinício; nada na entrega tocava aquele caminho. **Publicado como "causa não estabelecida"** |
+| 3 | Redigiu procedimento manual de deploy | Revisão do arquiteto contra a automação existente | O repositório já tinha deploy automatizado, com mais verificações que o procedimento proposto. **Documento reescrito apontando a automação como caminho padrão** |
+| 4 | Criou perfil de demonstração que desliga proteções de alarme | Revisão do arquiteto sobre o conteúdo do pacote de publicação | O arquivo entraria em produção — a lista de exclusões era anterior a ele. **Bloqueado em duas camadas: exclusão e trava de auditoria** |
+| 5 | Afirmou que o sistema não media a idade do quadro de vídeo | A própria implementação | A medição já existia em trânsito, sem retenção nem exibição. **Afirmação corrigida no documento** |
+| 6 | Formulou atribuição de causa raiz para falhas recorrentes no servidor | Medição | As falhas cessaram após reinício e a entrega não tocava aquele caminho de código. **Publicado como causa não estabelecida** |
 | 7 | Paralelizou 4 frentes com agentes automatizados | Supervisão do arquiteto | As 4 falharam por infraestrutura. Estado do repositório conferido (sem escrita parcial). **Refeito em sequência** |
 
-Padrão observado nos 7 casos:
+Mecanismo que detectou cada caso:
 
-- 3 foram pegos por **medição**.
-- 2 foram pegos por **pergunta do arquiteto**.
-- 1 pela **própria implementação** contradizendo a afirmação anterior.
-- 1 por **supervisão** de execução.
+- 3 pela **medição**.
+- 2 pela **revisão do arquiteto**.
+- 1 pela **própria implementação**, que contradisse a afirmação anterior.
+- 1 pela **supervisão** da execução.
 
 ---
 

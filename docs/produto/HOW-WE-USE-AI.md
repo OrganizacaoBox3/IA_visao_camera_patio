@@ -119,18 +119,18 @@ Seven real cases. All caught before causing harm.
 |---|---|---|---|
 | 1 | Proposed raising the analysis resolution, citing a gain inherited from another context | Measurement on the evaluation set | Real gain 2.1 pp, cost +91% CPU, false positives on empty scenes 0 → 4. **Reverted** |
 | 2 | Evaluated switching to a lighter model | Acceptance criteria written **before** measuring | Failed 2 of 3 criteria. **Discarded** |
-| 3 | Wrote a manual deploy procedure | Architect's question: *"isn't there CI/CD in the repo?"* | Automated deploy already existed, and was safer. **Document rewritten** |
-| 4 | Created a demo profile that disables alarm protections | Architect's question about the release package | The file would have shipped to production. **Locked out in two layers** |
-| 5 | Claimed the system "did not measure" video frame age | The implementation itself | The measurement already existed in transit. **Claim corrected in the document** |
-| 6 | Came one step from announcing "root cause found" for server failures | Measurement | Failures stopped after a restart; nothing in the release touched that path. **Published as "cause not established"** |
+| 3 | Drafted a manual deploy procedure | Architect review against the existing automation | The repository already had an automated deploy with more checks than the proposed procedure. **Document rewritten, pointing to the automation as the default path** |
+| 4 | Created a demo profile that disables alarm protections | Architect review of the release package contents | The file would have shipped to production — the exclusion list predated it. **Blocked in two layers: exclusion and audit lock** |
+| 5 | Claimed the system did not measure video frame age | The implementation itself | The measurement already existed in transit, without retention or display. **Claim corrected in the document** |
+| 6 | Formulated a root-cause attribution for recurring server failures | Measurement | Failures stopped after a restart and the release did not touch that code path. **Published as cause not established** |
 | 7 | Parallelized 4 work streams with automated agents | Architect's supervision | All 4 failed on infrastructure. Repository state checked (no partial writes). **Redone sequentially** |
 
-Pattern across the seven cases:
+Mechanism that detected each case:
 
-- 3 were caught by **measurement**.
-- 2 were caught by an **architect's question**.
-- 1 by the **implementation itself** contradicting the earlier claim.
-- 1 by **supervision** of execution.
+- 3 by **measurement**.
+- 2 by **architect review**.
+- 1 by the **implementation itself**, which contradicted the earlier claim.
+- 1 by **supervision** of the execution.
 
 ---
 
