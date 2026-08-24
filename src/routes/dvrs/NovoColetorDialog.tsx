@@ -93,7 +93,7 @@ export function NovoColetorDialog({ onCriado }: Props) {
             height={260}
             className="rounded-sm bg-white p-[var(--sp-2)]"
           />
-          <p className="text-[12px] text-text-muted text-center">
+          <p className="text-sec text-text-muted text-center">
             Aponte a câmera do app para este QR. Uso único — expira em{" "}
             {new Date(qr.expira).toLocaleString("pt-BR")}.
           </p>

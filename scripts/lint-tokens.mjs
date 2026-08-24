@@ -49,7 +49,7 @@ const BASELINE = {
   // 25 ocorrências a menos (os 4 arquivos que LIDERAVAM a dívida da spec §0 agora não têm
   // nenhum `text-[`). Restou 1 hex no Replay: o FALLBACK único do cssVar() p/ o canvas 2D
   // (exceção G8 documentada, mesma do TrackOverlay — canvas não entende var()).
-  "src/routes/ReplayPlayerPage.tsx": { "#hex": 1 },
+  // ZERADA em 2026-08-24: o fallback de hex saiu do arquivo (dívida extinta, não movida).
   // Fallback literal do cssVar() p/ canvas (exceção documentada G8 — contraste de canvas);
   // entra na baseline mesmo assim: se a exceção crescer, a revisão precisa ver.
   "src/routes/dashboard/TrackOverlay.tsx": { "#hex": 2 },
@@ -58,7 +58,7 @@ const BASELINE = {
   // fallback do cssVar() p/ o canvas 2D (MESMA exceção G8 do TrackOverlay/Replay: o canvas não
   // entende var()). Zero `text-[`.
   "src/CameraWorkspace.tsx": { "#hex": 1 },
-  "src/camera/TagPicker.tsx": { "text-[": 1 },
+  // ZERADA em 2026-08-24: sem `text-[` — passou a usar os papéis tipográficos.
   // ── Zeradas na Onda F (arquivo DELETADO, dívida foi junto — não foi "limpa", foi extinta) ──
   // "src/routes/AlarmHealthPage.tsx": 3 text-[ — a tela virou a faixa do topo do Relatório.
   // "src/camera/CalibrationPanel.tsx": 16 text-[ — o painel virou aba do palco (zero text-[).
