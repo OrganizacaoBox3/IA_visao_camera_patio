@@ -1,8 +1,8 @@
 # Como a IA foi usada neste projeto
 
-> Registro descritivo, não normativo. Descreve o que foi feito, com que ferramenta, e como cada
+> Descreve o que foi feito, com que ferramenta, e como cada
 > coisa foi verificada. Projeto `visao_computacional_mvp` — visão computacional industrial.
-> Estado em 19/08/2026.
+> Estado em 19/08/2026. Versão em inglês: [`HOW-WE-USE-AI.md`](HOW-WE-USE-AI.md).
 
 ---
 
@@ -40,12 +40,12 @@
 
 | Decisão | Quem decidiu | Como fica registrado |
 |---|---|---|
-| Escopo, prioridade, direção do produto | Pessoa | Commit + doc de plano |
-| Trade-off arquitetural | Pessoa, assessorada por medição | ADR com data e autoria |
+| Escopo, prioridade, direção do produto | Arquiteto | Commit + doc de plano |
+| Trade-off arquitetural | Arquiteto, assessorado por medição | ADR com data e autoria |
 | Implementação (como codar) | IA | Diff revisado |
-| Aprovar o que entra | Pessoa | Revisão de diff |
-| Publicar em produção | Pessoa (acionamento manual) | Log do workflow |
-| Reverter em falha | Pessoa | Instrução impressa, execução manual |
+| Aprovar o que entra | Arquiteto | Revisão de diff |
+| Publicar em produção | Arquiteto (acionamento manual) | Log do workflow |
+| Reverter em falha | Arquiteto | Instrução impressa, execução manual |
 
 Regra registrada no guia do projeto: *"recomendação automatizada é hipótese, não ordem — re-verifique contra o runtime antes de executar."*
 
@@ -96,7 +96,7 @@ Pontos observados na prática:
 
 ---
 
-## 7. Decisões que permaneceram com a pessoa
+## 7. Decisões que permaneceram com o arquiteto
 
 Abertas hoje, por natureza (produto, ética, orçamento) — não por limite técnico:
 
@@ -119,16 +119,16 @@ Sete casos reais. Todos detectados antes de causar dano.
 |---|---|---|---|
 | 1 | Propôs aumentar resolução de análise citando ganho herdado de outro contexto | Medição no conjunto de avaliação | Ganho real 2,1 pp, custo +91% CPU, falso positivo em cena vazia de 0 → 4. **Revertido** |
 | 2 | Avaliou trocar por modelo mais leve | Critério de aceite escrito **antes** de medir | Reprovou em 2 de 3 critérios. **Descartado** |
-| 3 | Escreveu procedimento manual de deploy | Pergunta humana: *"não tem CI/CD no git?"* | Já existia deploy automatizado, mais seguro. **Documento reescrito** |
-| 4 | Criou perfil de demonstração que desliga proteções de alarme | Pergunta humana sobre o pacote de publicação | O arquivo iria para produção. **Travado em duas camadas** |
+| 3 | Escreveu procedimento manual de deploy | Pergunta do arquiteto: *"não tem CI/CD no git?"* | Já existia deploy automatizado, mais seguro. **Documento reescrito** |
+| 4 | Criou perfil de demonstração que desliga proteções de alarme | Pergunta do arquiteto sobre o pacote de publicação | O arquivo iria para produção. **Travado em duas camadas** |
 | 5 | Afirmou que o sistema "não media" a idade do quadro de vídeo | A própria implementação | A medição já existia em trânsito. **Afirmação corrigida no documento** |
 | 6 | Esteve a um passo de anunciar "causa raiz encontrada" para falhas no servidor | Medição | Falhas cessaram por reinício; nada na entrega tocava aquele caminho. **Publicado como "causa não estabelecida"** |
-| 7 | Paralelizou 4 frentes com agentes automatizados | Supervisão humana | As 4 falharam por infraestrutura. Estado do repositório conferido (sem escrita parcial). **Refeito em sequência** |
+| 7 | Paralelizou 4 frentes com agentes automatizados | Supervisão do arquiteto | As 4 falharam por infraestrutura. Estado do repositório conferido (sem escrita parcial). **Refeito em sequência** |
 
 Padrão observado nos 7 casos:
 
 - 3 foram pegos por **medição**.
-- 2 foram pegos por **pergunta humana**.
+- 2 foram pegos por **pergunta do arquiteto**.
 - 1 pela **própria implementação** contradizendo a afirmação anterior.
 - 1 por **supervisão** de execução.
 

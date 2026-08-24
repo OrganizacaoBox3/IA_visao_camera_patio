@@ -82,4 +82,12 @@ WASM+modelos MediaPipe (`npm run dev`/`build` chamam `scripts/fetch-mediapipe.mj
   não cobre ainda o relay RTMP (ADR-019) nem a fadiga no hub.
 - **`docs/analises/decisoes/`** — ADRs (o índice diz quais vivem no repo irmão do BLE).
 - **`docs/analises/implementacao-changelog.md`** — o que foi entregue, em ordem, com o porquê.
+- **`docs/produto/COMO-USAMOS-IA.md`** — como a IA foi usada no projeto: onde entrou (código,
+  testes, planejamento, ADRs, infra/CI-CD, operação, pesquisa, documentação), a divisão de decisão
+  entre arquiteto e ferramenta, os portões de verificação, o tratamento de dado sensível, e os 7
+  erros de IA capturados antes de causar dano. Versão em inglês:
+  **`docs/produto/HOW-WE-USE-AI.md`**.
+- **`docs/produto/deploy-atualizacao-2026-08.md`** — runbook da release atual. O caminho normal de
+  publicação é o workflow `Deploy Homolog` (acionamento manual); as seções de comando manual são
+  fallback.
 - `docs/produto/PLANO-MVP.md` · `docs/produto/avaliacao-reconhecimento-presenca.md` (backlog original).
