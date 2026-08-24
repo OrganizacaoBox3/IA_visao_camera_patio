@@ -1,0 +1,67 @@
+# ════════════════════════════════════════════════════════════════════════════
+# Ponte DVR — RELAY (frp server) · SKELETON (B-1)
+# frp >= 0.52 (formato TOML novo). Roda numa VPS DEDICADA e isolada do control-plane
+# (ver README.md ao lado). Base do de-risking: ../../box3-mobile/planejamento/ponte-dvr/
+# de-risking/relay-proxy.md §4.1 e contratos.md §2.
+#
+# Túnel (frps) + login-plugin (B-2) ligado. O nginx de front (auth_request + sub_filter — B-3)
+# fica em relay/nginx/ (ver relay/nginx/README.md).
+#
+# ⚠️ NENHUM segredo real no repo (invariante 6): tokens/senhas vêm de env/secret manager
+# na VPS. Os {{PLACEHOLDERS}} são substituídos no deploy (envsubst/secret manager).
+# ════════════════════════════════════════════════════════════════════════════
+
+bindAddr = "0.0.0.0"
+bindPort = 7000                 # ÚNICA porta de entrada do frp que fica pública (fora a 443 do nginx)
+
+# --- Onde as portas de proxy nascem: LOOPBACK. Este é o coração da segurança (contratos §2). ---
+# Toda porta que um frpc expõe (type=tcp/remotePort) escuta só em 127.0.0.1 → o DVR só é
+# alcançável de dentro da VPS, pelo nginx, atrás do login. NUNCA na internet.
+proxyBindAddr = "127.0.0.1"
+
+# NÃO habilitamos vhostHTTPPort/vhostHTTPSPort: o proxy HTTP do frp fica DESLIGADO — o nginx
+# é o único front (contratos §2: frp TCP puro, não o vhost HTTP do frp).
+
+# --- Autenticação grossa: token compartilhado, obrigatório, e TLS forçado entre frpc↔frps ---
+auth.method = "token"
+auth.token  = "{{FRP_TOKEN}}"   # injetado por env/secret na VPS — nunca no git
+transport.tls.force = true       # recusa frpc sem TLS
+
+# --- Menor privilégio: 1 DVR por coletor (contratos §2) ---
+maxPortsPerClient = 1
+allowPorts = [
+  { start = 20000, end = 20099 } # faixa de loopback reservada aos túneis de sessão
+]
+
+# --- Dashboard do frps: SÓ em loopback (observação/auditoria; nunca público) ---
+[webServer]
+addr = "127.0.0.1"
+port = 7500
+user = "{{FRP_DASH_USER}}"
+password = "{{FRP_DASH_PASS}}"
+
+# ── B-2: LOGIN-PLUGIN — valida a site_key do coletor a cada Login/NewProxy ────────────────
+# O frps chama este endpoint (server manage plugin do frp) e obedece à decisão NO CORPO
+# (POST { version, op, content } → { reject, reject_reason } | { reject:false, unchange:true }).
+# A lógica JÁ EXISTE no control-plane do visão (C-be-4), em `POST /api/dvr/frp-login`:
+#   • Login    → confere metadatas.coletorId + metadatas.siteKey (Opção A, contratos §8);
+#                site_key inválida/revogada/inexistente ⇒ reject.
+#   • NewProxy → menor privilégio (contratos §2): só proxy TCP, com SESSÃO ATIVA, e a porta
+#                pedida = a porta alocada à sessão do coletor.
+#
+# `addr` — DUAS opções (o control-plane roda noutra máquina que NÃO a VPS do relay):
+#   (A) SHIM DE LOOPBACK [recomendado] — um forwarder mínimo em 127.0.0.1:9001 na própria VPS
+#       que repassa a chamada ao control-plane e INJETA o header `x-frp-plugin-token`. Necessário
+#       porque o frp NÃO adiciona headers custom à chamada do plugin — logo a trava
+#       CP_FRP_PLUGIN_TOKEN (control-plane) só dá para armar via shim. Ref.: relay/frp-login-shim.mjs
+#       (dependency-free; CP_URL + CP_FRP_PLUGIN_TOKEN vêm de env/secret na VPS).
+#   (B) DIRETO ao control-plane — addr = "http(s)://control-plane:4100", path = "/api/dvr/frp-login".
+#       Só quando o control-plane for alcançável em rede privada/loopback E a trava de token não
+#       for necessária (o frp não consegue mandar o header). Menos isolado; preferir (A).
+#
+# Abaixo: opção (A). Troque {{...}} no deploy (envsubst/secret manager) — nada de segredo no git.
+[[httpPlugins]]
+name = "ponte-dvr-login"
+addr = "http://127.0.0.1:9001"     # shim loopback → repassa ao control-plane e injeta o token
+path = "/frp/login"                 # o shim expõe este path; ele chama /api/dvr/frp-login no visão
+ops  = ["Login", "NewProxy"]        # Login = identidade (site_key); NewProxy = menor privilégio (porta)

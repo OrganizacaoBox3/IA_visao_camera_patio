@@ -6,6 +6,7 @@
 // a única tabela com RLS. Estas queries são todas parametrizadas ($1..$n) — nunca interpoladas.
 const crypto = require("node:crypto");
 const db = require("./db");
+const dvrDom = require("./dvr"); // helpers PUROS (proximaPortaLivre) — sem ciclo (dvr.js não requer nada)
 
 // ids text, com prefixo por entidade (mesmo idioma do genId do hub: prefixo + randomBytes hex).
 function genId(prefix) {
@@ -168,4 +169,248 @@ const memberships = {
   },
 };
 
-module.exports = { genId, partners, clientes, sites, users, memberships, publicUser };
+// ── PONTE DVR (Fase 2) ─────────────────────────────────────────────────────--
+// coletor = o ENROLLMENT (empresa box3 ↔ cliente visão) + credencial site_key. Guarda SÓ o
+// hash; a chave crua sai UMA vez no enrollment (padrão API key, como o site). getWithHash é
+// uso INTERNO (authColetor) — o hash NUNCA sai em resposta pública.
+const coletores = {
+  async create({ cliente_id, empresa_id_box3, nome, coletorIdBox3, siteKeyHash }) {
+    const id = genId("col");
+    const ts = now();
+    await db.query(
+      "insert into coletor(id,cliente_id,empresa_id_box3,coletor_id_box3,nome,site_key_hash,revogado,criado_em) values ($1,$2,$3,$4,$5,$6,false,$7)",
+      [id, cliente_id, empresa_id_box3, coletorIdBox3 ?? null, nome ?? null, siteKeyHash, ts],
+    );
+    return { id, cliente_id, empresa_id_box3, coletor_id_box3: coletorIdBox3 ?? null, nome: nome ?? null, revogado: false, revogado_em: null, criado_em: ts };
+  },
+  async list() {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,revogado,revogado_em,criado_em from coletor order by criado_em asc",
+    );
+    return r.rows;
+  },
+  async get(id) {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,revogado,revogado_em,criado_em from coletor where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+  // uso interno (authColetor): inclui site_key_hash + revogado. NÃO expor em resposta pública.
+  async getWithHash(id) {
+    const r = await db.query(
+      "select id,cliente_id,empresa_id_box3,coletor_id_box3,nome,site_key_hash,revogado,criado_em from coletor where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+};
+
+// dvr = o aparelho registrado pelo coletor. upsert idempotente por coletor_id (1 DVR/coletor,
+// contratos §3) — devolve { dvr, inserido } p/ o handler auditar registrar × atualizar.
+const dvrs = {
+  async getByColetor(coletorId) {
+    const r = await db.query(
+      "select id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em from dvr where coletor_id=$1",
+      [coletorId],
+    );
+    return r.rows[0] || null;
+  },
+  async get(id) {
+    const r = await db.query(
+      "select id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em from dvr where id=$1",
+      [id],
+    );
+    return r.rows[0] || null;
+  },
+  // LEITURA da UI do técnico (C-fe-1): DVR + contexto do coletor (nome/empresa) + cliente (nome).
+  // JOIN em vez de N queries; o canAccess do técnico filtra por cliente_id NO HANDLER (routes.js).
+  // NENHUMA credencial trafega (não há site_key aqui — nem da tabela dvr, nem do coletor).
+  async listComContexto() {
+    const r = await db.query(
+      `select d.id, d.coletor_id, d.cliente_id, d.marca, d.modelo, d.ip, d.porta,
+              d.consentimento_aceito, d.consentimento_em, d.consentimento_versao,
+              d.criado_em, d.atualizado_em,
+              col.nome as coletor_nome, col.empresa_id_box3, col.coletor_id_box3,
+              col.revogado as coletor_revogado,
+              cli.nome as cliente_nome, cli.partner_id
+       from dvr d
+       join coletor col on col.id = d.coletor_id
+       join cliente cli on cli.id = d.cliente_id
+       order by d.criado_em asc`,
+    );
+    return r.rows;
+  },
+  async upsert({ coletor_id, cliente_id, marca, modelo, ip, porta, consentimento }) {
+    const ts = now();
+    const existing = await this.getByColetor(coletor_id);
+    if (!existing) {
+      const id = genId("dvr");
+      await db.query(
+        `insert into dvr(id,coletor_id,cliente_id,marca,modelo,ip,porta,consentimento_aceito,consentimento_em,consentimento_versao,criado_em,atualizado_em)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+        [id, coletor_id, cliente_id, marca ?? null, modelo ?? null, ip ?? null, porta ?? null, consentimento.aceito, consentimento.quando, consentimento.versaoTexto ?? null, ts],
+      );
+      return { dvr: await this.get(id), inserido: true };
+    }
+    await db.query(
+      `update dvr set marca=$2, modelo=$3, ip=$4, porta=$5, consentimento_aceito=$6, consentimento_em=$7, consentimento_versao=$8, atualizado_em=$9 where coletor_id=$1`,
+      [coletor_id, marca ?? null, modelo ?? null, ip ?? null, porta ?? null, consentimento.aceito, consentimento.quando, consentimento.versaoTexto ?? null, ts],
+    );
+    return { dvr: await this.getByColetor(coletor_id), inserido: false };
+  },
+};
+
+// auditoria_dvr = quem/qual DVR/qual ação/quando (a auditoria que o control-plane não tinha).
+const auditoriaDvr = {
+  async registrar({ ator, dvr_id, coletor_id, acao, detalhe }) {
+    const r = await db.query(
+      "insert into auditoria_dvr(ator,dvr_id,coletor_id,acao,detalhe,em) values ($1,$2,$3,$4,$5,$6) returning id,ator,dvr_id,coletor_id,acao,em",
+      [String(ator || ""), dvr_id ?? null, coletor_id ?? null, String(acao || ""), detalhe ? JSON.stringify(detalhe) : null, now()],
+    );
+    return r.rows[0];
+  },
+  async list(limit = 100) {
+    const lim = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+    const r = await db.query("select id,ator,dvr_id,coletor_id,acao,detalhe,em from auditoria_dvr order by em desc limit $1", [lim]);
+    return r.rows;
+  },
+  // LEITURA da UI do técnico (C-fe-2): auditoria + cliente_id/coletor_nome do coletor (LEFT JOIN —
+  // um dia um coletor pode ter sumido). O canAccess por cliente é aplicado NO HANDLER (routes.js);
+  // linha sem coletor/cliente (não deveria ocorrer) fica visível só p/ platform. Filtro opcional
+  // por coletorId. `detalhe` já volta como objeto (jsonb) do node-pg.
+  async listComContexto({ limit = 200, coletorId = null } = {}) {
+    const lim = Math.min(Math.max(Number(limit) || 200, 1), 1000);
+    const params = [];
+    let where = "";
+    if (coletorId) {
+      params.push(String(coletorId));
+      where = `where a.coletor_id = $${params.length}`;
+    }
+    params.push(lim);
+    const r = await db.query(
+      `select a.id, a.ator, a.dvr_id, a.coletor_id, a.acao, a.detalhe, a.em,
+              col.cliente_id, col.nome as coletor_nome
+       from auditoria_dvr a
+       left join coletor col on col.id = a.coletor_id
+       ${where}
+       order by a.em desc
+       limit $${params.length}`,
+      params,
+    );
+    return r.rows;
+  },
+};
+
+// sessao = o ciclo do acesso remoto (F3 backend, C-be-5). A linha ativa É o mapa de rota que o
+// nginx (B-3) vai consumir (host_publico → remote_port → dvr). Faixa de portas via env (casa com
+// o allowPorts do frps: relay/frps.toml, 20000..20099).
+const PORTA_INICIO = Number(process.env.CP_DVR_PORT_START || 20000);
+const PORTA_FIM = Number(process.env.CP_DVR_PORT_END || 20099);
+const SESSAO_COLS =
+  "id,dvr_id,coletor_id,cliente_id,ator,status,remote_port,host_publico,aberta_em,encerrada_em,ultima_atividade";
+
+const sessoes = {
+  async get(id) {
+    const r = await db.query(`select ${SESSAO_COLS} from sessao where id=$1`, [id]);
+    return r.rows[0] || null;
+  },
+  async ativaPorColetor(coletorId) {
+    const r = await db.query(
+      `select ${SESSAO_COLS} from sessao where coletor_id=$1 and status='ativa' order by aberta_em desc limit 1`,
+      [coletorId],
+    );
+    return r.rows[0] || null;
+  },
+  // Sessão ativa por HOST público — o /_dvr_auth (C-be-6) descobre o DVR pelo Host do nginx e casa
+  // com a sessão ativa (host_publico é único por DVR; a UNIQUE parcial garante ≤1 ativa por porta).
+  async ativaPorHost(hostPublico) {
+    const r = await db.query(
+      `select ${SESSAO_COLS} from sessao where host_publico=$1 and status='ativa' order by aberta_em desc limit 1`,
+      [String(hostPublico || "")],
+    );
+    return r.rows[0] || null;
+  },
+  async portasAtivas() {
+    const r = await db.query("select remote_port from sessao where status='ativa'");
+    return r.rows.map((x) => x.remote_port);
+  },
+  // Todas as sessões ATIVAS (a UI do técnico casa DVR↔sessão por coletor_id — C-fe-1). Uma linha
+  // ativa por coletor (UNIQUE parcial), então mapear coletor_id → sessão é 1:1.
+  async listAtivas() {
+    const r = await db.query(`select ${SESSAO_COLS} from sessao where status='ativa' order by aberta_em desc`);
+    return r.rows;
+  },
+  // Abre a sessão alocando um remote_port LIVRE. Corrida-safe pelas UNIQUE parciais do schema:
+  //  • porta duplicada (23505 em sessao_remote_port_ativa_uidx) → recomputa e tenta outra;
+  //  • coletor já com sessão ativa (23505 em sessao_coletor_ativa_uidx) → reusa a existente
+  //    (abrir idempotente: 1 túnel por coletor). Devolve { sessao, reusada }.
+  async abrir({ dvr_id, coletor_id, cliente_id, ator, host_publico }) {
+    const ts = now();
+    for (let tentativa = 0; tentativa < 25; tentativa++) {
+      const porta = dvrDom.proximaPortaLivre(await this.portasAtivas(), PORTA_INICIO, PORTA_FIM);
+      if (porta == null) {
+        const e = new Error("faixa de portas de sessão esgotada");
+        e.semPorta = true;
+        throw e;
+      }
+      const id = genId("sess");
+      try {
+        await db.query(
+          `insert into sessao(id,dvr_id,coletor_id,cliente_id,ator,status,remote_port,host_publico,aberta_em,ultima_atividade)
+           values ($1,$2,$3,$4,$5,'ativa',$6,$7,$8,$8)`,
+          [id, dvr_id, coletor_id, cliente_id, ator, porta, host_publico, ts],
+        );
+        return { sessao: await this.get(id), reusada: false };
+      } catch (e) {
+        if (e && e.code === "23505") {
+          if (e.constraint === "sessao_coletor_ativa_uidx") {
+            const existente = await this.ativaPorColetor(coletor_id);
+            if (existente) return { sessao: existente, reusada: true };
+          }
+          continue; // corrida na porta (ou coletor sem linha ainda) → recomputa
+        }
+        throw e;
+      }
+    }
+    const e = new Error("não foi possível alocar sessão (corrida nas portas)");
+    e.semPorta = true;
+    throw e;
+  },
+  // Encerra (idempotente): só afeta 'ativa'. Devolve a linha encerrada, ou null se já encerrada/inexistente.
+  async encerrar(id, { encerradaEm } = {}) {
+    const ts = encerradaEm || now();
+    const r = await db.query(
+      `update sessao set status='encerrada', encerrada_em=$2 where id=$1 and status='ativa' returning ${SESSAO_COLS}`,
+      [id, ts],
+    );
+    return r.rows[0] || null;
+  },
+  // Renova a atividade (o /_dvr_auth chamará isto a cada acesso do técnico — F4, próxima onda).
+  async tocarAtividade(id, ts) {
+    const r = await db.query("update sessao set ultima_atividade=$2 where id=$1 and status='ativa' returning id", [id, ts || now()]);
+    return r.rowCount > 0;
+  },
+  // Varredura do TIMEOUT (§4/§7): encerra em lote as sessões ativas ociosas há mais de idleMs.
+  // Devolve as encerradas (p/ o chamador auditar 'sessao.timeout'). Base = ultima_atividade || aberta_em.
+  async varrerOciosas({ idleMs, agora } = {}) {
+    const nowTs = agora || now();
+    const cutoff = nowTs - Number(idleMs);
+    const r = await db.query(
+      `update sessao set status='encerrada', encerrada_em=$2
+       where status='ativa' and coalesce(ultima_atividade, aberta_em) < $1
+       returning id,dvr_id,coletor_id,cliente_id,remote_port,host_publico`,
+      [cutoff, nowTs],
+    );
+    return r.rows;
+  },
+  // O MAPA DE ROTA que o nginx (B-3) vai ler: host → porta → dvr das sessões ATIVAS.
+  async rotasAtivas() {
+    const r = await db.query(
+      "select host_publico, remote_port, dvr_id, cliente_id, coletor_id from sessao where status='ativa' order by aberta_em asc",
+    );
+    return r.rows;
+  },
+};
+
+module.exports = { genId, partners, clientes, sites, users, memberships, publicUser, coletores, dvrs, auditoriaDvr, sessoes };

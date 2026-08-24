@@ -55,6 +55,10 @@ server/camcfg.json
 # Shelves de alarme persistidas (runtime)
 server/alarm-shelves.json
 
+# Ponte DVR — fallback JSON de runtime (dvr.js): coletores/dvrs/sessões/auditoria. Contém HASHES
+# de site_key/enrollment (nunca a credencial crua) + tags cliente/empresa — estado, fora do git.
+server/dvr.json
+
 # Segredos / runtime que NÃO devem ser versionados (R0)
 deploy/visao-hub.service
 server/users.json

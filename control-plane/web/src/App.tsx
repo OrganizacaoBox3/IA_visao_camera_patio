@@ -6,9 +6,10 @@ import { Login } from "./screens/Login";
 import { Fleet } from "./screens/Fleet";
 import { SiteView } from "./screens/SiteView";
 import { Manage } from "./screens/Manage";
+import { DvrView } from "./screens/Dvr";
 
 // Roteamento por estado simples (sem react-router — poucas telas, uma pilha rasa). Ver README.
-type View = { name: "fleet" } | { name: "manage" } | { name: "site"; site: Site };
+type View = { name: "fleet" } | { name: "manage" } | { name: "dvr" } | { name: "site"; site: Site };
 
 function scopeLabel(scope: Scope | null): string {
   if (!scope) return "";
@@ -65,6 +66,13 @@ export function App() {
           </button>
           <button
             className="cp-nav__item"
+            aria-current={view.name === "dvr" ? "page" : undefined}
+            onClick={() => setView({ name: "dvr" })}
+          >
+            DVR
+          </button>
+          <button
+            className="cp-nav__item"
             aria-current={view.name === "manage" ? "page" : undefined}
             onClick={() => setView({ name: "manage" })}
           >
@@ -81,6 +89,7 @@ export function App() {
         {view.name === "fleet" && (
           <Fleet onOpenSite={(site) => setView({ name: "site", site })} />
         )}
+        {view.name === "dvr" && <DvrView />}
         {view.name === "manage" && scope && <Manage scope={scope} />}
         {view.name === "site" && (
           <SiteView site={view.site} onBack={() => setView({ name: "fleet" })} />

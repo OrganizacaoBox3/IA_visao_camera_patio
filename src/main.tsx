@@ -6,6 +6,7 @@ import { CamerasPage } from "./routes/CamerasPage";
 import { CameraPage } from "./routes/CameraPage";
 import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
+import { DvrsPage } from "./routes/DvrsPage";
 import { ProfilePage } from "./routes/ProfilePage";
 import { TurnosPage } from "./routes/TurnosPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
@@ -49,6 +50,8 @@ const router = createBrowserRouter([
       { path: "/calibracao", element: <Navigate to="/monitoramento" replace /> },
       { path: "/alarmes-saude", element: <Navigate to="/relatorio" replace /> },
       { path: "/usuarios", element: <UsersPage /> },
+      // Ponte DVR (suporte): lista os DVRs por cliente + auditoria (gate superadmin dentro da página).
+      { path: "/dvrs", element: <DvrsPage /> },
       { path: "/perfil", element: <ProfilePage /> },
       // Catch-all (404) dentro do shell autenticado: mantém navegação + identidade do produto.
       { path: "*", element: <NotFoundPage /> },

@@ -1,0 +1,24 @@
+# Ponte DVR — shim de loopback do login-plugin do frps. Instale em
+# /etc/systemd/system/frp-login-shim.service. Repassa Login/NewProxy ao hub e injeta o token.
+# Os segredos vêm de /etc/frp/shim.env (chmod 600; NÃO commitado) — ver relay/CO-RESIDIR.md.
+[Unit]
+Description=Ponte DVR frp login-plugin shim (loopback)
+After=network-online.target
+Wants=network-online.target
+Before=frps.service
+
+[Service]
+Type=simple
+# CP_URL, CP_FRP_PLUGIN_TOKEN (e opcionalmente SHIM_ADDR/PORT/PATH) vivem aqui:
+EnvironmentFile=/etc/frp/shim.env
+# Ajuste o caminho do checkout/deploy do relay no servidor.
+ExecStart=/usr/bin/node /opt/ponte-dvr-relay/frp-login-shim.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

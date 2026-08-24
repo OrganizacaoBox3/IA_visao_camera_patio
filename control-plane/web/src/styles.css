@@ -416,6 +416,49 @@ a {
   font-size: 0.82rem;
 }
 
+/* ── Ponte DVR (UI do técnico) ── */
+/* barra de título + ação (Atualizar) de cada aba */
+.cp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+.cp-toolbar h2 {
+  margin: 0;
+}
+.cp-toolbar .spacer {
+  flex: 1;
+}
+
+/* ações por linha de DVR (Abrir DVR / Encerrar) — o <a> "Abrir DVR" usa .cp-btn como botão */
+.cp-dvr-acoes {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.cp-dvr-acoes a.cp-btn {
+  text-decoration: none;
+  display: inline-block;
+}
+
+/* inline-confirm do "Encerrar" (padrão mínimo — sem modal/dep nova) */
+.cp-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.cp-confirm__q {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.cp-confirm__err {
+  font-size: 0.82rem;
+  color: var(--state-alarm);
+}
+
 /* ── banner da site_key (a credencial do hub — mostrada UMA vez) ── */
 .cp-sitekey {
   border: 1px solid var(--accent);

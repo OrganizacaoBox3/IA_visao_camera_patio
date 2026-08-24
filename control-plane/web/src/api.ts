@@ -7,7 +7,9 @@ import type {
   AdminSite,
   AdminUser,
   AlarmsResponse,
+  AuditoriaDvr,
   Cliente,
+  Dvr,
   LoginResponse,
   Membership,
   Overview,
@@ -197,4 +199,30 @@ export function deleteMembership(id: string): Promise<{ ok: true }> {
   return request<{ ok: true }>(`/api/memberships/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+// ── PONTE DVR (UI do técnico, C-fe) ──
+// As listas vêm SCOPED por canAccess no backend (mesmo filtro do CRUD); o token viaja no Bearer.
+
+// DVRs por cliente + status da sessão (C-fe-1). Cada item já traz a sessão ATIVA (ou null).
+export function listDvrs(): Promise<Dvr[]> {
+  return request<Dvr[]>("/api/dvr/dvrs");
+}
+
+// Encerra uma sessão ativa (o técnico, via token+canAccess). Idempotente no backend.
+export function encerrarSessaoDvr(
+  sessaoId: string,
+): Promise<{ ok: true; sessaoId: string; status: string }> {
+  return request(`/api/dvr/sessao/${encodeURIComponent(sessaoId)}/encerrar`, { method: "POST" });
+}
+
+// Auditoria por cliente/coletor (C-fe-2). Filtro opcional por coletor.
+export function listAuditoriaDvr(
+  opts: { coletor?: string; limit?: number } = {},
+): Promise<AuditoriaDvr[]> {
+  const qs = new URLSearchParams();
+  if (opts.coletor) qs.set("coletor", opts.coletor);
+  if (opts.limit != null) qs.set("limit", String(opts.limit));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<AuditoriaDvr[]>(`/api/dvr/auditoria${suffix}`);
 }

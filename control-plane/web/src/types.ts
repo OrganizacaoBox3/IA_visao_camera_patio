@@ -97,3 +97,50 @@ export interface Membership {
   scope_id: string | null;
   role: string;
 }
+
+// ── PONTE DVR (UI do técnico, C-fe) ──
+// Espelha GET /api/dvr/dvrs (control-plane/routes.js): DVR + contexto (coletor/cliente) + a
+// sessão ATIVA (quando há túnel). O fluxo: quem ABRE a sessão é o COLETOR (app); o técnico só
+// LISTA, e para uma sessão ativa abre a web do DVR em NOVA ABA (host_publico) ou ENCERRA.
+
+// Sessão ativa anexada a um DVR (só o que a UI precisa; status é "ativa" quando presente aqui).
+export interface DvrSessao {
+  sessaoId: string;
+  status: "ativa" | "encerrada";
+  remotePort: number;
+  hostPublico: string;
+  aberta_em: number;
+  ultima_atividade: number | null;
+}
+
+export interface Dvr {
+  id: string;
+  coletor_id: string;
+  coletor_nome: string | null;
+  empresa_id_box3: string;
+  coletor_revogado: boolean;
+  cliente_id: string;
+  cliente_nome: string;
+  partner_id: string | null;
+  marca: string | null;
+  modelo: string | null;
+  ip: string | null;
+  porta: number | null;
+  criado_em: number;
+  atualizado_em: number | null;
+  // null = sem túnel ativo. Só com sessao != null a UI oferece "Abrir DVR" (nova aba) / "Encerrar".
+  sessao: DvrSessao | null;
+}
+
+// Espelha GET /api/dvr/auditoria: quem/qual/quando (enrollment, registro, sessão, acesso do técnico).
+export interface AuditoriaDvr {
+  id: number;
+  ator: string;
+  dvr_id: string | null;
+  coletor_id: string | null;
+  coletor_nome: string | null;
+  cliente_id: string | null;
+  acao: string;
+  detalhe: Record<string, unknown> | null;
+  em: number;
+}

@@ -21,6 +21,7 @@ const shifts = require("./shifts");
 const persistenceHealth = require("./persistence-health");
 const camcfg = require("./camcfg");
 const events = require("./events");
+const dvr = require("./dvr"); // Ponte DVR — store do domínio (coletores/dvrs/sessões/auditoria)
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
@@ -38,6 +39,7 @@ const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
 const routeAnalysis = require("./routes/analysis");
+const routeDvr = require("./routes/dvr"); // Ponte DVR (/api/dvr/* + /_dvr_auth)
 
 // Camada socket (espelha o padrão de routes/): protocolo de nó-câmera e de dashboard em
 // módulos próprios; cada um expõe attach(socket, ctx). index.js só compõe.
@@ -114,6 +116,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
     if (await routeAnalysis.handle(req, res, ctx)) return;
+    if (await routeDvr.handle(req, res, ctx)) return; // Ponte DVR — prefixo próprio, sem colisão
   } catch (err) {
     // Distingue erro do CLIENTE (corpo grande/malformado → 4xx) de erro INTERNO (bug → 500 + log).
     if (err && err.tooLarge) {
@@ -277,6 +280,7 @@ io.on("connection", (socket) => {
     events.init(),
     camcfg.init(),
     shifts.init(), // turnos de trabalho (cadastro global — spec-turnos-por-zona F1)
+    dvr.init(), // Ponte DVR — coletores/dvrs/sessões/auditoria (memória + PG/JSON)
   ]);
   // GUARDIÃO DE PERSISTÊNCIA (persistence-health.js): se o PG está configurado mas algum store caiu
   // no fallback JSON, GRITA no boot — foi a armadilha que fez os turnos do dono sumirem (um .json não
@@ -288,6 +292,7 @@ io.on("connection", (socket) => {
     events: events.persistence(),
     camcfg: camcfg.persistence(),
     shifts: shifts.persistence(),
+    dvr: dvr.persistence(), // Ponte DVR — mesmo guardião (PG configurado + store no JSON = perigo)
   });
   // Guarda de segurança do boot (auditoria 01, R-A): avisa sobre DEFAULTS INSEGUROS e, em
   // produção, ABORTA SÓ pelo AUTH_SECRET default (catastrófico + corrigível por env, sem deadlock).
@@ -340,6 +345,29 @@ io.on("connection", (socket) => {
     // alcançar o hub por ele (o site está atrás de NAT). Inerte sem CP_URL/SITE_ID/SITE_KEY; fail-soft
     // (o plane cair não derruba o hub — só reconecta com backoff).
     cpLink.startSiteLink();
+    // Ponte DVR — VARREDURA periódica do TIMEOUT de sessões ociosas (contratos §4/§7). Complementa
+    // o gate imediato do /_dvr_auth (encerra mesmo sem novo acesso do técnico). idle/intervalo por
+    // env; .unref() p/ não segurar o event loop no shutdown.
+    {
+      const idleMs = Number(process.env.CP_DVR_IDLE_MS || 20 * 60 * 1000);
+      const sweepMs = Math.max(30_000, Number(process.env.CP_DVR_SWEEP_MS || 60_000));
+      setInterval(async () => {
+        try {
+          const encerradas = await dvr.sessoes.varrerOciosas({ idleMs });
+          for (const s of encerradas) {
+            await dvr.auditoria.registrar({
+              ator: "sistema",
+              dvr_id: s.dvr_id,
+              coletor_id: s.coletor_id,
+              acao: "sessao.timeout",
+              detalhe: { sessaoId: s.id, via: "varredura" },
+            });
+          }
+        } catch (e) {
+          console.error("[dvr] varredura de sessões ociosas falhou:", e.message);
+        }
+      }, sweepMs).unref();
+    }
     // Supervisor do sidecar go2rtc (WebRTC): AUTO-ON pela presença de bin/go2rtc[.exe];
     // GO2RTC_ENABLED=0 força off (ver server/go2rtc.js). getSources espelha o que o rtsp.js
     // ingere: fontes LEGADAS (rtsp.sources.json/env, ids rtsp-N) + DINÂMICAS (cameras.json).
