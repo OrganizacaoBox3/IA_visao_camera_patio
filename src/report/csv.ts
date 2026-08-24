@@ -8,9 +8,17 @@ export type CsvSection = { title?: string; headers?: string[]; rows: (string | n
 
 const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
+// AVISO DE PROPRIEDADE no arquivo exportado. O CSV é o artefato que SAI da empresa e circula
+// por e-mail, WhatsApp e pasta compartilhada — sem isto ele viaja sem identificação de origem
+// nem de titularidade. Vai como PRIMEIRA linha de propósito: rodapé de planilha longa não é
+// lido, e no Excel a linha 1 fica visível junto do primeiro bloco. Gate: csv.test.ts.
+export const CSV_AVISO_PROPRIEDADE =
+  "Documento gerado por Visão de Pátio — Copyright (c) 2026 Box 3. " +
+  "Todos os direitos reservados. Uso interno autorizado; redistribuição vedada.";
+
 // Monta o CSV a partir de seções; linha em branco separa cada bloco (legível no Excel).
 export function buildCSV(sections: CsvSection[]): string {
-  const lines: string[] = [];
+  const lines: string[] = [esc(CSV_AVISO_PROPRIEDADE), ""];
   for (const s of sections) {
     if (s.title) lines.push(esc(s.title));
     if (s.headers) lines.push(s.headers.map(esc).join(";"));

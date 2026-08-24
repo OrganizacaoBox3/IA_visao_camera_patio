@@ -1,3 +1,11 @@
+> ## ⚖️ Software proprietário — todos os direitos reservados
+>
+> Copyright © 2026 Box 3. **Repositório público não significa código livre.**
+> Nenhuma licença de uso é concedida: é vedado executar, copiar, modificar,
+> distribuir ou derivar desta obra, inclusive para teste, avaliação ou benchmark.
+> A visibilidade existe para auditoria por terceiros autorizados. Termos completos
+> em [`LICENSE`](LICENSE) · licenciamento: contato@box3.work
+
 # Visão de Pátio — POC (central de câmeras)
 
 MVP web de **inteligência operacional por área** (visão computacional industrial). Processamento **100% local**, **sem identificação individual**.

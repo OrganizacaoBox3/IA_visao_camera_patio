@@ -1,0 +1,73 @@
+SOFTWARE PROPRIETÁRIO — TODOS OS DIREITOS RESERVADOS
+PROPRIETARY SOFTWARE — ALL RIGHTS RESERVED
+
+Copyright (c) 2026 Box 3. Todos os direitos reservados / All rights reserved.
+
+Projeto: Visão de Pátio (visao_computacional_mvp)
+
+────────────────────────────────────────────────────────────────────────────
+PORTUGUÊS
+────────────────────────────────────────────────────────────────────────────
+
+1. NENHUMA LICENÇA É CONCEDIDA
+   Este software e toda a documentação, especificação, medição e material
+   associado ("Obra") são propriedade exclusiva da Box 3 e constituem segredo
+   de negócio. Nenhum direito de uso é concedido por este arquivo.
+
+2. VISIBILIDADE PÚBLICA NÃO É PERMISSÃO
+   O fato de este repositório estar publicamente visível não concede a
+   ninguém licença para usar, executar, copiar, modificar, mesclar, publicar,
+   distribuir, sublicenciar, vender, hospedar ou criar obras derivadas da
+   Obra, no todo ou em parte. A visibilidade existe para fins de avaliação e
+   auditoria por terceiros expressamente autorizados pela Box 3.
+
+3. VEDAÇÕES ESPECÍFICAS
+   Sem autorização prévia e por escrito da Box 3, é vedado:
+   (a) executar a Obra, inclusive para teste, avaliação, benchmark,
+       demonstração ou prova de conceito;
+   (b) reutilizar código, arquitetura, especificação, parâmetros de
+       calibração ou resultados de medição, ainda que reescritos;
+   (c) treinar, ajustar ou avaliar modelos de aprendizado de máquina usando
+       a Obra como dado de entrada;
+   (d) remover, ocultar ou alterar avisos de autoria, licença ou copyright.
+
+4. AUSÊNCIA DE GARANTIA
+   A Obra é disponibilizada "COMO ESTÁ", sem garantia de qualquer natureza.
+   A Box 3 não responde por qualquer dano decorrente de uso não autorizado.
+
+5. LICENCIAMENTO
+   Pedidos de licença, parceria ou avaliação autorizada: contato@box3.work
+
+────────────────────────────────────────────────────────────────────────────
+ENGLISH
+────────────────────────────────────────────────────────────────────────────
+
+1. NO LICENSE IS GRANTED
+   This software and all associated documentation, specifications,
+   measurements and materials (the "Work") are the exclusive property of
+   Box 3 and constitute trade secrets. No right of use is granted herein.
+
+2. PUBLIC VISIBILITY IS NOT PERMISSION
+   The fact that this repository is publicly visible grants no one a license
+   to use, run, copy, modify, merge, publish, distribute, sublicense, sell,
+   host or create derivative works from the Work, in whole or in part.
+   Visibility exists for evaluation and audit by third parties expressly
+   authorized by Box 3.
+
+3. SPECIFIC PROHIBITIONS
+   Without Box 3's prior written authorization, it is prohibited to:
+   (a) run the Work, including for testing, evaluation, benchmarking,
+       demonstration or proof of concept;
+   (b) reuse code, architecture, specifications, calibration parameters or
+       measurement results, even if rewritten;
+   (c) train, fine-tune or evaluate machine learning models using the Work
+       as input data;
+   (d) remove, obscure or alter authorship, license or copyright notices.
+
+4. NO WARRANTY
+   The Work is provided "AS IS", without warranty of any kind. Box 3 is not
+   liable for any damage arising from unauthorized use.
+
+5. LICENSING
+   Licensing, partnership or authorized-evaluation requests:
+   contato@box3.work
