@@ -65,7 +65,7 @@ describe("montarResposta", () => {
         "x-frame-options": "DENY",
         "set-cookie": "SID=1; Domain=192.168.1.108; Path=/",
       },
-      bodyB64: Buffer.from(`<a href="/x">`, "utf8").toString("base64"),
+      body: Buffer.from(`<a href="/x">`, "utf8"),
     };
     const { status, headers, buffer } = tunnel.montarResposta(resp, PREFIXO, DVR);
     expect(status).toBe(200);
@@ -77,7 +77,7 @@ describe("montarResposta", () => {
 
   it("corpo BINÁRIO (imagem) passa intacto", () => {
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
-    const resp = { status: 200, headers: { "content-type": "image/png" }, bodyB64: bytes.toString("base64") };
+    const resp = { status: 200, headers: { "content-type": "image/png" }, body: bytes };
     const { buffer } = tunnel.montarResposta(resp, PREFIXO, DVR);
     expect(Buffer.compare(buffer, bytes)).toBe(0);
   });
@@ -128,5 +128,51 @@ describe("registro + requisitar (socket.io fake)", () => {
     expect(tunnel.ativo("dvr-1")).toBeTruthy();
     tunnel.remover("dvr-1", s1); // mesmo socket → apaga
     expect(tunnel.ativo("dvr-1")).toBeNull();
+  });
+});
+
+describe("conectar — auth por site_key + resolve o DVR pelo coletor", () => {
+  function socketConn(query) {
+    const emitido = [];
+    return {
+      handshake: { query },
+      emit: (evt, dados) => emitido.push({ evt, dados }),
+      on: () => {},
+      disconnect: () => {},
+      _emitido: emitido,
+    };
+  }
+  beforeEach(() => {
+    for (const k of [...tunnel._tuneis.keys()]) tunnel._tuneis.delete(k);
+  });
+
+  it("site_key OK + DVR do coletor → registra e emite tunel-ok com o hostPublico", () => {
+    const s = socketConn({ coletorId: "col-1", siteKey: "sk" });
+    tunnel.conectar(s, {
+      verificarColetor: () => ({ coletorId: "col-1", clienteId: "cli-1" }),
+      resolverDvr: () => ({ id: "dvr-9", ip: "192.168.1.108", porta: 80 }),
+    });
+    expect(tunnel.ativo("dvr-9")).toBeTruthy();
+    expect(tunnel.ativo("dvr-9").dvrBase).toBe("192.168.1.108");
+    expect(s._emitido.find((e) => e.evt === "tunel-ok").dados.hostPublico).toBe("/api/dvr/web/dvr-9");
+  });
+
+  it("site_key inválida → tunel-erro, não registra", () => {
+    const s = socketConn({ coletorId: "x", siteKey: "ruim" });
+    tunnel.conectar(s, {
+      verificarColetor: () => ({ code: 401, error: "site_key inválida" }),
+      resolverDvr: () => null,
+    });
+    expect(s._emitido.find((e) => e.evt === "tunel-erro")).toBeTruthy();
+    expect([...tunnel._tuneis.keys()]).toHaveLength(0);
+  });
+
+  it("coletor sem DVR registrado → tunel-erro", () => {
+    const s = socketConn({ coletorId: "col-1", siteKey: "sk" });
+    tunnel.conectar(s, {
+      verificarColetor: () => ({ coletorId: "col-1", clienteId: "cli-1" }),
+      resolverDvr: () => null,
+    });
+    expect(s._emitido.find((e) => e.evt === "tunel-erro").dados.erro).toMatch(/nenhum DVR/i);
   });
 });

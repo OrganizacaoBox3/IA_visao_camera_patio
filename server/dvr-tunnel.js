@@ -113,7 +113,8 @@ function reescreverSetCookie(valor, prefixo) {
 
 /**
  * Monta a resposta final ao técnico a partir da resposta do app (via ponte), aplicando a reescrita.
- * `resp` = { status, headers, bodyB64 }. Devolve { status, headers, buffer } pronto p/ escrever.
+ * `resp` = { status, headers, body } — `body` é binário (Buffer/Uint8Array/ArrayBuffer, via socket.io).
+ * Devolve { status, headers, buffer } pronto p/ escrever.
  */
 function montarResposta(resp, prefixo, dvrBase) {
   const headers = {};
@@ -126,7 +127,7 @@ function montarResposta(resp, prefixo, dvrBase) {
     else if (kl === "set-cookie") headers[k] = reescreverSetCookie(v, prefixo);
     else headers[k] = v;
   }
-  let buffer = Buffer.from(resp.bodyB64 || "", "base64");
+  let buffer = Buffer.from(resp.body || []);
   const tipo = String(origem["content-type"] || origem["Content-Type"] || "");
   if (TIPOS_TEXTO.test(tipo)) {
     buffer = Buffer.from(reescreverCorpo(buffer.toString("utf8"), prefixo, dvrBase), "utf8");
@@ -135,10 +136,11 @@ function montarResposta(resp, prefixo, dvrBase) {
 }
 
 /**
- * Atende um socket.io com role=dvr-tunnel: autentica o COLETOR por site_key (deps.verificarColetor),
- * registra o túnel do DVR (dvrId + endereço do DVR na LAN) e o remove ao cair. O app do coletor é quem
- * RESPONDE aos "proxy-req" (fazendo fetch no DVR) — o hub só guarda o socket e relaya.
- * handshake.query: { role, coletorId, siteKey, dvrId, dvrIp, dvrPorta }.
+ * Atende um socket.io com role=dvr-tunnel: autentica o COLETOR por site_key (deps.verificarColetor) e
+ * RESOLVE o DVR do coletor no servidor (deps.resolverDvr → { id, ip, porta }) — o app não manda o dvrId,
+ * o backend o descobre pelo coletor. Registra o túnel e o remove ao cair. O app é quem RESPONDE aos
+ * "proxy-req" (fetch no DVR na LAN, que ele conhece localmente). handshake.query: { role, coletorId, siteKey }.
+ * Emite "tunel-ok" { dvrId, hostPublico } — onde o técnico acessa — ou "tunel-erro" { erro }.
  */
 function conectar(socket, deps) {
   const q = (socket.handshake && socket.handshake.query) || {};
@@ -148,17 +150,17 @@ function conectar(socket, deps) {
     socket.disconnect(true);
     return;
   }
-  const dvrId = String(q.dvrId || "");
-  if (!dvrId) {
-    socket.emit("tunel-erro", { erro: "dvrId ausente" });
+  const dvrRow = deps.resolverDvr(v.coletorId);
+  if (!dvrRow || !dvrRow.id) {
+    socket.emit("tunel-erro", { erro: "nenhum DVR registrado para este coletor" });
     socket.disconnect(true);
     return;
   }
-  const dvrBase = q.dvrIp
-    ? `${q.dvrIp}${q.dvrPorta && String(q.dvrPorta) !== "80" ? ":" + q.dvrPorta : ""}`
+  const dvrBase = dvrRow.ip
+    ? `${dvrRow.ip}${dvrRow.porta && String(dvrRow.porta) !== "80" ? ":" + dvrRow.porta : ""}`
     : null;
-  registrar(dvrId, { socket, coletorId: v.coletorId, clienteId: v.clienteId, dvrBase });
-  socket.emit("tunel-ok", { dvrId });
+  registrar(dvrRow.id, { socket, coletorId: v.coletorId, clienteId: v.clienteId, dvrBase });
+  socket.emit("tunel-ok", { dvrId: dvrRow.id, hostPublico: `/api/dvr/web/${dvrRow.id}` });
   socket.on("disconnect", () => removerPorSocket(socket));
 }
 

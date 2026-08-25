@@ -117,12 +117,10 @@ async function handle(req, res, ctx) {
     }
     const prefixo = `/api/dvr/web/${dvrId}`;
     const caminho = (req.url || "").slice(prefixo.length) || "/"; // subpath + querystring, no DVR
-    // Corpo (forms/POST) — texto no MVP (config do DVR é urlencoded). Upload binário fica p/ depois.
-    let bodyB64 = "";
-    if (method !== "GET" && method !== "HEAD") {
-      const body = await readBody(req);
-      bodyB64 = Buffer.from(body || "", "utf8").toString("base64");
-    }
+    // Corpo da REQUISIÇÃO (forms/POST) como STRING (config do DVR é urlencoded — texto). O app repassa
+    // direto ao fetch. A RESPOSTA do DVR volta BINÁRIA (ArrayBuffer via socket.io) — ver montarResposta.
+    let body = "";
+    if (method !== "GET" && method !== "HEAD") body = (await readBody(req)) || "";
     // Headers repassados ao DVR: fora host/hop-by-hop e o cookie/credenciais DO PORTAL (não vazam pro DVR).
     const headers = {};
     for (const [k, val] of Object.entries(req.headers)) {
@@ -131,7 +129,7 @@ async function handle(req, res, ctx) {
       headers[k] = val;
     }
     try {
-      const resp = await tunnel.requisitar(dvrId, { method, path: caminho, headers, bodyB64 });
+      const resp = await tunnel.requisitar(dvrId, { method, path: caminho, headers, body });
       const { status, headers: h, buffer } = tunnel.montarResposta(resp, prefixo, info.dvrBase);
       res.writeHead(status, h);
       res.end(buffer);

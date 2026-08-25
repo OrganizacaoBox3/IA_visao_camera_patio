@@ -272,7 +272,10 @@ io.on("connection", (socket) => {
   // Ponte DVR: o app do coletor abre o túnel (role=dvr-tunnel), autenticado por site_key. O hub relaya
   // a web do DVR por ele (/api/dvr/web/<id>). Isolado do fluxo de câmeras (dashboard/camera intactos).
   else if (role === "dvr-tunnel")
-    dvrTunnel.conectar(socket, { verificarColetor: (id, key) => dvrStore.coletores.verify(id, key) });
+    dvrTunnel.conectar(socket, {
+      verificarColetor: (id, key) => dvrStore.coletores.verify(id, key),
+      resolverDvr: (coletorId) => dvrStore.dvrs.getByColetor(coletorId),
+    });
   else socketDashboard.attach(socket, socketCtx);
 });
 
