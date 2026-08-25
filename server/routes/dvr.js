@@ -11,6 +11,7 @@
 const dvr = require("../dvr");
 const logic = require("../dvr-logic");
 const users = require("../users");
+const tunnel = require("../dvr-tunnel");
 const { bearer } = require("../http-auth");
 
 // authColetor: valida a site_key do coletor pelos headers (ingest-style). Sync (memória).
@@ -93,6 +94,52 @@ async function handle(req, res, ctx) {
   if (!path0.startsWith("/api/dvr")) return false;
   const seg = path0.split("/").filter(Boolean); // ["api","dvr", action, sub, sub2]
   const action = seg[2];
+
+  // ── /api/dvr/web/<dvrId>/… — ACESSO À WEB DO DVR pelo TÚNEL WS (contratos §5, variante sem frp) ──
+  // O técnico (superadmin) abre a web do DVR aqui, na MESMA origem do portal (o navegador manda o
+  // COOKIE cp_session). O hub relaya a requisição pelo socket.io do app (que faz fetch no DVR na LAN)
+  // e reescreve os caminhos absolutos p/ passarem pelo prefixo. Qualquer método/caminho.
+  if (action === "web") {
+    const u = users.verifyToken(cookieToken(req, "cp_session") || bearer(req));
+    if (!u || u.papel !== "superadmin") {
+      json(res, 401, { error: "faça login no portal (suporte) para acessar a web do DVR" });
+      return true;
+    }
+    const dvrId = seg[3];
+    if (!dvrId) {
+      json(res, 404, { error: "DVR não informado no caminho" });
+      return true;
+    }
+    const info = tunnel.ativo(dvrId);
+    if (!info) {
+      json(res, 502, { error: "sem túnel ativo — peça para liberarem o acesso no aparelho, no local" });
+      return true;
+    }
+    const prefixo = `/api/dvr/web/${dvrId}`;
+    const caminho = (req.url || "").slice(prefixo.length) || "/"; // subpath + querystring, no DVR
+    // Corpo (forms/POST) — texto no MVP (config do DVR é urlencoded). Upload binário fica p/ depois.
+    let bodyB64 = "";
+    if (method !== "GET" && method !== "HEAD") {
+      const body = await readBody(req);
+      bodyB64 = Buffer.from(body || "", "utf8").toString("base64");
+    }
+    // Headers repassados ao DVR: fora host/hop-by-hop e o cookie/credenciais DO PORTAL (não vazam pro DVR).
+    const headers = {};
+    for (const [k, val] of Object.entries(req.headers)) {
+      const kl = k.toLowerCase();
+      if (["host", "connection", "cookie", "content-length", "x-coletor-id", "x-coletor-key", "authorization"].includes(kl)) continue;
+      headers[k] = val;
+    }
+    try {
+      const resp = await tunnel.requisitar(dvrId, { method, path: caminho, headers, bodyB64 });
+      const { status, headers: h, buffer } = tunnel.montarResposta(resp, prefixo, info.dvrBase);
+      res.writeHead(status, h);
+      res.end(buffer);
+    } catch (e) {
+      json(res, 502, { error: `falha na ponte com o DVR: ${e.message}` });
+    }
+    return true; // (o acesso do técnico é auditado na ABERTURA da sessão, não por sub-requisição)
+  }
 
   // ── POST /api/dvr/enrollment/trocar — DEVICE, SEM auth prévia (o token É a credencial) ─────────
   // Fluxo QR (contratos §8): troca o enrollmentToken (uso único) por uma site_key durável. A chave

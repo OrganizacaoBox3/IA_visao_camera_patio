@@ -40,6 +40,8 @@ const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
 const routeAnalysis = require("./routes/analysis");
 const routeDvr = require("./routes/dvr"); // Ponte DVR (/api/dvr/* + /_dvr_auth)
+const dvrStore = require("./dvr"); // store do DVR (coletores.verify p/ o túnel)
+const dvrTunnel = require("./dvr-tunnel"); // Ponte DVR — túnel WS (acesso à web do DVR sem frp)
 
 // Camada socket (espelha o padrão de routes/): protocolo de nó-câmera e de dashboard em
 // módulos próprios; cada um expõe attach(socket, ctx). index.js só compõe.
@@ -265,7 +267,12 @@ const shed = createShed({
 // alarme (alert → política → canais → events → "alarm-event") vive em alarm/pipeline.js.
 const socketCtx = { io: ioAnalysis, cameras, cameraList, socketById, shed, analysis, rtsp };
 io.on("connection", (socket) => {
-  if (socket.handshake.query.role === "camera") socketCamera.attach(socket, socketCtx);
+  const role = socket.handshake.query.role;
+  if (role === "camera") socketCamera.attach(socket, socketCtx);
+  // Ponte DVR: o app do coletor abre o túnel (role=dvr-tunnel), autenticado por site_key. O hub relaya
+  // a web do DVR por ele (/api/dvr/web/<id>). Isolado do fluxo de câmeras (dashboard/camera intactos).
+  else if (role === "dvr-tunnel")
+    dvrTunnel.conectar(socket, { verificarColetor: (id, key) => dvrStore.coletores.verify(id, key) });
   else socketDashboard.attach(socket, socketCtx);
 });
 
