@@ -1,0 +1,81 @@
+# Diagnóstico READ-ONLY do relay/túnel DVR no homolog — mesmo acesso SSH do deploy-homolog,
+# sem NENHUMA escrita. Responde: frps roda? túnel conectado (porta 20000-20099)? nginx do cam
+# serve o DVR (dá pra adicionar location)? /_dvr_auth vivo? Ver planejamento/ponte-dvr.
+name: Diagnóstico DVR (read-only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diagnostico-dvr
+  cancel-in-progress: false
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    environment: homolog
+    timeout-minutes: 5
+    steps:
+      - name: Preparar chave SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?secret HOMOLOG_SSH_KEY não configurado}"
+          : "${SSH_HOST:?secret HOMOLOG_SSH_HOST não configurado}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
+
+      - name: Coletar diagnóstico DVR (só leitura)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -uo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          echo "== sudo -n -l (o que este usuário pode como root, sem senha) =="
+          sudo -n -l 2>/dev/null | sed -n '1,40p' || echo "(sem sudo sem-senha)"
+          echo
+          echo "== frps rodando? (servidor do túnel) =="
+          pgrep -a frps 2>/dev/null || echo "frps NÃO está rodando"
+          pgrep -a frpc 2>/dev/null || true
+          echo
+          echo "== portas em escuta (8091 hub / 7000 frps / 20000-20099 túneis DVR) =="
+          ss -tln 2>/dev/null | grep -E ':(8091|7000|700[0-9]|20[0-9]{3})\b' || echo "(nenhuma das portas de hub/frps/túnel)"
+          echo
+          echo "== /_dvr_auth do hub vivo? (401 sem cookie = rota existe e responde) =="
+          curl -s -o /dev/null -w "GET 127.0.0.1:8091/_dvr_auth -> HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8091/_dvr_auth || echo "conexão recusada na 8091"
+          curl -s -o /dev/null -w "GET 127.0.0.1:8091/api/dvr/dvrs -> HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8091/api/dvr/dvrs || true
+          echo
+          echo "== nginx: instalado/rodando? =="
+          command -v nginx >/dev/null && nginx -v 2>&1 || echo "nginx não no PATH"
+          pgrep -a nginx 2>/dev/null | head -3 || echo "nginx não está rodando (ou sem permissão de ver)"
+          echo
+          echo "== nginx: qual arquivo serve cam.box3.software? (procura por server_name) =="
+          for d in /etc/nginx/sites-enabled /etc/nginx/conf.d /etc/nginx/sites-available; do
+            [ -d "$d" ] && grep -rlniE "cam\.box3\.software|server_name" "$d" 2>/dev/null
+          done | sort -u | head
+          echo "  --- server blocks (cam / dvr / location dvr) ---"
+          grep -rniE "cam\.box3\.software|\.dvr\.box3|location .*/dvr|_dvr_auth|proxy_pass" /etc/nginx 2>/dev/null | grep -viE "#" | head -40 || echo "(sem leitura de /etc/nginx)"
+          echo
+          echo "== DNS visto do servidor =="
+          getent hosts cam.box3.software || echo "cam.box3.software NÃO resolve daqui"
+          getent hosts dvr.box3.software || echo "dvr.box3.software NÃO resolve (esperado)"
+          echo
+          echo "== há algum frpc.toml / config de frp por aqui? =="
+          find /home /root /opt /etc /var/www -maxdepth 4 -iname "frp*.toml" -o -iname "frps.ini" 2>/dev/null | head
+          echo "== FIM =="
+          REMOTE
