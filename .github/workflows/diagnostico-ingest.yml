@@ -1,0 +1,112 @@
+# Diagnóstico READ-ONLY do INGEST (canal RTMP ↔ câmera do painel). Nasceu de um sintoma real:
+# "estamos empurrando imagem e o painel não mostra". O diagnostico-homolog.yml responde
+# "o hub está vivo?"; este responde a pergunta seguinte, que é OUTRA: o canal que CHEGA é o
+# mesmo que o painel PEDE? Três verdades separadas, que hoje ninguém compara:
+#   (a) canais que o relay ACEITOU        — journal [rtmp-ingest]
+#   (b) câmeras que o painel CONHECE      — server/cameras.json (SEM url: tem credencial)
+#   (c) streams que o go2rtc SERVE        — bin/go2rtc.gen.yaml (só as chaves)
+# Divergência entre (a) e (b)/(c) É o bug. NENHUMA escrita: journalctl/cat/node -e de leitura.
+name: Diagnóstico Ingest (read-only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diagnostico-ingest
+  cancel-in-progress: false
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    environment: homolog
+    timeout-minutes: 5
+    steps:
+      - name: Preparar chave SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?secret HOMOLOG_SSH_KEY não configurado no environment homolog}"
+          : "${SSH_HOST:?secret HOMOLOG_SSH_HOST não configurado no environment homolog}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
+
+      - name: Coletar (só leitura)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -uo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          APP=/var/www/visao-patio
+
+          echo "== (a) CANAIS que o relay aceitou/encerrou (journal 6h, SEM truncar) =="
+          sudo -n journalctl -u visao-hub --since "-6 hours" --no-pager 2>/dev/null \
+            | grep -aoE '\[rtmp-ingest\] publish (aceito|encerrado|repetido|recusado)[^"]*"[A-Za-z0-9_-]+"' \
+            | sed -E 's/.*(aceito|encerrado|repetido|recusado)[^"]*"([A-Za-z0-9_-]+)"/\1 \2/' \
+            | sort | uniq -c | sort -rn | head -40 || echo "(journal indisponível)"
+
+          echo
+          echo "== (a2) o publisher está PISCANDO? (quedas por canal, por hora) =="
+          sudo -n journalctl -u visao-hub --since "-6 hours" --no-pager 2>/dev/null \
+            | grep -aE '\[rtmp-ingest\] publish (aceito|encerrado)' \
+            | awk '{print $1" "$2" "substr($3,1,2)"h"}' | sort | uniq -c | tail -12 || true
+
+          echo
+          echo "== (a3) AUTO-CADASTRO: cadastrou, ignorou ou bateu no CAP? =="
+          sudo -n journalctl -u visao-hub --since "-6 hours" --no-pager 2>/dev/null \
+            | grep -aE '\[rtmp-auto\]|go2rtc.yaml (regenerado|gerado)' | tail -30 || echo "(nenhuma linha de auto-cadastro)"
+
+          echo
+          echo "== (b) CÂMERAS que o painel conhece (id/nome/canal — URL NUNCA impressa) =="
+          if [ -f "$APP/server/cameras.json" ]; then
+            node -e '
+              const c = require(process.argv[1]);
+              const arr = Array.isArray(c) ? c : Object.values(c);
+              console.log("total: " + arr.length);
+              for (const x of arr) {
+                if (!x) continue;
+                // canal = último segmento da url (stream key), sem host/credencial nenhuma.
+                const u = typeof x.url === "string" ? x.url : "";
+                const canal = (u.match(/([A-Za-z0-9_-]+)(?:\.flv)?$/) || [])[1] || "(n/d)";
+                const tipo = /^rtsp:\/\/127\.0\.0\.1:8554\//.test(u) ? "ingest-rtmp"
+                           : /^https?:/.test(u) ? "http/hls" : "outro";
+                console.log(`  ${String(x.id||"?").padEnd(16)} ${tipo.padEnd(12)} canal=${canal.padEnd(20)} nome=${JSON.stringify(x.name||x.nome||"")}`);
+              }
+            ' "$APP/server/cameras.json" 2>/dev/null || echo "(cameras.json ilegível)"
+          else
+            echo "(cameras.json ausente)"
+          fi
+
+          echo
+          echo "== (c) STREAMS que o go2rtc serve (só as chaves do yaml gerado) =="
+          if [ -f "$APP/bin/go2rtc.gen.yaml" ]; then
+            grep -nE '^  [A-Za-z0-9_-]+:' "$APP/bin/go2rtc.gen.yaml" | sed -E 's/:.*//' | head -40
+          else
+            echo "(go2rtc.gen.yaml ausente em $APP/bin)"
+          fi
+
+          echo
+          echo "== (c2) canais com sessão VIVA agora (200=publisher presente, 404=canal sem imagem) =="
+          if [ -f "$APP/bin/go2rtc.gen.yaml" ]; then
+            for ch in $(grep -oE '8935/[A-Za-z0-9_-]+\.flv' "$APP/bin/go2rtc.gen.yaml" | sed -E 's|8935/||; s|\.flv||' | sort -u); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:8935/$ch.flv" || echo "erro")
+              printf '  %-24s HTTP %s\n' "$ch" "$code"
+            done
+          fi
+          echo
+          echo "== FIM =="
+          REMOTE
