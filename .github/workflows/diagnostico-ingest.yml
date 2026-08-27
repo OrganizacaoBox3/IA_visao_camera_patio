@@ -60,6 +60,11 @@ jobs:
             | sort | uniq -c | sort -rn | head -40 || echo "(journal indisponível)"
 
           echo
+          echo "== (a1) LINHAS CRUAS do relay, últimos 30min (mostra key= de cada publish e colisão) =="
+          sudo -n journalctl -u visao-hub --since "-30 minutes" --no-pager 2>/dev/null \
+            | grep -aE '\[rtmp-ingest\]' | tail -60 || echo "(journal indisponível)"
+
+          echo
           echo "== (a2) o publisher está PISCANDO? (quedas por canal, por hora) =="
           sudo -n journalctl -u visao-hub --since "-6 hours" --no-pager 2>/dev/null \
             | grep -aE '\[rtmp-ingest\] publish (aceito|encerrado)' \
