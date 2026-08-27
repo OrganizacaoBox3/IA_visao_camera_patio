@@ -618,3 +618,30 @@ export type DvrColetorCriado = {
 // POST /api/dvr/coletores → cria o coletor e devolve o enrollmentToken. Auth: superadmin.
 export const criarDvrColetor = (dados: NovoColetor) =>
   apiSend<DvrColetorCriado>("POST", "/api/dvr/coletores", dados);
+
+// ── Painel de log do ingest RTMP (server/routes/rtmp-log.js) ─────────────────────────────────
+// Lê o ring buffer em memória do relay (server/rtmp-ingest.js) — substitui o diagnóstico manual
+// por SSH (docs/analises/rtmp-ingest/) por uma tela dentro do próprio painel. Só metadados: nome
+// de canal e stream key (não é segredo — identifica o canal, não autentica nada), sem URL/credencial
+// nem vídeo (LGPD/ADR-002). Efêmero: some no restart do hub, igual ao estado que descreve.
+export type RtmpIngestEvent = {
+  ts: number; // epoch ms
+  type: "aceito" | "encerrado" | "repetido" | "recusado" | "colisao";
+  name: string; // nome do canal (ou o nome recusado, se inválido)
+  detail?: string;
+};
+export type RtmpIngestChannel = {
+  canal: string;
+  cadastrada: boolean; // existe em /cameras com essa URL self-referente?
+  cameraId: string | null;
+  label: string | null;
+  aoVivo: boolean; // sessão RTMP ativa AGORA no relay
+  ultimaAtividade: number | null; // epoch ms do evento mais recente desse canal, se houver
+};
+export type RtmpIngestLog = {
+  enabled: boolean; // false = relay RTMP não está ligado neste hub (go2rtc ausente/legado)
+  events: RtmpIngestEvent[];
+  channels: RtmpIngestChannel[];
+};
+// GET /api/rtmp-ingest/log → estado atual do relay. Auth: superadmin.
+export const getRtmpIngestLog = () => apiGet<RtmpIngestLog>("/api/rtmp-ingest/log");

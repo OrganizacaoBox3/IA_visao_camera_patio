@@ -39,6 +39,7 @@ const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
 const routeConfig = require("./routes/config-routes");
 const routeAnalysis = require("./routes/analysis");
+const routeRtmpLog = require("./routes/rtmp-log"); // Painel de log do ingest RTMP (/api/rtmp-ingest/log)
 const routeDvr = require("./routes/dvr"); // Ponte DVR (/api/dvr/* + /_dvr_auth)
 const dvrStore = require("./dvr"); // store do DVR (coletores.verify p/ o túnel)
 const dvrTunnel = require("./dvr-tunnel"); // Ponte DVR — túnel WS (acesso à web do DVR sem frp)
@@ -105,7 +106,16 @@ const httpServer = createServer(async (req, res) => {
   // consome (ex.: "camcfg-updated" recarrega zonas/tripwires no engine) — contrato intacto.
   // cameraList = snapshot das câmeras CONECTADAS (o MESMO estado que alimenta o evento
   // "cameras" — sem duplicação) p/ GET /api/cameras/connected (routes/cameras.js).
-  const ctx = { json, readBody, requireAuth, requireSuper, requireConfigurer, io: ioAnalysis, cameraList };
+  const ctx = {
+    json,
+    readBody,
+    requireAuth,
+    requireSuper,
+    requireConfigurer,
+    io: ioAnalysis,
+    cameraList,
+    rtmpRelay,
+  };
   try {
     // Dispatch por grupo (ordem preservada do arquivo original; padrões de URL não colidem
     // entre grupos, então o agrupamento não altera qual handler casa).
@@ -118,6 +128,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeCameras.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
     if (await routeAnalysis.handle(req, res, ctx)) return;
+    if (await routeRtmpLog.handle(req, res, ctx)) return;
     if (await routeDvr.handle(req, res, ctx)) return; // Ponte DVR — prefixo próprio, sem colisão
   } catch (err) {
     // Distingue erro do CLIENTE (corpo grande/malformado → 4xx) de erro INTERNO (bug → 500 + log).
@@ -217,6 +228,9 @@ const cameras = new Map();
 /** id -> socket da câmera (p/ enviar config de captura direcionada) */
 const socketById = new Map();
 const cameraList = () => [...cameras.values()];
+/** relay do ingest RTMP (server/rtmp-ingest.js), atribuído no boot se go2rtc estiver ligado —
+ * null até lá / quando RTMP_INGEST=go2rtc (legado). Lido por routes/rtmp-log.js via ctx. */
+let rtmpRelay = null;
 const broadcast = () => {
   io.to("dashboards").emit("cameras", cameraList());
   // Lista de câmeras mudou → regenera o go2rtc.yaml (debounced, no-op se OFF). broadcast() é
@@ -427,6 +441,7 @@ io.on("connection", (socket) => {
         httpPort: Number(process.env.RTMP_RELAY_HTTP_PORT ?? 8935),
       });
       ingest.relay.on("publish", (name) => autoEnroll.onPublish(name));
+      rtmpRelay = ingest.relay; // painel de log (routes/rtmp-log.js) lê o ring buffer daqui
     }
     // Câmeras IP/RTSP (via ffmpeg → frames JPEG), tratadas como câmeras comuns.
     // Legadas: rtsp.sources.json/env (retrocompat). Dinâmicas: cameras.json (CRUD em runtime).

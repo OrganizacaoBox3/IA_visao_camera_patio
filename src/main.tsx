@@ -7,6 +7,7 @@ import { CameraPage } from "./routes/CameraPage";
 import { ReportPage } from "./routes/ReportPage";
 import { UsersPage } from "./routes/UsersPage";
 import { DvrsPage } from "./routes/DvrsPage";
+import { IngestLogPage } from "./routes/IngestLogPage";
 import { ProfilePage } from "./routes/ProfilePage";
 import { TurnosPage } from "./routes/TurnosPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
@@ -52,6 +53,8 @@ const router = createBrowserRouter([
       { path: "/usuarios", element: <UsersPage /> },
       // Ponte DVR (suporte): lista os DVRs por cliente + auditoria (gate superadmin dentro da página).
       { path: "/dvrs", element: <DvrsPage /> },
+      // Log de ingest RTMP (suporte): canal que chega no relé × câmera cadastrada, sem SSH.
+      { path: "/ingest-log", element: <IngestLogPage /> },
       { path: "/perfil", element: <ProfilePage /> },
       // Catch-all (404) dentro do shell autenticado: mantém navegação + identidade do produto.
       { path: "*", element: <NotFoundPage /> },
