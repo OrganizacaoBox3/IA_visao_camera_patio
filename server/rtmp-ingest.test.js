@@ -184,6 +184,36 @@ describe("rtmp-ingest", () => {
     pub.close();
   });
 
+  it("mesmo app, stream keys diferentes → canais distintos (NVR multi-canal com app forçado, ex. Intelbras/Dahua)", async () => {
+    const pub1 = await connectPublish({ app: "live", publishKey: "ch1" });
+    const pub2 = await connectPublish({ app: "live", publishKey: "ch2" });
+    await new Promise((r) => setTimeout(r, 50));
+    // a 2ª câmera NÃO derruba a 1ª: ambas seguem ativas, sob nomes distintos
+    expect(ingest.relay.activeChannels()).toContain("live");
+    expect(ingest.relay.activeChannels()).toContain("live-ch2");
+
+    const flv1 = fetchFlv("live");
+    const flv2 = fetchFlv("live-ch2");
+    await new Promise((r) => setTimeout(r, 50));
+    pub1.tag(9, 10, AVC_NALU);
+    pub2.tag(9, 20, AVC_NALU);
+    const [body1, body2] = await Promise.all([flv1, flv2]);
+    expect(parseFlv(body1.body).some((t) => t.type === 9 && t.timeMS === 10)).toBe(true);
+    expect(parseFlv(body2.body).some((t) => t.type === 9 && t.timeMS === 20)).toBe(true);
+    pub1.close();
+    pub2.close();
+  });
+
+  it("mesmo app e mesma stream key → reconexão do mesmo canal, substitui normalmente (sem sufixo)", async () => {
+    const pub1 = await connectPublish({ app: "live2", publishKey: "ch3" });
+    const pub2 = await connectPublish({ app: "live2", publishKey: "ch3" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ingest.relay.activeChannels().filter((n) => n === "live2")).toHaveLength(1);
+    expect(ingest.relay.activeChannels()).not.toContain("live2-ch3");
+    pub1.close();
+    pub2.close();
+  });
+
   it("republish substitui a sessão antiga (reconexão do DVR não fica presa a socket morto)", async () => {
     const pub1 = await connectPublish({ app: "cam_re" });
     const pub2 = await connectPublish({ app: "cam_re" });
