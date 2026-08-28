@@ -36,10 +36,11 @@
 "use strict";
 
 const path = require("node:path");
+const { statePath } = require("../state-dir");
 const { PRECISION } = require("./precision");
 
 const MODEL =
-  process.env.ANALYSIS_MODEL_PATH || path.join(__dirname, "..", "models", "dfine_n_coco.onnx");
+  process.env.ANALYSIS_MODEL_PATH || statePath("models", "dfine_n_coco.onnx");
 
 // Knobs de qualidade — painel de precisão (dono único; sensores documentados lá).
 const SIZE = PRECISION.detector.input; // alvo do resize squash (H=W); tiles usam o MESMO input

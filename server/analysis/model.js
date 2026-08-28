@@ -13,6 +13,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { statePath } = require("../state-dir");
 const crypto = require("node:crypto");
 
 const MODELS = {
@@ -42,7 +43,7 @@ const MODELS = {
 const MODEL_OVERRIDE = process.env.ANALYSIS_MODEL_PATH || "";
 const MODEL_KEY = (process.env.ANALYSIS_MODEL || "s").toLowerCase();
 let modelSpec = MODELS[MODEL_KEY] || MODELS.s; // default de produção: S
-let MODEL_PATH = MODEL_OVERRIDE || path.join(__dirname, "..", "models", modelSpec.file);
+let MODEL_PATH = MODEL_OVERRIDE || statePath("models", modelSpec.file);
 
 // ── Modelo: verificação + download com sha256 ────────────────────────────────
 function sha256File(file) {
@@ -89,7 +90,7 @@ async function ensureModel(allowDownload) {
     // menor, mas o hub SEGUE analisando). Ajuste ANALYSIS_MODEL=n p/ evitar este caminho.
     if (!MODEL_OVERRIDE && modelSpec !== MODELS.n) {
       modelSpec = MODELS.n;
-      MODEL_PATH = path.join(__dirname, "..", "models", modelSpec.file);
+      MODEL_PATH = statePath("models", modelSpec.file);
       console.warn(`[analysis] fallback → ${modelSpec.label} (recall menor que o default S)`);
       if (modelOk()) return true;
       try {
@@ -131,7 +132,7 @@ function setTier(key) {
   const spec = MODELS[String(key || "").toLowerCase()];
   if (!spec) return false;
   modelSpec = spec;
-  MODEL_PATH = path.join(__dirname, "..", "models", spec.file);
+  MODEL_PATH = statePath("models", spec.file);
   return true;
 }
 
@@ -148,7 +149,7 @@ async function setActiveTier(key, allowDownload) {
   const prevSpec = modelSpec;
   const prevPath = MODEL_PATH;
   modelSpec = spec;
-  MODEL_PATH = path.join(__dirname, "..", "models", spec.file);
+  MODEL_PATH = statePath("models", spec.file);
   if (modelOk()) return true; // já no disco (baixado num pico anterior) — troca imediata
   if (!allowDownload) {
     modelSpec = prevSpec; // não pode baixar → NUNCA fica sem modelo: reverte

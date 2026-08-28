@@ -2,10 +2,10 @@
 // se notifica + título + instrução extra. Cache em memória; persiste no Postgres (app_settings id='notif')
 // se configurado, ou em notif-settings.json (fallback). Usada pelo dispatch (settings.get(), sync).
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const db = require("./db");
 
-const FILE = path.join(__dirname, "notif-settings.json");
+const FILE = statePath("notif-settings.json");
 let usingPg = false;
 
 const DEFAULTS = {

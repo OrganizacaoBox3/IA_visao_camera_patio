@@ -11,10 +11,11 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { statePath } = require("../state-dir");
 const zlib = require("node:zlib");
 const crypto = require("node:crypto");
 
-const MODELS_DIR = path.join(__dirname, "..", "models");
+const MODELS_DIR = statePath("models");
 
 const FADIGA_MODELS = {
   yunet: {

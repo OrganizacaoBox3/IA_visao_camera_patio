@@ -9,11 +9,11 @@
 // A capacidade de CONFIGURAR (canConfigure) = superadmin OU engenheiro; ver helper canConfigure() abaixo.
 const ROLES = ["superadmin", "engenheiro", "usuario"];
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 const db = require("./db");
 
-const FILE = path.join(__dirname, "users.json");
+const FILE = statePath("users.json");
 // Defaults INSEGUROS (só p/ dev/1º boot) — a guarda de boot (insecureDefaults) os recusa em produção.
 const DEFAULT_AUTH_SECRET = "dev-inseguro-troque-AUTH_SECRET-em-producao";
 const DEFAULT_ADMIN_PASSWORD = "admin@box3";

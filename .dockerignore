@@ -1,0 +1,32 @@
+# O build copia o repo inteiro no estagio 'build'; o que nao entra na imagem final entra no
+# CONTEXTO, e contexto grande e build lento. Estado de runtime NUNCA entra: ele vem do volume.
+.git
+.github
+node_modules
+dist
+bin
+test-results
+playwright-report
+coverage
+**/*.log
+.env
+.env.*
+!.env.example
+# ESTADO (vive no volume — se entrasse na imagem, sobrescreveria producao no deploy)
+server/cameras.json
+server/camcfg.json
+server/alarms.json
+server/dvr.json
+server/shifts.json
+server/users.json
+server/recipients.json
+server/notif-settings.json
+server/data-hist.json
+server/data-hist.json.*
+server/alarm-shelves.json
+server/rtsp.sources.json
+server/go2rtc.yaml
+server/models
+server/wa-auth
+**/*.gen.yaml
+scripts/feira.sh

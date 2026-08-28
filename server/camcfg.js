@@ -6,7 +6,7 @@
 // Espelha o padrão de recipients.js/settings.js: cache em memória + Postgres (se configurado) ou
 // camcfg.json (fallback). LGPD: SÓ geometria/ids/config — nunca imagem, frame ou PII.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const db = require("./db");
 // Validação de zona POLIGONAL (spec zonas-poligonais): espelho JS de src/zones.ts vive em
 // analysis/zones.js (mesmo lugar do pointInPolygon que a consome) — fonte única no hub.
@@ -17,7 +17,7 @@ const { sanitizeZonePoints, polygonBBox } = require("./analysis/zones");
 const shiftsStore = require("./shifts");
 const { parseHM, durationMin } = require("./shift-clock");
 
-const FILE = path.join(__dirname, "camcfg.json");
+const FILE = statePath("camcfg.json");
 let tripwires = new Map(); // cameraId -> Tripwire[]
 let zones = new Map(); // cameraId -> Zone[]
 let camConfigs = new Map(); // cameraId -> CameraCfg

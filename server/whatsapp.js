@@ -12,7 +12,7 @@
 //
 // Adaptador isolado: trocar por Cloud API oficial depois mexe só aqui.
 
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const fs = require("node:fs");
 
 // Node 18: a Web Crypto API não é global por padrão.
@@ -21,7 +21,7 @@ if (!globalThis.crypto) {
   globalThis.crypto = require("node:crypto").webcrypto;
 }
 
-const AUTH_DIR = path.join(__dirname, "wa-auth");
+const AUTH_DIR = statePath("wa-auth");
 
 const ENABLED =
   process.env.WHATSAPP_ENABLED === "1" ||

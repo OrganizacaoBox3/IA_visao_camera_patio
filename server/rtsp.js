@@ -13,6 +13,7 @@
 const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { statePath } = require("./state-dir");
 
 // Resolve o binário do ffmpeg de forma robusta, INDEPENDENTE do PATH do shell
 // (no Windows o PATH do winget/choco só entra em shells abertos após a instalação).
@@ -122,7 +123,7 @@ function defaultCfg() {
 
 /** Fontes RTSP LEGADAS: arquivo server/rtsp.sources.json [{label,url}] OU env RTSP_SOURCES="label=url;label=url". */
 function loadSources() {
-  const file = path.join(__dirname, "rtsp.sources.json");
+  const file = statePath("rtsp.sources.json");
   if (fs.existsSync(file)) {
     try {
       const arr = JSON.parse(fs.readFileSync(file, "utf8"));
