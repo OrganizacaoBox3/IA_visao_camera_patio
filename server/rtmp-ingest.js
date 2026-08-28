@@ -385,11 +385,12 @@ class RtmpSession {
           this.destroy("nome inválido");
           return;
         }
-        if (!this.relay._startSession(name, this)) {
+        const assigned = this.relay._startSession(name, this, key);
+        if (!assigned) {
           this.destroy("sem vaga");
           return;
         }
-        this.name = name;
+        this.name = assigned;
         this.writeCommand(amfEncode("onStatus", 0, null, { code: "NetStream.Publish.Start" }));
         return;
       }
@@ -428,26 +429,44 @@ class RtmpRelay extends EventEmitter {
     this.sessions = new Map(); // name → {session, metadata, videoSeq, audioSeq, consumers:Set}
   }
 
-  _startSession(name, session) {
+  // `key` é a stream key do comando publish (items[3]) — usada para distinguir dois publishers
+  // que caem no MESMO nome (mesmo `app`, ex. firmware Intelbras/Dahua que força `app="live"`
+  // em todo canal de um NVR multi-canal). Retorna o nome EFETIVO da sessão (pode diferir de
+  // `name` quando desambiguado) ou `false` se recusado.
+  _startSession(name, session, key = "") {
     if (this.sessions.size >= MAX_SESSIONS && !this.sessions.has(name)) {
       this.log(`[rtmp-ingest] CAP de ${MAX_SESSIONS} sessões atingido — publish em "${name}" recusado`);
       return false;
     }
     const old = this.sessions.get(name);
+    if (old && old.key !== key) {
+      // Mesmo nome, chave de publish diferente → NÃO é reconexão do mesmo canal, são DOIS
+      // canais distintos colidindo (o app forçado esconde a identidade real). Substituir aqui
+      // apagaria o canal que já funciona (era exatamente o bug: "algumas câmeras recebem,
+      // outras específicas não" — PENDENCIAS.md item 3). Desambigua pela key em vez de pisar.
+      const suffix = key.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 20);
+      const altName = suffix ? `${name}-${suffix}`.slice(0, 32) : "";
+      if (!altName || !NAME_RE.test(altName)) {
+        this.log(`[rtmp-ingest] colisão no canal "${name}" (chaves de publish diferentes, sem nome alternativo válido) — publish recusado`);
+        return false;
+      }
+      this.log(`[rtmp-ingest] canal "${name}" já ocupado por outra stream key — registrando como "${altName}"`);
+      return this._startSession(altName, session, key);
+    }
     if (old) {
-      // Republish substitui a sessão (DVR re-conectando após queda não fica preso a socket morto)
+      // Mesma key: reconexão do mesmo canal (DVR caiu e voltou) — não fica presa a socket morto
       this.log(`[rtmp-ingest] publish repetido em "${name}" — substituindo a sessão anterior`);
       const consumers = old.consumers; // consumidores migram para a sessão nova
       old.consumers = new Set();
       old.session.name = null; // impede o destroy antigo de derrubar a entrada nova
       old.session.destroy("substituída");
-      this.sessions.set(name, { session, metadata: null, videoSeq: [], audioSeq: null, consumers });
+      this.sessions.set(name, { session, key, metadata: null, videoSeq: [], audioSeq: null, consumers });
     } else {
-      this.sessions.set(name, { session, metadata: null, videoSeq: [], audioSeq: null, consumers: new Set() });
+      this.sessions.set(name, { session, key, metadata: null, videoSeq: [], audioSeq: null, consumers: new Set() });
     }
-    this.log(`[rtmp-ingest] publish aceito no canal "${name}" (${this.sessions.size} sessão(ões) ativa(s))`);
+    this.log(`[rtmp-ingest] publish aceito no canal "${name}" (key="${key}", ${this.sessions.size} sessão(ões) ativa(s))`);
     this.emit("publish", name);
-    return true;
+    return name;
   }
 
   _endSession(name, session, reason) {

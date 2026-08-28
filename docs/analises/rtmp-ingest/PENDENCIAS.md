@@ -40,6 +40,18 @@ JPEG real capturado. A rede: PC e câmera no mesmo `/24` (`192.168.1.0/24`), pus
 - Runbook de homolog escrito: [`deploy-homolog-rtmp.md`](deploy-homolog-rtmp.md).
 - Infra homolog LIGADA: DNS `cam.box3.software` → 137.184.183.179, dashboard https 200 (nginx+TLS já
   serviam o domínio), porta 1935 acende com o cadastro da câmera.
+- **Colisão de canal por app forçado (2026-08-27):** `server/rtmp-ingest.js` nomeava o canal só pelo
+  `app` do `connect`, ignorando a stream key do `publish` — quando duas câmeras/canais do MESMO
+  equipamento forçavam o mesmo `app` (item 3 abaixo), a 2ª conexão **substituía** a 1ª (mesma lógica
+  do republish), então só uma câmera daquele grupo aparecia por vez, mesmo cada uma publicando numa
+  stream key diferente. Corrigido: `_startSession` agora compara a **key** junto do nome — key igual
+  ao canal já ativo continua sendo republish (reconexão do mesmo canal); key diferente vira canal
+  **desambiguado** (`<app>-<key>`, auto-cadastrado normalmente), sem derrubar o que já funcionava.
+  Regressão coberta em `server/rtmp-ingest.test.js` (mesmo app/keys diferentes → 2 canais vivos;
+  mesmo app/mesma key → substitui sem sufixo, comportamento antigo preservado). **Em aberto:** ainda
+  não confirmado em campo se o(s) equipamento(s) do cliente atual realmente variam a key quando forçam
+  o `app` — se a key também for fixa/igual em todos os canais, esta correção não resolve sozinha (aí é
+  mesmo limite de protocolo do equipamento, sem diferenciador algum chegando ao relay).
 
 ## Pendente
 
