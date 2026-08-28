@@ -382,6 +382,7 @@ class RtmpSession {
         const name = (this.app || key).replace(/^\/+|\/+$/g, "");
         if (!NAME_RE.test(name)) {
           this.relay.log(`[rtmp-ingest] publish recusado: nome fora do contrato (${JSON.stringify(name).slice(0, 48)})`);
+          this.relay._record("recusado", name.slice(0, 32) || "(vazio)", "nome fora do contrato");
           this.destroy("nome inválido");
           return;
         }
@@ -421,12 +422,26 @@ class RtmpSession {
   }
 }
 
+const MAX_EVENTS = 200; // ring buffer p/ o painel de log (/api/rtmp-ingest/log) — só memória, LGPD ok
+
 // ── Relay (sessões + consumidores HTTP-FLV) ──────────────────────────────────────────────────
 class RtmpRelay extends EventEmitter {
   constructor({ log = console.log } = {}) {
     super();
     this.log = log;
     this.sessions = new Map(); // name → {session, metadata, videoSeq, audioSeq, consumers:Set}
+    this.events = []; // ring buffer p/ diagnóstico: {ts, type, name, detail} — mais recente por último
+  }
+
+  // Alimenta o painel de log do hub (server/routes/rtmp-log.js). Efêmero: nada disso é persistido
+  // em disco (ADR-002) — some no restart, exatamente como o estado de sessão que ele descreve.
+  _record(type, name, detail) {
+    this.events.push({ ts: Date.now(), type, name, detail });
+    if (this.events.length > MAX_EVENTS) this.events.shift();
+  }
+
+  recentEvents() {
+    return this.events.slice();
   }
 
   // `key` é a stream key do comando publish (items[3]) — usada para distinguir dois publishers
@@ -436,6 +451,7 @@ class RtmpRelay extends EventEmitter {
   _startSession(name, session, key = "") {
     if (this.sessions.size >= MAX_SESSIONS && !this.sessions.has(name)) {
       this.log(`[rtmp-ingest] CAP de ${MAX_SESSIONS} sessões atingido — publish em "${name}" recusado`);
+      this._record("recusado", name, "cap de sessões atingido");
       return false;
     }
     const old = this.sessions.get(name);
@@ -448,14 +464,17 @@ class RtmpRelay extends EventEmitter {
       const altName = suffix ? `${name}-${suffix}`.slice(0, 32) : "";
       if (!altName || !NAME_RE.test(altName)) {
         this.log(`[rtmp-ingest] colisão no canal "${name}" (chaves de publish diferentes, sem nome alternativo válido) — publish recusado`);
+        this._record("recusado", name, "colisão de key sem nome alternativo válido");
         return false;
       }
       this.log(`[rtmp-ingest] canal "${name}" já ocupado por outra stream key — registrando como "${altName}"`);
+      this._record("colisao", name, `desambiguado para "${altName}" (key="${key}")`);
       return this._startSession(altName, session, key);
     }
     if (old) {
       // Mesma key: reconexão do mesmo canal (DVR caiu e voltou) — não fica presa a socket morto
       this.log(`[rtmp-ingest] publish repetido em "${name}" — substituindo a sessão anterior`);
+      this._record("repetido", name, "substituição de sessão (reconexão)");
       const consumers = old.consumers; // consumidores migram para a sessão nova
       old.consumers = new Set();
       old.session.name = null; // impede o destroy antigo de derrubar a entrada nova
@@ -465,6 +484,7 @@ class RtmpRelay extends EventEmitter {
       this.sessions.set(name, { session, key, metadata: null, videoSeq: [], audioSeq: null, consumers: new Set() });
     }
     this.log(`[rtmp-ingest] publish aceito no canal "${name}" (key="${key}", ${this.sessions.size} sessão(ões) ativa(s))`);
+    this._record("aceito", name, `key="${key}"`);
     this.emit("publish", name);
     return name;
   }
@@ -472,6 +492,7 @@ class RtmpRelay extends EventEmitter {
   _endSession(name, session, reason) {
     const s = this.sessions.get(name);
     if (!s || s.session !== session) return;
+    this._record("encerrado", name, reason);
     this.sessions.delete(name);
     this.log(`[rtmp-ingest] publish encerrado no canal "${name}" (${reason})`);
     for (const res of s.consumers) res.end();

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import net from "node:net";
 import http from "node:http";
-import { startRtmpIngest, amfDecode, amfEncode, flvTag } from "./rtmp-ingest";
+import { startRtmpIngest, amfDecode, amfEncode, flvTag, RtmpRelay } from "./rtmp-ingest";
 
 const RTMP_PORT = 19351;
 const HTTP_PORT = 19352;
@@ -243,5 +243,28 @@ describe("rtmp-ingest", () => {
     const t = flvTag(9, 0x01234567, Buffer.from([0xaa]));
     expect(t.readUIntBE(4, 3)).toBe(0x234567);
     expect(t[7]).toBe(0x01);
+  });
+
+  it("recentEvents() registra aceito/encerrado/colisão p/ o painel de log (routes/rtmp-log.js)", async () => {
+    const before = ingest.relay.recentEvents().length;
+    const pub1 = await connectPublish({ app: "log_evt", publishKey: "k1" });
+    const pub2 = await connectPublish({ app: "log_evt", publishKey: "k2" }); // colide, desambiguado
+    await new Promise((r) => setTimeout(r, 50));
+    const events = ingest.relay.recentEvents().slice(before);
+    expect(events.find((e) => e.type === "aceito" && e.name === "log_evt")).toBeTruthy();
+    expect(events.find((e) => e.type === "colisao" && e.name === "log_evt")).toBeTruthy();
+    expect(events.find((e) => e.type === "aceito" && e.name === "log_evt-k2")).toBeTruthy();
+    pub1.close();
+    pub2.close();
+    await new Promise((r) => setTimeout(r, 50));
+    const afterClose = ingest.relay.recentEvents();
+    expect(afterClose.find((e) => e.type === "encerrado" && e.name === "log_evt")).toBeTruthy();
+  });
+
+  it("recentEvents() é limitado (ring buffer não cresce sem fim)", () => {
+    const relay = new RtmpRelay({ log: () => {} });
+    for (let i = 0; i < 250; i++) relay._record("aceito", `canal${i}`, "");
+    expect(relay.recentEvents().length).toBeLessThanOrEqual(200);
+    expect(relay.recentEvents().at(-1).name).toBe("canal249"); // mais recente sobrevive, não o mais antigo
   });
 });

@@ -16,6 +16,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  ScrollText,
   Search,
   ShieldCheck,
   Users,
@@ -255,6 +256,11 @@ export function AppShell() {
         // mesmo RBAC do painel de Usuários.
         ...(user.papel === "superadmin"
           ? [{ to: "/dvrs", icon: Cctv, label: "DVRs" }]
+          : []),
+        // Log de ingest RTMP (suporte): canal que chega no relé × câmera cadastrada, sem SSH.
+        // Mesmo RBAC do painel de DVRs/Usuários.
+        ...(user.papel === "superadmin"
+          ? [{ to: "/ingest-log", icon: ScrollText, label: "Log de ingest" }]
           : []),
       ],
     },
