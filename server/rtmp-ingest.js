@@ -4,7 +4,7 @@
 // (spec: docs/analises/rtmp-ingest/spec-relay-ingest.md). Este relay NÃO interpreta codec:
 // aceita o publish, repassa as tags FLV verbatim por HTTP local (127.0.0.1), e quem faz o
 // parse é o ffmpeg (fonte "ffmpeg:…#video=copy" do canal no go2rtc) — o mesmo parser que
-// comprovadamente decodifica esse DVR. Zero dependências: node:net + node:http.
+// comprovadamente decodifica esse DVR. Zero dependências externas: só módulos node:*.
 //
 // SEGURANÇA/LIMITES (a :1935 é pública gated por firewall; o publish RTMP não tem auth):
 //  · nome de canal validado por regex estrita (o mesmo contrato do rtmp-auto-enroll);
@@ -15,6 +15,7 @@
 
 const net = require("node:net");
 const http = require("node:http");
+const crypto = require("node:crypto");
 const { EventEmitter } = require("node:events");
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
@@ -23,6 +24,77 @@ const MAX_MSG = 8 * 1024 * 1024; // 8 MB por mensagem RTMP (keyframe grande cabe
 const MAX_SESSIONS = 64;
 const SOCKET_TIMEOUT_MS = 60_000; // publisher sem NENHUM byte por 60s = morto
 const CONSUMER_HIGH_WATER = 16 * 1024 * 1024; // consumidor HTTP atrasado além disto cai
+
+// ── Handshake RTMP ───────────────────────────────────────────────────────────────────────────
+// Alguns firmwares Adobe/Intelbras encerram o TCP antes de connect/publish quando recebem o
+// handshake simples. Detectamos o C1 complexo pela assinatura HMAC (não por versão/heurística)
+// e respondemos com S1/S2 complexos; clientes simples preservam exatamente o fallback anterior.
+const ADOBE_KEY_SUFFIX = Buffer.from(
+  "f0eec24a8068bee82e00d0d1029e7e576eec5d2d29806fab93b8e636cfeb31ae",
+  "hex",
+);
+const GENUINE_FP_KEY = Buffer.concat([
+  Buffer.from("Genuine Adobe Flash Player 001"),
+  ADOBE_KEY_SUFFIX,
+]);
+const GENUINE_FMS_KEY = Buffer.concat([
+  Buffer.from("Genuine Adobe Flash Media Server 001"),
+  ADOBE_KEY_SUFFIX,
+]);
+const HANDSHAKE_SIZE = 1536;
+const DIGEST_SIZE = 32;
+const DIGEST_LAYOUT_BASES = [8, 772];
+
+function hmacSha256(key, ...parts) {
+  const hmac = crypto.createHmac("sha256", key);
+  for (const part of parts) hmac.update(part);
+  return hmac.digest();
+}
+
+function digestPosition(block, base) {
+  return ((block[base] + block[base + 1] + block[base + 2] + block[base + 3]) % 728) + base + 4;
+}
+
+function digestExcludingGap(block, position, key) {
+  return hmacSha256(key, block.subarray(0, position), block.subarray(position + DIGEST_SIZE));
+}
+
+function findComplexClientDigest(c1) {
+  for (const base of DIGEST_LAYOUT_BASES) {
+    const position = digestPosition(c1, base);
+    const expected = digestExcludingGap(c1, position, GENUINE_FP_KEY.subarray(0, 30));
+    const received = c1.subarray(position, position + DIGEST_SIZE);
+    if (received.length === DIGEST_SIZE && crypto.timingSafeEqual(received, expected)) {
+      return { base, digest: received };
+    }
+  }
+  return null;
+}
+
+function createSimpleHandshake(c1) {
+  const s1 = Buffer.alloc(HANDSHAKE_SIZE);
+  s1.writeUInt32BE((Date.now() >>> 0) & 0x7fffffff, 0);
+  return { s1, s2: c1 };
+}
+
+function createComplexHandshake(client) {
+  const s1 = crypto.randomBytes(HANDSHAKE_SIZE);
+  s1.writeUInt32BE((Date.now() >>> 0) & 0x7fffffff, 0);
+  s1.writeUInt32BE(0x01000504, 4); // versão FMS compatível com clientes Adobe complexos
+  const s1DigestPosition = digestPosition(s1, client.base);
+  digestExcludingGap(s1, s1DigestPosition, GENUINE_FMS_KEY.subarray(0, 36)).copy(
+    s1,
+    s1DigestPosition,
+  );
+
+  const s2 = crypto.randomBytes(HANDSHAKE_SIZE);
+  const s2Key = hmacSha256(GENUINE_FMS_KEY, client.digest);
+  hmacSha256(s2Key, s2.subarray(0, HANDSHAKE_SIZE - DIGEST_SIZE)).copy(
+    s2,
+    HANDSHAKE_SIZE - DIGEST_SIZE,
+  );
+  return { s1, s2 };
+}
 
 // ── AMF0 (só o que o handshake de publish usa) ───────────────────────────────────────────────
 // Leitura: number(0x00), boolean(0x01), string(0x02), object(0x03), null(0x05), undefined(0x06),
@@ -220,10 +292,11 @@ class RtmpSession {
         if (this.buf[0] !== 3) throw new Error("handshake: versão != 3");
         const c1 = this.buf.slice(1, 1537);
         this.buf = this.buf.slice(1537);
-        // S0 + S1 (ts + zero + random) + S2 (eco do C1) — handshake simples, igual ao go2rtc
-        const s1 = Buffer.alloc(1536);
-        s1.writeUInt32BE(Date.now() >>> 0 & 0x7fffffff, 0);
-        this.socket.write(Buffer.concat([Buffer.from([3]), s1, c1]));
+        const complexClient = findComplexClientDigest(c1);
+        const { s1, s2 } = complexClient
+          ? createComplexHandshake(complexClient)
+          : createSimpleHandshake(c1);
+        this.socket.write(Buffer.concat([Buffer.from([3]), s1, s2]));
         this.stage = "c2";
       } else if (this.stage === "c2") {
         if (this.buf.length < 1536) return;
