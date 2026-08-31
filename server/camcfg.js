@@ -239,7 +239,7 @@ function validateZoneLabels(list) {
   for (const z of list) {
     const nomeModo = LABEL_UNIQUE_MODES.get(z.modo);
     if (!nomeModo) continue;
-    const key = `${z.modo} ${z.label}`;
+    const key = `${z.modo}\0${z.label}`;
     if (seen.has(key))
       return `duas zonas de ${nomeModo} desta câmera se chamam "${z.label}" — o rótulo é como o operador identifica a área no painel, no relatório e no alarme; dê nomes distintos`;
     seen.add(key);
