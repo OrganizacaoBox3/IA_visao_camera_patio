@@ -1,0 +1,71 @@
+# Diagnóstico READ-ONLY do BANCO no homolog — mesmo acesso SSH do deploy. Responde: postgres está de pé
+# (5432/55432)? é systemd/docker/processo? o usuário do deploy consegue religar (sudo/docker sem sudo)?
+# NÃO liga/desliga nada — só coleta, pra decidir COMO religar com segurança.
+name: Diagnóstico DB (read-only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diagnostico-db
+  cancel-in-progress: false
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    environment: homolog
+    timeout-minutes: 5
+    steps:
+      - name: Preparar chave SSH
+        env:
+          SSH_KEY: ${{ secrets.HOMOLOG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HOMOLOG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?secret HOMOLOG_SSH_KEY nao configurado}"
+          : "${SSH_HOST:?secret HOMOLOG_SSH_HOST nao configurado}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null; fi
+          test -s ~/.ssh/known_hosts || { echo "::error::known_hosts vazio"; exit 1; }
+
+      - name: Coletar diagnóstico do banco (só leitura)
+        env:
+          SSH_HOST: ${{ secrets.HOMOLOG_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOMOLOG_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOMOLOG_SSH_PORT || '22' }}
+        run: |
+          set -uo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          echo "== quem sou eu + grupos (docker?) =="
+          id
+          echo
+          echo "== portas de banco em escuta (5432 / 55432) =="
+          ss -tln 2>/dev/null | grep -E ':(5432|55432)\b' || echo "NENHUMA porta 5432/55432 em escuta (banco provavelmente PARADO)"
+          echo
+          echo "== processos postgres =="
+          pgrep -a postgres 2>/dev/null | head || echo "(nenhum processo postgres)"
+          echo
+          echo "== units systemd de postgres (ativo?) =="
+          systemctl list-units --type=service --all 2>/dev/null | grep -iE 'postgres|pg' || echo "(nenhuma unit postgres visivel)"
+          for u in postgresql postgresql@16-main postgresql@15-main postgresql@14-main; do
+            printf '  is-active %-24s ' "$u"; systemctl is-active "$u" 2>/dev/null || true
+          done
+          echo
+          echo "== docker? (o banco pode estar em container) =="
+          if command -v docker >/dev/null 2>&1; then
+            docker ps -a --format '  {{.Names}}\t{{.Image}}\t{{.Status}}' 2>&1 | grep -iE 'postgres|pg|banco|db' || echo "  (docker sem container de postgres, ou sem permissao: $(docker ps 2>&1 | head -1))"
+          else echo "  (docker nao instalado / nao no PATH)"; fi
+          echo
+          echo "== o que consigo como root SEM senha (posso religar?) =="
+          sudo -n -l 2>/dev/null | grep -iE 'postgres|systemctl|docker|pg_ctl|ALL' || echo "  (sem sudo sem-senha util p/ o banco)"
+          echo
+          echo "== o hub reclama do banco? (ultimos erros de conexao) =="
+          sudo -n journalctl -u visao-hub --since "-30 min" --no-pager 2>/dev/null | grep -aiE 'postgres|pg|ECONNREFUSED|5432|database|banco' | tail -20 || echo "  (journal indisponivel)"
+          echo "== FIM =="
+          REMOTE
