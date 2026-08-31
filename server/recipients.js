@@ -1,11 +1,11 @@
 // Destinatários de WhatsApp do superadmin (números avulsos). Cache em memória; escrita no
 // Postgres (se configurado) ou recipients.json (fallback). LGPD: consentimento é do superadmin.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 const db = require("./db");
 
-const FILE = path.join(__dirname, "recipients.json");
+const FILE = statePath("recipients.json");
 let list = [];
 let usingPg = false;
 

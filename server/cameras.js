@@ -3,10 +3,10 @@
 // de recipients.js (cache em memória + arquivo). As fontes legadas seguem em rtsp.sources.json
 // (carregadas no boot por rtsp.js); este módulo cuida apenas das câmeras adicionadas pela UI/API.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 
-const FILE = path.join(__dirname, "cameras.json");
+const FILE = statePath("cameras.json");
 const TRANSPORTS = ["tcp", "udp", "http", "auto"]; // só se aplica a fontes rtsp://
 const URL_RE = /^(rtsp|rtsps|http|https):\/\//i; // aceita RTSP, HLS (.m3u8) e MJPEG (http)
 

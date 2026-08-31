@@ -13,13 +13,13 @@
 //   ALARM_EVENTS_RETENTION_DAYS  (default 0=off) Descarta eventos mais antigos que X dias.
 //   ALARM_LOG_LEVEL              (default "info") Nível do logger pino.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 const db = require("./db");
 
 const log = require("pino")({ name: "alarm-events", level: process.env.ALARM_LOG_LEVEL || "info" });
 
-const FILE = path.join(__dirname, "alarms.json");
+const FILE = statePath("alarms.json");
 const RETENTION = Math.max(1, Number(process.env.ALARM_EVENTS_RETENTION ?? 1000));
 const RETENTION_DAYS = Math.max(0, Number(process.env.ALARM_EVENTS_RETENTION_DAYS ?? 0));
 const DAY_MS = 86_400_000;

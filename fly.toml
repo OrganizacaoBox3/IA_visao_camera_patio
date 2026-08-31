@@ -1,0 +1,77 @@
+# Hub de visao de patio no Fly.io. Config declarada com as razoes, porque tres destes valores
+# nao sao gosto — sao requisito medido, e mudar em silencio quebra o ingest ou o dado.
+#
+# App/IP ja provisionados: visao-patio · IPv4 dedicado 213.188.207.159 · IPv6 2a09:8280:1::17d:eaf8:0
+app = "visao-patio"
+primary_region = "gru"          # Sao Paulo: a camera publica do Brasil, e latencia de RTMP importa
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8091"                 # hub HTTP (nginx da 8080 faz proxy)
+  HOST = "0.0.0.0"              # permite o health check TCP provar que o MOTOR esta vivo
+  VISAO_STATE_DIR = "/data"     # estado no volume, nao no rootfs efemero (server/state-dir.js)
+  NODE_ENV = "production"
+
+# ── ESTADO ───────────────────────────────────────────────────────────────────────────────────
+# 13 itens de estado moram aqui: cameras.json, camcfg.json, alarms.json, dvr.json, shifts.json,
+# users.json, recipients.json, notif-settings.json, data-hist.json, alarm-shelves.json,
+# rtsp.sources.json, wa-auth/ (sessao do WhatsApp) e models/ (ONNX ~40 MB).
+# Sem este mount o entrypoint SE RECUSA a subir — perder cadastro em silencio e pior que downtime.
+[[mounts]]
+  source = "visao_data"
+  destination = "/data"
+
+# ── FRONT + API ──────────────────────────────────────────────────────────────────────────────
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # UMA machine, SEMPRE ligada. Nao e economia mal feita: as sessoes do relay RTMP e o estado do
+  # go2rtc sao em memoria, e o Baileys (WhatsApp) exige instancia unica. Duas machines dividiriam
+  # o publisher entre elas; uma machine dormindo derruba o publisher (que e o bug que estamos
+  # caçando por outro caminho). Escala aqui e vertical, nunca horizontal.
+  auto_stop_machines = false
+  auto_start_machines = true    # se alguem parar a machine, uma conexao a religa
+  min_machines_running = 1
+
+# ── INGEST RTMP ──────────────────────────────────────────────────────────────────────────────
+# TCP PURO, handlers vazio: RTMP nao e HTTP e nao tem SNI. E por isso que o IPv4 tem de ser
+# DEDICADO ($2/mo) — o IPv4 compartilhado do Fly so roteia HTTP/HTTPS por SNI, e o publish da
+# camera simplesmente nao chegaria. A camera publica em rtmp://<ip-ou-host>:1935/<stream-key>.
+[[services]]
+  protocol = "tcp"
+  internal_port = 1935
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 1935
+    handlers = []
+
+# ── SAUDE: DOIS sensores, porque ha DOIS processos ───────────────────────────────────────────
+# Checar so o front daria verde com o motor morto (nginx serve o index.html de pe sozinho) —
+# exatamente o Falso-OK que o entrypoint tambem impede. O check TCP na 8091 prova que o hub
+# esta escutando; o HTTP na 8080 prova que o front esta sendo servido.
+[checks]
+  [checks.hub]
+    type = "tcp"
+    port = 8091
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "60s"
+
+  [checks.front]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+
+# CPU DEDICADA: o motor e inferencia ONNX (D-FINE-S) + um ffmpeg por camera. shared-cpu estrangula
+# igual ao servidor atual (que esta a 88% de CPU) — trocaria de casa sem trocar de problema.
+[[vm]]
+  size = "performance-2x"       # 2 vCPU / 4 GB

@@ -26,7 +26,7 @@
 //   ALARM_FLAP_WINDOW_MS    (default 600000 = 10 min) Janela de re-disparos.
 //   ALARM_FLAP_THRESHOLD    (default 5)      Limiar de re-disparos p/ cooldown.
 //   ALARM_FLAP_COOLDOWN_MS  (default 300000 = 5 min) Duração do cooldown.
-const path = require("node:path");
+const { statePath } = require("../state-dir");
 
 const log = require("pino")({ name: "alarm", level: process.env.ALARM_LOG_LEVEL || "info" });
 
@@ -43,7 +43,7 @@ const SHELVE_DEFAULT_MS = Number(process.env.ALARM_SHELVE_DEFAULT_MS ?? 1_800_00
 // aponta para server/alarm-shelves.json (este módulo vive em server/alarm/, daí
 // o ".." para voltar a server/, preservando o caminho histórico).
 const SHELVES_FILE =
-  process.env.ALARM_SHELVES_FILE || path.join(__dirname, "..", "alarm-shelves.json");
+  process.env.ALARM_SHELVES_FILE || statePath("alarm-shelves.json");
 
 // Métricas / racionalização
 const RATE_WINDOW_MS = Number(process.env.ALARM_RATE_WINDOW_MS ?? 600_000);

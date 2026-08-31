@@ -10,7 +10,7 @@
 // abaixo, então o front não distingue PG de JSON.
 // LGPD: só indicadores agregados/metadados — nunca imagens/frames.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const db = require("./db");
 // CARIMBO DE TURNO (bloco abaixo): o ingest é o CHOKE POINT de TODOS os produtores de histórico
 // (motor do hub, navegador, futuros) — é aqui, e em nenhum outro lugar, que a linha ganha turno.
@@ -122,7 +122,7 @@ function _setStampSources(s) {
 // ── FALLBACK JSON: estado + persistência ─────────────────────────────────────
 // DATA_HIST_PATH: override do arquivo do fallback (default = server/data-hist.json). Ops pode
 // relocar (ex.: volume dedicado); o teste de contrato aponta p/ um tmp — não toca o estado real.
-const FILE = process.env.DATA_HIST_PATH || path.join(__dirname, "data-hist.json");
+const FILE = process.env.DATA_HIST_PATH || statePath("data-hist.json");
 const KINDS = ["ativ", "read", "obj", "fad", "flow"];
 const RETENTION_DAYS = Math.max(1, Number(process.env.DATA_HIST_RETENTION_DAYS ?? 30));
 const DAY_MS = 86_400_000;

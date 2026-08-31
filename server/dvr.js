@@ -16,13 +16,13 @@
 // hub não tem o multi-tenant do control-plane; o suporte é um superadmin que vê tudo/filtra por tag.
 // LGPD/sigilo (invariantes do CLAUDE.md): nenhum segredo do DVR aqui; hashes nunca saem em resposta.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 const db = require("./db");
 const sitekey = require("./dvr-sitekey");
 const logic = require("./dvr-logic");
 
-const FILE = path.join(__dirname, "dvr.json");
+const FILE = statePath("dvr.json");
 
 // Faixa de portas de sessão — casa com o allowPorts do frps (relay). Env sem segredo.
 const PORTA_INICIO = Number(process.env.CP_DVR_PORT_START || 20000);

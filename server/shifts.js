@@ -5,12 +5,12 @@
 // ⇒ +1 dia (D2), dias ⊆ 0..6 não-vazio (D5), pausas dentro da janela e sem sobreposição (D3).
 // SÓ config é persistida (LGPD) — nenhum dado de pessoa/imagem.
 const fs = require("node:fs");
-const path = require("node:path");
+const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
 const db = require("./db");
 const clock = require("./shift-clock");
 
-const FILE = path.join(__dirname, "shifts.json");
+const FILE = statePath("shifts.json");
 let list = [];
 let usingPg = false;
 
