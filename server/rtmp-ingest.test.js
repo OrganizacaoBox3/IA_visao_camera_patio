@@ -1,13 +1,70 @@
 // Gates do relay RTMP→HTTP-FLV (server/rtmp-ingest.js). O cliente de teste implementa o
-// dialeto RTMP que o DVR/ffmpeg falam (handshake simples, chunking fmt0/fmt3, AMF0), publica
+// dialeto RTMP que DVRs/ffmpeg falam (handshakes simples/complexo, chunking fmt0/fmt3, AMF0), publica
 // tags de mídia e valida o FLV servido por HTTP — o caminho INTEIRO, por sockets reais.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import net from "node:net";
 import http from "node:http";
+import crypto from "node:crypto";
 import { startRtmpIngest, amfDecode, amfEncode, flvTag, RtmpRelay } from "./rtmp-ingest";
 
 const RTMP_PORT = 19351;
 const HTTP_PORT = 19352;
+
+const ADOBE_KEY_SUFFIX = Buffer.from(
+  "f0eec24a8068bee82e00d0d1029e7e576eec5d2d29806fab93b8e636cfeb31ae",
+  "hex",
+);
+const GENUINE_FP_KEY = Buffer.concat([
+  Buffer.from("Genuine Adobe Flash Player 001"),
+  ADOBE_KEY_SUFFIX,
+]);
+const GENUINE_FMS_KEY = Buffer.concat([
+  Buffer.from("Genuine Adobe Flash Media Server 001"),
+  ADOBE_KEY_SUFFIX,
+]);
+
+function hmacSha256(key, ...parts) {
+  const hmac = crypto.createHmac("sha256", key);
+  for (const part of parts) hmac.update(part);
+  return hmac.digest();
+}
+
+function digestPosition(block, base) {
+  return ((block[base] + block[base + 1] + block[base + 2] + block[base + 3]) % 728) + base + 4;
+}
+
+function digestExcludingGap(block, position, key) {
+  return hmacSha256(key, block.subarray(0, position), block.subarray(position + 32));
+}
+
+function createComplexC1(base) {
+  const c1 = crypto.randomBytes(1536);
+  c1.writeUInt32BE(0, 0);
+  c1.writeUInt32BE(0x09007c02, 4); // versão observada no publisher que falhava antes de connect
+  const position = digestPosition(c1, base);
+  const digest = digestExcludingGap(c1, position, GENUINE_FP_KEY.subarray(0, 30));
+  digest.copy(c1, position);
+  return { c1, digest };
+}
+
+function verifyComplexResponse(response, base, clientDigest) {
+  expect(response[0]).toBe(3);
+  const s1 = response.subarray(1, 1537);
+  const s2 = response.subarray(1537, 3073);
+  expect(s1.readUInt32BE(4)).not.toBe(0);
+
+  const s1DigestPosition = digestPosition(s1, base);
+  const expectedS1Digest = digestExcludingGap(
+    s1,
+    s1DigestPosition,
+    GENUINE_FMS_KEY.subarray(0, 36),
+  );
+  expect(s1.subarray(s1DigestPosition, s1DigestPosition + 32).equals(expectedS1Digest)).toBe(true);
+
+  const s2Key = hmacSha256(GENUINE_FMS_KEY, clientDigest);
+  const expectedS2Digest = hmacSha256(s2Key, s2.subarray(0, 1504));
+  expect(s2.subarray(1504).equals(expectedS2Digest)).toBe(true);
+}
 
 // ── Cliente RTMP mínimo de teste ─────────────────────────────────────────────────────────────
 function chunkMessage(csid, type, timeMS, payload, wrChunkSize = 4096) {
@@ -26,10 +83,19 @@ function chunkMessage(csid, type, timeMS, payload, wrChunkSize = 4096) {
   return Buffer.concat(parts);
 }
 
-function connectPublish({ app, publishKey = "", port = RTMP_PORT }) {
+function connectPublish({
+  app,
+  publishKey = "",
+  port = RTMP_PORT,
+  complexBase = null,
+  simpleVersion = 0,
+}) {
   return new Promise((resolve, reject) => {
+    const complex = complexBase === null ? null : createComplexC1(complexBase);
+    const simpleC1 = Buffer.alloc(1536);
+    simpleC1.writeUInt32BE(simpleVersion, 4);
     const sock = net.connect(port, "127.0.0.1", () => {
-      sock.write(Buffer.concat([Buffer.from([3]), Buffer.alloc(1536)])); // C0 + C1
+      sock.write(Buffer.concat([Buffer.from([3]), complex?.c1 ?? simpleC1])); // C0 + C1
     });
     let buf = Buffer.alloc(0);
     let stage = "hs";
@@ -38,6 +104,16 @@ function connectPublish({ app, publishKey = "", port = RTMP_PORT }) {
     sock.on("data", (d) => {
       buf = Buffer.concat([buf, d]);
       if (stage === "hs" && buf.length >= 1 + 1536 + 1536) {
+        if (complex) {
+          try {
+            verifyComplexResponse(buf.subarray(0, 3073), complexBase, complex.digest);
+          } catch (error) {
+            stage = "failed";
+            sock.destroy();
+            reject(error);
+            return;
+          }
+        }
         buf = Buffer.alloc(0);
         stage = "cmd";
         sock.write(Buffer.alloc(1536)); // C2 (eco simplificado — o relay não valida conteúdo)
@@ -121,6 +197,24 @@ describe("rtmp-ingest", () => {
     ingest.relay.on("publish", (n) => seen.push(n));
     const pub = await connectPublish({ app: "dydentro_cam05" });
     expect(seen).toContain("dydentro_cam05");
+    pub.close();
+  });
+
+  it.each([
+    ["digest no primeiro bloco", 8],
+    ["digest no segundo bloco", 772],
+  ])(
+    "handshake complexo Adobe (%s) valida S1/S2 e chega ao publish",
+    async (_label, complexBase) => {
+      const pub = await connectPublish({ app: `complex_${complexBase}`, complexBase });
+      expect(ingest.relay.activeChannels()).toContain(`complex_${complexBase}`);
+      pub.close();
+    },
+  );
+
+  it("C1 sem assinatura válida mantém o handshake simples, mesmo anunciando versão Adobe", async () => {
+    const pub = await connectPublish({ app: "simple_fallback", simpleVersion: 0x09007c02 });
+    expect(ingest.relay.activeChannels()).toContain("simple_fallback");
     pub.close();
   });
 
