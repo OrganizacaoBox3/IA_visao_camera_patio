@@ -81,7 +81,7 @@ export function NotificacoesTab({
     setBusy(true);
     try {
       await waTest(waNum.trim());
-      toast("Mensagem de teste enviada.", "ok");
+      toast("Mensagem entregue pelo WhatsApp.", "ok");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Falha no envio.", "alert");
     }
