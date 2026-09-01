@@ -1,5 +1,36 @@
 const DELIVERY_ACK = 3;
 const ERROR_ACK = 0;
+const guardedConsoles = new WeakSet();
+
+const SENSITIVE_SIGNAL_LOG_PREFIXES = [
+  "Session already closed",
+  "Closing session:",
+  "Opening session:",
+  "Removing old closed session:",
+];
+
+function installSignalLogGuard(target = console) {
+  if (!target || guardedConsoles.has(target)) return;
+
+  for (const method of ["info", "warn"]) {
+    if (typeof target[method] !== "function") continue;
+    const original = target[method].bind(target);
+    target[method] = (...args) => {
+      const first = args[0];
+      if (
+        typeof first === "string" &&
+        SENSITIVE_SIGNAL_LOG_PREFIXES.some((prefix) =>
+          first.startsWith(prefix),
+        )
+      ) {
+        return;
+      }
+      original(...args);
+    };
+  }
+
+  guardedConsoles.add(target);
+}
 
 function normalizeDigits(value) {
   return String(value ?? "").replace(/\D/g, "");
@@ -166,6 +197,7 @@ class DeliveryTracker {
 
 module.exports = {
   DeliveryTracker,
+  installSignalLogGuard,
   normalizeDigits,
   recipientCandidates,
   resolveRecipient,

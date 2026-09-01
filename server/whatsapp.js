@@ -15,9 +15,15 @@
 const { statePath } = require("./state-dir");
 const {
   DeliveryTracker,
+  installSignalLogGuard,
   resolveRecipient,
 } = require("./whatsapp-delivery");
 const fs = require("node:fs");
+
+// libsignal 6 imprime SessionEntry completo diretamente em console.info/warn,
+// fora do logger silencioso do Baileys. Bloqueia somente essas mensagens
+// conhecidas antes que a dependência seja carregada.
+installSignalLogGuard();
 
 // Node 18: a Web Crypto API não é global por padrão.
 // O Baileys usa globalThis.crypto.

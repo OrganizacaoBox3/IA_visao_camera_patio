@@ -4,9 +4,41 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const {
   DeliveryTracker,
+  installSignalLogGuard,
   recipientCandidates,
   resolveRecipient,
 } = require("./whatsapp-delivery");
+
+describe("WhatsApp — proteção dos logs de sessão", () => {
+  it("suprime SessionEntry sensível e preserva logs normais", () => {
+    const target = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const originalInfo = target.info;
+    const originalWarn = target.warn;
+
+    installSignalLogGuard(target);
+    target.info("Closing session:", { rootKey: "valor-sensivel" });
+    target.warn("Session already closed", { rootKey: "valor-sensivel" });
+    target.info("mensagem segura", { ok: true });
+    target.warn("aviso seguro");
+
+    expect(originalInfo).toHaveBeenCalledTimes(1);
+    expect(originalInfo).toHaveBeenCalledWith("mensagem segura", { ok: true });
+    expect(originalWarn).toHaveBeenCalledTimes(1);
+    expect(originalWarn).toHaveBeenCalledWith("aviso seguro");
+  });
+
+  it("é idempotente", () => {
+    const target = { info: vi.fn(), warn: vi.fn() };
+    const originalInfo = target.info;
+    installSignalLogGuard(target);
+    installSignalLogGuard(target);
+    target.info("mensagem segura");
+    expect(originalInfo).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("WhatsApp — resolução segura do destinatário", () => {
   it("consulta a forma brasileira com e sem nono dígito", () => {
