@@ -23,6 +23,7 @@ import {
   loadZones,
   pointInZone,
   assignZone,
+  assignZoneByOverlap,
   withDefaults,
   ZONE_MODE_COLOR,
   ZONE_MODE_LABEL,
@@ -439,6 +440,40 @@ describe("zones — assignZone (desempate por interseção, depois menor área)"
     expect(assignZone([mascarada], 0.5, 0.2, undefined, (s) => s.contains)?.label).toBe("M");
     expect(assignZone([mascarada], 0.5, 0.8, undefined, (s) => s.contains)).toBeNull();
     expect(assignZone([especifica], 0.1, 0.1)).toBeNull();
+  });
+});
+
+// assignZoneByOverlap: SÓ modo Objetos (contagem de pessoas). assignZone exige o CENTRO da caixa
+// dentro da zona — uma pessoa na borda (corpo cruzando a linha, centro do lado de fora) some da
+// contagem. Aqui basta o retângulo TOCAR a zona (e, com máscara/polígono, algum ponto amostrado
+// da interseção cair dentro dela).
+describe("zones — assignZoneByOverlap (basta parte da caixa estar na zona)", () => {
+  const setor = { label: "Depósito", x: 0.5, y: 0, w: 0.5, h: 1 };
+
+  it("centro FORA da zona mas caixa cruzando a borda: assignZone perde, assignZoneByOverlap acha", () => {
+    const bboxNaBorda = [0.35, 0.4, 0.2, 0.2] as const; // 0.35..0.55 × 0.4..0.6, centro em x=0.45
+    expect(assignZone([setor], 0.45, 0.5, bboxNaBorda)).toBeNull(); // centro fora (zona começa em x=0.5)
+    expect(assignZoneByOverlap([setor], bboxNaBorda)?.label).toBe("Depósito"); // mas toca (0.5..0.55)
+  });
+
+  it("caixa TOTALMENTE fora (nem toca o retângulo da zona) continua null nos dois", () => {
+    const bboxFora = [0.0, 0.0, 0.2, 0.2] as const;
+    expect(assignZone([setor], 0.1, 0.1, bboxFora)).toBeNull();
+    expect(assignZoneByOverlap([setor], bboxFora)).toBeNull();
+  });
+
+  it("respeita a máscara/polígono: retângulos se tocam mas a interseção cai fora da máscara", () => {
+    const mascarada = { label: "M", x: 0, y: 0, w: 1, h: 1, contains: (_nx: number, ny: number) => ny < 0.1 };
+    // interseção com a máscara seria a faixa y<0.1; esta caixa fica inteira em y=0.5..0.7 → fora.
+    const bbox = [0.4, 0.5, 0.2, 0.2] as const;
+    expect(assignZoneByOverlap([mascarada], bbox, (s) => s.contains)).toBeNull();
+  });
+
+  it("mesmo desempate de assignZone entre zonas sobrepostas: maior interseção, depois menor área", () => {
+    const grande = { label: "Espera", x: 0, y: 0, w: 1, h: 1 };
+    const especifica = { label: "Doca 3", x: 0.4, y: 0.4, w: 0.3, h: 0.3 };
+    const bbox = [0.45, 0.45, 0.2, 0.2] as const; // dentro das duas, igual interseção → menor área
+    expect(assignZoneByOverlap([grande, especifica], bbox)?.label).toBe("Doca 3");
   });
 });
 

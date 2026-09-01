@@ -951,6 +951,8 @@ export function CameraWorkspace({
                 w: z.w,
                 h: z.h,
                 contains: zm.containsFn(z),
+                targetOccupancy: z.targetOccupancy,
+                occupancyToleranceMs: z.occupancyToleranceMs,
               },
             ],
             z.selectedClasses,
@@ -966,6 +968,16 @@ export function CameraWorkspace({
             if (r.samples) recordObjectSamples({ samples: r.samples });
           }
           r.alerts.forEach((a) => onAlertRef.current?.(a));
+          // Lotação fora do alvo (⚠ NOS TEXTOS DE onAlert É CONTRATO — ver nota mais abaixo): só
+          // este tipo de alerta do modo objetos leva o prefixo "⚠", de propósito — é o que faz
+          // alertMetaFromText derivar cameraId/zona e o alarme chegar ao Andon/WhatsApp; entrada/
+          // saída de presença (r.alerts acima) segue como toast informativo, sem alarme.
+          r.occupancyAlerts.forEach((oa) => {
+            const dir = oa.count > oa.target ? "acima" : "abaixo";
+            onAlertRef.current?.(
+              `⚠ ${label} · ${oa.setor}: lotação ${dir} do esperado — ${oa.count} pessoa(s) (esperado ${oa.target})`,
+            );
+          });
           const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
           resultsRef.current.set(z.id, { modo: "objetos", counts: r.counts, total, dets: r.dets });
         } else {

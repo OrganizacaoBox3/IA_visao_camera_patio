@@ -13,6 +13,7 @@ import { type Dataset } from "../report/mock";
 import { OBJECT_CATALOG } from "../objects/catalog";
 import {
   DEFAULT_PRESENCA_ALERT_MS,
+  DEFAULT_OCCUPANCY_TOLERANCE_MS,
   PRESENCA_ALERT_PRESETS_MS,
   ZONE_ARMINGS,
   ZONE_ARMING_LABEL,
@@ -23,7 +24,7 @@ import {
 } from "../zones";
 import { VertexTable } from "./VertexTable";
 import { getShifts, type Shift } from "../api";
-import { Button, Input, Select, Slider, ToggleGroup, Dialog, Field } from "../ui";
+import { Button, Input, Select, Slider, Switch, ToggleGroup, Dialog, Field } from "../ui";
 
 // RÓTULOS (CT-B). Os VALORES gravados são contrato e NÃO mudam
 // (atividade|leitura|objetos|fadiga|exclusao|proibida seguem idênticos no camcfg e no motor);
@@ -343,6 +344,53 @@ export function ConfigZonaDialog({
                       ariaLabel: o.label,
                     }))}
                   />
+                </Field>
+              )}
+
+              {/* Lotação: só faz sentido contando PESSOA (a histerese em ObjetosProcessor lê
+                  matrix[setor].pessoa) — sem a classe selecionada, o alvo nunca teria como
+                  bater e alarmaria pra sempre "abaixo do esperado" (falso-OK invertido). */}
+              {z.modo === "objetos" && z.selectedClasses.includes("pessoa") && (
+                <Field
+                  label="Alertar por lotação"
+                  hint="Se a quantidade de pessoas na área ficar diferente do número esperado pelo tempo configurado, gera um alarme (mesmo canal dos outros alarmes — painel e WhatsApp/Andon)."
+                >
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={z.targetOccupancy != null}
+                      onCheckedChange={(on) =>
+                        patchZone(z.id, { targetOccupancy: on ? (z.targetOccupancy ?? 1) : undefined })
+                      }
+                      ariaLabel="Alertar por lotação"
+                    />
+                    {z.targetOccupancy != null && (
+                      <>
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          className="w-16"
+                          aria-label="Quantidade esperada de pessoas"
+                          value={z.targetOccupancy}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            if (Number.isFinite(n) && n >= 0)
+                              patchZone(z.id, { targetOccupancy: Math.round(n) });
+                          }}
+                        />
+                        <span className="muted">pessoa(s) por</span>
+                        <Select
+                          value={String(z.occupancyToleranceMs ?? DEFAULT_OCCUPANCY_TOLERANCE_MS)}
+                          onChange={(v) => patchZone(z.id, { occupancyToleranceMs: Number(v) })}
+                          options={PRESENCA_ALERT_PRESETS_MS.map((ms) => ({
+                            value: String(ms),
+                            label: fmtLimit(ms),
+                          }))}
+                          ariaLabel="Tempo até o alarme de lotação"
+                        />
+                      </>
+                    )}
+                  </div>
                 </Field>
               )}
 

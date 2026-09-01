@@ -101,7 +101,13 @@ import { describe, it, expect } from "vitest";
 // aqui sobrou fiação: 1 import + 2 refs + observe/latency no ramo hub + 3 props ao drawTelemetryHud.
 // Contabilidade REAL: 1614 → 1626; teto 1632 mantém a folga mínima da convenção (≈5).
 // NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1632;
+// 1632→1638 (lotação do modo Objetos): alerta quando a contagem de pessoas do setor sai do alvo
+// configurado por tempo demais. O GROSSO foi EXTRAÍDO — histerese/estado em
+// processors/objetos.ts (ObjetosProcessor, puro, testado); aqui sobrou fiação: 2 props
+// (targetOccupancy/occupancyToleranceMs) no setor passado ao processador + 1 forEach formatando
+// e roteando `r.occupancyAlerts` pro mesmo canal de alarme do fadiga (prefixo "⚠" + label · zona).
+// Teto 1643 mantém a folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1643;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

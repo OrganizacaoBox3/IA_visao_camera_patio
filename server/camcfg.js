@@ -168,6 +168,13 @@ function cleanZone(z, strict) {
     // campo NOVO de zona TEM que ser adicionado aqui, senão o save o descarta MUDO e o motor
     // do hub nunca vê o dwell configurado. Clamp são: 0..24h; inválido → default 10s.
     presencaAlertMs: Math.min(86_400_000, Math.max(0, num(z.presencaAlertMs, 10_000))),
+    // lotação (modo objetos, contagem de pessoas) — MESMA armadilha A5 (campo novo tem que
+    // estar na allowlist, senão o save o descarta mudo). targetOccupancy é OPCIONAL (ausente =
+    // alerta desligado); occupancyToleranceMs sempre presente (default 30s), como presencaAlertMs.
+    ...(fin(z.targetOccupancy) && z.targetOccupancy >= 1
+      ? { targetOccupancy: Math.round(z.targetOccupancy) }
+      : {}),
+    occupancyToleranceMs: Math.min(86_400_000, Math.max(1000, num(z.occupancyToleranceMs, 30_000))),
     arming: ARMING_MODES.has(z.arming) ? z.arming : "sempre",
     // shiftIds (spec-turnos-por-zona F2): turnos atribuídos à zona. MESMA armadilha A5 — sem o
     // campo AQUI o save o descartaria MUDO e o gate de turno (alarm/shift.js) nunca veria a
