@@ -13,6 +13,10 @@
 // Adaptador isolado: trocar por Cloud API oficial depois mexe só aqui.
 
 const { statePath } = require("./state-dir");
+const {
+  DeliveryTracker,
+  resolveRecipient,
+} = require("./whatsapp-delivery");
 const fs = require("node:fs");
 
 // Node 18: a Web Crypto API não é global por padrão.
@@ -33,6 +37,15 @@ let qrDataUrl = null;
 let starting = false;
 
 let reconnectTimer = null;
+const deliveryTracker = new DeliveryTracker();
+
+const DELIVERY_TIMEOUT_MS = Math.min(
+  60_000,
+  Math.max(
+    5_000,
+    Number(process.env.WHATSAPP_DELIVERY_TIMEOUT_MS) || 20_000,
+  ),
+);
 
 /**
  * Cancela uma tentativa de reconexão já agendada.
@@ -174,6 +187,15 @@ async function start() {
     sock.ev.on("creds.update", saveCreds);
 
     /**
+     * Recibos assíncronos: sendMessage() resolver significa apenas que o
+     * cliente aceitou a solicitação. DELIVERY_ACK confirma que chegou ao
+     * dispositivo do destinatário.
+     */
+    sock.ev.on("messages.update", (updates) => {
+      deliveryTracker.observe(updates);
+    });
+
+    /**
      * Estado da conexão.
      */
     sock.ev.on(
@@ -235,6 +257,8 @@ async function start() {
         if (connection === "close") {
           connected = false;
           starting = false;
+
+          deliveryTracker.rejectAll();
 
           sock = null;
 
@@ -356,22 +380,33 @@ async function sendText(
     );
   }
 
-  const digits = String(
+  const activeSocket = sock;
+  const recipient = await resolveRecipient(
+    activeSocket,
     numberDigits,
-  ).replace(/\D/g, "");
+  );
 
-  if (digits.length < 10) {
-    throw new Error(
-      "número inválido",
-    );
-  }
-
-  await sock.sendMessage(
-    `${digits}@s.whatsapp.net`,
+  const sent = await activeSocket.sendMessage(
+    recipient.jid,
     {
       text: String(text),
     },
   );
+
+  const receipt = await deliveryTracker.waitFor(
+    sent?.key?.id,
+    sent?.status,
+    DELIVERY_TIMEOUT_MS,
+  );
+
+  console.log(
+    `[whatsapp] entrega confirmada (${recipient.addressing})`,
+  );
+
+  return {
+    ...receipt,
+    addressing: recipient.addressing,
+  };
 }
 
 /**

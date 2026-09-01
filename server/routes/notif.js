@@ -85,13 +85,13 @@ async function handle(req, res, ctx) {
     if (!requireSuper(req, res)) return true;
     const { numero } = JSON.parse((await readBody(req)) || "{}");
     try {
-      await whatsapp.sendText(
+      const result = await whatsapp.sendText(
         numero,
         "✅ Teste — Visão de Pátio: notificações de WhatsApp funcionando.",
       );
-      json(res, 200, { ok: true });
+      json(res, 200, { ok: true, delivery: result.delivery });
     } catch (e) {
-      json(res, 400, { error: e.message });
+      json(res, e.httpStatus || 400, { error: e.message });
     }
     return true;
   }

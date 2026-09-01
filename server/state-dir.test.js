@@ -14,8 +14,9 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SERVER_DIR = path.dirname(new URL(import.meta.url).pathname);
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 // Roda um snippet num node filho com o env dado. Devolve {ok, out, err}.
 function run(code, env) {

@@ -137,7 +137,8 @@ export const getCameraEnroll = () => apiGet<{ token: string | null }>("/api/came
 // ── WhatsApp (superadmin) ──
 export type WaStatus = { enabled: boolean; connected: boolean; qr: string | null };
 export const getWaStatus = () => apiGet<WaStatus>("/api/wa-status");
-export const waTest = (numero: string) => apiSend<{ ok: true }>("POST", "/api/wa-test", { numero });
+export const waTest = (numero: string) =>
+  apiSend<{ ok: true; delivery: "delivered" }>("POST", "/api/wa-test", { numero });
 
 // ── Configuração de notificações (superadmin) ──
 export type NotifTipo = { ativo: boolean; titulo: string; instrucao: string };
