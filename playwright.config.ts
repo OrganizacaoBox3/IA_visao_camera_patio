@@ -8,7 +8,16 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 20_000 },
   workers: 1,
-  retries: 0,
+  // MEDIDO (2026-09-02): e2e/app.spec.ts:353 falhou 2× no CI (runs 33622286129 e 33628962158),
+  // SEMPRE no mesmo teste/posição — login() trava com o botão "Entrar" desabilitado os 90s
+  // inteiros — e nunca reproduziu localmente (16/16 passou). Já falhava num PR anterior
+  // (#5, codex/fix-whatsapp-delivery) que não toca login/auth — não é regressão deste código.
+  // Rate-limit de login descartado por leitura (routes/auth.js): default 10 tentativas/15min,
+  // o arquivo usa 9 antes deste teste. Hipótese não fechada: CPU-pressure do runner
+  // ubuntu-latest (2 vCPU compartilhado) atrasando o React o bastante pra o clique nunca achar
+  // o botão habilitado. Retry SÓ em CI (local continua exigente, 0 tentativas extra) — se
+  // voltar a falhar mesmo com retry, é sinal de que é regressão real, não ambiente.
+  retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
