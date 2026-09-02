@@ -347,13 +347,24 @@ export function ConfigZonaDialog({
                 </Field>
               )}
 
-              {/* Lotação: só faz sentido contando PESSOA (a histerese em ObjetosProcessor lê
-                  matrix[setor].pessoa) — sem a classe selecionada, o alvo nunca teria como
-                  bater e alarmaria pra sempre "abaixo do esperado" (falso-OK invertido). */}
-              {z.modo === "objetos" && z.selectedClasses.includes("pessoa") && (
+              {/* Lotação: dois produtores possíveis, mesmos campos (targetOccupancy/
+                  occupancyToleranceMs) — quem observa depende do MODO da zona:
+                  · "atividade" → server-side, 24/7, sobre o D-FINE (occupancy-alert.js no
+                    hub) — RECOMENDADO: é o motor avaliado no `npm run eval`, robusto a
+                    pose/ângulo/oclusão. Não depende do navegador aberto.
+                  · "objetos" com "pessoa" selecionada → client-side, OWL-ViT zero-shot
+                    (ObjetosProcessor). Medido (câmera real, gente sentada/ocluída): esse
+                    detector pode não reconhecer a pose e a meta nunca bate — prefira
+                    "atividade" para contagem de PESSOA; "objetos" continua sendo a única
+                    via para metas de CLASSES não-pessoa (caixa/palete/empilhadeira). */}
+              {(z.modo === "atividade" || (z.modo === "objetos" && z.selectedClasses.includes("pessoa"))) && (
                 <Field
                   label="Alertar por lotação"
-                  hint="Se a quantidade de pessoas na área ficar diferente do número esperado pelo tempo configurado, gera um alarme (mesmo canal dos outros alarmes — painel e WhatsApp/Andon)."
+                  hint={
+                    z.modo === "atividade"
+                      ? "Se a quantidade de pessoas na área ficar diferente do número esperado pelo tempo configurado, gera um alarme (mesmo canal dos outros alarmes — painel e WhatsApp/Andon). Roda no servidor, 24/7, mesmo com o painel fechado."
+                      : "Se a quantidade de pessoas na área ficar diferente do número esperado pelo tempo configurado, gera um alarme (mesmo canal dos outros alarmes). Roda no navegador enquanto a câmera estiver aberta na tela — se a contagem nunca bater com gente visivelmente presente, troque o modo da zona pra \"Atividade\" (mais robusto pra pessoa)."
+                  }
                 >
                   <div className="flex items-center gap-2">
                     <Switch

@@ -36,6 +36,7 @@
 const { resolveZone, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
+const { createOccupancyAlert } = require("./occupancy-alert");
 
 /**
  * @param {object} deps
@@ -52,6 +53,11 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
   // mora em presence-alert.js; aqui só a OBSERVAÇÃO por rodada de inferência é
   // alimentada — o alarme nasce no HUB (24/7, sem dashboard aberto — CA-4).
   const presence = raiseAlarm ? createPresenceAlert({ raiseAlarm, cameraLabelOf }) : null;
+  // Lotação em zona de ATIVIDADE (targetOccupancy/occupancyToleranceMs — campo
+  // aditivo do camcfg): mesma dinâmica 24/7 sem dashboard aberto, sobre a
+  // contagem por zona que o D-FINE já calcula (perZone, abaixo) — não depende
+  // do OWL-ViT client-side (occupancy-alert.js, cabeçalho explica o porquê).
+  const occupancy = raiseAlarm ? createOccupancyAlert({ raiseAlarm, cameraLabelOf }) : null;
   /**
    * Uma rodada de UMA câmera: consome as dets cruas do worker e MUTA st
    * (tracker/counter/janela/logs). Emite overlay ao final (inclusive com 0
@@ -162,6 +168,11 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // SÓ rodada de INFERÊNCIA passa aqui — rodada pulada pelo gate não observa e
     // NÃO reseta o dwell (skip = "nada mudou"; ver cabeçalho do presence-alert.js).
     if (presence) presence.observe(st, tracks, now);
+    // Lotação: perZone já reflete a rodada de INFERÊNCIA atual (calculado acima,
+    // no mesmo bloco que alimenta o payload zones[].people) — mesma semântica de
+    // "só observa em rodada não pulada" do presence, pelo mesmo motivo (skip = a
+    // cena não mudou; o dwell de lotação não deve resetar por isso).
+    if (occupancy) occupancy.observe(st, st.zonesAtiv, perZone, now);
 
     // (O gravador de sessão de fusão — bt/session-recorder — migrou com o BLE; ADR-018.
     //  Era o ÚNICO gancho câmera→BLE dentro do motor de análise.)
