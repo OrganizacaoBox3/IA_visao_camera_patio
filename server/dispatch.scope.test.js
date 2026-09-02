@@ -1,26 +1,45 @@
 // Roteamento de notificação por câmera (dispatch.targets) — papel "cliente" só recebe alarme
-// das câmeras alocadas a ele; papéis de equipe e os avulsos (recipients.json) não são escopados
-// por câmera (só o "cliente" é). writeFileSync mockado como NO-OP (mesmo padrão dos demais
+// das câmeras alocadas a ele; papéis de equipe recebem de todas. Todo número vem de recipients
+// e herda o escopo do usuário proprietário. writeFileSync mockado como NO-OP (mesmo padrão dos
 // testes de users.js — nunca toca o users.json real do dev).
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 
 const require = createRequire(import.meta.url);
 const users = require("./users");
+const recipients = require("./recipients");
 const dispatch = require("./dispatch");
 
 let writeSpy;
+let renameSpy;
+const TEST_ADMIN_ID = "u-dispatch-test-admin";
+beforeAll(() => {
+  users.all().push({
+    id: TEST_ADMIN_ID,
+    usuario: "dispatch-test-admin",
+    papel: "superadmin",
+    ativo: true,
+    cameraIds: [],
+    recipientMigrationVersion: 1,
+  });
+});
+afterAll(() => {
+  const idx = users.all().findIndex((u) => u.id === TEST_ADMIN_ID);
+  if (idx >= 0) users.all().splice(idx, 1);
+});
 beforeEach(() => {
   writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+  renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {});
 });
 afterEach(() => {
   writeSpy.mockRestore();
+  renameSpy.mockRestore();
 });
 
 async function makeNotifiableUser({ usuario, papel, cameraIds, whatsapp }) {
   const r = await users.createUser({ usuario, senha: "x", papel, cameraIds });
-  await users.updateProfile(r.user.id, { whatsapp, optIn: true });
+  await recipients.updateProfile(r.user.id, { whatsapp, optIn: true });
   return users.getById(r.user.id);
 }
 
@@ -97,5 +116,54 @@ describe("dispatch.targets — escopo por câmera (papel cliente)", () => {
     const paraY = dispatch.targets(META, "cam-y").map((t) => t.numero);
     expect(paraY).toContain("5588900000006");
     expect(paraY).not.toContain("5588900000005");
+  });
+
+  it("aplica o mesmo escopo a vários números do usuário e bloqueia usuário desativado", async () => {
+    const tag = Date.now();
+    const made = await users.createUser({
+      usuario: `cli-multi-${tag}`,
+      senha: "x",
+      papel: "cliente",
+      cameraIds: ["cam-multi"],
+    });
+    await recipients.updateProfile(made.user.id, {
+      whatsapp: "5588900000011",
+      optIn: true,
+    });
+    await recipients.create({
+      nome: "Segundo telefone",
+      numero: "5588900000012",
+      userId: made.user.id,
+      somenteCriticos: false,
+    });
+    expect(dispatch.targets(META, "cam-multi").map((t) => t.numero)).toEqual(
+      expect.arrayContaining(["5588900000011", "5588900000012"]),
+    );
+    expect(dispatch.targets(META, "cam-outra").map((t) => t.numero)).not.toEqual(
+      expect.arrayContaining(["5588900000011", "5588900000012"]),
+    );
+    const deactivated = await users.updateUser(made.user.id, { ativo: false });
+    expect(deactivated.error).toBeUndefined();
+    expect(users.getById(made.user.id).ativo).toBe(false);
+    expect(dispatch.targets(META, "cam-multi").map((t) => t.numero)).not.toEqual(
+      expect.arrayContaining(["5588900000011", "5588900000012"]),
+    );
+  });
+
+  it("não envia o principal sem consentimento", async () => {
+    const tag = Date.now();
+    const made = await users.createUser({
+      usuario: `cli-optout-${tag}`,
+      senha: "x",
+      papel: "cliente",
+      cameraIds: ["cam-optout"],
+    });
+    await recipients.updateProfile(made.user.id, {
+      whatsapp: "5588900000013",
+      optIn: false,
+    });
+    expect(dispatch.targets(META, "cam-optout").some((t) => t.numero === "5588900000013")).toBe(
+      false,
+    );
   });
 });

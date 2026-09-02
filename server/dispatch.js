@@ -1,6 +1,5 @@
-// Canal WhatsApp — disparo de alertas. Destinatários de DUAS fontes (dedupe por número):
-//   1) lista do superadmin (recipients.json) — números avulsos;
-//   2) usuários com número no /perfil + opt-in + "receber" ativo.
+// Canal WhatsApp — disparo de alertas. recipients é a fonte única: cada número pertence a
+// um usuário, que define o escopo de câmeras no instante do envio.
 // A taxonomia (tipo + crítico) vem do NÚCLEO de alarme (alarm/classify) — o canal só
 // formata/filtra/envia; quem decide o QUE enviar é a política (ADR-004).
 const users = require("./users");
@@ -68,23 +67,16 @@ function passes(f, meta) {
   return true;
 }
 
-// monta a lista única de números a notificar (dedupe por número). `cameraId` (câmera de
-// origem do alarme, quando houver) escopa os usuários papel "cliente": só recebem alarme das
-// câmeras alocadas a eles (users.canSeeCamera — fail-closed sem cameraIds). Os avulsos
-// (recipients.json) e os demais papéis de equipe NÃO são escopados por câmera — só o "cliente".
+// Monta a lista única de números a notificar (dedupe por número). O dono precisa existir e estar
+// ativo. `cameraId` escopa o papel "cliente" pelas câmeras atuais dele; equipe recebe de todas.
 function targets(meta, cameraId) {
   const map = new Map(); // numero -> nome
   for (const r of recipients.all()) {
-    if (!r.ativo || !r.numero) continue;
+    const owner = users.getById(r.userId);
+    if (!owner || !owner.ativo || !r.ativo || !r.numero || !r.optInEm) continue;
+    if (owner.papel === "cliente" && !users.canSeeCamera(owner, cameraId)) continue;
     if (!passes({ somenteCriticos: r.somenteCriticos, tipos: r.tipos }, meta)) continue;
     map.set(r.numero, r.nome);
-  }
-  for (const u of users.all()) {
-    if (!u.ativo || !u.whatsapp || !u.optInEm) continue;
-    if (u.papel === "cliente" && !users.canSeeCamera(u, cameraId)) continue;
-    const f = u.filtros || { ativo: true, somenteCriticos: false, tipos: [] };
-    if (!f.ativo || !passes(f, meta)) continue;
-    if (!map.has(u.whatsapp)) map.set(u.whatsapp, u.usuario);
   }
   return [...map.entries()].map(([numero, nome]) => ({ numero, nome }));
 }

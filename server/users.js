@@ -126,11 +126,11 @@ const PERSIST_ERROR = (acao) => ({
 async function persist(u) {
   if (!usingPg) return saveFile();
   await db.query(
-    `insert into users (id,usuario,senha_hash,papel,ativo,whatsapp,filtros,opt_in_em,criado_em,camera_ids)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `insert into users (id,usuario,senha_hash,papel,ativo,whatsapp,filtros,opt_in_em,criado_em,camera_ids,recipient_migration_version)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (id) do update set usuario=excluded.usuario, senha_hash=excluded.senha_hash, papel=excluded.papel,
        ativo=excluded.ativo, whatsapp=excluded.whatsapp, filtros=excluded.filtros, opt_in_em=excluded.opt_in_em,
-       camera_ids=excluded.camera_ids`,
+       camera_ids=excluded.camera_ids, recipient_migration_version=excluded.recipient_migration_version`,
     [
       u.id,
       u.usuario,
@@ -142,6 +142,7 @@ async function persist(u) {
       u.optInEm ?? null,
       u.criadoEm ?? Date.now(),
       JSON.stringify(u.cameraIds || []),
+      u.recipientMigrationVersion ?? 0,
     ],
   );
 }
@@ -162,6 +163,7 @@ function newSuperadmin() {
     optInEm: null,
     criadoEm: Date.now(),
     cameraIds: [],
+    recipientMigrationVersion: 1,
   };
 }
 
@@ -169,7 +171,10 @@ async function init() {
   if (db.configured()) {
     try {
       const r = await db.query(
-        `select id, usuario, senha_hash as "senhaHash", papel, ativo, whatsapp, filtros, opt_in_em as "optInEm", criado_em as "criadoEm", camera_ids as "cameraIds" from users order by criado_em asc nulls first`,
+        `select id, usuario, senha_hash as "senhaHash", papel, ativo, whatsapp, filtros,
+          opt_in_em as "optInEm", criado_em as "criadoEm", camera_ids as "cameraIds",
+          recipient_migration_version as "recipientMigrationVersion"
+         from users order by criado_em asc nulls first`,
       );
       users = r.rows.map((u) => ({ ...u, cameraIds: u.cameraIds || [] }));
       usingPg = true;
@@ -209,7 +214,7 @@ async function init() {
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 function publicUser(u) {
-  const { senhaHash: _senhaHash, ...r } = u; // omite o hash de senha do objeto público
+  const { senhaHash: _senhaHash, recipientMigrationVersion: _migration, ...r } = u;
   return r;
 }
 function getById(id) {
@@ -257,6 +262,7 @@ async function createUser({ usuario, senha, papel, cameraIds }) {
     optInEm: null,
     criadoEm: Date.now(),
     cameraIds: sanitizeCameraIds(cameraIds) ?? [],
+    recipientMigrationVersion: 1,
   };
   users.push(u);
   try {
@@ -342,6 +348,35 @@ async function updateProfile(id, patch) {
   return { user: publicUser(u) };
 }
 
+async function markRecipientMigration(ids, version = 1, client = null) {
+  const target = users.filter(
+    (u) => ids.includes(u.id) && Number(u.recipientMigrationVersion || 0) < version,
+  );
+  if (!target.length) return;
+  const before = target.map((u) => [u, u.recipientMigrationVersion]);
+  for (const u of target) u.recipientMigrationVersion = version;
+  try {
+    if (client) {
+      for (const u of target)
+        await client.query("update users set recipient_migration_version=$1 where id=$2", [
+          version,
+          u.id,
+        ]);
+    } else if (!usingPg) saveFile();
+    else
+      await db.transaction(async (client) => {
+        for (const u of target)
+          await client.query("update users set recipient_migration_version=$1 where id=$2", [
+            version,
+            u.id,
+          ]);
+      });
+  } catch (e) {
+    for (const [u, oldVersion] of before) u.recipientMigrationVersion = oldVersion;
+    throw e;
+  }
+}
+
 module.exports = {
   init,
   authenticate,
@@ -351,12 +386,14 @@ module.exports = {
   removeUser,
   getProfile,
   updateProfile,
+  markRecipientMigration,
   hashPassword,
   insecureDefaults,
   bootAbort,
   constantTimeEqual,
   genId,
   getById,
+  publicUser,
   all: () => users,
   persistence: () => (usingPg ? "pg" : "json"), // guardião de persistência (persistence-health.js)
   publicList: () => users.map(publicUser),

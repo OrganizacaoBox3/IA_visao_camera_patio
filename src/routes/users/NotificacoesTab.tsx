@@ -3,6 +3,7 @@ import {
   Button,
   Input,
   Field,
+  Select,
   Switch,
   CheckboxRow,
   HelpTip,
@@ -24,6 +25,7 @@ import {
   type WaStatus,
   type Recipient,
   type NotifSettings,
+  type AdminUser,
 } from "../../api";
 import type { ConfirmRemove } from "./types";
 
@@ -34,13 +36,20 @@ const TIPO_LABEL: Record<string, string> = {
   objetos: "Objetos / presença",
 };
 
-type NovoDest = { nome: string; numero: string; somenteCriticos: boolean };
+type NovoDest = {
+  nome: string;
+  numero: string;
+  somenteCriticos: boolean;
+  userId: string;
+  principal: boolean;
+};
 
 type Props = {
   wa: WaStatus | null;
   waNum: string;
   setWaNum: Dispatch<SetStateAction<string>>;
   dests: Recipient[];
+  users: AdminUser[];
   setDests: Dispatch<SetStateAction<Recipient[]>>;
   loading: boolean;
   novoDest: NovoDest;
@@ -58,6 +67,7 @@ export function NotificacoesTab({
   waNum,
   setWaNum,
   dests,
+  users,
   setDests,
   loading,
   novoDest,
@@ -123,7 +133,12 @@ export function NotificacoesTab({
   // Toggles de destinatário: antes eram `.then(refreshDests)` sem catch → falha silenciosa + unhandled rejection.
   async function onPatchDest(
     id: string,
-    patch: Partial<{ ativo: boolean; somenteCriticos: boolean }>,
+    patch: Partial<{
+      ativo: boolean;
+      somenteCriticos: boolean;
+      userId: string;
+      principal: boolean;
+    }>,
   ) {
     try {
       await patchRecipient(id, patch);
@@ -159,7 +174,13 @@ export function NotificacoesTab({
     setErr(null);
     try {
       await createRecipient(novoDest);
-      setNovoDest({ nome: "", numero: "", somenteCriticos: true });
+      setNovoDest((d) => ({
+        nome: "",
+        numero: "",
+        somenteCriticos: true,
+        userId: d.userId,
+        principal: false,
+      }));
       await refreshDests();
       toast("Destinatário cadastrado.", "ok");
     } catch (e2) {
@@ -325,9 +346,9 @@ export function NotificacoesTab({
         <SectionTitle>Destinatários do WhatsApp ({dests.length})</SectionTitle>
         {/* Prosa >1 linha vira tooltip (regra de ouro): a tela fica com 1 linha essencial. */}
         <p className="meta-text muted">
-          Números avulsos que também recebem os alertas — colha o consentimento (LGPD).{" "}
+          Cada número pertence a um usuário e recebe apenas alertas das câmeras permitidas.{" "}
           <HelpTip label="Mais sobre destinatários">
-            Além destes números, cada usuário pode cadastrar o próprio WhatsApp em “Meu perfil”.
+            O número principal aparece em “Meu perfil”. Números adicionais ficam somente aqui.
             Quem cadastra número de terceiros responde pelo consentimento (LGPD).
           </HelpTip>
         </p>
@@ -344,6 +365,19 @@ export function NotificacoesTab({
             value={novoDest.numero}
             onChange={(e) => setNovoDest((d) => ({ ...d, numero: e.target.value }))}
           />
+          <Select
+            value={novoDest.userId}
+            onChange={(userId) => setNovoDest((d) => ({ ...d, userId }))}
+            options={users.map((u) => ({ value: u.id, label: u.usuario }))}
+            ariaLabel="Usuário responsável"
+          />
+          <CheckboxRow
+            id="chk-dest-principal"
+            checked={novoDest.principal}
+            onCheckedChange={(principal) => setNovoDest((d) => ({ ...d, principal }))}
+          >
+            principal
+          </CheckboxRow>
           <CheckboxRow
             id="chk-dest-crit"
             checked={novoDest.somenteCriticos}
@@ -367,6 +401,8 @@ export function NotificacoesTab({
             // Nome absorve a largura livre; demais colunas compactas (sem faixa morta).
             { label: "Nome", className: "w-full" },
             { label: "Número", className: "whitespace-nowrap" },
+            { label: "Usuário", className: "whitespace-nowrap" },
+            { label: "Principal", className: "whitespace-nowrap" },
             { label: "Filtro", className: "whitespace-nowrap" },
             { label: "Status", className: "whitespace-nowrap" },
             { label: "Ações", className: "whitespace-nowrap text-right" },
@@ -377,6 +413,21 @@ export function NotificacoesTab({
               <tr key={d.id}>
                 <td>{d.nome}</td>
                 <td className="mono">{d.numero}</td>
+                <td>
+                  <Select
+                    value={d.userId}
+                    onChange={(userId) => onPatchDest(d.id, { userId })}
+                    options={users.map((u) => ({ value: u.id, label: u.usuario }))}
+                    ariaLabel={`Usuário responsável por ${d.nome || d.numero}`}
+                  />
+                </td>
+                <td>
+                  <Switch
+                    checked={d.principal}
+                    onCheckedChange={(principal) => onPatchDest(d.id, { principal })}
+                    ariaLabel={`Número principal de ${d.nome || d.numero}`}
+                  />
+                </td>
                 <td>
                   <div className="cell-toggle">
                     <Switch
@@ -412,13 +463,13 @@ export function NotificacoesTab({
             {loading &&
               Array.from({ length: 3 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  <td colSpan={5}>
+                  <td colSpan={7}>
                     <Skeleton w="100%" h={16} />
                   </td>
                 </tr>
               ))}
             {!loading && dests.length === 0 && (
-              <TableEmpty colSpan={5}>Nenhum destinatário avulso.</TableEmpty>
+              <TableEmpty colSpan={7}>Nenhum destinatário cadastrado.</TableEmpty>
             )}
           </tbody>
         </Table>

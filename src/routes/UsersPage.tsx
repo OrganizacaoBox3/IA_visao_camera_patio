@@ -49,7 +49,13 @@ export function UsersPage() {
   const [waNum, setWaNum] = useState("");
   const [dests, setDests] = useState<Recipient[]>([]);
   const [destsLoading, setDestsLoading] = useState(true);
-  const [novoDest, setNovoDest] = useState({ nome: "", numero: "", somenteCriticos: true });
+  const [novoDest, setNovoDest] = useState({
+    nome: "",
+    numero: "",
+    somenteCriticos: true,
+    userId: user.id,
+    principal: false,
+  });
   const [notif, setNotif] = useState<NotifSettings | null>(null);
   const [preview, setPreview] = useState<Record<string, string> | null>(null);
   const [secao, setSecao] = useState<"usuarios" | "notificacoes" | "cameras">("usuarios");
@@ -155,6 +161,7 @@ export function UsersPage() {
               waNum={waNum}
               setWaNum={setWaNum}
               dests={dests}
+              users={rows}
               setDests={setDests}
               loading={destsLoading}
               novoDest={novoDest}

@@ -37,6 +37,25 @@ function query(text, params) {
   return getPool().query(text, params);
 }
 
+async function transaction(run) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const result = await run(client);
+    await client.query("commit");
+    return result;
+  } catch (e) {
+    try {
+      await client.query("rollback");
+    } catch (rollbackError) {
+      console.error("[db] falha no rollback:", rollbackError.message);
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // Esquema completo vem de server/schema.sql (fonte única; idempotente). LGPD: só indicadores.
 const SCHEMA = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
 
@@ -55,4 +74,4 @@ async function init() {
   }
 }
 
-module.exports = { configured, getPool, query, init };
+module.exports = { configured, getPool, query, transaction, init };

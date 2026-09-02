@@ -20,6 +20,8 @@ server/dvr.json
 server/shifts.json
 server/users.json
 server/recipients.json
+server/recipients.json.tmp
+server/recipients.pre-user-link.bak.json
 server/notif-settings.json
 server/data-hist.json
 server/data-hist.json.*
