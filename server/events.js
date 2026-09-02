@@ -216,7 +216,10 @@ async function forward(id, by) {
 
 // Aplica os FILTROS da consulta, sem cortar (o universo da pergunta, sempre ts desc).
 // Separado do corte de propósito: `total` só é honesto se contar DEPOIS do filtro e ANTES do limite.
-function match({ since, state, priority } = {}) {
+// `cameraIds` (RBAC com escopo, papel "cliente"): array = só esses ids; null/undefined = sem
+// restrição (equipe). Filtra AQUI, antes do corte de `limit` — senão `total`/`truncated`
+// mentiriam pro cliente (contariam o universo GLOBAL, não o dele).
+function match({ since, state, priority, cameraIds } = {}) {
   let out = list;
   if (since != null && !Number.isNaN(Number(since))) {
     const s = Number(since);
@@ -224,6 +227,10 @@ function match({ since, state, priority } = {}) {
   }
   if (state && STATES.has(state)) out = out.filter((e) => e.state === state);
   if (priority && PRIORITIES.has(priority)) out = out.filter((e) => e.priority === priority);
+  if (Array.isArray(cameraIds)) {
+    const allow = new Set(cameraIds);
+    out = out.filter((e) => e.cameraId != null && allow.has(String(e.cameraId)));
+  }
   return out;
 }
 

@@ -6,8 +6,13 @@
 //   - "superadmin": acesso total — gestão de usuários, câmeras, notificações E configuração (thresholds/zonas).
 //   - "engenheiro": equipe de engenharia/setup — PODE configurar (thresholds/zonas), mas NÃO gerencia usuários.
 //   - "usuario":    operador em modo só-visualização/operação — NÃO configura nem gerencia usuários.
+//   - "cliente":    ESCOPADO por câmera (cameraIds) — vê e é notificado só das câmeras alocadas a
+//     ele. Só-visualização (não configura). cameraIds VAZIO = não vê NENHUMA câmera (fail-closed:
+//     um cliente recém-criado sem alocação não pode "ver tudo por engano" — spec-multitenancy
+//     §4 S3, mesma régua). Papéis de equipe (superadmin/engenheiro/usuario) IGNORAM cameraIds —
+//     sempre veem tudo; o campo só tem efeito prático no papel "cliente".
 // A capacidade de CONFIGURAR (canConfigure) = superadmin OU engenheiro; ver helper canConfigure() abaixo.
-const ROLES = ["superadmin", "engenheiro", "usuario"];
+const ROLES = ["superadmin", "engenheiro", "usuario", "cliente"];
 const fs = require("node:fs");
 const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
@@ -58,7 +63,7 @@ function verifyToken(token) {
     const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
     if (!p.exp || p.exp < Date.now()) return null;
     const u = users.find((x) => x.id === p.id && x.ativo);
-    return u ? { id: u.id, usuario: u.usuario, papel: u.papel } : null;
+    return u ? { id: u.id, usuario: u.usuario, papel: u.papel, cameraIds: u.cameraIds || [] } : null;
   } catch {
     return null;
   }
@@ -121,10 +126,11 @@ const PERSIST_ERROR = (acao) => ({
 async function persist(u) {
   if (!usingPg) return saveFile();
   await db.query(
-    `insert into users (id,usuario,senha_hash,papel,ativo,whatsapp,filtros,opt_in_em,criado_em)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `insert into users (id,usuario,senha_hash,papel,ativo,whatsapp,filtros,opt_in_em,criado_em,camera_ids)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      on conflict (id) do update set usuario=excluded.usuario, senha_hash=excluded.senha_hash, papel=excluded.papel,
-       ativo=excluded.ativo, whatsapp=excluded.whatsapp, filtros=excluded.filtros, opt_in_em=excluded.opt_in_em`,
+       ativo=excluded.ativo, whatsapp=excluded.whatsapp, filtros=excluded.filtros, opt_in_em=excluded.opt_in_em,
+       camera_ids=excluded.camera_ids`,
     [
       u.id,
       u.usuario,
@@ -135,6 +141,7 @@ async function persist(u) {
       u.filtros == null ? null : JSON.stringify(u.filtros),
       u.optInEm ?? null,
       u.criadoEm ?? Date.now(),
+      JSON.stringify(u.cameraIds || []),
     ],
   );
 }
@@ -154,6 +161,7 @@ function newSuperadmin() {
     filtros: null,
     optInEm: null,
     criadoEm: Date.now(),
+    cameraIds: [],
   };
 }
 
@@ -161,9 +169,9 @@ async function init() {
   if (db.configured()) {
     try {
       const r = await db.query(
-        `select id, usuario, senha_hash as "senhaHash", papel, ativo, whatsapp, filtros, opt_in_em as "optInEm", criado_em as "criadoEm" from users order by criado_em asc nulls first`,
+        `select id, usuario, senha_hash as "senhaHash", papel, ativo, whatsapp, filtros, opt_in_em as "optInEm", criado_em as "criadoEm", camera_ids as "cameraIds" from users order by criado_em asc nulls first`,
       );
-      users = r.rows;
+      users = r.rows.map((u) => ({ ...u, cameraIds: u.cameraIds || [] }));
       usingPg = true;
       if (!users.length) {
         const su = newSuperadmin();
@@ -218,7 +226,22 @@ function canConfigure(papel) {
   return papel === "superadmin" || papel === "engenheiro";
 }
 
-async function createUser({ usuario, senha, papel }) {
+// papel "cliente" só vê/recebe alarme das câmeras em cameraIds; cameraIds vazio = nenhuma
+// (fail-closed — um cliente novo sem alocação não vê nada por engano, nunca tudo por engano).
+// Demais papéis (equipe): sempre true — a restrição não se aplica a eles.
+function canSeeCamera(user, cameraId) {
+  if (!user || user.papel !== "cliente") return true;
+  if (cameraId == null) return false;
+  return Array.isArray(user.cameraIds) && user.cameraIds.includes(String(cameraId));
+}
+// sanitiza a lista de câmeras alocadas: array de strings não-vazias, sem duplicata. SEM
+// cross-check contra o registro de câmeras (mesmo padrão de shiftIds em zones.ts) — um id
+// pendurado (câmera removida depois) só faz o filtro não casar nada, nunca casar demais.
+function sanitizeCameraIds(v) {
+  return Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter(Boolean))] : undefined;
+}
+
+async function createUser({ usuario, senha, papel, cameraIds }) {
   usuario = String(usuario || "").trim();
   if (!usuario || !senha) return { error: "usuário e senha são obrigatórios" };
   if (users.some((u) => u.usuario.toLowerCase() === usuario.toLowerCase()))
@@ -233,6 +256,7 @@ async function createUser({ usuario, senha, papel }) {
     filtros: null,
     optInEm: null,
     criadoEm: Date.now(),
+    cameraIds: sanitizeCameraIds(cameraIds) ?? [],
   };
   users.push(u);
   try {
@@ -259,6 +283,8 @@ async function updateUser(id, patch) {
   if (typeof patch.ativo === "boolean") u.ativo = patch.ativo;
   u.papel = willPapel;
   if (patch.senha) u.senhaHash = hashPassword(patch.senha);
+  const newCameraIds = sanitizeCameraIds(patch.cameraIds);
+  if (newCameraIds !== undefined) u.cameraIds = newCameraIds;
   try {
     await persist(u);
   } catch (e) {
@@ -337,4 +363,5 @@ module.exports = {
   ROLES,
   normalizeRole,
   canConfigure,
+  canSeeCamera,
 };

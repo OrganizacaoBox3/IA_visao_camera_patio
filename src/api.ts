@@ -123,13 +123,19 @@ export type AdminUser = {
   ativo: boolean;
   whatsapp?: string;
   criadoEm?: number;
+  // Câmeras alocadas (RBAC com escopo, papel "cliente") — ausente/[] noutros papéis.
+  cameraIds?: string[];
 };
 export const listUsers = () => apiGet<AdminUser[]>("/api/users");
-export const createUser = (u: { usuario: string; senha: string; papel: string }) =>
-  apiSend<AdminUser>("POST", "/api/users", u);
+export const createUser = (u: {
+  usuario: string;
+  senha: string;
+  papel: string;
+  cameraIds?: string[];
+}) => apiSend<AdminUser>("POST", "/api/users", u);
 export const patchUser = (
   id: string,
-  patch: Partial<{ ativo: boolean; papel: string; senha: string }>,
+  patch: Partial<{ ativo: boolean; papel: string; senha: string; cameraIds: string[] }>,
 ) => apiSend<AdminUser>("PATCH", `/api/users/${id}`, patch);
 export const deleteUser = (id: string) => apiSend<{ ok: true }>("DELETE", `/api/users/${id}`);
 export const getCameraEnroll = () => apiGet<{ token: string | null }>("/api/camera-enroll");

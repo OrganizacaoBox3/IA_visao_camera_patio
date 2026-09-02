@@ -4,7 +4,9 @@
 
 export type Reveal = { usuario: string; senha: string };
 
-export type NovoUser = { usuario: string; senha: string; papel: string };
+// cameraIds: só relevante quando papel === "cliente" (câmeras alocadas — RBAC com escopo);
+// demais papéis ignoram o campo. Opcional aqui pra não obrigar todo call-site a preenchê-lo.
+export type NovoUser = { usuario: string; senha: string; papel: string; cameraIds?: string[] };
 
 // Confirmação destrutiva centralizada (substitui window.confirm) — Radix AlertDialog controlado.
 export type ConfirmRemove = {

@@ -2,6 +2,8 @@
 // câmera. GET = qualquer autenticado; PUT = requireConfigurer (por câmera).
 // Emite "camcfg-updated" aos painéis via io a cada gravação.
 const camcfg = require("../camcfg");
+const { canSeeCamera } = require("../users");
+const { emitScopedByCamera } = require("../socket-scope");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireConfigurer, io } = ctx;
@@ -13,7 +15,9 @@ async function handle(req, res, ctx) {
   if (mtw) {
     const cameraId = decodeURIComponent(mtw[1]);
     if (req.method === "GET") {
-      if (!requireAuth(req, res)) return true;
+      const me = requireAuth(req, res);
+      if (!me) return true;
+      if (!canSeeCamera(me, cameraId)) return json(res, 403, { error: "sem acesso a esta câmera" }), true;
       json(res, 200, camcfg.getTripwires(cameraId));
       return true;
     }
@@ -21,7 +25,7 @@ async function handle(req, res, ctx) {
       if (!requireConfigurer(req, res)) return true;
       const body = JSON.parse((await readBody(req, 200_000)) || "{}");
       const saved = await camcfg.saveTripwires(cameraId, body && body.tripwires);
-      io.to("dashboards").emit("camcfg-updated", { kind: "tripwires", cameraId });
+      emitScopedByCamera(io, "camcfg-updated", { kind: "tripwires", cameraId }, cameraId);
       json(res, 200, saved);
       return true;
     }
@@ -33,7 +37,9 @@ async function handle(req, res, ctx) {
   if (mzn) {
     const cameraId = decodeURIComponent(mzn[1]);
     if (req.method === "GET") {
-      if (!requireAuth(req, res)) return true;
+      const me = requireAuth(req, res);
+      if (!me) return true;
+      if (!canSeeCamera(me, cameraId)) return json(res, 403, { error: "sem acesso a esta câmera" }), true;
       json(res, 200, camcfg.getZones(cameraId));
       return true;
     }
@@ -53,7 +59,7 @@ async function handle(req, res, ctx) {
         }
         throw e;
       }
-      io.to("dashboards").emit("camcfg-updated", { kind: "zones", cameraId });
+      emitScopedByCamera(io, "camcfg-updated", { kind: "zones", cameraId }, cameraId);
       json(res, 200, saved);
       return true;
     }
@@ -66,7 +72,9 @@ async function handle(req, res, ctx) {
   if (mcc) {
     const cameraId = decodeURIComponent(mcc[1]);
     if (req.method === "GET") {
-      if (!requireAuth(req, res)) return true;
+      const me = requireAuth(req, res);
+      if (!me) return true;
+      if (!canSeeCamera(me, cameraId)) return json(res, 403, { error: "sem acesso a esta câmera" }), true;
       json(res, 200, camcfg.getCamConfig(cameraId));
       return true;
     }
@@ -92,7 +100,7 @@ async function handle(req, res, ctx) {
         json(res, 400, { error: "config inválida" });
         return true;
       }
-      io.to("dashboards").emit("camcfg-updated", { kind: "camconfig", cameraId });
+      emitScopedByCamera(io, "camcfg-updated", { kind: "camconfig", cameraId }, cameraId);
       json(res, 200, saved);
       return true;
     }
@@ -105,7 +113,9 @@ async function handle(req, res, ctx) {
   if (mcal) {
     const cameraId = decodeURIComponent(mcal[1]);
     if (req.method === "GET") {
-      if (!requireAuth(req, res)) return true;
+      const me = requireAuth(req, res);
+      if (!me) return true;
+      if (!canSeeCamera(me, cameraId)) return json(res, 403, { error: "sem acesso a esta câmera" }), true;
       json(res, 200, camcfg.getCalibration(cameraId));
       return true;
     }
@@ -118,7 +128,7 @@ async function handle(req, res, ctx) {
         return true;
       }
       // Novo kind ADITIVO: o engine ignora kinds desconhecidos (onCamcfgUpdated) — contrato intacto.
-      io.to("dashboards").emit("camcfg-updated", { kind: "calibration", cameraId });
+      emitScopedByCamera(io, "camcfg-updated", { kind: "calibration", cameraId }, cameraId);
       json(res, 200, saved);
       return true;
     }

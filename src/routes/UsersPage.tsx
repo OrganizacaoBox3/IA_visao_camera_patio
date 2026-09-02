@@ -17,10 +17,12 @@ import {
   getWaStatus,
   listRecipients,
   getNotifSettings,
+  getConnectedCameras,
   type AdminUser,
   type WaStatus,
   type Recipient,
   type NotifSettings,
+  type ConnectedCamera,
 } from "../api";
 import { UsersTab } from "./users/UsersTab";
 import { NotificacoesTab } from "./users/NotificacoesTab";
@@ -40,6 +42,9 @@ export function UsersPage() {
 
   const [novo, setNovo] = useState<NovoUser>({ usuario: "", senha: "", papel: "usuario" });
   const [camToken, setCamToken] = useState<string | null>(null);
+  // Câmeras conhecidas pelo hub — usado no seletor de alocação do papel "cliente" (RBAC com
+  // escopo). Superadmin vê todas aqui (a rota não escopa quem já é equipe).
+  const [cameras, setCameras] = useState<ConnectedCamera[]>([]);
   const [wa, setWa] = useState<WaStatus | null>(null);
   const [waNum, setWaNum] = useState("");
   const [dests, setDests] = useState<Recipient[]>([]);
@@ -75,6 +80,9 @@ export function UsersPage() {
       .finally(() => setDestsLoading(false));
     getNotifSettings()
       .then(setNotif)
+      .catch(() => {});
+    getConnectedCameras()
+      .then((r) => setCameras(r.cameras))
       .catch(() => {});
     const poll = () =>
       getWaStatus()
@@ -173,6 +181,7 @@ export function UsersPage() {
               setErr={setErr}
               setReveal={setReveal}
               setConfirmRemove={setConfirmRemove}
+              cameras={cameras}
             />
           </TabsContent>
         </Tabs>

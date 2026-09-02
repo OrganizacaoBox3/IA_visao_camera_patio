@@ -68,8 +68,11 @@ function passes(f, meta) {
   return true;
 }
 
-// monta a lista única de números a notificar (dedupe por número)
-function targets(meta) {
+// monta a lista única de números a notificar (dedupe por número). `cameraId` (câmera de
+// origem do alarme, quando houver) escopa os usuários papel "cliente": só recebem alarme das
+// câmeras alocadas a eles (users.canSeeCamera — fail-closed sem cameraIds). Os avulsos
+// (recipients.json) e os demais papéis de equipe NÃO são escopados por câmera — só o "cliente".
+function targets(meta, cameraId) {
   const map = new Map(); // numero -> nome
   for (const r of recipients.all()) {
     if (!r.ativo || !r.numero) continue;
@@ -78,6 +81,7 @@ function targets(meta) {
   }
   for (const u of users.all()) {
     if (!u.ativo || !u.whatsapp || !u.optInEm) continue;
+    if (u.papel === "cliente" && !users.canSeeCamera(u, cameraId)) continue;
     const f = u.filtros || { ativo: true, somenteCriticos: false, tipos: [] };
     if (!f.ativo || !passes(f, meta)) continue;
     if (!map.has(u.whatsapp)) map.set(u.whatsapp, u.usuario);
@@ -87,8 +91,9 @@ function targets(meta) {
 
 // priority (advisory|high|critical) é opcional e vem da política de alarmes (alarmPolicy).
 // Quando informado, ele tem precedência sobre a heurística local: "critical" força o
-// cabeçalho de alerta (🔴) e expõe meta.priority p/ futuros consumidores.
-function dispatchAlert(text, ts, priority) {
+// cabeçalho de alerta (🔴) e expõe meta.priority p/ futuros consumidores. `cameraId` roteia
+// o alarme só aos clientes alocados àquela câmera (targets) — ver nota acima.
+function dispatchAlert(text, ts, priority, cameraId) {
   if (!text || !whatsapp.enabled() || !whatsapp.status().connected) return;
   const meta = classify(text);
   if (priority) {
@@ -100,7 +105,7 @@ function dispatchAlert(text, ts, priority) {
   if (cfg.tipos[meta.tipo] && cfg.tipos[meta.tipo].ativo === false) return; // tipo desligado pelo superadmin
   const msg = formatWhatsApp(text, meta, ts, cfg); // mensagem profissional (não o texto cru do toast)
   const now = Date.now();
-  for (const t of targets(meta)) {
+  for (const t of targets(meta, cameraId)) {
     // Dedup de canal (nº|texto) = REDE DE SEGURANÇA do modo ALARM_POLICY_ENABLED=0 (sem a
     // política, ninguém deduplicou ainda). Com a política LIGADA (default), o dedup mora num
     // lugar só — alarm/state.dedup — e este mapa fica inerte (não checa nem acumula).

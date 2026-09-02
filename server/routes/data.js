@@ -1,6 +1,14 @@
 // Rotas de histórico/indicadores (Postgres com fallback JSON): /api/ingest,
 // /api/data/*, /api/data/status e /api/data/clear.
 const pgstore = require("../pgstore");
+const { canSeeCamera } = require("../users");
+
+// RBAC com escopo (papel "cliente"): só "ativ" e "flow" carregam cameraId no bucket/evento
+// (ver server/pgstore.js BUCKET_SQL/EVENT_SQL). "read"/"obj"/"fad" não têm câmera atribuível
+// no schema atual — em vez de arriscar misturar dado de câmeras de outro cliente (ou vazar
+// setor/posto sem dono claro), bloqueamos esses três kinds pro papel "cliente" (fail-closed;
+// residual conhecido, não escondido).
+const CAMERA_ATTRIBUTABLE_KINDS = new Set(["ativ", "flow"]);
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireSuper } = ctx;
@@ -23,12 +31,15 @@ async function handle(req, res, ctx) {
 
   const mb = req.url && req.url.match(/^\/api\/data\/(ativ|read|obj|fad|flow)\/(buckets|events)$/);
   if (mb && req.method === "GET") {
-    if (!requireAuth(req, res)) return true;
-    json(
-      res,
-      200,
-      mb[2] === "buckets" ? await pgstore.buckets(mb[1]) : await pgstore.events(mb[1]),
-    );
+    const me = requireAuth(req, res);
+    if (!me) return true;
+    const kind = mb[1];
+    if (me.papel === "cliente" && !CAMERA_ATTRIBUTABLE_KINDS.has(kind)) {
+      json(res, 403, { error: "acesso restrito à equipe" });
+      return true;
+    }
+    const rows = mb[2] === "buckets" ? await pgstore.buckets(kind) : await pgstore.events(kind);
+    json(res, 200, me.papel === "cliente" ? rows.filter((r) => canSeeCamera(me, r.cameraId)) : rows);
     return true;
   }
 

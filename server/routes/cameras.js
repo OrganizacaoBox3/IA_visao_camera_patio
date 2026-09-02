@@ -6,6 +6,7 @@ const rtsp = require("../rtsp");
 const users = require("../users");
 const { bearer } = require("../http-auth");
 const videoTicket = require("../video-ticket");
+const { visibleCameras } = require("../socket-scope");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireSuper, cameraList } = ctx;
@@ -37,6 +38,13 @@ async function handle(req, res, ctx) {
     } catch {
       src = undefined;
     }
+    // RBAC com escopo (spec-multitenancy §4 S1): um ticket com `src` de câmera fora da alocação
+    // do "cliente" driblaria TODO o filtro de socket (watch/cam:<id>) indo direto no proxy do
+    // go2rtc. Dispositivo (CAMERA_TOKEN) não tem papel — nunca é "cliente", passa sempre.
+    if (user && src && !users.canSeeCamera(user, src)) {
+      json(res, 403, { error: "sem acesso a esta câmera" });
+      return true;
+    }
     json(res, 200, { ticket: videoTicket.signTicket({ src }) });
     return true;
   }
@@ -46,13 +54,15 @@ async function handle(req, res, ctx) {
   // id/rótulo/disponibilidade (sem URL/credencial — o CRUD abaixo segue superadmin).
   // CONTRATO com o front (não mudar o shape): { cameras: [{ id, label, online }] }.
   if (req.url === "/api/cameras/connected" && req.method === "GET") {
-    if (!requireAuth(req, res)) return true;
+    const me = requireAuth(req, res);
+    if (!me) return true;
     // RTSP: online = ffmpeg entregando ("online") ou pausado pelo shed ("idle" — religa sozinho
     // ao ganhar espectador); "connecting"/"error"/"stopped" = indisponível agora.
     // Nó-navegador: estar no registry = socket conectado = online.
     const rtspState = new Map(rtsp.statuses().map((s) => [s.id, s.state]));
+    // Escopado por câmera (RBAC — papel "cliente" só vê as câmeras alocadas a ele).
     json(res, 200, {
-      cameras: cameraList().map((c) => ({
+      cameras: visibleCameras(cameraList(), me).map((c) => ({
         id: String(c.id),
         label: String(c.label || c.id),
         online: c.kind === "rtsp" ? ["online", "idle"].includes(rtspState.get(c.id)) : true,

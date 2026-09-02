@@ -11,7 +11,10 @@ const KEY = "vp-auth";
 //   - "superadmin": acesso total (gestão de usuários/câmeras/notificações + configuração).
 //   - "engenheiro": equipe de configuração/setup — PODE editar thresholds/zonas; NÃO gerencia usuários.
 //   - "usuario":    operador em modo só-visualização — não configura nem gerencia usuários.
-export type Papel = "superadmin" | "engenheiro" | "usuario";
+//   - "cliente":    RBAC com escopo (spec-multitenancy) — só-visualização das câmeras alocadas a
+//     ele (users.cameraIds no servidor); nunca configura. A restrição é toda no SERVIDOR (REST +
+//     socket) — o front não precisa filtrar nada, só recebe o que já vem escopado.
+export type Papel = "superadmin" | "engenheiro" | "usuario" | "cliente";
 export type AuthUser = { id: string; usuario: string; papel: Papel };
 type Session = { token: string; user: AuthUser };
 

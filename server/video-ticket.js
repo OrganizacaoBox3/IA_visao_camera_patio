@@ -10,9 +10,11 @@
 // A verificação é timing-safe (crypto.timingSafeEqual) e checa expiração. Um ticket COM `src` só
 // vale p/ aquele stream; um ticket SEM `src` (GERAL) vale p/ paths sem stream (ex.: /api/streams).
 //
-// PONTO CEGO honesto: como QUALQUER usuário autenticado obtém um ticket (o gate fino por câmera/
-// escopo é a fase do túnel), o `src` aqui é HIGIENE de binding, não fronteira de autorização entre
-// usuários. O que este tijolo fecha é o "sem token nenhum".
+// O gate fino por câmera/escopo (RBAC papel "cliente") mora em routes/cameras.js: antes de
+// assinar um ticket com `src`, ele checa users.canSeeCamera(user, src) e recusa com 403 se a
+// câmera está fora da alocação do usuário. Sem essa checagem na EMISSÃO, o `src` aqui seria só
+// higiene de binding (qualquer autenticado pediria ticket de qualquer câmera) — com ela, o
+// ticket também é fronteira de autorização ENTRE usuários, não só "sem token nenhum".
 const crypto = require("node:crypto");
 
 // MESMO AUTH_SECRET do server/users.js (resolvido igual: env com o mesmo default inseguro de dev).
