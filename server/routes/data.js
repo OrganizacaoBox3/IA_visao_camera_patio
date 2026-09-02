@@ -15,7 +15,12 @@ async function handle(req, res, ctx) {
 
   // Histórico/indicadores no Postgres (qualquer usuário autenticado)
   if (req.url === "/api/ingest" && req.method === "POST") {
-    if (!requireAuth(req, res)) return true;
+    const me = requireAuth(req, res);
+    if (!me) return true;
+    if (me.papel === "cliente") {
+      json(res, 403, { error: "acesso restrito à equipe" });
+      return true;
+    }
     const { kind, op, payload } = JSON.parse((await readBody(req, 200_000)) || "{}");
     await pgstore.ingest(kind, op, payload);
     json(res, 200, { ok: true });
