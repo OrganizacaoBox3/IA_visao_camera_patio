@@ -10,7 +10,7 @@ import {
   type ObjBackend,
 } from "../objects/detector";
 import { objClass } from "../objects/catalog";
-import { assignZone } from "../zones";
+import { assignZoneByOverlap, DEFAULT_OCCUPANCY_TOLERANCE_MS } from "../zones";
 import type { ObjSample, ObjectEvent } from "../report/store";
 import type { FrameSource } from "../frame";
 import type { Disposable } from "./types";
@@ -30,6 +30,9 @@ export type ObjetosSetor = {
   w: number;
   h: number;
   contains?: (nx: number, ny: number) => boolean;
+  // Lotação (contagem de pessoas): alvo opcional de nº de pessoas. Ausente = alerta desligado.
+  targetOccupancy?: number;
+  occupancyToleranceMs?: number;
 };
 export type ObjetosCtx = { frame: FrameSource; now: number };
 export type ObjetosResult = {
@@ -42,6 +45,10 @@ export type ObjetosResult = {
   samples: ObjSample[] | null; // a cada 5s
   events: ObjectEvent[]; // carregamento + entrada/saída
   alerts: string[]; // toasts de transição de presença
+  // Lotação fora do alvo por ≥ occupancyToleranceMs (setor com targetOccupancy configurado).
+  // Separado de `alerts` de propósito: este vai pro canal de alarme (WhatsApp/Andon) via
+  // prefixo "⚠" que a view acrescenta — entrada/saída de presença NÃO deve virar alarme.
+  occupancyAlerts: { setor: string; count: number; target: number }[];
 };
 
 type Accum = {
@@ -73,6 +80,10 @@ export class ObjetosProcessor implements Disposable {
   private lastAccum = 0;
   private lastEmit = 0;
   private lastCargaEvt = 0;
+  // Lotação: quando a contagem de pessoas do setor está fora do alvo, desde quando (`since`) e
+  // se já disparamos o alarme dessa deviação (`alerted`, evita repetir a cada tick enquanto
+  // persiste — só dispara de novo depois de voltar ao alvo e desviar de novo).
+  private occupancyState = new Map<string, { since: number; alerted: boolean }>();
   // Perfil "longo alcance" (opt-in POR CÂMERA — a frente C chama setLongRange conforme a config).
   // Default false = comportamento atual. Quando ligado, baixa o limiar de score na filtragem das
   // detecções de ocupação (longRange.objectScoreThreshold) p/ resgatar objetos distantes/pequenos.
@@ -91,15 +102,19 @@ export class ObjetosProcessor implements Disposable {
     this.longRange = on;
   }
 
-  // Setor do objeto pela regra ÚNICA de atribuição de zona (zones.assignZone): com setores
-  // SOBREPOSTOS, desempate por maior interseção bbox∩setor, depois menor área — o first-match
-  // por ordem de lista atribuía ao setor errado (mesmo bug já corrigido na atividade).
-  // Fora de qualquer setor → 1º setor (fallback histórico deste modo; "Cena" sem setores).
-  private zoneOf(setores: ObjetosSetor[], bbox: readonly [number, number, number, number]): string {
-    const cx = bbox[0] + bbox[2] / 2,
-      cy = bbox[1] + bbox[3] / 2;
-    const z = assignZone(setores, cx, cy, bbox, (s) => s.contains);
-    return z?.label ?? setores[0]?.label ?? "Cena";
+  // Setor do objeto por SOBREPOSIÇÃO (zones.assignZoneByOverlap — SÓ modo Objetos, decisão de
+  // produto: basta parte da caixa estar na área, não o centro — assignZone/centro-in-polygon é
+  // estrito demais e sub-contava gente na borda). Com setores SOBREPOSTOS, desempate por maior
+  // interseção bbox∩setor, depois menor área. Fora de TODOS os setores → null: NÃO cai mais no
+  // 1º setor por fallback (esse fallback fazia toda detecção do frame contar em qualquer setor
+  // chamado com uma lista de 1 elemento — o padrão real de chamada deste processador — anulando
+  // o filtro geométrico por completo; era o bug por trás da contagem "imprecisa" relatada).
+  private zoneOf(
+    setores: ObjetosSetor[],
+    bbox: readonly [number, number, number, number],
+  ): string | null {
+    const z = assignZoneByOverlap(setores, bbox, (s) => s.contains);
+    return z?.label ?? null;
   }
 
   process(setores: ObjetosSetor[], classes: string[], ctx: ObjetosCtx): ObjetosResult {
@@ -132,14 +147,40 @@ export class ObjetosProcessor implements Disposable {
         });
     }
 
-    // contagem + matriz Setor×Classe (sobre a última detecção)
+    // contagem + matriz Setor×Classe (sobre a última detecção) — SÓ o que está (parcialmente)
+    // dentro de algum setor conta; fora de todos → excluído (não vira contagem de setor nenhum).
     const counts: Record<string, number> = {};
     const matrix: Record<string, Record<string, number>> = {};
     for (const s of setores) matrix[s.label] = {};
     for (const d of this.dets) {
-      counts[d.key] = (counts[d.key] ?? 0) + 1;
       const z = this.zoneOf(setores, d.bbox);
+      if (z == null) continue;
+      counts[d.key] = (counts[d.key] ?? 0) + 1;
       (matrix[z] ??= {})[d.key] = (matrix[z][d.key] ?? 0) + 1;
+    }
+
+    // Lotação: setor com targetOccupancy configurado e contagem de "pessoa" fora do alvo por
+    // ≥ occupancyToleranceMs dispara UMA vez (não repete a cada tick enquanto persiste — só
+    // depois de voltar ao alvo e desviar de novo). Setor sem targetOccupancy nunca entra aqui.
+    const occupancyAlerts: ObjetosResult["occupancyAlerts"] = [];
+    for (const s of setores) {
+      if (s.targetOccupancy == null) {
+        this.occupancyState.delete(s.id);
+        continue;
+      }
+      const count = matrix[s.label]?.pessoa ?? 0;
+      if (count === s.targetOccupancy) {
+        this.occupancyState.delete(s.id);
+        continue;
+      }
+      const tolMs = s.occupancyToleranceMs ?? DEFAULT_OCCUPANCY_TOLERANCE_MS;
+      const st = this.occupancyState.get(s.id);
+      if (!st) {
+        this.occupancyState.set(s.id, { since: now, alerted: false });
+      } else if (!st.alerted && now - st.since >= tolMs) {
+        st.alerted = true;
+        occupancyAlerts.push({ setor: s.label, count, target: s.targetOccupancy });
+      }
     }
 
     // heurística "pessoa carregando caixa"
@@ -151,7 +192,7 @@ export class ObjetosProcessor implements Disposable {
       for (const cx of caixas)
         if (overlap(p.bbox, cx.bbox) > 0.02) {
           carregando++;
-          if (!cargaSetor) cargaSetor = this.zoneOf(setores, p.bbox);
+          if (!cargaSetor) cargaSetor = this.zoneOf(setores, p.bbox) ?? "";
           break;
         }
     if (carregando > 0 && now - this.lastCargaEvt > 4000) {
@@ -170,6 +211,7 @@ export class ObjetosProcessor implements Disposable {
       const cur = new Map<string, number>();
       for (const d of this.dets) {
         const z = this.zoneOf(setores, d.bbox);
+        if (z == null) continue;
         const k = `${z}${d.key}`;
         cur.set(k, (cur.get(k) ?? 0) + 1);
       }
@@ -237,6 +279,7 @@ export class ObjetosProcessor implements Disposable {
       samples,
       events,
       alerts,
+      occupancyAlerts,
     };
   }
 

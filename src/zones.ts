@@ -60,6 +60,11 @@ export type Zone = {
   // frentes), mas SEMPRE preenchidos por withDefaults; o motor do hub lê os mesmos campos do
   // camcfg do servidor (allowlist cleanZone — armadilha A5).
   presencaAlertMs?: number; // dwell: presença contínua acima disto → alarme (default 10s)
+  // lotação (modo objetos, contagem de pessoas): alvo opcional de nº de pessoas na zona.
+  // Ausente = alerta de lotação DESLIGADO (comportamento atual, sem esse campo). Fora do alvo
+  // por ≥ occupancyToleranceMs dispara alarme tipo "objetos" (mesmo canal do proibida/atividade).
+  targetOccupancy?: number;
+  occupancyToleranceMs?: number; // default 30s (DEFAULT_OCCUPANCY_TOLERANCE_MS)
   arming?: ZoneArming; // janela de armamento da zona proibida (E4) — decidida no servidor
   // TURNOS atribuídos à zona (spec-turnos-por-zona F2). Ausente/[] = zona 24/7 = comportamento
   // ATUAL (CA-5, default seguro). Numa zona de ATIVIDADE eles gateiam o alerta de ociosidade
@@ -77,6 +82,7 @@ export type Zone = {
 // [0, 86_400_000], sem allowlist de presets, então o servidor persiste o valor como veio.
 export const PRESENCA_ALERT_PRESETS_MS = [2_000, 5_000, 10_000, 30_000, 60_000, 300_000] as const;
 export const DEFAULT_PRESENCA_ALERT_MS = 10_000;
+export const DEFAULT_OCCUPANCY_TOLERANCE_MS = 30_000;
 
 // ── ZONA POLIGONAL (spec zonas-poligonais F1) ─────────────────────────────────
 // O teste fino por PONTO usa o pointInPolygon abaixo (ray casting, puro — morava em
@@ -299,6 +305,19 @@ export function withDefaults(z: Partial<Zone>, cameraId: string): Zone {
       z.presencaAlertMs >= 0
         ? z.presencaAlertMs
         : DEFAULT_PRESENCA_ALERT_MS,
+    // lotação: targetOccupancy só existe quando finito e ≥1 (ausente = alerta desligado);
+    // occupancyToleranceMs sempre presente, como presencaAlertMs (default 30s).
+    ...(typeof z.targetOccupancy === "number" &&
+    Number.isFinite(z.targetOccupancy) &&
+    z.targetOccupancy >= 1
+      ? { targetOccupancy: Math.round(z.targetOccupancy) }
+      : {}),
+    occupancyToleranceMs:
+      typeof z.occupancyToleranceMs === "number" &&
+      Number.isFinite(z.occupancyToleranceMs) &&
+      z.occupancyToleranceMs >= 1000
+        ? z.occupancyToleranceMs
+        : DEFAULT_OCCUPANCY_TOLERANCE_MS,
     arming: ZONE_ARMINGS.includes(z.arming as ZoneArming) ? (z.arming as ZoneArming) : "sempre",
     // turnos atribuídos (F2): campo PLANO como os demais — [] = 24/7 (CA-5).
     shiftIds: sanitizeShiftIds(z.shiftIds),
@@ -516,6 +535,45 @@ export function assignZone<Z extends AssignableZone>(
       const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
       ov = Math.max(0, ix) * Math.max(0, iy);
     }
+    if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
+      best = z;
+      bestOv = ov;
+    }
+  }
+  return best;
+}
+
+// ── Atribuição por SOBREPOSIÇÃO (SÓ modo Objetos — contagem de pessoas/caixas) ───────────────
+// assignZone exige o CENTRO da caixa dentro da zona: uma pessoa na BORDA (só parte do corpo
+// dentro da área) fica de fora da contagem — sub-conta na prática. Aqui o critério de entrada é
+// "algum ponto do retângulo de interseção cai na máscara/polígono" (aproximação por amostragem
+// dos 4 cantos + centro da interseção, sem clipping poligonal completo — suficiente para caixas
+// de pessoa/objeto, que são convexas e pequenas frente à zona). Mesmo desempate de assignZone
+// (maior interseção, depois menor área) — só muda o teste de ENTRADA, não a escolha entre
+// zonas candidatas. NÃO reusar para atividade/tripwire/proibida (decisão de produto: essas
+// mantêm o critério de centro, mais estrito).
+export function assignZoneByOverlap<Z extends AssignableZone>(
+  zones: readonly Z[],
+  bbox: readonly [number, number, number, number],
+  containsOf?: (z: Z) => ((nx: number, ny: number) => boolean) | undefined,
+): Z | null {
+  let best: Z | null = null;
+  let bestOv = -1;
+  for (const z of zones) {
+    const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
+    const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
+    if (ix <= 0 || iy <= 0) continue; // sem sobreposição de retângulo → nem candidata
+    const cn = containsOf?.(z);
+    if (cn) {
+      const rx0 = Math.max(bbox[0], z.x),
+        ry0 = Math.max(bbox[1], z.y);
+      const rx1 = rx0 + ix,
+        ry1 = ry0 + iy;
+      const hit =
+        cn(rx0, ry0) || cn(rx1, ry0) || cn(rx0, ry1) || cn(rx1, ry1) || cn((rx0 + rx1) / 2, (ry0 + ry1) / 2);
+      if (!hit) continue; // retângulos se tocam, mas fora da máscara/polígono
+    }
+    const ov = ix * iy;
     if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
       best = z;
       bestOv = ov;

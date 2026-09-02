@@ -110,6 +110,8 @@ create table if not exists users (
   opt_in_em bigint,               -- consentimento LGPD (epoch ms) ou null
   criado_em bigint
 );
+-- papel "cliente" (RBAC com escopo) — câmeras alocadas; ausente/null = nenhuma (fail-closed).
+alter table users add column if not exists camera_ids jsonb;
 
 -- ── DESTINATÁRIOS de WhatsApp do superadmin (números avulsos) ────────────────
 create table if not exists recipients (

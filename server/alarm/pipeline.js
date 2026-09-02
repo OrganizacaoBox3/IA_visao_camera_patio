@@ -13,6 +13,7 @@ const alerts = require("../alerts");
 const dispatch = require("../dispatch");
 const events = require("../events");
 const cpForwarder = require("../control-plane-forwarder");
+const { emitScopedByCamera } = require("../socket-scope");
 
 /**
  * Avalia e roteia um alerta. Nunca rejeita: falha de persistência é logada e engolida
@@ -33,7 +34,7 @@ function handleAlert(p, { cameras, io }, deps = {}) {
   const d = evaluate(p);
   if (!d) return Promise.resolve(null);
   notify(d);
-  if (d.text) dispatchAlert(d.text, d.ts, d.priority);
+  if (d.text) dispatchAlert(d.text, d.ts, d.priority, d.cameraId);
   const cam = d.cameraId && d.cameraId !== "_" ? cameras.get(d.cameraId) : null;
   return record({
     ts: d.ts,
@@ -46,7 +47,8 @@ function handleAlert(p, { cameras, io }, deps = {}) {
   })
     .then((ev) => {
       if (ev) {
-        io.to("dashboards").emit("alarm-event", ev);
+        // Escopado por câmera (RBAC — papel "cliente" só vê alarme das câmeras alocadas a ele).
+        emitScopedByCamera(io, "alarm-event", ev, ev.cameraId);
         // Encaminha o MESMO ev de metadados ao control-plane (fire-and-forget: fail-soft e
         // inerte sem env — nunca atrasa nem derruba o pipeline; spec-control-plane §4).
         void forwardAlarm(ev);
