@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
 import { Dices } from "lucide-react";
 import { useAuth } from "../../auth";
 import {
@@ -7,26 +7,33 @@ import {
   Input,
   Select,
   Switch,
+  ToggleGroup,
   Skeleton,
   Table,
   TableEmpty,
   useConfirm,
   useToast,
   SectionTitle,
+  Field,
 } from "../../ui";
-import { createUser, patchUser, deleteUser, type AdminUser } from "../../api";
+import { createUser, patchUser, deleteUser, type AdminUser, type ConnectedCamera } from "../../api";
 import type { ConfirmRemove, NovoUser, Reveal } from "./types";
 
 // Papéis atribuíveis (RBAC Setup × Live — Onda C item 12). "engenheiro" = equipe de configuração
-// (pode editar thresholds/zonas); "usuario" = operador só-visualização; "superadmin" = acesso total.
+// (pode editar thresholds/zonas); "usuario" = operador só-visualização; "superadmin" = acesso
+// total; "cliente" = RBAC com escopo — só-visualização das câmeras alocadas (ver CamerasField
+// abaixo), nunca configura.
 const PAPEL_OPTS = [
   { value: "usuario", label: "Usuário" },
+  { value: "cliente", label: "Cliente" },
   { value: "engenheiro", label: "Engenheiro" },
   { value: "superadmin", label: "Superadmin" },
 ];
 
 // Hierarquia de privilégio p/ decidir quando a troca de papel é ELEVAÇÃO (exige confirmação).
-const PAPEL_RANK: Record<string, number> = { usuario: 0, engenheiro: 1, superadmin: 2 };
+// "cliente" fica no mesmo nível de "usuario": é um papel restrito por câmera, não uma posição
+// intermediária na escada usuario→engenheiro→superadmin.
+const PAPEL_RANK: Record<string, number> = { usuario: 0, cliente: 0, engenheiro: 1, superadmin: 2 };
 const PAPEL_LABEL: Record<string, string> = Object.fromEntries(
   PAPEL_OPTS.map((o) => [o.value, o.label]),
 );
@@ -40,6 +47,38 @@ function genSenha(): string {
   return s;
 }
 
+// Seletor de câmeras alocadas (só aparece p/ papel "cliente" — RBAC com escopo). Sem câmeras
+// conhecidas ainda (hub subindo) mostra um aviso em vez de uma lista vazia enganosa.
+function CamerasField({
+  cameras,
+  value,
+  onChange,
+}: {
+  cameras: ConnectedCamera[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  return (
+    <Field
+      label="Câmeras alocadas"
+      hint="Este cliente só vê e recebe notificação das câmeras marcadas aqui. Nenhuma marcada = não vê nenhuma câmera."
+    >
+      {cameras.length === 0 ? (
+        <p className="muted">Nenhuma câmera conectada ainda.</p>
+      ) : (
+        <ToggleGroup
+          type="multiple"
+          className="ws-cfg ws-chips"
+          ariaLabel="Câmeras alocadas"
+          value={value}
+          onValueChange={onChange}
+          items={cameras.map((c) => ({ value: c.id, label: c.label, ariaLabel: c.label }))}
+        />
+      )}
+    </Field>
+  );
+}
+
 type Props = {
   rows: AdminUser[];
   loading: boolean;
@@ -49,6 +88,7 @@ type Props = {
   setErr: Dispatch<SetStateAction<string | null>>;
   setReveal: Dispatch<SetStateAction<Reveal | null>>;
   setConfirmRemove: Dispatch<SetStateAction<ConfirmRemove | null>>;
+  cameras: ConnectedCamera[];
 };
 
 export function UsersTab({
@@ -60,6 +100,7 @@ export function UsersTab({
   setErr,
   setReveal,
   setConfirmRemove,
+  cameras,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -75,7 +116,12 @@ export function UsersTab({
     setErr(null);
     const senha = novo.senha.trim() || genSenha();
     try {
-      await createUser({ usuario: novo.usuario.trim(), senha, papel: novo.papel });
+      await createUser({
+        usuario: novo.usuario.trim(),
+        senha,
+        papel: novo.papel,
+        cameraIds: novo.papel === "cliente" ? novo.cameraIds ?? [] : undefined,
+      });
       setReveal({ usuario: novo.usuario.trim(), senha });
       setNovo({ usuario: "", senha: "", papel: "usuario" });
       await refresh();
@@ -89,7 +135,7 @@ export function UsersTab({
   }
   async function onPatch(
     id: string,
-    patch: Partial<{ ativo: boolean; papel: string; senha: string }>,
+    patch: Partial<{ ativo: boolean; papel: string; senha: string; cameraIds: string[] }>,
   ) {
     if (busy) return;
     setBusy(true);
@@ -211,6 +257,13 @@ export function UsersTab({
             Criar
           </Button>
         </form>
+        {novo.papel === "cliente" && (
+          <CamerasField
+            cameras={cameras}
+            value={novo.cameraIds ?? []}
+            onChange={(ids) => setNovo((n) => ({ ...n, cameraIds: ids }))}
+          />
+        )}
       </section>
 
       {/* Lista cresce com a viewport (flex-1 + min-h-0 na cadeia; scroll interno na ScrollArea)
@@ -235,45 +288,58 @@ export function UsersTab({
         >
           <tbody>
             {rows.map((u) => (
-              <tr key={u.id}>
-                <td>
-                  {u.usuario}
-                  {u.id === user.id && <span className="muted"> (você)</span>}
-                </td>
-                <td>
-                  <Select
-                    value={u.papel}
-                    onChange={(v) => onChangePapel(u, v)}
-                    options={PAPEL_OPTS}
-                    ariaLabel="Papel"
-                    disabled={busy}
-                  />
-                </td>
-                <td>
-                  <div className="cell-toggle">
-                    <Switch
-                      checked={u.ativo}
-                      onCheckedChange={(v) => onPatch(u.id, { ativo: v })}
-                      ariaLabel="ativo"
+              <Fragment key={u.id}>
+                <tr>
+                  <td>
+                    {u.usuario}
+                    {u.id === user.id && <span className="muted"> (você)</span>}
+                  </td>
+                  <td>
+                    <Select
+                      value={u.papel}
+                      onChange={(v) => onChangePapel(u, v)}
+                      options={PAPEL_OPTS}
+                      ariaLabel="Papel"
                       disabled={busy}
                     />
-                    <span>{u.ativo ? "Ativo" : "Inativo"}</span>
-                  </div>
-                </td>
-                <td className="users-actions justify-end whitespace-nowrap">
-                  <Button size="sm" onClick={() => onReset(u)} disabled={busy}>
-                    Resetar senha
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => onDelete(u)}
-                    disabled={busy || u.id === user.id}
-                  >
-                    Remover
-                  </Button>
-                </td>
-              </tr>
+                  </td>
+                  <td>
+                    <div className="cell-toggle">
+                      <Switch
+                        checked={u.ativo}
+                        onCheckedChange={(v) => onPatch(u.id, { ativo: v })}
+                        ariaLabel="ativo"
+                        disabled={busy}
+                      />
+                      <span>{u.ativo ? "Ativo" : "Inativo"}</span>
+                    </div>
+                  </td>
+                  <td className="users-actions justify-end whitespace-nowrap">
+                    <Button size="sm" onClick={() => onReset(u)} disabled={busy}>
+                      Resetar senha
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => onDelete(u)}
+                      disabled={busy || u.id === user.id}
+                    >
+                      Remover
+                    </Button>
+                  </td>
+                </tr>
+                {u.papel === "cliente" && (
+                  <tr>
+                    <td colSpan={4}>
+                      <CamerasField
+                        cameras={cameras}
+                        value={u.cameraIds ?? []}
+                        onChange={(ids) => onPatch(u.id, { cameraIds: ids })}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             {loading &&
               Array.from({ length: 3 }).map((_, i) => (

@@ -27,6 +27,7 @@ const settings = require("./settings");
 const analysis = require("./analysis/engine");
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
+const { visibleCameras, dashboardSockets } = require("./socket-scope");
 
 // Grupos de rotas HTTP (corpos dos handlers). Cada módulo expõe handle(req,res,ctx) e
 // devolve true quando tratou a requisição (resposta enviada), senão false → o dispatch segue.
@@ -190,6 +191,10 @@ function analysisTee(target) {
     get volatile() {
       return analysisTee(target.volatile);
     },
+    // Passthrough de LEITURA (RBAC com escopo, server/socket-scope.js precisa iterar sockets
+    // pra emitir por-usuário): não passa por frame/camcfg-updated, então não quebra a
+    // INVARIANTE do tee (observar só emit/to/volatile do relé real).
+    of: (ns) => target.of(ns),
     emit(ev, payload) {
       if (ev === "frame" && payload) {
         analysis.onFrame(payload.id, payload.buf, payload.ts);
@@ -232,7 +237,10 @@ const cameraList = () => [...cameras.values()];
  * null até lá / quando RTMP_INGEST=go2rtc (legado). Lido por routes/rtmp-log.js via ctx. */
 let rtmpRelay = null;
 const broadcast = () => {
-  io.to("dashboards").emit("cameras", cameraList());
+  // POR SOCKET, não broadcast único (RBAC com escopo): papel "cliente" só recebe as câmeras
+  // alocadas a ele — ver server/socket-scope.js e spec-multitenancy §4 S2/S3.
+  const list = cameraList();
+  for (const s of dashboardSockets(io)) s.emit("cameras", visibleCameras(list, s.data.user));
   // Lista de câmeras mudou → regenera o go2rtc.yaml (debounced, no-op se OFF). broadcast() é
   // chamado pelo CRUD de câmera IP (rtsp.add/remove/restartSource), então qualquer alteração
   // re-sincroniza os streams do go2rtc sem hook extra.

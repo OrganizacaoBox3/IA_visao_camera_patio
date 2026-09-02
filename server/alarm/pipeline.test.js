@@ -19,10 +19,19 @@ const policy = require("../alarmPolicy");
 const BASE = 1_700_000_000_000;
 
 // Fakes de canais/persistência/broadcast — capturam chamadas p/ asserção.
+// io.of("/").sockets: RBAC com escopo (socket-scope.emitScopedByCamera) itera os sockets da
+// sala "dashboards" e emite POR SOCKET, não mais broadcast único — o fake tem 1 socket de
+// EQUIPE (papel != "cliente" → users.canSeeCamera sempre true, recebe tudo, como antes).
 function makeFakes({ recordFails = false } = {}) {
   const calls = { notify: [], dispatchAlert: [], record: [], emitted: [] };
+  const fakeSocket = {
+    data: { user: { id: "s1", papel: "superadmin" } },
+    rooms: new Set(["dashboards"]),
+    emit: (ev, payload) => calls.emitted.push({ ev, payload }),
+  };
   const io = {
     to: (room) => ({ emit: (ev, payload) => calls.emitted.push({ room, ev, payload }) }),
+    of: () => ({ sockets: new Map([["s1", fakeSocket]]) }),
   };
   const deps = {
     notify: (d) => calls.notify.push(d),
@@ -95,8 +104,8 @@ describe("handleAlert — decisão → canais → persistência → broadcast", 
       priority: "high",
       text: "Zona parada há 20min",
     });
-    // broadcast do evento gravado aos painéis
-    expect(calls.emitted).toEqual([{ room: "dashboards", ev: "alarm-event", payload: ev }]);
+    // broadcast do evento gravado aos painéis (por socket, escopado por câmera — ver makeFakes)
+    expect(calls.emitted).toEqual([{ ev: "alarm-event", payload: ev }]);
     expect(ev).toMatchObject({ id: "ev1", cameraId: "cam-1" });
   });
 

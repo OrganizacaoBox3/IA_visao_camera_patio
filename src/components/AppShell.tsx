@@ -77,6 +77,7 @@ const PAPEL_LABEL: Record<Papel, string> = {
   superadmin: "Administrador",
   engenheiro: "Engenheiro",
   usuario: "Operador",
+  cliente: "Cliente",
 };
 
 // `short`: rótulo compacto para o bottom-nav (≤640px) — o aria-label continua sendo `label`

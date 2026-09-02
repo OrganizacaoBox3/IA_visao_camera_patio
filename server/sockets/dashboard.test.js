@@ -21,12 +21,14 @@ function makeIo() {
   return { to: () => chain() };
 }
 
-function fakeDashSocket() {
+// papel de EQUIPE por default (sem restrição de câmera) — este arquivo testa o filtro de ids
+// FORJADOS/inexistentes (S3), não o RBAC por papel (isso é escopo de dashboard.scope.test.js).
+function fakeDashSocket(user = { id: "u1", papel: "superadmin" }) {
   const rooms = new Set();
   const listeners = new Map();
   return {
     id: "dash-1",
-    data: {},
+    data: { user },
     rooms,
     join: vi.fn((r) => rooms.add(r)),
     leave: vi.fn((r) => rooms.delete(r)),

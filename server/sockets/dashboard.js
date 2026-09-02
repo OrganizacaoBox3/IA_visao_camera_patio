@@ -6,6 +6,8 @@
 // jul/12 (órfão: nenhum cliente jamais o emitiu); o evento "capture" hub→nó-câmera segue
 // VIVO — é o shed.js quem o emite (rebaixar/restaurar perfil).
 const pipeline = require("../alarm/pipeline");
+const { canSeeCamera } = require("../users");
+const { visibleCameras } = require("../socket-scope");
 
 /**
  * Anexa os handlers de dashboard a um socket recém-conectado.
@@ -13,16 +15,19 @@ const pipeline = require("../alarm/pipeline");
  * @param ctx { io, cameras, cameraList, shed, analysis, rtsp }
  */
 function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
+  const me = socket.data.user;
   socket.join("dashboards");
-  // Retrocompat: todo dashboard começa na room LEGADA (recebe TODOS os frames). Um dashboard
-  // novo emite `watch` e migra para rooms por câmera; um antigo segue recebendo tudo.
-  socket.join("dash-legacy");
+  // Retrocompat: dashboard de EQUIPE começa na room LEGADA (recebe TODOS os frames) até
+  // emitir `watch` e migrar para rooms por câmera. Papel "cliente" NUNCA entra aqui (RBAC com
+  // escopo — spec-multitenancy §4 S2): sem isso, o frame de câmeras fora da alocação vazaria
+  // pela room legada antes mesmo do 1º `watch`.
+  if (me.papel !== "cliente") socket.join("dash-legacy");
   shed.sweepShed(); // espectador legado chegou — religa imediatamente câmeras que estavam em shed
-  socket.emit("cameras", cameraList());
+  socket.emit("cameras", visibleCameras(cameraList(), me));
   // Estado inicial por câmera p/ este dashboard (RTSP: do ingestor; navegador: conectada = online).
-  for (const s of rtsp.statuses()) socket.emit("camera-status", s);
+  for (const s of rtsp.statuses()) if (canSeeCamera(me, s.id)) socket.emit("camera-status", s);
   for (const c of cameraList())
-    if (c.kind !== "rtsp")
+    if (c.kind !== "rtsp" && canSeeCamera(me, c.id))
       socket.emit("camera-status", { id: c.id, state: "online", label: c.label, kind: "browser" });
   // Anti-duplicação (ADR-009): snapshot do "analysis-status" por câmera analisada
   // ({ cameraId, engine: "hub" }) — o dashboard novo desliga o ingest local dessas câmeras.
@@ -35,12 +40,11 @@ function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
   // eventos (cameras/camera-status/alarm-*/camcfg-updated) seguem pela room "dashboards".
   socket.on("watch", (p) => {
     const requested = p && Array.isArray(p.ids) ? p.ids.map(String) : [];
-    // S4/§4 spec-multitenancy — NÃO confiar no cliente: só entram em `cam:<id>` os ids que o hub
-    // REALMENTE conhece (câmeras conectadas/cadastradas = o MESMO estado do evento `cameras`,
-    // que inclui webcam, RTSP e dinâmicas). Single-tenant: todas as câmeras são do mesmo dono, e
-    // o front só assiste o que veio no `cameras` (pageCameras) — nenhum id legítimo é filtrado.
-    // Um id inexistente/forjado é IGNORADO (não faz join) — fecha a porta do join arbitrário.
-    const ids = requested.filter((id) => cameras.has(id));
+    // S3/§4 spec-multitenancy — NÃO confiar no cliente: só entram em `cam:<id>` os ids que o hub
+    // REALMENTE conhece E que este usuário pode ver. Papéis de equipe: todas as conectadas
+    // (comportamento de sempre). Papel "cliente": só as de `cameraIds` — um id de fora da
+    // alocação (legítimo mas de OUTRO cliente, ou forjado) é IGNORADO, nunca entra na room.
+    const ids = requested.filter((id) => cameras.has(id) && canSeeCamera(me, id));
     socket.data.usesWatch = true;
     socket.leave("dash-legacy");
     const want = new Set(ids.map((id) => `cam:${id}`));
@@ -70,7 +74,11 @@ function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
 
   // Alerta do painel → pipeline de alarme (política → canais → persistência → broadcast).
   // A política decide UMA vez e a decisão vai aos dois canais; null = suprimido (ADR-004).
+  // Papel "cliente" NUNCA emite (é só-visualização/notificação) — sem este gate, um cliente
+  // poderia FORJAR `cameraId` de outro cliente e o novo roteamento por câmera (dispatch.js)
+  // mandaria a notificação forjada pro WhatsApp de um cliente que não é o dele.
   socket.on("alert", (p) => {
+    if (me.papel === "cliente") return;
     void pipeline.handleAlert(p, { cameras, io });
   });
 }
