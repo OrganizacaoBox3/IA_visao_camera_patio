@@ -335,6 +335,7 @@ function createState(id) {
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
     zonesProib: proibZonesOf(id), // modo "proibida" — presença vigiada (presence-alert.js)
     presence: new Map(), // máquina ARMADA/VIOLADA por zona proibida (presence-alert.js muta)
+    occupancy: new Map(), // máquina OK/VIOLADA por zona de lotação (occupancy-alert.js muta)
     // ── Gate de movimento ──
     prevLuma: null, // thumbnail de luma anterior (MOTION_W×MOTION_H); null = sem baseline ainda
     motionIgnore: null, // mapa de ignore (hotspots das zonas de exclusão) — montado após states.set
