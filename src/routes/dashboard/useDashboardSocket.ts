@@ -44,6 +44,11 @@ export type DashboardSocket = {
   // Sincronização ao vivo — revisão da CALIBRAÇÃO (homografia) por câmera. Mesmo idioma do
   // revByCamera: `camcfg-updated {kind:"calibration"}` incrementa; a câmera re-busca o H.
   calibrationRevByCamera: Map<string, number>;
+  // Sincronização ao vivo — revisão das ZONAS por câmera. Mesmo idioma do revByCamera:
+  // `camcfg-updated {kind:"zones"}` incrementa; a CameraWorkspace já aberta re-busca a lista
+  // (era o gap: só a carga inicial buscava, e uma tab já aberta ficava com geometria obsoleta
+  // até reload manual — ver zonesRev em CameraWorkspace.tsx).
+  zonesRevByCamera: Map<string, number>;
 };
 
 /** Payload do evento `analysis-tracks` COMO CHEGA DO FIO. Só o `cameraId` é declarado — o resto é
@@ -123,6 +128,8 @@ export function useDashboardSocket({
   const [calibrationRevByCamera, setCalibrationRevByCamera] = useState<Map<string, number>>(
     new Map(),
   );
+  // Idem para ZONAS (ver DashboardSocket.zonesRevByCamera acima).
+  const [zonesRevByCamera, setZonesRevByCamera] = useState<Map<string, number>>(new Map());
   // Último id de foco anunciado ao hub. Ref (não state): mudá-lo não deve re-renderizar — é só
   // o "espelho" do que o servidor já sabe, usado p/ idempotência (não reemitir o mesmo id),
   // re-emit no reconnect (o servidor perde o foco no disconnect) e release no unmount.
@@ -223,6 +230,14 @@ export function useDashboardSocket({
           // enquanto recarrega, o flag ausente força decode NATIVO (seguro p/ ZXing).
           readingZoneRef.current.delete(p.cameraId);
           loadReadingFlag(p.cameraId, p.cameraId);
+          // Incrementa a revisão da câmera: a CameraWorkspace já aberta (se for esta câmera)
+          // re-busca a lista de zonas via zonesRev — sem isto, edição por outro posto/API só
+          // pegava depois de fechar/reabrir a câmera ou recarregar a página.
+          setZonesRevByCamera((prev) => {
+            const next = new Map(prev);
+            next.set(p.cameraId, (next.get(p.cameraId) ?? 0) + 1);
+            return next;
+          });
         } else if (p?.kind === "camconfig" && typeof p.cameraId === "string") {
           // longRange pode ter mudado em OUTRO posto: refresca o cache local (localStorage)
           // que o leitor síncrono getCameraCfg usa na exceção do resize.
@@ -270,5 +285,6 @@ export function useDashboardSocket({
     analysisEngines,
     revByCamera,
     calibrationRevByCamera,
+    zonesRevByCamera,
   };
 }

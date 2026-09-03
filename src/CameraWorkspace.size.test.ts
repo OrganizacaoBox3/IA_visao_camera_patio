@@ -107,7 +107,12 @@ import { describe, it, expect } from "vitest";
 // (targetOccupancy/occupancyToleranceMs) no setor passado ao processador + 1 forEach formatando
 // e roteando `r.occupancyAlerts` pro mesmo canal de alarme do fadiga (prefixo "⚠" + label · zona).
 // Teto 1643 mantém a folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1643;
+// 1643→1662 (sync ao vivo de zonas): zona editada por API/outro posto não repropagava pra uma
+// tab já aberta (só a carga inicial buscava) — bug real medido em produção. Prop `zonesRev`
+// (mesmo idioma de tripwiresRev/calibrationRev) + 1 efeito extra que só re-busca a lista
+// (sem resetar preset/layers da sessão). Contabilidade REAL: 1638 → 1657; teto 1662 mantém a
+// folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1662;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

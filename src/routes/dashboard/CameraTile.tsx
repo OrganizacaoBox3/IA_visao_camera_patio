@@ -348,6 +348,10 @@ type CameraTileProps = {
   // `camcfg-updated {kind:"calibration"}` → a câmera re-busca o H em vez de ficar
   // stale até remontar. OPCIONAL/retrocompatível; primitiva → amigável ao React.memo abaixo.
   calibrationRev?: number;
+  // Sync ao vivo das ZONAS (mesmo idioma do tripwiresRev/calibrationRev): a central incrementa a
+  // cada `camcfg-updated {kind:"zones"}` → o tile re-busca a lista em vez de ficar com geometria
+  // obsoleta até remontar. OPCIONAL/retrocompatível; primitiva → amigável ao React.memo abaixo.
+  zonesRev?: number;
   // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
   // canvas + relé socket.io. Por câmera (camcfg). Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
@@ -377,6 +381,7 @@ export const CameraTile = memo(function CameraTile({
   analysisEngine,
   getHubAnalysis,
   calibrationRev,
+  zonesRev,
   transport,
   onWebrtcFail,
   onOpen,
@@ -431,6 +436,7 @@ export const CameraTile = memo(function CameraTile({
       analysisEngine={analysisEngine}
       getHubAnalysis={getHubAnalysis}
       calibrationRev={calibrationRev}
+      zonesRev={zonesRev}
       onOpen={openSelf}
       onAlert={onAlert}
     />
