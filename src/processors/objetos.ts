@@ -132,10 +132,13 @@ export class ObjetosProcessor implements Disposable {
       this.lastDetAt = now;
       this.detecting = true;
       const t0 = performance.now();
-      // Longo alcance: limiar de score mais baixo p/ não cortar objetos distantes (que pontuam menos).
+      // Piso de score do OWL-ViT — knobs de `objects`, NÃO os de `detection` (esses são do
+      // COCO-SSD, escala 0.5-0.95; o zero-shot pontua bem mais baixo e o 0.5 emprestado
+      // descartava pessoa real em cena interna: ver objects.minScore no config, com o medido).
+      // Longo alcance: piso ainda menor p/ não cortar objeto distante (que pontua menos).
       const scoreThr = this.longRange
-        ? APP_CONFIG.detection.longRange.objectScoreThreshold
-        : APP_CONFIG.detection.objectScoreThreshold;
+        ? APP_CONFIG.objects.minScoreLongRange
+        : APP_CONFIG.objects.minScore;
       void detectObjects(f.el, f.w, f.h, classes, scoreThr)
         .then((res) => {
           this.dets = res;

@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ObjetosProcessor, type ObjetosSetor } from "./objetos";
 import type { ObjDetection } from "../objects/detector";
+import { APP_CONFIG, MODE_PRESETS } from "../config";
 
 const detectObjects = vi.fn<(...args: unknown[]) => Promise<ObjDetection[]>>();
 
@@ -134,5 +135,31 @@ describe("ObjetosProcessor — alarme de lotação (histerese)", () => {
     const semAlvo: ObjetosSetor = { id: "z2", label: "Corredor", x: 0, y: 0, w: 1, h: 1 };
     const r = await seed(proc, [semAlvo], ["pessoa"], 5000, umaPessoa);
     expect(r.occupancyAlerts).toHaveLength(0);
+  });
+});
+
+// GATE do bug MEDIDO em produção (2026-09-03): o piso de score mandado ao detector era o do
+// COCO-SSD (`detection.objectScoreThreshold` = 0.5, escala 0.5-0.95), não o do OWL-ViT (zero-shot
+// pontua ~0.1-0.45). Pessoa curvada/de costas em cena interna era detectada e DESCARTADA em
+// silêncio — "conta uma vez e nunca mais" — enquanto a exibição do modo objetos já estava
+// preparada pra mostrar ≥0.15 (MODE_PRESETS.objetos). Este teste trava a regressão: o piso tem
+// de vir de `objects.*` e casar com o da EXIBIÇÃO (contar o que se mostra).
+describe("ObjetosProcessor — piso de score é o do OWL-ViT, não o do coco-ssd", () => {
+  const setor: ObjetosSetor = { id: "z1", label: "Área", x: 0, y: 0, w: 1, h: 1 };
+
+  it("manda objects.minScore (0.15) ao detector — e NUNCA o 0.5 do coco", async () => {
+    const proc = new ObjetosProcessor();
+    await seed(proc, [setor], ["pessoa"], 1000, []);
+    const minScore = detectObjects.mock.calls[0][4];
+    expect(minScore).toBe(APP_CONFIG.objects.minScore);
+    expect(minScore).toBe(MODE_PRESETS.objetos.confidenceThreshold); // contar o que se mostra
+    expect(minScore).not.toBe(APP_CONFIG.detection.objectScoreThreshold); // 0.5 é do coco
+  });
+
+  it("no perfil LONGO ALCANCE o piso cai ainda mais (objects.minScoreLongRange)", async () => {
+    const proc = new ObjetosProcessor();
+    proc.setLongRange(true);
+    await seed(proc, [setor], ["pessoa"], 1000, []);
+    expect(detectObjects.mock.calls[0][4]).toBe(APP_CONFIG.objects.minScoreLongRange);
   });
 });
