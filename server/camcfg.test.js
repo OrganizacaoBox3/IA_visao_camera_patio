@@ -419,6 +419,67 @@ describe("camcfg — round-trip da zona POLIGONAL (points na allowlist)", () => 
   });
 });
 
+// ── LOTAÇÃO DE PESSOA (modo objetos) cobre o QUADRO INTEIRO ──────────────────────────────────
+// MEDIDO (2026-09-03, múltiplas câmeras reais): zona "objetos" com "pessoa" desenhada menor que
+// o quadro ficava, na prática, sem cobrir onde as pessoas de fato aparecem — a contagem presa em
+// 0 com gente claramente visível, repetindo em toda câmera nova. cleanZone agora força x/y/w/h
+// (e descarta points/mask) pra zona objetos+pessoa, em QUALQUER caminho de escrita/leitura — sem
+// depender do operador redesenhar cada zona.
+describe("camcfg — zona objetos+pessoa força cobertura do quadro inteiro (medido em produção)", () => {
+  it("zona pequena com 'pessoa' selecionada é expandida para x:0,y:0,w:1,h:1", () => {
+    const [z] = roundTrip([
+      {
+        id: "z-obj",
+        label: "Bebedouro",
+        modo: "objetos",
+        selectedClasses: ["pessoa"],
+        x: 0.04,
+        y: 0.14,
+        w: 0.11,
+        h: 0.19,
+      },
+    ]);
+    expect(z).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+    expect("points" in z).toBe(false);
+  });
+
+  it("points/máscara de uma zona objetos+pessoa são descartados (a bbox manda, não o desenho)", () => {
+    const [z] = roundTrip([
+      {
+        id: "z-obj-pts",
+        modo: "objetos",
+        selectedClasses: ["pessoa", "caixa"],
+        points: [{ x: 0.1, y: 0.1 }, { x: 0.3, y: 0.1 }, { x: 0.3, y: 0.6 }],
+        mask: "8x8:AAAA",
+      },
+    ]);
+    expect(z).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+    expect("points" in z).toBe(false);
+    expect("mask" in z).toBe(false);
+  });
+
+  it("zona objetos SEM 'pessoa' entre as classes preserva a geometria desenhada (caixa/empilhadeira numa sub-área)", () => {
+    const [z] = roundTrip([
+      { id: "z-caixa", modo: "objetos", selectedClasses: ["caixa"], x: 0.2, y: 0.3, w: 0.15, h: 0.1 },
+    ]);
+    // w/h passam por points→bbox (rectPreset) no round-trip: float por subtração, ~1 ULP de erro.
+    expect(z.x).toBeCloseTo(0.2, 10);
+    expect(z.y).toBeCloseTo(0.3, 10);
+    expect(z.w).toBeCloseTo(0.15, 10);
+    expect(z.h).toBeCloseTo(0.1, 10);
+  });
+
+  it("zona 'atividade' com geometria pequena NÃO é tocada (o gate é modo==='objetos' + pessoa)", () => {
+    const [z] = roundTrip([
+      { id: "z-ativ", modo: "atividade", selectedClasses: ["pessoa"], x: 0.2, y: 0.3, w: 0.15, h: 0.1 },
+    ]);
+    expect(z.x).toBeCloseTo(0.2, 10);
+    expect(z.y).toBeCloseTo(0.3, 10);
+    expect(z.w).toBeCloseTo(0.15, 10);
+    expect(z.h).toBeCloseTo(0.1, 10);
+  });
+});
+
 // ── MIGRAÇÃO rect → POLÍGONO (spec-zona-unificada §7, F2) ────────────────────────────────────
 // A zona É um polígono; o retângulo é o PRESET de 4 vértices. A migração vive no cleanZone (load
 // E save) ⇒ é IDEMPOTENTE por construção — sem script, sem downtime. Dado de produção medido no
