@@ -169,13 +169,29 @@ export type Recipient = {
   ativo: boolean;
   somenteCriticos: boolean;
   tipos: string[];
+  userId: string;
+  principal: boolean;
+  optInEm?: number | null;
 };
 export const listRecipients = () => apiGet<Recipient[]>("/api/recipients");
-export const createRecipient = (r: { nome: string; numero: string; somenteCriticos?: boolean }) =>
+export const createRecipient = (r: {
+  nome: string;
+  numero: string;
+  somenteCriticos?: boolean;
+  userId: string;
+  principal?: boolean;
+}) =>
   apiSend<Recipient>("POST", "/api/recipients", r);
 export const patchRecipient = (
   id: string,
-  patch: Partial<{ ativo: boolean; nome: string; numero: string; somenteCriticos: boolean }>,
+  patch: Partial<{
+    ativo: boolean;
+    nome: string;
+    numero: string;
+    somenteCriticos: boolean;
+    userId: string;
+    principal: boolean;
+  }>,
 ) => apiSend<Recipient>("PATCH", `/api/recipients/${id}`, patch);
 export const deleteRecipient = (id: string) =>
   apiSend<{ ok: true }>("DELETE", `/api/recipients/${id}`);

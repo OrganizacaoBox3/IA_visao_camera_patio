@@ -112,13 +112,23 @@ create table if not exists users (
 );
 -- papel "cliente" (RBAC com escopo) — câmeras alocadas; ausente/null = nenhuma (fail-closed).
 alter table users add column if not exists camera_ids jsonb;
+-- Marca a importação do WhatsApp legado para recipients; os campos antigos ficam preservados
+-- para rollback, mas não podem ser reaplicados a cada boot.
+alter table users add column if not exists recipient_migration_version integer default 0;
 
 -- ── DESTINATÁRIOS de WhatsApp do superadmin (números avulsos) ────────────────
 create table if not exists recipients (
   id text primary key,
   nome text, numero text unique not null, ativo boolean default true,
-  somente_criticos boolean default true, tipos jsonb default '[]'::jsonb, criado_em bigint
+  somente_criticos boolean default true, tipos jsonb default '[]'::jsonb, criado_em bigint,
+  user_id text, principal boolean default false, opt_in_em bigint
 );
+-- Migração aditiva: instalações existentes já têm a tabela sem vínculo com usuário.
+alter table recipients add column if not exists user_id text;
+alter table recipients add column if not exists principal boolean default false;
+alter table recipients add column if not exists opt_in_em bigint;
+create unique index if not exists recipients_one_principal_per_user
+  on recipients(user_id) where principal;
 
 -- ── CONFIGURAÇÃO da aplicação (ex.: notificações, id='notif') ────────────────
 create table if not exists app_settings (

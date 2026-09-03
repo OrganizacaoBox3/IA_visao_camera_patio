@@ -1,6 +1,7 @@
 // Rotas de autenticação/perfil: login (público) e /api/me (perfil do próprio usuário).
 // handle(req,res,ctx) → true se a requisição foi tratada (resposta enviada), senão false.
 const users = require("../users");
+const recipients = require("../recipients");
 const { createLoginThrottle } = require("../loginThrottle");
 
 // Trava de brute-force do /api/login (auditoria 01, R-A). Tunável por env; defaults sensatos.
@@ -71,11 +72,11 @@ async function handle(req, res, ctx) {
     const me = requireAuth(req, res);
     if (!me) return true;
     if (req.method === "GET") {
-      json(res, 200, users.getProfile(me.id));
+      json(res, 200, recipients.profileForUser(me.id));
       return true;
     }
     if (req.method === "PATCH" || req.method === "PUT") {
-      const r = await users.updateProfile(me.id, JSON.parse((await readBody(req)) || "{}"));
+      const r = await recipients.updateProfile(me.id, JSON.parse((await readBody(req)) || "{}"));
       if (r.error) json(res, r.status || 400, r); // r.status (503) tem prioridade sobre o 400
       else json(res, 200, r.user);
       return true;

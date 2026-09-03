@@ -41,6 +41,20 @@ test("mobile 390: nenhuma tela tem scroll horizontal da página", async ({ page 
     await page.screenshot({ path: `test-results/mobile/${s.name}.png` });
     console.log(`[mobile] ${s.name}: scrollWidth=${m.sw} innerWidth=${m.iw} → ${ok ? "OK" : "OVERFLOW"}`);
     if (!ok) bad.push(`${s.name}(${m.sw}>${m.iw})`);
+    if (s.name === "usuarios") {
+      await page.getByRole("tab", { name: "Notificações" }).click();
+      await expect(page.getByText(/Destinatários do WhatsApp/)).toBeVisible();
+      const notif = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        iw: window.innerWidth,
+      }));
+      const notifOk = notif.sw <= notif.iw + 1;
+      await page.screenshot({ path: "test-results/mobile/usuarios-notificacoes.png" });
+      console.log(
+        `[mobile] usuarios-notificacoes: scrollWidth=${notif.sw} innerWidth=${notif.iw} → ${notifOk ? "OK" : "OVERFLOW"}`,
+      );
+      if (!notifOk) bad.push(`usuarios-notificacoes(${notif.sw}>${notif.iw})`);
+    }
   }
   expect(bad, `telas com scroll horizontal no mobile: ${bad.join(", ")}`).toHaveLength(0);
 });

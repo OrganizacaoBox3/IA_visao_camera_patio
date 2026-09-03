@@ -305,8 +305,10 @@ io.on("connection", (socket) => {
 // aceitar conexões — assim verifyToken/login já têm os dados em memória.
 (async () => {
   await db.init();
+  // recipients.init migra os destinatários legados usando os usuários já carregados; por isso
+  // users é deliberadamente sequencial aqui (não volte a colocá-los no mesmo Promise.all).
+  await users.init();
   await Promise.all([
-    users.init(),
     recipients.init(),
     settings.init(),
     events.init(),

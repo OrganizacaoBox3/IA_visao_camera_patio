@@ -105,6 +105,11 @@ test("axe: /usuarios", async ({ page }) => {
   await page.goto("/usuarios");
   await expect(page.getByRole("heading", { name: /Usuários/i })).toBeVisible();
   await checkA11y(page, "usuarios");
+  // A aba de destinatários contém os novos seletores de proprietário/principal; precisa ser
+  // montada antes do axe, pois Tabs desmonta o conteúdo inativo.
+  await page.getByRole("tab", { name: "Notificações" }).click();
+  await expect(page.getByText(/Destinatários do WhatsApp/)).toBeVisible();
+  await checkA11y(page, "usuarios");
 });
 
 test("axe: /perfil", async ({ page }) => {
