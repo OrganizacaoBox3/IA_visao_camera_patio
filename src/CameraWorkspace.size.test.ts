@@ -112,7 +112,14 @@ import { describe, it, expect } from "vitest";
 // (mesmo idioma de tripwiresRev/calibrationRev) + 1 efeito extra que só re-busca a lista
 // (sem resetar preset/layers da sessão). Contabilidade REAL: 1638 → 1657; teto 1662 mantém a
 // folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1662;
+// 1662→1680 (contagem de PESSOA em zona Objetos passa a vir do hub/D-FINE, não do OWL-ViT — mesmo
+// motor confiável que a Atividade já usa): 1 flag (hubCoversPeople) + omite targetOccupancy do
+// processador local quando o hub cobre (evita alarme duplicado) + 1 leitura de getHubAnalysis()
+// pra achar a zona por id + merge no `counts`/`total`. O GROSSO (resolveZoneByOverlap, perZoneObj,
+// merge na observação de lotação) foi pro servidor (server/analysis/{zones,pipeline,engine}.js).
+// Contabilidade REAL: 1657 → 1672; teto 1680 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1680;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {
