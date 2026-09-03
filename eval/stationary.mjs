@@ -206,6 +206,7 @@ function runScenario(sc) {
     counter,
     zonesAtiv: [ZONE],
     zonesExcl: [],
+    zonesObjPessoa: [], // modo "objetos"+"pessoa" — contagem por D-FINE (perZoneObj em pipeline.js)
     autoMask: null,
     window: { frames: 0, zones: new Map() },
     rounds: [],
