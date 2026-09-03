@@ -287,7 +287,24 @@ export const APP_CONFIG = {
   objects: {
     model: "Xenova/owlvit-base-patch32", // modelo zero-shot (baixado do HF na 1ª vez, depois cacheado)
     procWidth: 640, // largura p/ rasterizar o frame antes de detectar (custo×precisão)
-    threshold: 0.1, // confiança mínima do OWL-ViT (scores são baixos)
+    threshold: 0.1, // confiança mínima do OWL-ViT NO WORKER (scores são baixos)
+    // PISO DE CONTAGEM do modo Objetos (consumidor: processors/objetos.ts → detectObjects).
+    // MEDIDO (2026-09-03, câmera real de cozinha): o processador filtrava as dets do OWL-ViT com
+    // `detection.objectScoreThreshold` (0.5) — valor da seção do COCO-SSD, cujos scores ficam
+    // entre 0.5 e 0.95. O zero-shot pontua MUITO mais baixo (o `threshold` acima e o preset de
+    // exibição do modo objetos, 0.15, já dizem isso): pessoa curvada no balcão/de costas em cena
+    // interna marcava ~0.2-0.45 → era detectada e DESCARTADA em silêncio, enquanto a exibição
+    // estava preparada pra mostrar ≥0.15. Sintoma em produção: "conta uma vez e nunca mais"
+    // (só o frame de sorte que cruzava 0.5) na cozinha, e MUITAS caixas na câmera externa clara
+    // (lá o score passa de 0.5 fácil). A regra agora é "contar o que se mostra": este piso casa
+    // com MODE_PRESETS.objetos.confidenceThreshold.
+    // TRADE-OFF DECLARADO: mais recall, mais falso-positivo (sacola/manequim/reflexo podem virar
+    // "pessoa" no zero-shot). NÃO há sensor automático disto — `eval/` cobre o D-FINE do servidor,
+    // não o OWL-ViT do cliente; a validação é observação nas câmeras reais (residual honesto).
+    minScore: 0.15,
+    // Perfil LONGO ALCANCE: alvo pequeno/distante pontua ainda menos — sem piso extra além do
+    // que o worker já aplica (`threshold`). Mesma assimetria de detection.longRange (0.3 < 0.5).
+    minScoreLongRange: 0.1,
     detectIntervalMs: 700, // cadência de detecção (zero-shot é pesado; o worker se auto-regula)
   },
 

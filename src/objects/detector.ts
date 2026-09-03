@@ -40,6 +40,19 @@ type WorkerDet = {
 const pending = new Map<number, (d: WorkerDet[]) => void>();
 let rasterCanvas: HTMLCanvasElement | null = null;
 
+// MEDIDO (2026-09-03, produção): o worker travando NO MEIO de uma detecção (WASM/OOM/frame
+// estranho — qualquer coisa) matava o worker mas nunca resolvia a Promise pendente daquele
+// pedido (o `new Promise` só tem `resolve`, sem `reject` — não dá pra rejeitar por fora). Isso
+// deixava `detectObjects()` PENDURADO pra sempre → ObjetosProcessor.detecting nunca volta a
+// `false` → a câmera parava de detectar pessoa PERMANENTEMENTE (até reabrir a câmera/recarregar
+// a página), sem nenhum aviso — "detecta uma vez e nunca mais". Resolver com [] (sem detecção)
+// destrava o chamador imediatamente; o backend "indisponível"/coco (já tratado abaixo) segue
+// sendo o sinal real de falha — isto só evita o TRAVAMENTO silencioso.
+function flushPending() {
+  for (const cb of pending.values()) cb([]);
+  pending.clear();
+}
+
 /**
  * Pós-processamento PURO do resultado OWL-ViT (testável sem worker/DOM):
  *  1. label→key (prompts fora do catálogo caem);
@@ -90,7 +103,9 @@ function initWorker() {
       if (m.type === "error") {
         worker = null;
         workerFailed = true; // permanente: não recria em loop; coco segue como fallback
-        if (!owlvitReady && !cocoReady) backend = "indisponível";
+        owlvitReady = false; // o worker morreu — "owlvit" reportado como backend seria falso-OK
+        backend = cocoReady ? "coco" : "indisponível"; // reflete o fallback REAL, não o que já foi
+        flushPending(); // destrava qualquer detectObjects() em voo (ver comentário de flushPending)
         return;
       }
       if (m.type === "result" && typeof m.id === "number") {
@@ -104,7 +119,9 @@ function initWorker() {
     worker.onerror = () => {
       worker = null;
       workerFailed = true;
-      if (!owlvitReady && !cocoReady) backend = "indisponível";
+      owlvitReady = false; // o worker morreu — "owlvit" reportado como backend seria falso-OK
+      backend = cocoReady ? "coco" : "indisponível"; // reflete o fallback REAL, não o que já foi
+      flushPending();
     };
     worker.postMessage({ type: "init", model: APP_CONFIG.objects.model });
   } catch {
