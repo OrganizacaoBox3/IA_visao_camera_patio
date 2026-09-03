@@ -25,6 +25,7 @@ const path = require("node:path");
 const { fork } = require("node:child_process");
 const { ensureFadigaModels } = require("./model-fadiga");
 const { FadigaRisk, calcEar, calcMar, LEFT_EYE, RIGHT_EYE, MOUTH_W, MOUTH_O } = require("./fadiga-risk");
+const { emitScopedByCamera, hasDashboardViewerForCamera } = require("../socket-scope");
 
 const ENABLED = process.env.ANALYSIS_FADIGA === "1"; // F1a: opt-in explícito
 const TICK_MS = 200; // 5fps por câmera de fadiga (spike: mesh 7,4ms → folga enorme)
@@ -152,10 +153,17 @@ function createFadigaHost({ io, ingest, isFadigaCamera, cameraLabelOf, log = con
     // paga banda de overlay) e SEM espectador o payload nem é montado. ATENÇÃO: tudo
     // acima (ingest de fad event/samples, st.box, st.risk) já rodou — a análise 24/7
     // não depende de navegador aberto; só a emissão é economizada.
-    if (!hasDashboardViewers(io)) return;
+    if (!hasDashboardViewerForCamera(io, cameraId)) return;
     const snap = st.risk.snapshot();
-    io.to("dashboards")
-      .volatile.emit("analysis-fatigue", buildFatiguePayload({ cameraId, ts: msg.ts, now, face, snap, maskIdx: MASK_IDX }));
+    const payload = buildFatiguePayload({
+      cameraId,
+      ts: msg.ts,
+      now,
+      face,
+      snap,
+      maskIdx: MASK_IDX,
+    });
+    emitScopedByCamera(io, "analysis-fatigue", payload, cameraId, { volatile: true });
   }
 
   function tick() {

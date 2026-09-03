@@ -59,7 +59,9 @@ function attach(socket, { io, cameras, cameraList, shed, analysis, rtsp }) {
   // mais cadência no motor (FPS_FOCUS). `{ id }` foca; `{ id: null }` libera. A câmera focada
   // é a UNIÃO entre todos os dashboards (por socket) — no disconnect a contribuição some.
   socket.on("analysis-focus", (p) => {
-    const id = p && p.id != null && p.id !== "" ? String(p.id) : null;
+    const requested = p && p.id != null && p.id !== "" ? String(p.id) : null;
+    const id =
+      requested && cameras.has(requested) && canSeeCamera(me, requested) ? requested : null;
     socket.data.focusId = id;
     analysis.setFocus(socket.id, id);
     // Foco conta como audiência no shed (fps dinâmico): câmera focada sobe ao fps cheio

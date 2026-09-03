@@ -38,15 +38,15 @@ function fakeDashSocket(user = { id: "u1", papel: "superadmin" }) {
   };
 }
 
-function setup(cameraEntries) {
+function setup(cameraEntries, user) {
   const cameras = new Map(cameraEntries);
   const shed = { sweepShed: vi.fn(), onCameraConnected: vi.fn() };
   const analysis = { snapshotTo: vi.fn(), setFocus: vi.fn(), clearFocus: vi.fn() };
   const rtsp = { statuses: () => [] };
   const cameraList = () => [...cameras.values()];
-  const socket = fakeDashSocket();
+  const socket = fakeDashSocket(user);
   attach(socket, { io: makeIo(), cameras, cameraList, shed, analysis, rtsp });
-  return { socket, cameras, shed };
+  return { socket, cameras, shed, analysis };
 }
 
 describe("dashboard watch — S3: filtra ids contra as câmeras conhecidas", () => {
@@ -90,5 +90,34 @@ describe("dashboard watch — S3: filtra ids contra as câmeras conhecidas", () 
     const { socket } = setup([["cam-A", { id: "cam-A" }]]);
     expect(() => socket.fire("watch", {})).not.toThrow();
     expect([...socket.rooms].some((r) => r.startsWith("cam:"))).toBe(false);
+  });
+});
+
+describe("dashboard analysis-focus — valida câmera e escopo", () => {
+  it("cliente não consegue focar câmera fora da própria alocação", () => {
+    const { socket, analysis } = setup(
+      [
+        ["cam-A", { id: "cam-A" }],
+        ["cam-B", { id: "cam-B" }],
+      ],
+      { id: "u-cliente", papel: "cliente", cameraIds: ["cam-A"] },
+    );
+
+    socket.fire("analysis-focus", { id: "cam-B" });
+    expect(analysis.setFocus).toHaveBeenCalledWith("dash-1", null);
+    expect(socket.data.focusId).toBeNull();
+  });
+
+  it("aceita a câmera alocada e rejeita id inexistente para qualquer papel", () => {
+    const { socket, analysis } = setup([["cam-A", { id: "cam-A" }]], {
+      id: "u-cliente",
+      papel: "cliente",
+      cameraIds: ["cam-A"],
+    });
+
+    socket.fire("analysis-focus", { id: "cam-A" });
+    expect(analysis.setFocus).toHaveBeenLastCalledWith("dash-1", "cam-A");
+    socket.fire("analysis-focus", { id: "fantasma" });
+    expect(analysis.setFocus).toHaveBeenLastCalledWith("dash-1", null);
   });
 });

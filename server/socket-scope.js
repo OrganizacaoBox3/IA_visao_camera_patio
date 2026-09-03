@@ -19,11 +19,49 @@ function dashboardSockets(io) {
   return out;
 }
 
+function hasDashboardViewerForCamera(io, cameraId) {
+  return dashboardSockets(io).some((s) => canSeeCamera(s.data.user, cameraId));
+}
+
 // Emite um evento LIGADO A UMA CÂMERA (alarm-event, camera-status, camcfg-updated) só para os
 // dashboards cujo usuário pode ver aquela câmera. `cameraId` ausente/null (ex.: evento sem
 // câmera associada) → só chega a papéis de equipe, nunca a "cliente" (fail-closed).
-function emitScopedByCamera(io, event, payload, cameraId) {
-  for (const s of dashboardSockets(io)) if (canSeeCamera(s.data.user, cameraId)) s.emit(event, payload);
+function emitScopedByCamera(io, event, payload, cameraId, { volatile = false } = {}) {
+  for (const s of dashboardSockets(io)) {
+    if (!canSeeCamera(s.data.user, cameraId)) continue;
+    if (volatile && s.volatile && typeof s.volatile.emit === "function")
+      s.volatile.emit(event, payload);
+    else s.emit(event, payload);
+  }
 }
 
-module.exports = { visibleCameras, dashboardSockets, emitScopedByCamera };
+function scopeAnalysisStatus(status, user) {
+  if (!status || !user || user.papel !== "cliente") return status;
+  const entries = Object.entries(status.perCamera || {}).filter(([cameraId]) =>
+    canSeeCamera(user, cameraId),
+  );
+  const perCamera = Object.fromEntries(entries);
+  const skipped1m = entries.reduce((sum, [, item]) => sum + Number(item?.skipped1m || 0), 0);
+  const skippedTotal = entries.reduce(
+    (sum, [, item]) => sum + Number(item?.skippedTotal || 0),
+    0,
+  );
+  return {
+    ...status,
+    focused: Array.isArray(status.focused)
+      ? status.focused.filter((cameraId) => canSeeCamera(user, cameraId))
+      : [],
+    motionGate: status.motionGate
+      ? { ...status.motionGate, skipped1m, skippedTotal }
+      : status.motionGate,
+    perCamera,
+  };
+}
+
+module.exports = {
+  visibleCameras,
+  dashboardSockets,
+  hasDashboardViewerForCamera,
+  emitScopedByCamera,
+  scopeAnalysisStatus,
+};

@@ -29,6 +29,8 @@ const motion = require("./motion");
 const zones = require("./zones"); // polygonOf/rasterizePolygonMask — o gate de movimento honra `points`
 const pgstore = require("../pgstore");
 const go2rtc = require("../go2rtc");
+const { canSeeCamera } = require("../users");
+const { emitScopedByCamera } = require("../socket-scope");
 const alarmPipeline = require("../alarm/pipeline"); // alarme server-side (presença em zona proibida)
 const { PRECISION, trackTtlMs } = require("./precision");
 const { createByteTracker } = require("./bytetrack");
@@ -114,7 +116,8 @@ const pipeline = createPipeline({
   // Transporte do `analysis-tracks` (payload montado no pipeline). volatile =
   // último-vence: overlay atrasado não acumula backlog em socket lento.
   hasViewers: () => !!(ctx && ctx.io.sockets.adapter.rooms.get("dashboards")?.size),
-  emitTracks: (payload) => ctx.io.to("dashboards").volatile.emit("analysis-tracks", payload),
+  emitTracks: (payload) =>
+    emitScopedByCamera(ctx.io, "analysis-tracks", payload, payload.cameraId, { volatile: true }),
   cameraLabelOf,
   // PRODUTOR server-side de alarme (presença em zona proibida — presence-alert.js
   // via pipeline): handleAlert DIRETO no hub cobre a câmera 24/7 sem dashboard
@@ -370,7 +373,7 @@ function createState(id) {
 }
 
 function emitAnalysisStatus(cameraId, engine) {
-  if (ctx) ctx.io.to("dashboards").emit("analysis-status", { cameraId, engine });
+  if (ctx) emitScopedByCamera(ctx.io, "analysis-status", { cameraId, engine }, cameraId);
 }
 
 // ── Amostragem: tick escolhe o último frame por câmera, GATA por movimento e despacha ─
@@ -750,7 +753,10 @@ function isAnalyzing() {
 function snapshotTo(socket) {
   if (!enabled) return;
   // Fadiga: engine:null (o hub não cobre pessoa nela — front mantém o modo especializado local).
-  for (const [id, st] of states) socket.emit("analysis-status", { cameraId: id, engine: st.fadiga ? null : "hub" });
+  for (const [id, st] of states) {
+    if (canSeeCamera(socket.data.user, id))
+      socket.emit("analysis-status", { cameraId: id, engine: st.fadiga ? null : "hub" });
+  }
 }
 
 /** Contrato socket `analysis-focus` (cliente→hub, ADITIVO) — registro em focus.js. */

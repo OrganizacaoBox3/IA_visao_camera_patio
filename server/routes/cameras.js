@@ -38,6 +38,10 @@ async function handle(req, res, ctx) {
     } catch {
       src = undefined;
     }
+    if (user && user.papel === "cliente" && !src) {
+      json(res, 403, { error: "ticket geral restrito à equipe" });
+      return true;
+    }
     // RBAC com escopo (spec-multitenancy §4 S1): um ticket com `src` de câmera fora da alocação
     // do "cliente" driblaria TODO o filtro de socket (watch/cam:<id>) indo direto no proxy do
     // go2rtc. Dispositivo (CAMERA_TOKEN) não tem papel — nunca é "cliente", passa sempre.
