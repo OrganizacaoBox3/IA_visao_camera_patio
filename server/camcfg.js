@@ -204,22 +204,6 @@ function cleanZone(z, strict) {
     out.w = bb.w;
     out.h = bb.h;
   }
-  // MEDIDO (2026-09-03, múltiplas câmeras reais — causei_cam7/casa_do_chapel_c15/stick_bom7):
-  // zona "objetos" com "pessoa" desenhada menor que o quadro inteiro ficava, na prática, sem
-  // cobrir onde as pessoas de fato aparecem (operador desenha 1× no setup; a cena muda) — a
-  // contagem ficava presa em 0 com gente claramente visível, e cada câmera nova repetia o
-  // mesmo problema. Em vez de depender do operador redesenhar cada zona (e reintroduzir o
-  // mesmo bug na próxima câmera), a área de CONTAGEM DE PESSOA cobre o quadro inteiro sempre
-  // — a câmera já é, na prática, "a área" (1 câmera = 1 posto/sala na maioria dos casos).
-  // Sobrescreve DEPOIS de qualquer points/preset de propósito (fonte da verdade final).
-  if (out.modo === "objetos" && out.selectedClasses.includes("pessoa")) {
-    out.x = 0;
-    out.y = 0;
-    out.w = 1;
-    out.h = 1;
-    delete out.points;
-    delete out.mask;
-  }
   return out;
 }
 // `strict` só é passado pelo caminho de ESCRITA (saveZones). O de LEITURA (init) chama sem ele —
