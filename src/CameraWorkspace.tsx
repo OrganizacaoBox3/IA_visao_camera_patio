@@ -148,6 +148,11 @@ type Props = {
    *  central a cada `camcfg-updated {kind:"calibration"}` → a câmera re-busca o H. Ausente →
    *  calibração carrega só ao abrir/trocar a câmera (comportamento anterior). */
   calibrationRev?: number;
+  /** SYNC AO VIVO das ZONAS (mesmo idioma do tripwiresRev/ADR-006): revisão incrementada pela
+   *  central a cada `camcfg-updated {kind:"zones"}` → a câmera re-busca a lista. Ausente → zonas
+   *  carregam só ao abrir/trocar a câmera (era o bug: edição por API/outro posto não repropagava
+   *  pra tab já aberta — só um reload manual pegava). */
+  zonesRev?: number;
   /** Transporte do VÍDEO da câmera aberta: "webrtc" = <video-stream> (decode por HW) atrás de um
    *  canvas TRANSPARENTE; "mjpeg"/ausente = frames desenhados no canvas (caminho original). */
   transport?: "mjpeg" | "webrtc";
@@ -170,6 +175,7 @@ export function CameraWorkspace({
   analysisEngine = "local",
   getHubAnalysis,
   calibrationRev,
+  zonesRev,
   transport = "mjpeg",
   onWebrtcFail,
 }: Props) {
@@ -488,6 +494,20 @@ export function CameraWorkspace({
       cancelled = true;
     };
   }, [cameraId, label, canConfigure]);
+  // SYNC AO VIVO das zonas (zonesRev, mesmo idioma do calibrationRev abaixo): zona editada por
+  // OUTRO posto (ou direto na API) não repropagava pra esta tab sem reload manual — só a carga
+  // inicial (efeito acima) buscava. Aqui só re-busca a LISTA; preset/layers da sessão ficam intactos.
+  useEffect(() => {
+    if (!zonesRev) return;
+    let cancelled = false;
+    (async () => {
+      const z = await loadZonesForCamera(cameraId, label, canConfigure);
+      if (!cancelled) setZones(z);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [zonesRev, cameraId, label, canConfigure]);
   // Config de câmera compartilhada: lê o cache síncrono já (sem flash) e hidrata do backend
   // best-effort — a config flui do backend sem acoplar as telas (a UI de config vive na central).
   useEffect(() => {

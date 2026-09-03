@@ -62,8 +62,15 @@ export function DashboardPage() {
     setCameras,
     setAlarms: alarmsApi.setAlarms,
   });
-  const { socketRef, connected, statuses, analysisEngines, revByCamera, calibrationRevByCamera } =
-    socket;
+  const {
+    socketRef,
+    connected,
+    statuses,
+    analysisEngines,
+    revByCamera,
+    calibrationRevByCamera,
+    zonesRevByCamera,
+  } = socket;
   const { alarms, alarmsOpen, setAlarmsOpen, newCount, topNewPriority, actOnAlarm } = alarmsApi;
 
   // Config por câmera (default = atividade → retrocompatível); leitor síncrono usado no transporte.
@@ -281,6 +288,9 @@ export function DashboardPage() {
                 // Sync ao vivo da calibração (idioma tripwiresRev): recalibrou em outro posto →
                 // a fusão tag↔pessoa do tile re-busca H/station (antes ficava stale até remontar).
                 calibrationRev={calibrationRevByCamera.get(c.id) ?? 0}
+                // Idem para ZONAS: editou por outro posto/API → o tile aberto re-busca a lista
+                // (antes só pegava fechando/reabrindo a câmera ou recarregando a página).
+                zonesRev={zonesRevByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
                 analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
@@ -325,6 +335,8 @@ export function DashboardPage() {
                 tripwiresRev={revByCamera.get(open.id) ?? 0}
                 // Simetria com o tile: a fusão da câmera ABERTA também re-busca a calibração ao vivo.
                 calibrationRev={calibrationRevByCamera.get(open.id) ?? 0}
+                // Idem para ZONAS (ver comentário no tile acima).
+                zonesRev={zonesRevByCamera.get(open.id) ?? 0}
                 analysisEngine={analysisEngines[open.id] ?? defaultEngine}
                 // Simetria com o tile; a câmera aberta mantém o pipeline local (decisão no rAF
                 // do CameraWorkspace) — o getter só é consumido na grade (mode≠full).
