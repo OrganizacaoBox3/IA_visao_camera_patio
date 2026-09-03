@@ -119,7 +119,12 @@ import { describe, it, expect } from "vitest";
 // merge na observação de lotação) foi pro servidor (server/analysis/{zones,pipeline,engine}.js).
 // Contabilidade REAL: 1657 → 1672; teto 1680 mantém a folga mínima da convenção (≈5).
 // NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1680;
+// 1680→1698 (MEDIDO em produção: "detecta mas não mantém" — câmera focada em ~0,2fps real
+// zerava a contagem de pessoa vinda do hub numa rodada esparsa em que o track não sobrepôs a
+// zona, mesmo a pessoa não tendo saído): hubPeopleHoldRef segura o último valor >0 por
+// HUB_PEOPLE_HOLD_MS antes de aceitar 0. Contabilidade REAL: 1672 → 1693; teto 1698 mantém a
+// folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1698;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

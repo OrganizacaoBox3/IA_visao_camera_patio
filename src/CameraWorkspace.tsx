@@ -162,6 +162,9 @@ type Props = {
 };
 
 const C = APP_CONFIG.detection;
+// Ver comentário do hubPeopleHoldRef (declaração do componente): tempo que o display segura o
+// último valor >0 da contagem de pessoa vinda do hub antes de aceitar 0.
+const HUB_PEOPLE_HOLD_MS = 8000;
 
 export function CameraWorkspace({
   cameraId,
@@ -291,6 +294,13 @@ export function CameraWorkspace({
   // (falso-OK). Vira estado (o ref evita re-render: muda 2-3× na vida da página).
   const [objBackend, setObjBackend] = useState<ObjBackend>("carregando");
   const objBackendRef = useRef<ObjBackend>("carregando");
+  // Segura o último valor >0 da contagem de PESSOA vinda do hub (zona objetos+pessoa) por até
+  // HUB_PEOPLE_HOLD_MS. MEDIDO: câmera focada pode ficar em ~0,2-0,3 fps real (26 câmeras
+  // dividindo 1-2 workers de análise) — ~1 rodada a cada 4-5s. Sem isto, 1 rodada em que o
+  // track não sobrepôs a zona (jitter/oclusão momentânea) zerava o "TOTAL EM CENA" na tela até
+  // a PRÓXIMA rodada (segundos depois) — "detecta mas não mantém". Residual declarado: quem sai
+  // de verdade só reflete 0 depois de HUB_PEOPLE_HOLD_MS, não instantaneamente.
+  const hubPeopleHoldRef = useRef<Map<string, { value: number; at: number }>>(new Map());
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
@@ -1009,9 +1019,20 @@ export function CameraWorkspace({
               `⚠ ${label} · ${oa.setor}: lotação ${dir} do esperado — ${oa.count} pessoa(s) (esperado ${oa.target})`,
             );
           });
-          const hubPeople = hubCoversPeople
+          const hubPeopleRaw = hubCoversPeople
             ? getHubAnalysis?.()?.zones.find((hz) => hz.id === z.id)?.people
             : undefined;
+          // Segura o último valor >0 por HUB_PEOPLE_HOLD_MS (ver hubPeopleHoldRef) — rodada
+          // esparsa do hub que não sobrepôs a zona não é o mesmo que "a pessoa saiu".
+          let hubPeople = hubPeopleRaw;
+          if (hubCoversPeople) {
+            if (hubPeopleRaw != null && hubPeopleRaw > 0) {
+              hubPeopleHoldRef.current.set(z.id, { value: hubPeopleRaw, at: now });
+            } else {
+              const held = hubPeopleHoldRef.current.get(z.id);
+              if (held && now - held.at < HUB_PEOPLE_HOLD_MS) hubPeople = held.value;
+            }
+          }
           const counts = hubPeople != null ? { ...r.counts, pessoa: hubPeople } : r.counts;
           const total = Object.values(counts).reduce((a, b) => a + b, 0);
           resultsRef.current.set(z.id, { modo: "objetos", counts, total, dets: r.dets });
