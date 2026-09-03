@@ -73,5 +73,11 @@ primary_region = "gru"          # Sao Paulo: a camera publica do Brasil, e laten
 
 # CPU DEDICADA: o motor e inferencia ONNX (D-FINE-S) + um ffmpeg por camera. shared-cpu estrangula
 # igual ao servidor atual (que esta a 88% de CPU) — trocaria de casa sem trocar de problema.
+# MEDIDO (2026-09-02): com 2 vCPU, resolveWorkerCount trava em 1 worker (floor(cores/2), de
+# proposito — 1 nucleo fica pro hub/ffmpeg/relay). 1 worker dividido entre 26 streams entregava
+# ~0.02 fps/camera (1 frame a cada ~50s) mesmo apos pinar ANALYSIS_MODEL=s — abaixo do minimo
+# que a contagem de linha (tripwire) exige pra fechar um cruzamento (ByteTrack + TTL de
+# counting.js precisam de ~2-6 fps sustentado nessa camera; ver engine.js ROUND_MS_LINE/FOCUS).
+# 4 vCPU -> 2 workers, dobrando a cadencia por camera.
 [[vm]]
-  size = "performance-2x"       # 2 vCPU / 4 GB
+  size = "performance-4x"       # 4 vCPU / 8 GB
