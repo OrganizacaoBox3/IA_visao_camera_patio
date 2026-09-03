@@ -423,6 +423,19 @@ describe("processRound — zonas 'objetos'+'pessoa' (contagem por SOBREPOSIÇÃO
     });
   });
 
+  // GATE do que QUEBROU o dev na 1ª tentativa desta feature: os estados sintéticos montados à
+  // mão (eval/counting.mjs, eval/stationary.mjs e este makeSt) não tinham o campo novo, e o
+  // pipeline lia `st.zonesObjPessoa.length` direto → TypeError derrubou o gate de CI. Agora a
+  // leitura é defensiva (`|| []`, mesmo padrão de st.zonesProib); este teste trava isso.
+  it("estado SEM o campo zonesObjPessoa (fixture antigo/eval) não quebra a rodada", () => {
+    const st = makeSt({ zonesAtiv: [{ id: "z1", label: "Doca", x: 0, y: 0, w: 1, h: 1 }] });
+    delete st.zonesObjPessoa;
+    expect(() => pipeline.processRound(st, [person(0.5, 0.8)], 1000)).not.toThrow();
+    expect(deps.emitTracks.mock.calls[0][0].zones).toEqual([
+      { id: "z1", label: "Doca", people: 1, occupied: true },
+    ]);
+  });
+
   it("zona de ATIVIDADE e zona 'objetos'+pessoa na MESMA câmera: as duas lotações evoluem juntas, sem uma podar a outra", () => {
     const ativ = { id: "a1", label: "Linha 1", modo: "atividade", targetOccupancy: 1, occupancyToleranceMs: 10_000, x: 0, y: 0, w: 0.5, h: 1 };
     const obj = { ...zonaObj, targetOccupancy: 2, occupancyToleranceMs: 10_000 }; // meta 2, ninguém lá

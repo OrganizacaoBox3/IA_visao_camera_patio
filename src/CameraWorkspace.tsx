@@ -162,6 +162,9 @@ type Props = {
 };
 
 const C = APP_CONFIG.detection;
+// Tempo que a contagem de pessoa vinda do HUB segura o último valor >0 antes de aceitar 0 (ver
+// hubPeopleHoldRef, na declaração do componente): amortiza a cadência esparsa do motor por câmera.
+const HUB_PEOPLE_HOLD_MS = 8000;
 
 export function CameraWorkspace({
   cameraId,
@@ -291,6 +294,11 @@ export function CameraWorkspace({
   // (falso-OK). Vira estado (o ref evita re-render: muda 2-3× na vida da página).
   const [objBackend, setObjBackend] = useState<ObjBackend>("carregando");
   const objBackendRef = useRef<ObjBackend>("carregando");
+  // Último valor >0 da contagem de pessoa vinda do hub, por zona. MEDIDO (2026-09-03): a câmera
+  // focada roda a 0,05-0,32 fps reais (26 câmeras dividindo os workers de análise) — ~1 rodada a
+  // cada 3-20s. Sem isto, UMA rodada em que o track não sobrepôs a zona zerava o número na tela
+  // até a rodada seguinte, mesmo com a pessoa parada lá ("detecta mas não mantém").
+  const hubPeopleHoldRef = useRef<Map<string, { value: number; at: number }>>(new Map());
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
@@ -1009,12 +1017,41 @@ export function CameraWorkspace({
               `⚠ ${label} · ${oa.setor}: lotação ${dir} do esperado — ${oa.count} pessoa(s) (esperado ${oa.target})`,
             );
           });
-          const hubPeople = hubCoversPeople
+          // PESSOA vem do HUB quando ele cobre esta zona; as outras classes seguem no OWL-ViT.
+          // SEM FALLBACK CALADO (mudança em relação à 1ª tentativa): se o hub cobre mas ainda
+          // não reportou esta zona, a contagem de pessoa fica AUSENTE e o painel diz
+          // "aguardando" — cair no OWL-ViT aqui exibiria o 0 dele como se fosse observação, e
+          // MEDIDO (2026-09-03, cozinha real): ele não detecta essas pessoas nem no piso 0.15.
+          // Falso-OK é pior que erro (CLAUDE.md §2.5).
+          const hubPeopleRaw = hubCoversPeople
             ? getHubAnalysis?.()?.zones.find((hz) => hz.id === z.id)?.people
             : undefined;
-          const counts = hubPeople != null ? { ...r.counts, pessoa: hubPeople } : r.counts;
+          let hubPeople = hubPeopleRaw;
+          if (hubCoversPeople) {
+            // Segura o último valor >0 por HUB_PEOPLE_HOLD_MS: a cadência do motor por câmera é
+            // esparsa sob carga (medido 0,05-0,32 fps) e uma rodada em que o track não sobrepôs
+            // a zona não é "a pessoa saiu". Residual: saída real reflete 0 com até 8s de atraso.
+            if (hubPeopleRaw != null && hubPeopleRaw > 0) {
+              hubPeopleHoldRef.current.set(z.id, { value: hubPeopleRaw, at: now });
+            } else {
+              const held = hubPeopleHoldRef.current.get(z.id);
+              if (held && now - held.at < HUB_PEOPLE_HOLD_MS) hubPeople = held.value;
+            }
+          }
+          let counts = r.counts;
+          let peopleSource: "hub" | "aguardando" | "owlvit" = "owlvit";
+          if (hubCoversPeople) {
+            if (hubPeople != null) {
+              counts = { ...r.counts, pessoa: hubPeople };
+              peopleSource = "hub";
+            } else {
+              const { pessoa: _semObservacao, ...outrasClasses } = r.counts;
+              counts = outrasClasses; // pessoa fica FORA da contagem até o hub reportar
+              peopleSource = "aguardando";
+            }
+          }
           const total = Object.values(counts).reduce((a, b) => a + b, 0);
-          resultsRef.current.set(z.id, { modo: "objetos", counts, total, dets: r.dets });
+          resultsRef.current.set(z.id, { modo: "objetos", counts, total, dets: r.dets, peopleSource });
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
           // Fica no cliente por exceção declarada da ADR-009 → sempre ingerida.

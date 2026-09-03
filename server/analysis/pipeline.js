@@ -169,10 +169,16 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // troca de motor (D-FINE em vez de OWL-ViT). perZoneObj é um Map SEPARADO (id de zona
     // objetos não colide com id de zona atividade, mas o critério de entrada é diferente —
     // não dá pra reusar o mesmo perZone).
+    // LEITURA DEFENSIVA (`|| []`, mesmo padrão que st.zonesProib já usa no payload): estado
+    // sintético de teste/eval é montado à mão (eval/counting.mjs, eval/stationary.mjs,
+    // pipeline.test.js) e um campo NOVO ausente lá derrubava o gate de CI com TypeError — foi
+    // exatamente o que quebrou o `dev` na 1ª tentativa desta feature. O engine SEMPRE popula
+    // este campo em produção; aqui a tolerância é de graça e evita o falso-vermelho.
+    const zonesObjPessoa = st.zonesObjPessoa || [];
     const perZoneObj = new Map();
-    if (st.zonesObjPessoa.length) {
+    if (zonesObjPessoa.length) {
       for (const t of tracks) {
-        const z = resolveZoneByOverlap(t.bbox, st.zonesObjPessoa);
+        const z = resolveZoneByOverlap(t.bbox, zonesObjPessoa);
         if (z) perZoneObj.set(z.id, (perZoneObj.get(z.id) || 0) + 1);
       }
     }
@@ -191,8 +197,8 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // podar o que a 1ª acabou de gravar. occupancy-alert.js é agnóstico de modo (só olha
     // targetOccupancy/occupancyToleranceMs da zona) — ids não colidem entre zonas (newZoneId).
     if (occupancy) {
-      const zonesLotacao = st.zonesObjPessoa.length ? st.zonesAtiv.concat(st.zonesObjPessoa) : st.zonesAtiv;
-      const perZoneLotacao = st.zonesObjPessoa.length ? new Map([...perZone, ...perZoneObj]) : perZone;
+      const zonesLotacao = zonesObjPessoa.length ? st.zonesAtiv.concat(zonesObjPessoa) : st.zonesAtiv;
+      const perZoneLotacao = zonesObjPessoa.length ? new Map([...perZone, ...perZoneObj]) : perZone;
       occupancy.observe(st, zonesLotacao, perZoneLotacao, now);
     }
 
@@ -231,8 +237,8 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
         // zonesObjPessoa entra na MESMA lista (id não colide entre zonas, newZoneId) — o
         // cliente casa por id independente do modo; é como a contagem de PESSOA de uma zona
         // Objetos passa a vir do D-FINE em vez do OWL-ViT sem precisar de um contrato novo.
-        zones: st.zonesAtiv.concat(st.zonesObjPessoa).map((z) => {
-          const people = (st.zonesObjPessoa.includes(z) ? perZoneObj : perZone).get(z.id) || 0;
+        zones: st.zonesAtiv.concat(zonesObjPessoa).map((z) => {
+          const people = (zonesObjPessoa.includes(z) ? perZoneObj : perZone).get(z.id) || 0;
           return { id: z.id, label: z.label, people, occupied: people > 0 };
         }),
         // Zonas PROIBIDAS (campo ADITIVO — contrato da Onda B): uma entrada POR
