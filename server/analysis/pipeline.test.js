@@ -37,7 +37,6 @@ function makeSt(over = {}) {
     zonesAtiv: [],
     zonesExcl: [],
     zonesProib: [], // modo "proibida" — presença vigiada (presence-alert.js)
-    zonesObjPessoa: [], // modo "objetos"+"pessoa" — contagem por D-FINE (perZoneObj)
     autoMask: null,
     window: { frames: 0, zones: new Map() },
     rounds: [],
@@ -387,55 +386,6 @@ describe("processRound — zonas de atividade (janela + overlay)", () => {
     pipeline.processRound(st, [person(0.3, 0.8), person(0.7, 0.8)], 1000); // 2 pessoas
     pipeline.processRound(st, [person(0.3, 0.8)], 2000); // 1 pessoa
     expect(st.window.zones.get("z1")).toMatchObject({ active: 2, peak: 2 });
-  });
-});
-
-// ── ZONAS "OBJETOS"+"PESSOA" (contagem por D-FINE, motor trocado do OWL-ViT) ─────────────────
-// A ÁREA é a que o operador desenha na UI de Objetos (livre); só a contagem de PESSOA passa a
-// vir do D-FINE via resolveZoneByOverlap (SOBREPOSIÇÃO, não centro) — mesmo critério do cliente
-// OWL-ViT (decisão de produto: basta parte do corpo tocar a área). Zona SEPARADA de zonesAtiv,
-// mas cai na MESMA observação de lotação (occupancy.observe) — 2 chamadas por rodada podariam o
-// estado da outra lista (occupancy-alert.js poda por id quem não está na lista da chamada).
-describe("processRound — zonas 'objetos'+'pessoa' (contagem por SOBREPOSIÇÃO, motor D-FINE)", () => {
-  const zonaObj = { id: "o1", label: "Bebedouro", modo: "objetos", selectedClasses: ["pessoa"], x: 0.5, y: 0, w: 0.5, h: 1 };
-
-  it("entra no payload `zones` com a contagem por SOBREPOSIÇÃO (centro fora, caixa tocando a área)", () => {
-    const st = makeSt({ zonesObjPessoa: [zonaObj] });
-    // bbox largo (w=0.2): x 0.35..0.55 — CENTRO em x=0.45 (fora, zona começa em 0.5), mas a
-    // caixa CRUZA a área (0.5..0.55) — resolveZoneByOverlap acha, resolveZone (atividade) não.
-    pipeline.processRound(st, [person(0.45, 0.8, 0.9, 0.2)], 1000);
-    const payload = deps.emitTracks.mock.calls[0][0];
-    expect(payload.zones).toEqual([{ id: "o1", label: "Bebedouro", people: 1, occupied: true }]);
-  });
-
-  it("lotação dispara raiseAlarm pelo MESMO canal (tipo objetos), com o mesmo dwell/histerese", () => {
-    const comMeta = { ...zonaObj, targetOccupancy: 1, occupancyToleranceMs: 10_000 };
-    const st = makeSt({ zonesObjPessoa: [comMeta] });
-    pipeline.processRound(st, [], 0); // 0 pessoas, meta=1 → desvia desde t=0
-    pipeline.processRound(st, [], 6000);
-    expect(deps.raiseAlarm).not.toHaveBeenCalled(); // 6s < 10s
-    pipeline.processRound(st, [], 12_000); // 12s ≥ 10s → alarme
-    expect(deps.raiseAlarm).toHaveBeenCalledTimes(1);
-    expect(deps.raiseAlarm.mock.calls[0][0]).toMatchObject({
-      cameraId: "cam1",
-      zona: "Bebedouro",
-      tipo: "objetos",
-    });
-  });
-
-  it("zona de ATIVIDADE e zona 'objetos'+pessoa na MESMA câmera: as duas lotações evoluem juntas, sem uma podar a outra", () => {
-    const ativ = { id: "a1", label: "Linha 1", modo: "atividade", targetOccupancy: 1, occupancyToleranceMs: 10_000, x: 0, y: 0, w: 0.5, h: 1 };
-    const obj = { ...zonaObj, targetOccupancy: 2, occupancyToleranceMs: 10_000 }; // meta 2, ninguém lá
-    const st = makeSt({ zonesAtiv: [ativ], zonesObjPessoa: [obj] });
-    // pessoa só na zona de ATIVIDADE (x<0.5): ativ desvia (0 pessoas ≠ meta 1) e obj TAMBÉM desvia
-    // (0 ≠ meta 2) — as duas devem violar juntas aos 12s, prova de que uma não zera a pendência da outra.
-    pipeline.processRound(st, [], 0);
-    pipeline.processRound(st, [], 6000);
-    expect(deps.raiseAlarm).not.toHaveBeenCalled();
-    pipeline.processRound(st, [], 12_000);
-    expect(deps.raiseAlarm).toHaveBeenCalledTimes(2);
-    const zonasAlertadas = deps.raiseAlarm.mock.calls.map((c) => c[0].zona).sort();
-    expect(zonasAlertadas).toEqual(["Bebedouro", "Linha 1"]);
   });
 });
 
