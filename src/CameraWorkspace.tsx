@@ -961,6 +961,13 @@ export function CameraWorkspace({
             noReads: r.noReads,
           });
         } else if (h.modo === "objetos") {
+          // Contagem de PESSOA nesta zona: MOTOR TROCADO (não a área). O hub já roda D-FINE
+          // 24/7 nesta câmera (ADR-009) — se a zona pede "pessoa", usamos a contagem dele (por
+          // SOBREPOSIÇÃO, mesma área desenhada aqui) em vez do OWL-ViT, que mede pior em pose/
+          // ângulo real (medido). targetOccupancy some do processador local quando o hub cobre —
+          // evita o MESMO alarme de lotação disparar duas vezes (cliente E servidor).
+          const hubCoversPeople =
+            analysisEngine === "hub" && !!getHubAnalysis && z.selectedClasses.includes("pessoa");
           const r = h.proc.process(
             [
               {
@@ -971,7 +978,7 @@ export function CameraWorkspace({
                 w: z.w,
                 h: z.h,
                 contains: zm.containsFn(z),
-                targetOccupancy: z.targetOccupancy,
+                targetOccupancy: hubCoversPeople ? undefined : z.targetOccupancy,
                 occupancyToleranceMs: z.occupancyToleranceMs,
               },
             ],
@@ -982,7 +989,9 @@ export function CameraWorkspace({
           // O backend do detector PARA DE SER DESCARTADO: sobe ao estado que a aba Zonas lê.
           if (r.backend !== objBackendRef.current)
             setObjBackend((objBackendRef.current = r.backend));
-          // Objetos segue no cliente (o motor não cobre o modo) → sempre ingerido (ADR-009).
+          // Objetos segue no cliente (o motor não cobre CLASSE nenhuma além de pessoa) → sempre
+          // ingerido (ADR-009). O sample de "pessoa" ainda é o do OWL-ViT (relatório fora de
+          // escopo desta troca — só a EXIBIÇÃO ao vivo usa o hub por ora).
           if (shouldIngest("object", engine)) {
             r.events.forEach((e) => recordObjectEvent(e));
             if (r.samples) recordObjectSamples({ samples: r.samples });
@@ -991,15 +1000,21 @@ export function CameraWorkspace({
           // Lotação fora do alvo (⚠ NOS TEXTOS DE onAlert É CONTRATO — ver nota mais abaixo): só
           // este tipo de alerta do modo objetos leva o prefixo "⚠", de propósito — é o que faz
           // alertMetaFromText derivar cameraId/zona e o alarme chegar ao Andon/WhatsApp; entrada/
-          // saída de presença (r.alerts acima) segue como toast informativo, sem alarme.
+          // saída de presença (r.alerts acima) segue como toast informativo, sem alarme. Some
+          // sozinho quando hubCoversPeople (targetOccupancy ausente → objetos.ts nunca gera):
+          // o alarme sai do occupancy-alert.js do servidor nesse caso (mesmo canal).
           r.occupancyAlerts.forEach((oa) => {
             const dir = oa.count > oa.target ? "acima" : "abaixo";
             onAlertRef.current?.(
               `⚠ ${label} · ${oa.setor}: lotação ${dir} do esperado — ${oa.count} pessoa(s) (esperado ${oa.target})`,
             );
           });
-          const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
-          resultsRef.current.set(z.id, { modo: "objetos", counts: r.counts, total, dets: r.dets });
+          const hubPeople = hubCoversPeople
+            ? getHubAnalysis?.()?.zones.find((hz) => hz.id === z.id)?.people
+            : undefined;
+          const counts = hubPeople != null ? { ...r.counts, pessoa: hubPeople } : r.counts;
+          const total = Object.values(counts).reduce((a, b) => a + b, 0);
+          resultsRef.current.set(z.id, { modo: "objetos", counts, total, dets: r.dets });
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
           // Fica no cliente por exceção declarada da ADR-009 → sempre ingerida.

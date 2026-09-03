@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const {
   resolveZone,
   attributeZone,
+  resolveZoneByOverlap,
   inExclusionZone,
   createMask,
   anySet,
@@ -126,6 +127,49 @@ describe("attributeZone — desempate em zonas sobrepostas (regra: maior interse
   it("sem bbox (só ponto), overlap é 0 p/ todas → vence a de MENOR área", () => {
     const zs = [zone("Grande", 0, 0, 1, 1), zone("Pequena", 0.4, 0.4, 0.2, 0.2)];
     expect(attributeZone({ x: 0.5, y: 0.5 }, zs)).toBe("Pequena");
+  });
+});
+
+// resolveZoneByOverlap: SÓ modo Objetos+pessoa (D-FINE, pipeline.js). resolveZone exige o CENTRO
+// do bbox dentro da zona — pessoa na borda (corpo cruzando a linha, centro fora) some da
+// contagem. Aqui basta o retângulo TOCAR a zona (e, com máscara/polígono, algum ponto amostrado
+// da interseção cair dentro dela). Espelho 1:1 dos casos de src/zones.test.ts (assignZoneByOverlap).
+describe("resolveZoneByOverlap — basta parte da caixa estar na zona (espelho de assignZoneByOverlap)", () => {
+  const setor = zone("Depósito", 0.5, 0, 0.5, 1);
+
+  it("centro FORA da zona mas caixa cruzando a borda: resolveZone perde, resolveZoneByOverlap acha", () => {
+    const bboxNaBorda = [0.35, 0.4, 0.2, 0.2]; // 0.35..0.55 × 0.4..0.6, centro em x=0.45
+    expect(resolveZone(bboxNaBorda, [setor])).toBeNull(); // centro fora (zona começa em x=0.5)
+    expect(resolveZoneByOverlap(bboxNaBorda, [setor])?.label).toBe("Depósito"); // mas toca (0.5..0.55)
+  });
+
+  it("caixa TOTALMENTE fora (nem toca o retângulo da zona) continua null", () => {
+    const bboxFora = [0.0, 0.0, 0.2, 0.2];
+    expect(resolveZoneByOverlap(bboxFora, [setor])).toBeNull();
+  });
+
+  it("respeita a MÁSCARA: retângulos se tocam mas a interseção cai fora da máscara pintada", () => {
+    const m = createMask(10, 10);
+    fillRectNorm(m, 0, 0, 1, 0.1, true); // só a faixa y<0.1
+    const mascarada = { ...zone("M", 0, 0, 1, 1), mask: encodeMask(m) };
+    // interseção com a caixa fica inteira em y=0.5..0.7 → fora da faixa pintada.
+    const bbox = [0.4, 0.5, 0.2, 0.2];
+    expect(resolveZoneByOverlap(bbox, [mascarada])).toBeNull();
+  });
+
+  it("respeita o POLÍGONO: mesma ideia, com points em vez de máscara", () => {
+    // bbox do retângulo cobre o frame todo (pré-filtro passa); o POLÍGONO real é um triângulo
+    // fino perto do topo (y<0.1) — a caixa de teste (y=0.5..0.7) toca o RETÂNGULO mas não o polígono.
+    const triangulo = { ...zone("T", 0, 0, 1, 1), points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0.1 }] };
+    const bbox = [0.4, 0.5, 0.2, 0.2];
+    expect(resolveZoneByOverlap(bbox, [triangulo])).toBeNull();
+  });
+
+  it("mesmo desempate de resolveZone entre zonas sobrepostas: maior interseção, depois menor área", () => {
+    const grande = zone("Espera", 0, 0, 1, 1);
+    const especifica = zone("Doca 3", 0.4, 0.4, 0.3, 0.3);
+    const bbox = [0.45, 0.45, 0.2, 0.2]; // dentro das duas, igual interseção → menor área
+    expect(resolveZoneByOverlap(bbox, [grande, especifica])?.label).toBe("Doca 3");
   });
 });
 

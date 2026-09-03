@@ -164,6 +164,18 @@ function proibZonesOf(cameraId) {
   return camcfg.getZones(cameraId).filter((z) => z.modo === "proibida");
 }
 
+// Zonas OBJETOS com "pessoa" selecionada: contagem de PESSOA nessa área passa a vir do
+// D-FINE (perZoneObj em pipeline.js), não do OWL-ViT client-side — mesma área que o
+// operador desenha na UI de Objetos (área/tamanho livres), mesmo motor 24/7 do resto do
+// produto. MEDIDO (2026-09-03): OWL-ViT falha em pose/ângulo real com frequência — o
+// D-FINE é o motor avaliado em `npm run eval`. Classes que NÃO são pessoa (caixa,
+// empilhadeira) continuam só no cliente — o hub não sabe o que é "caixa".
+function objPessoaZonesOf(cameraId) {
+  return camcfg
+    .getZones(cameraId)
+    .filter((z) => z.modo === "objetos" && Array.isArray(z.selectedClasses) && z.selectedClasses.includes("pessoa"));
+}
+
 // Máscara de HOTSPOT do gate de movimento: reaproveita as MESMAS zonas de exclusão
 // como mapa de ignore do thumbnail (relógio/galho/timestamp queimado não disparam o
 // gate). Rebuild só quando as zonas mudam; null = sem exclusão (caminho rápido).
@@ -337,6 +349,7 @@ function createState(id) {
     zonesAtiv: ativZonesOf(id),
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking
     zonesProib: proibZonesOf(id), // modo "proibida" — presença vigiada (presence-alert.js)
+    zonesObjPessoa: objPessoaZonesOf(id), // modo "objetos"+"pessoa" — contagem por D-FINE (pipeline.js)
     presence: new Map(), // máquina ARMADA/VIOLADA por zona proibida (presence-alert.js muta)
     occupancy: new Map(), // máquina OK/VIOLADA por zona de lotação (occupancy-alert.js muta)
     // ── Gate de movimento ──
@@ -729,6 +742,7 @@ function onCamcfgUpdated(p) {
     st.zonesAtiv = ativZonesOf(st.id);
     st.zonesExcl = exclZonesOf(st.id); // recarrega a máscara de exclusão na próxima rodada
     st.zonesProib = proibZonesOf(st.id); // zonas vigiadas — presence-alert poda estados órfãos por id
+    st.zonesObjPessoa = objPessoaZonesOf(st.id); // idem p/ contagem de pessoa em zona objetos
     st.motionIgnore = buildMotionIgnore(st.zonesExcl); // e o mapa de hotspot do gate (mesmas zonas)
     st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
     st.lastTracks = null; // snapshot de coasting carrega a lista de zonas ANTIGA → invalida
