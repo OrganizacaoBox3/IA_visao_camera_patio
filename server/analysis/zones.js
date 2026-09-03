@@ -306,48 +306,6 @@ function attributeZone(target, zones) {
   return best ? (best.label ?? null) : null;
 }
 
-/**
- * Zona por SOBREPOSIÇÃO — espelho 1:1 de assignZoneByOverlap (src/zones.ts). Usada SÓ para
- * contagem de PESSOA em zona modo "objetos" (decisão de produto igual ao cliente: basta parte
- * da caixa estar na área, não o centro — resolveZone/centro é estrito demais e sub-conta gente
- * na borda). Mesmo desempate de resolveZone (maior interseção, depois menor área). NÃO usar
- * para atividade/tripwire/proibida — essas mantêm o critério de centro (resolveZone).
- * @param {[number,number,number,number]} bbox
- * @param {Array<{id?:string,label:string,x:number,y:number,w:number,h:number,mask?:string,points?:Array<{x:number,y:number}>}>} zones
- * @returns {object | null} a zona vencedora, ou null.
- */
-function resolveZoneByOverlap(bbox, zones) {
-  let best = null;
-  let bestOv = -1;
-  for (const z of zones) {
-    const ix = Math.min(bbox[0] + bbox[2], z.x + z.w) - Math.max(bbox[0], z.x);
-    const iy = Math.min(bbox[1] + bbox[3], z.y + z.h) - Math.max(bbox[1], z.y);
-    if (ix <= 0 || iy <= 0) continue; // sem sobreposição de retângulo → nem candidata
-    const poly = polygonOf(z);
-    const mc = !poly ? maskFor(z.mask) : null;
-    const cn = poly
-      ? (nx, ny) => pointInPolygon({ x: nx, y: ny }, poly)
-      : mc && mc.any
-        ? (nx, ny) => containsNorm(mc.mask, nx, ny)
-        : null;
-    if (cn) {
-      const rx0 = Math.max(bbox[0], z.x),
-        ry0 = Math.max(bbox[1], z.y);
-      const rx1 = rx0 + ix,
-        ry1 = ry0 + iy;
-      const hit =
-        cn(rx0, ry0) || cn(rx1, ry0) || cn(rx0, ry1) || cn(rx1, ry1) || cn((rx0 + rx1) / 2, (ry0 + ry1) / 2);
-      if (!hit) continue; // retângulos se tocam, mas fora da máscara/polígono
-    }
-    const ov = ix * iy;
-    if (!best || ov > bestOv || (ov === bestOv && z.w * z.h < best.w * best.h)) {
-      best = z;
-      bestOv = ov;
-    }
-  }
-  return best;
-}
-
 // ── zona de exclusão (calibração — docs/analises/acuracia-modelos.md Medida A) ────
 /**
  * A pessoa está numa zona de EXCLUSÃO? Critério = o PÉ (bottom-center do bbox: cx,
@@ -391,7 +349,6 @@ function inExclusionZone(target, zones) {
 module.exports = {
   resolveZone, // identidade (contagem por zona) — 1:1 do assignZone do cliente
   attributeZone, // rótulo (overlay/alarme) — wrapper de resolveZone
-  resolveZoneByOverlap, // identidade por SOBREPOSIÇÃO — 1:1 do assignZoneByOverlap (só objetos+pessoa)
   inExclusionZone,
   // helpers de máscara (mesma semântica do zoneMask.ts; exportados p/ testes/engine)
   createMask,
