@@ -43,7 +43,18 @@ export type ZoneResult =
       ratePct: number;
       noReads: number;
     }
-  | { modo: "objetos"; counts: Record<string, number>; total: number; dets: ObjDetection[] }
+  | {
+      modo: "objetos";
+      counts: Record<string, number>;
+      total: number;
+      dets: ObjDetection[];
+      /** De onde vem a contagem de PESSOA desta zona (as outras classes são sempre do OWL-ViT):
+       *  "hub" = motor do servidor (D-FINE — MEDIDO: o OWL-ViT não detecta pessoa em cena
+       *  interna/oclusa, ver objects.minScore no config); "aguardando" = o hub cobre esta zona
+       *  mas ainda não reportou (NÃO cai no OWL-ViT calado — o 0 dele seria falso-OK);
+       *  "owlvit" = o hub não cobre (câmera sem motor, ou "pessoa" não selecionada). */
+      peopleSource: "hub" | "aguardando" | "owlvit";
+    }
   | {
       modo: "fadiga";
       risk: RiskState;

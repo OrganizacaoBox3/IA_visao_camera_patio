@@ -112,7 +112,23 @@ import { describe, it, expect } from "vitest";
 // (mesmo idioma de tripwiresRev/calibrationRev) + 1 efeito extra que só re-busca a lista
 // (sem resetar preset/layers da sessão). Contabilidade REAL: 1638 → 1657; teto 1662 mantém a
 // folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1662;
+// 1662→1680 (contagem de PESSOA em zona Objetos passa a vir do hub/D-FINE, não do OWL-ViT — mesmo
+// motor confiável que a Atividade já usa): 1 flag (hubCoversPeople) + omite targetOccupancy do
+// processador local quando o hub cobre (evita alarme duplicado) + 1 leitura de getHubAnalysis()
+// pra achar a zona por id + merge no `counts`/`total`. O GROSSO (resolveZoneByOverlap, perZoneObj,
+// merge na observação de lotação) foi pro servidor (server/analysis/{zones,pipeline,engine}.js).
+// Contabilidade REAL: 1657 → 1672; teto 1680 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+// 1680→1715 (contagem de pessoa da zona Objetos volta ao hub/D-FINE, agora SEM fallback calado):
+// MEDIDO em cozinha real (2026-09-03) que o OWL-ViT não detecta pessoa nessa cena nem no piso
+// 0.15, enquanto o D-FINE rastreia as mesmas pessoas estável. Aqui ficou a fiação: hold do valor
+// do hub (hubPeopleHoldRef + constante), o tri-estado peopleSource (hub/aguardando/owlvit — em
+// "aguardando" pessoa fica FORA da contagem em vez de exibir o 0 do detector cego, que era
+// falso-OK) e o repasse ao painel. O GROSSO segue no servidor (resolveZoneByOverlap/perZoneObj em
+// server/analysis/) e o TEXTO do aviso em camera/objectBackendNotice.ts (puro, testado).
+// Contabilidade REAL: 1672 → 1709; teto 1715 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1715;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

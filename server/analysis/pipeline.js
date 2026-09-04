@@ -33,7 +33,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
-const { resolveZone, inExclusionZone } = require("./zones");
+const { resolveZone, resolveZoneByOverlap, inExclusionZone } = require("./zones");
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
 const { createOccupancyAlert } = require("./occupancy-alert");
@@ -163,16 +163,44 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
       }
     }
 
+    // Zonas OBJETOS com "pessoa" (st.zonesObjPessoa do engine): MESMO critério de entrada do
+    // cliente Objetos (SOBREPOSIÇÃO — resolveZoneByOverlap, não o centro do resolveZone) — a
+    // área é a que o operador desenhou na UI de Objetos (tamanho/local livres), a contagem só
+    // troca de motor (D-FINE em vez de OWL-ViT). perZoneObj é um Map SEPARADO (id de zona
+    // objetos não colide com id de zona atividade, mas o critério de entrada é diferente —
+    // não dá pra reusar o mesmo perZone).
+    // LEITURA DEFENSIVA (`|| []`, mesmo padrão que st.zonesProib já usa no payload): estado
+    // sintético de teste/eval é montado à mão (eval/counting.mjs, eval/stationary.mjs,
+    // pipeline.test.js) e um campo NOVO ausente lá derrubava o gate de CI com TypeError — foi
+    // exatamente o que quebrou o `dev` na 1ª tentativa desta feature. O engine SEMPRE popula
+    // este campo em produção; aqui a tolerância é de graça e evita o falso-vermelho.
+    const zonesObjPessoa = st.zonesObjPessoa || [];
+    const perZoneObj = new Map();
+    if (zonesObjPessoa.length) {
+      for (const t of tracks) {
+        const z = resolveZoneByOverlap(t.bbox, zonesObjPessoa);
+        if (z) perZoneObj.set(z.id, (perZoneObj.get(z.id) || 0) + 1);
+      }
+    }
+
     // Zonas PROIBIDAS (modo "proibida" — st.zonesProib do engine): a observação da
     // rodada alimenta a máquina de estados de presença (dwell → alarme server-side).
     // SÓ rodada de INFERÊNCIA passa aqui — rodada pulada pelo gate não observa e
     // NÃO reseta o dwell (skip = "nada mudou"; ver cabeçalho do presence-alert.js).
     if (presence) presence.observe(st, tracks, now);
-    // Lotação: perZone já reflete a rodada de INFERÊNCIA atual (calculado acima,
-    // no mesmo bloco que alimenta o payload zones[].people) — mesma semântica de
-    // "só observa em rodada não pulada" do presence, pelo mesmo motivo (skip = a
-    // cena não mudou; o dwell de lotação não deve resetar por isso).
-    if (occupancy) occupancy.observe(st, st.zonesAtiv, perZone, now);
+    // Lotação: perZone/perZoneObj já refletem a rodada de INFERÊNCIA atual (calculados acima,
+    // no mesmo bloco que alimenta o payload zones[].people) — mesma semântica de "só observa em
+    // rodada não pulada" do presence, pelo mesmo motivo (skip = a cena não mudou; o dwell de
+    // lotação não deve resetar por isso). UMA chamada só, com as DUAS listas de zona (atividade +
+    // objetos+pessoa) e os DOIS Maps de contagem já combinados — observe() PODA por id quem não
+    // está na lista desta chamada (zona que perdeu a meta); 2 chamadas separadas fariam a 2ª
+    // podar o que a 1ª acabou de gravar. occupancy-alert.js é agnóstico de modo (só olha
+    // targetOccupancy/occupancyToleranceMs da zona) — ids não colidem entre zonas (newZoneId).
+    if (occupancy) {
+      const zonesLotacao = zonesObjPessoa.length ? st.zonesAtiv.concat(zonesObjPessoa) : st.zonesAtiv;
+      const perZoneLotacao = zonesObjPessoa.length ? new Map([...perZone, ...perZoneObj]) : perZone;
+      occupancy.observe(st, zonesLotacao, perZoneLotacao, now);
+    }
 
     // (O gravador de sessão de fusão — bt/session-recorder — migrou com o BLE; ADR-018.
     //  Era o ÚNICO gancho câmera→BLE dentro do motor de análise.)
@@ -206,8 +234,11 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
           score: t.score,
           zone: zoneByTrack.get(t.id) ?? null,
         })),
-        zones: st.zonesAtiv.map((z) => {
-          const people = perZone.get(z.id) || 0; // por IDENTIDADE (ver a agregação acima)
+        // zonesObjPessoa entra na MESMA lista (id não colide entre zonas, newZoneId) — o
+        // cliente casa por id independente do modo; é como a contagem de PESSOA de uma zona
+        // Objetos passa a vir do D-FINE em vez do OWL-ViT sem precisar de um contrato novo.
+        zones: st.zonesAtiv.concat(zonesObjPessoa).map((z) => {
+          const people = (zonesObjPessoa.includes(z) ? perZoneObj : perZone).get(z.id) || 0;
           return { id: z.id, label: z.label, people, occupied: people > 0 };
         }),
         // Zonas PROIBIDAS (campo ADITIVO — contrato da Onda B): uma entrada POR

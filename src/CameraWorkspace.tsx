@@ -162,6 +162,9 @@ type Props = {
 };
 
 const C = APP_CONFIG.detection;
+// Tempo que a contagem de pessoa vinda do HUB segura o último valor >0 antes de aceitar 0 (ver
+// hubPeopleHoldRef, na declaração do componente): amortiza a cadência esparsa do motor por câmera.
+const HUB_PEOPLE_HOLD_MS = 8000;
 
 export function CameraWorkspace({
   cameraId,
@@ -291,6 +294,11 @@ export function CameraWorkspace({
   // (falso-OK). Vira estado (o ref evita re-render: muda 2-3× na vida da página).
   const [objBackend, setObjBackend] = useState<ObjBackend>("carregando");
   const objBackendRef = useRef<ObjBackend>("carregando");
+  // Último valor >0 da contagem de pessoa vinda do hub, por zona. MEDIDO (2026-09-03): a câmera
+  // focada roda a 0,05-0,32 fps reais (26 câmeras dividindo os workers de análise) — ~1 rodada a
+  // cada 3-20s. Sem isto, UMA rodada em que o track não sobrepôs a zona zerava o número na tela
+  // até a rodada seguinte, mesmo com a pessoa parada lá ("detecta mas não mantém").
+  const hubPeopleHoldRef = useRef<Map<string, { value: number; at: number }>>(new Map());
   const [presence, setPresence] = useState({ now: 0, peak: 0, dwell: 0 });
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   // Default = uma aba de OBSERVAÇÃO (Zona/Linha saíram das abas — viram modos do palco). Pessoas é a
@@ -961,6 +969,13 @@ export function CameraWorkspace({
             noReads: r.noReads,
           });
         } else if (h.modo === "objetos") {
+          // Contagem de PESSOA nesta zona: MOTOR TROCADO (não a área). O hub já roda D-FINE
+          // 24/7 nesta câmera (ADR-009) — se a zona pede "pessoa", usamos a contagem dele (por
+          // SOBREPOSIÇÃO, mesma área desenhada aqui) em vez do OWL-ViT, que mede pior em pose/
+          // ângulo real (medido). targetOccupancy some do processador local quando o hub cobre —
+          // evita o MESMO alarme de lotação disparar duas vezes (cliente E servidor).
+          const hubCoversPeople =
+            analysisEngine === "hub" && !!getHubAnalysis && z.selectedClasses.includes("pessoa");
           const r = h.proc.process(
             [
               {
@@ -971,7 +986,7 @@ export function CameraWorkspace({
                 w: z.w,
                 h: z.h,
                 contains: zm.containsFn(z),
-                targetOccupancy: z.targetOccupancy,
+                targetOccupancy: hubCoversPeople ? undefined : z.targetOccupancy,
                 occupancyToleranceMs: z.occupancyToleranceMs,
               },
             ],
@@ -982,7 +997,9 @@ export function CameraWorkspace({
           // O backend do detector PARA DE SER DESCARTADO: sobe ao estado que a aba Zonas lê.
           if (r.backend !== objBackendRef.current)
             setObjBackend((objBackendRef.current = r.backend));
-          // Objetos segue no cliente (o motor não cobre o modo) → sempre ingerido (ADR-009).
+          // Objetos segue no cliente (o motor não cobre CLASSE nenhuma além de pessoa) → sempre
+          // ingerido (ADR-009). O sample de "pessoa" ainda é o do OWL-ViT (relatório fora de
+          // escopo desta troca — só a EXIBIÇÃO ao vivo usa o hub por ora).
           if (shouldIngest("object", engine)) {
             r.events.forEach((e) => recordObjectEvent(e));
             if (r.samples) recordObjectSamples({ samples: r.samples });
@@ -991,15 +1008,50 @@ export function CameraWorkspace({
           // Lotação fora do alvo (⚠ NOS TEXTOS DE onAlert É CONTRATO — ver nota mais abaixo): só
           // este tipo de alerta do modo objetos leva o prefixo "⚠", de propósito — é o que faz
           // alertMetaFromText derivar cameraId/zona e o alarme chegar ao Andon/WhatsApp; entrada/
-          // saída de presença (r.alerts acima) segue como toast informativo, sem alarme.
+          // saída de presença (r.alerts acima) segue como toast informativo, sem alarme. Some
+          // sozinho quando hubCoversPeople (targetOccupancy ausente → objetos.ts nunca gera):
+          // o alarme sai do occupancy-alert.js do servidor nesse caso (mesmo canal).
           r.occupancyAlerts.forEach((oa) => {
             const dir = oa.count > oa.target ? "acima" : "abaixo";
             onAlertRef.current?.(
               `⚠ ${label} · ${oa.setor}: lotação ${dir} do esperado — ${oa.count} pessoa(s) (esperado ${oa.target})`,
             );
           });
-          const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
-          resultsRef.current.set(z.id, { modo: "objetos", counts: r.counts, total, dets: r.dets });
+          // PESSOA vem do HUB quando ele cobre esta zona; as outras classes seguem no OWL-ViT.
+          // SEM FALLBACK CALADO (mudança em relação à 1ª tentativa): se o hub cobre mas ainda
+          // não reportou esta zona, a contagem de pessoa fica AUSENTE e o painel diz
+          // "aguardando" — cair no OWL-ViT aqui exibiria o 0 dele como se fosse observação, e
+          // MEDIDO (2026-09-03, cozinha real): ele não detecta essas pessoas nem no piso 0.15.
+          // Falso-OK é pior que erro (CLAUDE.md §2.5).
+          const hubPeopleRaw = hubCoversPeople
+            ? getHubAnalysis?.()?.zones.find((hz) => hz.id === z.id)?.people
+            : undefined;
+          let hubPeople = hubPeopleRaw;
+          if (hubCoversPeople) {
+            // Segura o último valor >0 por HUB_PEOPLE_HOLD_MS: a cadência do motor por câmera é
+            // esparsa sob carga (medido 0,05-0,32 fps) e uma rodada em que o track não sobrepôs
+            // a zona não é "a pessoa saiu". Residual: saída real reflete 0 com até 8s de atraso.
+            if (hubPeopleRaw != null && hubPeopleRaw > 0) {
+              hubPeopleHoldRef.current.set(z.id, { value: hubPeopleRaw, at: now });
+            } else {
+              const held = hubPeopleHoldRef.current.get(z.id);
+              if (held && now - held.at < HUB_PEOPLE_HOLD_MS) hubPeople = held.value;
+            }
+          }
+          let counts = r.counts;
+          let peopleSource: "hub" | "aguardando" | "owlvit" = "owlvit";
+          if (hubCoversPeople) {
+            if (hubPeople != null) {
+              counts = { ...r.counts, pessoa: hubPeople };
+              peopleSource = "hub";
+            } else {
+              const { pessoa: _semObservacao, ...outrasClasses } = r.counts;
+              counts = outrasClasses; // pessoa fica FORA da contagem até o hub reportar
+              peopleSource = "aguardando";
+            }
+          }
+          const total = Object.values(counts).reduce((a, b) => a + b, 0);
+          resultsRef.current.set(z.id, { modo: "objetos", counts, total, dets: r.dets, peopleSource });
         } else {
           // FADIGA: recorta a ROI da zona e roda o pipeline do operador nela (1 operador por zona).
           // Fica no cliente por exceção declarada da ADR-009 → sempre ingerida.

@@ -115,7 +115,13 @@ export function ZonasTab({
         // Aviso do DETECTOR (só o modo Objetos tem detector próprio). `null` no caminho saudável
         // — o aviso não pode virar decoração permanente (ver objectBackendNotice.ts).
         const detAviso =
-          z.modo === "objetos" ? objectBackendNotice(objBackend, z.selectedClasses) : null;
+          z.modo === "objetos"
+            ? objectBackendNotice(
+                objBackend,
+                z.selectedClasses,
+                r?.modo === "objetos" ? r.peopleSource : "owlvit",
+              )
+            : null;
         return (
           <div key={z.id} className={`zone ${st}`}>
             <div className="row">
