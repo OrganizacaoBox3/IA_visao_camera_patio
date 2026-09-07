@@ -976,6 +976,17 @@ export function CameraWorkspace({
           // evita o MESMO alarme de lotação disparar duas vezes (cliente E servidor).
           const hubCoversPeople =
             analysisEngine === "hub" && !!getHubAnalysis && z.selectedClasses.includes("pessoa");
+          // Com o hub medindo pessoa, PARAR de pedir a classe "pessoa" ao OWL-ViT. MEDIDO
+          // (2026-09-04, cozinha real): no piso 0.15 ele passou a marcar EQUIPAMENTO como
+          // pessoa — caixa falsa desenhada onde não tem ninguém (a supressão de draw.ts só
+          // esconde a det que TEM track por cima; a falsa não tem, então aparece). Essas dets
+          // não servem mais pra nada (quem conta pessoa é o servidor), então cortá-las na
+          // ORIGEM mata o falso-positivo e ainda poupa inferência no navegador. Se "pessoa"
+          // era a única classe, a lista fica vazia → detectObjects devolve [] sem rodar o
+          // modelo (labels.length === 0), zero custo.
+          const classesOwl = hubCoversPeople
+            ? z.selectedClasses.filter((k) => k !== "pessoa")
+            : z.selectedClasses;
           const r = h.proc.process(
             [
               {
@@ -990,7 +1001,7 @@ export function CameraWorkspace({
                 occupancyToleranceMs: z.occupancyToleranceMs,
               },
             ],
-            z.selectedClasses,
+            classesOwl,
             { frame: f, now },
           );
           if (r.detectMs != null) stageMsRef.current.detect = r.detectMs;

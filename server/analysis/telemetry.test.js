@@ -138,7 +138,57 @@ describe("buildStatus — agregação por câmera", () => {
       fadiga: false,
       source: "go2rtc",
       gate: GATE_ZERO, // bloco ADITIVO do sensor do gate (sem rodadas na janela)
+      // ESTABILIDADE (aditivo, 2026-09-04 — health.observeFrame): `null` porque este estado
+      // sintético nunca recebeu frame pelo observador. Mesmo princípio do frameAge acima:
+      // ausência de medição é `null`, NUNCA 0 (0 aqui afirmaria "vídeo perfeitamente estável").
+      maxGapMs: null,
+      retomadas1m: null,
+      // SAÚDE (aditivo): veredito + o número que o sustenta. Aqui a câmera tem frame e
+      // inferência recentes, mas fps 0.1 contra meta 1 (< 25%) → "ia-atrasada" é o certo:
+      // ela ESTÁ medindo, só não acompanha o vídeo.
+      health: {
+        estado: "ia-atrasada",
+        motivo: "0.1 de 1 análises/s",
+        desde: null,
+        medido: {
+          // `null`: este estado sintético não tem lastFrameAt/lastInferAt — "não sei", e o
+          // veredito veio da CADÊNCIA (o único sinal medido aqui), não de suposição.
+          semFrameMs: null,
+          semInferMs: null,
+          fps: 0.1,
+          targetFps: 1,
+          frameAgeP50: null,
+          maxGapMs: null,
+          retomadas1m: null,
+        },
+      },
     });
+  });
+
+  // Contrato do RESUMO da frota (aditivo): é o que uma tela de monitoramento consome sem
+  // varrer perCamera. Prova que ele conta por estado e lista as problemáticas com motivo.
+  it("health da frota: conta por estado e lista as problemáticas", () => {
+    const semVideo = fakeSt({ lastFrameAt: 20_000 }); // now=100_000 no snap → 80s sem frame
+    const saudavel = fakeSt({
+      rounds: Array.from({ length: 60 }, (_, i) => 40_000 + i * 1000), // 1 fps
+      lastFrameAt: 99_800,
+      lastInferAt: 99_500,
+    });
+    const s = buildStatus(
+      snapWith(
+        new Map([
+          ["cam1", semVideo],
+          ["cam2", saudavel],
+        ]),
+      ),
+    );
+    expect(s.perCamera.cam1.health.estado).toBe("sem-video");
+    expect(s.perCamera.cam2.health.estado).toBe("ok");
+    expect(s.health.total).toBe(2);
+    expect(s.health.contagem).toMatchObject({ "sem-video": 1, ok: 1 });
+    expect(s.health.problemas).toEqual([
+      { id: "cam1", estado: "sem-video", motivo: expect.stringContaining("80s") },
+    ]);
   });
 
   it("poda o gateLog além de 60s (mutação deliberada) e agrega skipped no motionGate", () => {

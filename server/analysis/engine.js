@@ -39,6 +39,7 @@ const { createInflightSlots } = require("./inflight");
 const model = require("./model");
 const autoscale = require("./autoscale");
 const telemetry = require("./telemetry");
+const health = require("./health");
 const { createPipeline } = require("./pipeline");
 const { pickRoundMs, focusUnion, createFocusRegistry } = require("./focus");
 const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host");
@@ -724,6 +725,7 @@ function onFrame(cameraId, buf, ts) {
   const id = String(cameraId);
   const st = states.get(id) || createState(id);
   const now = Date.now();
+  health.observeFrame(st, now); // lacuna/retomada (O(1)) — ANTES de atualizar lastFrameAt
   st.lastFrameAt = now;
   st.lastRelayAt = now; // relé ativo → em modo "relay-less" esta câmera não é puxada do go2rtc
   st.source = "relay";
@@ -801,6 +803,9 @@ function status() {
     states,
     focusedCams: new Set(focus.ids()),
     targetFpsOf,
+    // Saúde: câmera COM linha e cadência insuficiente não fecha travessia (counting.js exige
+    // ver a MESMA pessoa antes e depois) — o aviso precisa saber quem tem linha.
+    hasTripwireOf: (id) => camcfg.getTripwires(id).length > 0,
     enabled,
     modelFile: path.basename(model.getModelPath()),
     fps: { normal: FPS, line: FPS_LINE, focus: FPS_FOCUS },

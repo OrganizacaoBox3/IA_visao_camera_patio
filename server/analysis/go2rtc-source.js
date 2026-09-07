@@ -21,6 +21,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use strict";
 
+const health = require("./health"); // observeFrame: lacuna/retomada por câmera (saúde)
+
 // ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
 // outro valor → modo "relay-less" (puxa só quem não manda relé). ANALYSIS_GO2RTC_PULL=0
 // desliga o pull mesmo com go2rtc ligado (escape hatch).
@@ -156,6 +158,7 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spa
     const id = String(cameraId);
     const st = states.get(id) || createState(id);
     const now = Date.now();
+    health.observeFrame(st, now); // lacuna/retomada (O(1)) — ANTES de atualizar lastFrameAt
     st.lastFrameAt = now;
     st.source = "go2rtc";
     st.latest = { buf, ts: now - ageMs };
