@@ -18,6 +18,7 @@ const {
   AM_PRESENT,
   AM_JITTER,
   AM_MIN_ROUNDS,
+  AM_CONFIRM_WINDOWS,
   AUTOMASK_MODE,
   AUTOMASK_ON,
 } = require("./automask");
@@ -94,15 +95,56 @@ describe("evaluateWindow — gate objeto-fixo (presença + jitter + janela)", ()
   });
   afterEach(() => logSpy.mockRestore());
 
-  it("presença ~100% + jitter ~0 + rodadas suficientes → SUGERE a célula", () => {
+  it("1ª janela qualificada → SUGERE, mas ainda NÃO suprime (confirmação em 2 janelas)", () => {
     const cell = amCell(0.5, 0.5);
     observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10); // estático, presente sempre
     evaluateWindow(am, Date.now(), "camT");
-    expect(am.suppressed.has(cell)).toBe(true);
     expect(am.suggestions).toHaveLength(1);
     expect(am.suggestions[0].cell).toBe(cell);
     expect(am.suggestions[0].presentPct).toBe(1);
     expect(am.suggestions[0].jitter).toBe(0);
+    expect(am.suggestions[0].janelas).toBe(1);
+    // AINDA não suprime: uma janela só não distingue mobília de pessoa parada (ver o teste
+    // "pessoa parada UMA janela" abaixo — é o falso-positivo que esta espera evita).
+    expect(am.suppressed.has(cell)).toBe(false);
+  });
+
+  it("2ª janela consecutiva qualificada → SUPRIME (objeto fixo confirmado)", () => {
+    const cell = amCell(0.5, 0.5);
+    for (let janela = 0; janela < AM_CONFIRM_WINDOWS; janela++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+      evaluateWindow(am, Date.now(), "camT");
+    }
+    expect(am.suppressed.has(cell)).toBe(true);
+    expect(am.suggestions[0].janelas).toBe(AM_CONFIRM_WINDOWS);
+  });
+
+  // A PROVA DE PRECISÃO desta mudança: baixar AM_MIN_ROUNDS de 120 p/ 20 (pra o mecanismo
+  // funcionar na cadência real de 0,05-0,32 fps) só é seguro porque a supressão exige DUAS
+  // janelas. Pessoa que fica imóvel uma janela inteira e depois sai NÃO pode ser apagada.
+  it("pessoa parada UMA janela e depois ausente NÃO é suprimida", () => {
+    const cell = amCell(0.5, 0.5);
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10); // parada, imóvel
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suppressed.has(cell)).toBe(false); // só sugestão
+    // Janela 2: ela saiu de quadro → não qualifica → perde a sequência.
+    observeRounds(am, [0.2, 0.2, 0.1, 0.2], AM_MIN_ROUNDS + 10); // outra célula
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suppressed.has(cell)).toBe(false);
+    expect(am.candidatas.get(cell)).toBeUndefined(); // sequência zerada
+  });
+
+  it("sequência quebrada no meio reinicia a contagem (não acumula janelas não-consecutivas)", () => {
+    const cell = amCell(0.5, 0.5);
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+    evaluateWindow(am, Date.now(), "camT"); // janelas = 1
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS - 1); // amostra insuficiente → não qualifica
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.candidatas.get(cell)).toBeUndefined();
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+    evaluateWindow(am, Date.now(), "camT"); // volta a qualificar: recomeça em 1, NÃO suprime
+    expect(am.candidatas.get(cell)).toBe(1);
+    expect(am.suppressed.has(cell)).toBe(false);
   });
 
   it("jitter ALTO (bbox oscila > AM_JITTER) → NÃO decide (provável pessoa real)", () => {
@@ -146,12 +188,14 @@ describe("evaluateWindow — gate objeto-fixo (presença + jitter + janela)", ()
     expect(am.windowStart).toBe(now);
   });
 
-  it("adaptativo: objeto que SOME deixa de ser reaprendido → supressão cai na 2ª janela", () => {
-    // Janela 1: objeto fixo presente → suprimido.
-    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
-    evaluateWindow(am, Date.now(), "camT");
+  it("adaptativo: objeto que SOME deixa de ser reaprendido → supressão cai na janela seguinte", () => {
+    // Janelas 1-2: objeto fixo presente → confirmado (AM_CONFIRM_WINDOWS) e suprimido.
+    for (let j = 0; j < AM_CONFIRM_WINDOWS; j++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+      evaluateWindow(am, Date.now(), "camT");
+    }
     expect(am.suppressed.size).toBe(1);
-    // Janela 2: nada observado (objeto sumiu) → next vazio → supressão cai.
+    // Janela seguinte: nada observado (objeto sumiu) → não qualifica → supressão cai.
     evaluateWindow(am, Date.now(), "camT");
     expect(am.suppressed.size).toBe(0);
     expect(am.suggestions).toHaveLength(0);
@@ -159,6 +203,11 @@ describe("evaluateWindow — gate objeto-fixo (presença + jitter + janela)", ()
 
   it("close() do observer dispara a avaliação quando a janela VENCE (fio que o engine puxava)", () => {
     const cell = amCell(0.5, 0.5);
+    // 1ª janela já qualificada (só sugestão, sem supressão); a 2ª é fechada pelo close() abaixo,
+    // que é o ponto do contrato sob teste: o engine não chama evaluateWindow, o observer chama.
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suppressed.has(cell)).toBe(false);
     observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
     // rodada final com now além da janela → close avalia sozinho (sem evaluateWindow explícito)
     const obs = roundObserver(am);
@@ -200,7 +249,50 @@ describe("configuração default", () => {
     expect(AM_COLS).toBe(24);
     expect(AM_ROWS).toBe(18);
     expect(AM_PRESENT).toBe(0.97);
-    expect(AM_MIN_ROUNDS).toBe(120);
+    expect(AM_MIN_ROUNDS).toBe(20); // era 120: inalcançável na cadência real (ver o racional no módulo)
+    expect(AM_CONFIRM_WINDOWS).toBe(2); // o que paga a conta da amostra menor
     expect(AM_JITTER).toBe(0.02); // env ANALYSIS_AUTOMASK_JITTER preservado (default 0.02)
+  });
+});
+
+// GATE DO DEFEITO MEDIDO (2026-09-04): AM_MIN_ROUNDS era 120 e a contagem é de rodadas de
+// INFERÊNCIA. Com 26 câmeras dividindo os workers, a cadência real por câmera fica em
+// 0,05-0,32 fps → 30 a 192 rodadas numa janela de 10min. Abaixo de 120 o mecanismo NUNCA
+// avaliava (produção: `autoMask: {suppressed: 0, suggestions: []}`) e a janela também não
+// virava (windowStart só avançava dentro do evaluateWindow). O fantasma de objeto fixo — o
+// FP que o operador vê como "pessoa" onde não tem ninguém — ficava pra sempre.
+describe("cadência REAL da operação: o mecanismo tem de funcionar a 0,05-0,32 fps", () => {
+  // Rodadas que caberiam numa janela de 10min na cadência medida em produção.
+  const rodadasNaJanela = (fps) => Math.round(fps * (600_000 / 1000));
+
+  it("a 0,05 fps (pior caso medido) ainda há amostra suficiente pra decidir", () => {
+    expect(rodadasNaJanela(0.05)).toBeGreaterThanOrEqual(AM_MIN_ROUNDS);
+  });
+
+  it("objeto fixo é suprimido na cadência de 0,05 fps (antes: nunca)", () => {
+    const am = createAutoMask();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const cell = amCell(0.5, 0.5);
+    const rodadas = rodadasNaJanela(0.05); // 30 rodadas por janela
+    for (let janela = 0; janela < AM_CONFIRM_WINDOWS; janela++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], rodadas);
+      evaluateWindow(am, Date.now(), "camLenta");
+    }
+    expect(am.suppressed.has(cell)).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it("a janela VIRA por tempo mesmo com amostra insuficiente (antes congelava pra sempre)", () => {
+    const am = createAutoMask();
+    const t0 = am.windowStart;
+    // 3 rodadas só (muito abaixo de AM_MIN_ROUNDS) e a janela vence no close da última.
+    for (let i = 0; i < 3; i++) {
+      const obs = roundObserver(am);
+      obs.observe(0.5, 0.5, 0.1, 0.2);
+      obs.close(i === 2 ? t0 + 600_001 : t0 + i, "camLenta");
+    }
+    expect(am.windowStart).toBe(t0 + 600_001); // reposicionada: NÃO congelou
+    expect(am.rounds).toBe(0); // contagem reiniciada com a janela
+    expect(am.suppressed.size).toBe(0); // e nada foi decidido com amostra insuficiente
   });
 });
