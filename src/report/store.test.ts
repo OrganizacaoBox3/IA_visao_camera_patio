@@ -3,7 +3,7 @@
 // (peoplePeakOf). As agregações do fluxo vivem (com seus testes) em calc/flow. As funções de I/O
 // (record*/load*/clearAll) dependem de fetch/API → cobertas pelo e2e, não aqui.
 import { describe, it, expect } from "vitest";
-import { deriveWindow, cellTime, peoplePeakOf, type AtivCell } from "./store";
+import { deriveWindow, cellTime, peoplePeakOf, activePctOf, type AtivCell } from "./store";
 
 const DAY = 86_400_000;
 const midnight = (offsetDays = 0) =>
@@ -66,5 +66,37 @@ describe("peoplePeakOf — pico de pessoas no recorte", () => {
   it("recorte vazio ou tudo ausente → 0", () => {
     expect(peoplePeakOf([])).toBe(0);
     expect(peoplePeakOf([ac(undefined)])).toBe(0);
+  });
+});
+
+// ATIVIDADE ponderada por TEMPO. O bug era de MEDIÇÃO, não de conta: activeSamples/samples é
+// média não-ponderada sobre RODADAS, e a cadência da mesma câmera varia ~100× (até 6 fps com um
+// operador olhando, 0,05-0,32 fps no fundo). O relatório passava a responder "quem estava
+// olhando?" em vez de "quanto tempo a área ficou ocupada?".
+describe("activePctOf — atividade por TEMPO com fallback por RODADA", () => {
+  it("com observedMs, PREFERE o tempo e ignora a contagem de rodadas", () => {
+    // 180 rodadas ocupadas / 528 no total = 34% por rodada; 100s de 3600s = 3% no tempo.
+    const b = { samples: 528, activeSamples: 180, observedMs: 3_600_000, activeMs: 100_000 };
+    expect(activePctOf(b)).toBe(3);
+  });
+
+  it("sem observedMs (bucket de hub ANTIGO), cai na média por rodada — não em zero", () => {
+    expect(activePctOf({ samples: 528, activeSamples: 180 })).toBe(34);
+  });
+
+  it("observedMs = 0 (janela sem intervalo medido) também usa o fallback", () => {
+    expect(activePctOf({ samples: 4, activeSamples: 3, observedMs: 0, activeMs: 0 })).toBe(75);
+  });
+
+  it("activeMs ausente com observedMs presente → 0% (medido ocioso, não 'sem dado')", () => {
+    expect(activePctOf({ samples: 10, activeSamples: 10, observedMs: 60_000 })).toBe(0);
+  });
+
+  it("bucket sem nada não divide por zero", () => {
+    expect(activePctOf({ samples: 0, activeSamples: 0 })).toBe(0);
+  });
+
+  it("100% do tempo observado é 100%", () => {
+    expect(activePctOf({ samples: 3, activeSamples: 3, observedMs: 900_000, activeMs: 900_000 })).toBe(100);
   });
 });

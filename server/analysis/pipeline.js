@@ -34,6 +34,11 @@
 "use strict";
 
 const { resolveZone, resolveZoneByOverlap, inExclusionZone } = require("./zones");
+
+// Teto de tempo que UMA rodada pode representar no indicador ponderado por tempo (ver o bloco
+// da janela em processRound). 10s cobre com folga o pior caso saudável (piso de probe do gate
+// de movimento = 6s) sem transformar um buraco de fonte caída em "tempo observado".
+const ATTRIB_MAX_MS = 10_000;
 const { roundObserver } = require("./automask");
 const { createPresenceAlert, stateOf } = require("./presence-alert");
 const { createOccupancyAlert } = require("./occupancy-alert");
@@ -153,12 +158,43 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
         if (z) perZone.set(z.id, (perZone.get(z.id) || 0) + 1);
       }
       st.window.frames += 1;
+      // TEMPO que esta rodada REPRESENTA (ms), p/ o indicador de atividade do relatório ser
+      // média ponderada por TEMPO e não por RODADA.
+      //
+      // POR QUE (viés MEDIDO, 2026-09-04): `activePct` do relatório é
+      // activeFrames/frames (report/store.ts:163) — média NÃO ponderada sobre rodadas. Mas as
+      // rodadas NÃO são igualmente espaçadas: a mesma câmera roda a até 6 fps quando um
+      // operador a abre (boost de FOCO) e a 0,05-0,32 fps no fundo, sob a carga real do pool.
+      // Consequência: o número do relatório passa a depender de QUEM ESTAVA OLHANDO. Cenário
+      // real desta operação — área ocupada 2min com a câmera aberta e ociosa 58min no fundo:
+      // 180 rodadas ocupadas × 348 ociosas ⇒ 34% por rodada, contra 3% de verdade no tempo
+      // (11× de inflação). É a Regra 8 do CLAUDE.md (ponderar ANTES da estatística) e a Regra
+      // 9 (a resolução do instrumento contaminando a medida).
+      //
+      // TETO por rodada (ATTRIB_MAX_MS): uma rodada representa no máximo ~10s de observação.
+      // Buraco maior que isso (fonte caída, pool afogado, gate longo) é AUSÊNCIA DE MEDIÇÃO —
+      // atribuir 5min de "ocioso" a uma rodada seria inventar observação que não houve. O
+      // resultado é `observedMs` HONESTAMENTE menor nesses períodos (o relatório passa a
+      // poder dizer "medi 12min desta hora", em vez de fingir cobertura total).
+      const dtBruto = st.window.lastRoundAt ? now - st.window.lastRoundAt : 0;
+      const dtMs = Math.min(ATTRIB_MAX_MS, Math.max(0, dtBruto));
+      st.window.lastRoundAt = now;
+      st.window.observedMs = (st.window.observedMs || 0) + dtMs;
       for (const z of st.zonesAtiv) {
         const n = perZone.get(z.id) || 0;
         let acc = st.window.zones.get(z.id);
         if (!acc)
-          st.window.zones.set(z.id, (acc = { label: z.label, atividade: z.atividade || "", active: 0, peak: 0 }));
-        if (n > 0) acc.active += 1;
+          st.window.zones.set(
+            z.id,
+            (acc = { label: z.label, atividade: z.atividade || "", active: 0, peak: 0, activeMs: 0 }),
+          );
+        if (n > 0) {
+          acc.active += 1;
+          // O intervalo é atribuído ao estado OBSERVADO NESTA rodada (a evidência é daqui);
+          // a 1ª rodada da janela tem dt=0 e não atribui tempo a ninguém — correto, ela só
+          // ancora o relógio.
+          acc.activeMs = (acc.activeMs || 0) + dtMs;
+        }
         if (n > acc.peak) acc.peak = n;
       }
     }
@@ -302,9 +338,16 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
           frames: st.window.frames,
           activeFrames: acc.active,
           people: acc.peak,
+          // ADITIVOS (2026-09-04): tempo OBSERVADO e tempo ATIVO da janela, em ms. São o
+          // numerador/denominador do activePct ponderado por TEMPO — o de rodada (frames/
+          // activeFrames) fica no payload por retrocompatibilidade e como fallback p/ hub
+          // antigo. Ver o racional medido (viés de 11× por quem estava olhando) no bloco da
+          // janela em processRound.
+          activeMs: acc.activeMs || 0,
+          observedMs: st.window.observedMs || 0,
         });
       }
-      st.window = { frames: 0, zones: new Map() };
+      st.window = { frames: 0, zones: new Map(), observedMs: 0, lastRoundAt: 0 };
       ingest("ativ", "samples", { cameraId: st.id, samples }).catch((e) =>
         console.error("[analysis] ingest ativ falhou:", e.message),
       );

@@ -361,7 +361,13 @@ describe("processRound — zonas de atividade (janela + overlay)", () => {
     const st = makeSt({ zonesAtiv: [zone] });
     pipeline.processRound(st, [person(0.5, 0.8)], 1000);
     expect(st.window.frames).toBe(1);
-    expect(st.window.zones.get("z1")).toEqual({ label: "Doca", atividade: "Separação", active: 1, peak: 1 });
+    expect(st.window.zones.get("z1")).toEqual({
+      label: "Doca",
+      atividade: "Separação",
+      active: 1,
+      peak: 1,
+      activeMs: 0, // 1ª rodada só ancora o relógio da janela (dt=0)
+    });
     const payload = deps.emitTracks.mock.calls[0][0];
     expect(payload.tracks[0].zone).toBe("Doca");
     expect(payload.zones).toEqual([{ id: "z1", label: "Doca", people: 1, occupied: true }]);
@@ -371,7 +377,13 @@ describe("processRound — zonas de atividade (janela + overlay)", () => {
     const st = makeSt({ zonesAtiv: [zone] });
     pipeline.processRound(st, [], 1000);
     expect(st.window.frames).toBe(1);
-    expect(st.window.zones.get("z1")).toEqual({ label: "Doca", atividade: "Separação", active: 0, peak: 0 });
+    expect(st.window.zones.get("z1")).toEqual({
+      label: "Doca",
+      atividade: "Separação",
+      active: 0,
+      peak: 0,
+      activeMs: 0,
+    });
   });
 
   it("track em OCLUSÃO (dentro do TTL) segue contando na zona — rodada sem det não zera presença", () => {
@@ -534,6 +546,8 @@ describe("flushWindows — ingest 'ativ'/'samples' (contrato do relatório)", ()
           frames: 5,
           activeFrames: 3,
           people: 2, // pico da janela → people_peak
+          activeMs: 0, // janela montada à mão (sem relógio) → tempo zerado, não inventado
+          observedMs: 0,
         },
       ],
     });
@@ -557,5 +571,96 @@ describe("turno — o motor NÃO resolve turno (fonte única: shift-clock, carim
   it("o módulo não exporta mais shiftOf (a regra de turno saiu do motor)", () => {
     expect(pipelineModule.shiftOf).toBeUndefined();
     expect(Object.keys(pipelineModule)).toEqual(["createPipeline"]);
+  });
+});
+
+// ── ATIVIDADE PONDERADA POR TEMPO (viés MEDIDO, 2026-09-04) ─────────────────────────────────
+// `activePct` do relatório era activeFrames/frames — média NÃO ponderada sobre RODADAS. Mas as
+// rodadas não são igualmente espaçadas: a MESMA câmera roda a até 6 fps quando um operador a
+// abre (boost de FOCO) e a 0,05-0,32 fps no fundo, sob a carga real do pool. Resultado: o número
+// do relatório passava a depender de QUEM ESTAVA OLHANDO — medido no cenário desta operação
+// (ocupada 2min com a câmera aberta, ociosa 58min no fundo): 34% por rodada × 3% no tempo.
+// A janela agora acumula TEMPO (observedMs/activeMs) além das rodadas.
+describe("processRound — janela de atividade ponderada por TEMPO", () => {
+  const zone = { id: "z1", label: "Doca", atividade: "Separação", x: 0, y: 0, w: 1, h: 1 };
+
+  it("a 1ª rodada só ANCORA o relógio (dt=0): não atribui tempo a ninguém", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    expect(st.window.observedMs).toBe(0);
+    expect(st.window.zones.get("z1").activeMs).toBe(0);
+    expect(st.window.frames).toBe(1); // a contagem por rodada segue existindo (retrocompat)
+  });
+
+  it("o intervalo é atribuído ao estado OBSERVADO na rodada (evidência é da rodada)", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000); // âncora
+    pipeline.processRound(st, [person(0.5, 0.8)], 3000); // +2s COM pessoa
+    expect(st.window.observedMs).toBe(2000);
+    expect(st.window.zones.get("z1").activeMs).toBe(2000);
+    pipeline.processRound(st, [], 12_000); // +9s SEM pessoa (acima do TTL de 8s: track morto)
+    expect(st.window.observedMs).toBe(11_000);
+    expect(st.window.zones.get("z1").activeMs).toBe(2000); // tempo ativo NÃO cresce
+  });
+
+  it("TETO por rodada: buraco longo não vira 'tempo observado' (ausência de medição)", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [], 1000);
+    pipeline.processRound(st, [], 301_000); // 5min sem rodada (fonte caída/pool afogado)
+    expect(st.window.observedMs).toBe(10_000); // teto de 10s, não 300s
+  });
+
+  it("flushWindows publica os ms ADITIVOS ao lado de frames/activeFrames", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    pipeline.processRound(st, [person(0.5, 0.8)], 3000);
+    pipeline.flushWindows(new Map([["cam1", st]]));
+    const [kind, sub, payload] = deps.ingest.mock.calls.at(-1);
+    expect([kind, sub]).toEqual(["ativ", "samples"]);
+    expect(payload.samples[0]).toMatchObject({
+      zoneId: "z1",
+      frames: 2, // contrato ANTIGO intacto
+      activeFrames: 2,
+      activeMs: 2000, // contrato NOVO ao lado
+      observedMs: 2000,
+    });
+  });
+
+  it("flush ZERA o relógio da janela (a próxima não herda o dt da anterior)", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    pipeline.processRound(st, [person(0.5, 0.8)], 1000);
+    pipeline.processRound(st, [person(0.5, 0.8)], 3000);
+    pipeline.flushWindows(new Map([["cam1", st]]));
+    expect(st.window.observedMs).toBe(0);
+    expect(st.window.lastRoundAt).toBe(0);
+    pipeline.processRound(st, [person(0.5, 0.8)], 100_000); // muito depois: volta a ancorar
+    expect(st.window.observedMs).toBe(0);
+  });
+
+  // O VIÉS, reproduzido: a MESMA cena medida com cadência desigual. Por rodada o número mente;
+  // por tempo, não. É este teste que justifica o campo novo existir.
+  it("cadência desigual: por RODADA infla o ativo; por TEMPO reflete a cena", () => {
+    const st = makeSt({ zonesAtiv: [zone] });
+    let now = 0;
+    // Trecho OCUPADO, câmera aberta: 10 rodadas de 200ms (2s de cena, muitas amostras).
+    // A pessoa ANDA (cx varia) para o track ficar MÓVEL: o track ESTACIONÁRIO tem graça de
+    // oclusão própria (stationaryMaxMisses) e seguiria contando nas rodadas ociosas — outro
+    // comportamento, intencional, que não é o que este teste mede.
+    for (let i = 0; i < 10; i++) {
+      now += 200;
+      pipeline.processRound(st, [person(0.3 + i * 0.02, 0.8)], now);
+    }
+    // Trecho OCIOSO, câmera no fundo: 2 rodadas de 9s (18s de cena, pouquíssimas amostras).
+    // 9s > TTL de 8s do tracker ⇒ o track realmente morre e a zona fica vazia (não é coasting).
+    for (let i = 0; i < 2; i++) {
+      now += 9000;
+      pipeline.processRound(st, [], now);
+    }
+    const acc = st.window.zones.get("z1");
+    const porRodada = Math.round((acc.active / st.window.frames) * 100);
+    const porTempo = Math.round((acc.activeMs / st.window.observedMs) * 100);
+    expect(porRodada).toBe(83); // 10 de 12 rodadas "ativas" — mas foram só ~2s de ~20s de cena
+    expect(porTempo).toBe(9); // 1,8s ativos de 19,8s observados
+    expect(porRodada).toBeGreaterThan(porTempo * 4); // o viés é de ordem de grandeza
   });
 });

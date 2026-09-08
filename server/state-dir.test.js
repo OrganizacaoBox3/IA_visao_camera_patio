@@ -81,8 +81,12 @@ describe("state-dir: onde o estado de runtime vive", () => {
     expect(alvo).toBe(dir);
   });
 
-  // Root ignora bits de permissão: o caso não é observável rodando como root.
-  const semPermissao = typeof process.getuid === "function" && process.getuid() === 0 ? it.skip : it;
+  // Root ignora bits de permissao, e o Windows/NTFS ignora o modo POSIX que chmod() escreve
+  // (a pasta segue gravavel) — nos dois casos o cenario nao e OBSERVAVEL, entao o teste se
+  // cala em vez de mentir. O gate segue valendo onde importa: o CI roda ubuntu-latest sem root.
+  const naoObservavel =
+    (typeof process.getuid === "function" && process.getuid() === 0) || process.platform === "win32";
+  const semPermissao = naoObservavel ? it.skip : it;
   semPermissao("diretório de estado não-gravável DERRUBA o boot, em voz alta", () => {
     const base = mkdtempSync(path.join(tmpdir(), "visao-state-"));
     const dir = path.join(base, "somente-leitura");

@@ -135,3 +135,61 @@ describe("pgstore — read:read não fabrica mais `cameras` (fallback JSON)", ()
     expect(b.perCamera["cam-a"]).toMatchObject({ label: "Doca 1", reads: 2 });
   });
 });
+
+// Atividade ponderada por TEMPO no fallback JSON. O bucket é ACUMULADOR: o motor manda uma
+// janela a cada ~3s e o bucket da hora soma. Os ms novos têm de somar do MESMO jeito que
+// samples/activeFrames — se ficarem `undefined` ou zerarem, o front cai no fallback por rodada
+// e o relatório volta a mentir 11× sem avisar ninguém.
+describe("pgstore — ativ:samples soma activeMs/observedMs (fallback JSON)", () => {
+  const sample = (over = {}) => ({
+    zoneId: "z1",
+    label: "Doca",
+    atividade: "Separação",
+    idleMs: 0,
+    frames: 3,
+    activeFrames: 2,
+    people: 1,
+    activeMs: 2_000,
+    observedMs: 3_000,
+    ...over,
+  });
+
+  beforeAll(async () => {
+    await store.clear();
+  });
+
+  it("duas janelas da MESMA zona/hora acumulam tempo ao lado das rodadas", async () => {
+    await store.ingest("ativ", "samples", { cameraId: "cam-t", samples: [sample()] });
+    await store.ingest("ativ", "samples", {
+      cameraId: "cam-t",
+      samples: [sample({ frames: 1, activeFrames: 0, activeMs: 0, observedMs: 3_000 })],
+    });
+
+    const buckets = await store.buckets("ativ");
+    expect(buckets).toHaveLength(1); // mesma chave câmera|zona|hora|turno
+    expect(buckets[0]).toMatchObject({
+      cameraId: "cam-t",
+      area: "Doca",
+      samples: 4, // 3 + 1 rodadas
+      activeSamples: 2, // 2 + 0
+      activeMs: 2_000, // 2000 + 0
+      observedMs: 6_000, // 3000 + 3000
+    });
+    // 50% por RODADA (2/4) contra 33% por TEMPO (2s/6s): é o viés, no dado persistido.
+    expect(Math.round((buckets[0].activeSamples / buckets[0].samples) * 100)).toBe(50);
+    expect(Math.round((buckets[0].activeMs / buckets[0].observedMs) * 100)).toBe(33);
+  });
+
+  it("produtor ANTIGO (sample sem os ms) grava 0 — nunca undefined/NaN", async () => {
+    await store.clear();
+    const antigo = sample();
+    delete antigo.activeMs;
+    delete antigo.observedMs;
+    await store.ingest("ativ", "samples", { cameraId: "cam-t", samples: [antigo] });
+
+    const [b] = await store.buckets("ativ");
+    expect(b.activeMs).toBe(0);
+    expect(b.observedMs).toBe(0); // observedMs 0 ⇒ o consumo cai na média por rodada (aditivo)
+    expect(b.samples).toBe(3);
+  });
+});
