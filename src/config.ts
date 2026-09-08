@@ -103,6 +103,18 @@ export const APP_CONFIG = {
       // pela 1ª passada, por IoU com a caixa congelada). O 8000 do hub é OUTRA coisa: lá ele é
       // DERIVADO (precision.trackTtlMs = max(1500, roundMs×3.5, probe+2000)) e o probe de 6s o
       // exige. Paridade é de POLÍTICA, não de NÚMERO (CA-7).
+      // MEDIDO 2026-09-08 (e o motivo de este número NÃO mudar): a herança acima é do regime
+      // FULL. No MOSAICO (4000ms/rodada) a janela de herança é de 16s em QUALQUER ttl — de 1500
+      // a 12000, medido — porque lá quem manda não é o ttl: é a morte do PARADO por EVIDÊNCIA,
+      // contada em RODADAS (stationaryMaxMisses 3 ⇒ 4 rodadas × 4000ms). Ou seja: no mosaico,
+      // quem reocupa um posto até 16s depois HERDA o id e o relógio de permanência de quem saiu,
+      // contra os 5s que a régua pinou como troca de operador crível. A régua R5 é COMPARATIVA e
+      // a base também vazava, então isso passava CALADO — agora eval/front-tournament.mjs imprime
+      // a janela por regime e QUEBRA se ela crescer (LEAK_BASELINE). Não está 'consertado' porque
+      // encurtá-la é ESCOLHA (Regra 10): 'pessoa parada atrás de uma obstrução' e 'outra pessoa no
+      // mesmo posto' são o MESMO input para o tracker (mesma caixa, mesmo lugar, sem aparência/
+      // ReID) — perdoar menos ausência custa a identidade de quem fica parado. Decisão do dono do
+      // produto (2026-09-08): manter a janela e expor o número.
       ttlMs: 3000,
       // Guarda de NASCIMENTO (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts + travessias
       // contadas): detecção alta sem par que sobrepõe um track ativo além disto NÃO nasce — mata
