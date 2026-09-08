@@ -163,3 +163,40 @@ describe("ObjetosProcessor — piso de score é o do OWL-ViT, não o do coco-ssd
     expect(detectObjects.mock.calls[0][4]).toBe(APP_CONFIG.objects.minScoreLongRange);
   });
 });
+
+// GATE do falso-positivo MEDIDO em produção (2026-09-04, cozinha real): com o piso do OWL-ViT
+// em 0.15 (necessário pra ele ver pessoa de longe/oclusa) ele passou a marcar EQUIPAMENTO como
+// pessoa. Como quem conta pessoa passou a ser o servidor (D-FINE), a det de pessoa do OWL-ViT
+// não serve mais pra nada — e a caixa FALSA aparecia na tela (draw.ts só esconde a det que tem
+// track por cima; a falsa não tem). O conserto é cortar a classe na ORIGEM: o CameraWorkspace
+// não pede "pessoa" ao processador quando o hub cobre. Aqui se prova o efeito no processador:
+// sem "pessoa" na lista, nenhuma det de pessoa é pedida nem contada — e as outras classes
+// seguem intactas.
+describe("ObjetosProcessor — classe fora da lista não é pedida nem contada", () => {
+  const setor: ObjetosSetor = { id: "z1", label: "Área", x: 0, y: 0, w: 1, h: 1 };
+
+  it("sem 'pessoa' na lista, o detector recebe só as outras classes", async () => {
+    const proc = new ObjetosProcessor();
+    await seed(proc, [setor], ["caixa"], 1000, []);
+    expect(detectObjects.mock.calls[0][3]).toEqual(["caixa"]); // 4º arg = classes
+    expect(detectObjects.mock.calls[0][3]).not.toContain("pessoa");
+  });
+
+  it("lista VAZIA (só pessoa estava selecionada, e o hub a cobre) ainda é chamada sem classes", async () => {
+    // detectObjects devolve [] sem rodar o modelo quando não há prompt (labels.length === 0):
+    // custo ZERO no navegador, que é metade do ganho deste conserto.
+    const proc = new ObjetosProcessor();
+    const r = await seed(proc, [setor], [], 1000, []);
+    expect(detectObjects.mock.calls[0][3]).toEqual([]);
+    // `total` NÃO existe aqui de propósito: quem soma é o CameraWorkspace (o processador
+    // devolve `counts` por classe). Sem classe pedida, não há contagem nenhuma.
+    expect(r.counts).toEqual({});
+  });
+
+  it("caixa continua sendo contada normalmente (o corte é SÓ da classe pessoa)", async () => {
+    const proc = new ObjetosProcessor();
+    const caixa: ObjDetection = { key: "caixa", score: 0.4, bbox: [0.4, 0.4, 0.1, 0.1] };
+    const r = await seed(proc, [setor], ["caixa"], 1000, [caixa]);
+    expect(r.counts.caixa).toBe(1);
+  });
+});

@@ -101,6 +101,10 @@ export type ZoneSample = {
   frames: number;
   activeFrames: number;
   people: number;
+  /** Tempo ATIVO e tempo OBSERVADO da janela (ms) — atividade ponderada por TEMPO. ADITIVOS:
+   *  produtor antigo os omite e o consumo cai na média por rodada (frames/activeFrames). */
+  activeMs?: number;
+  observedMs?: number;
 };
 export type SamplePayload = { cameraId: string; samples: ZoneSample[] };
 export type AlertPayload = {
@@ -123,6 +127,10 @@ type Bucket = ShiftStamp & {
   samples: number;
   activeSamples: number;
   peoplePeak: number;
+  /** Atividade ponderada por TEMPO (ms). ADITIVOS: bucket de hub antigo os omite (ou traz 0)
+   *  e o cálculo cai na média por RODADA — ver activePct em loadDataset. */
+  activeMs?: number;
+  observedMs?: number;
 };
 
 export function recordSamples(p: SamplePayload): Promise<void> {
@@ -136,6 +144,24 @@ export function recordAlert(a: AlertPayload): Promise<void> {
 // como campo opcional só p/ quem quiser ler.
 export interface AtivCell extends Cell {
   peoplePeak?: number;
+}
+// ATIVIDADE do bucket, em %: ponderada por TEMPO quando o hub mandou os ms (observedMs > 0);
+// a média por RODADA (activeSamples/samples) fica como FALLBACK p/ bucket de hub ANTIGO, que
+// não tem os campos. MEDIDO (2026-09-04): as rodadas NÃO são igualmente espaçadas — a mesma
+// câmera roda a até 6 fps quando um operador a abre (boost de FOCO) e a 0,05-0,32 fps no fundo,
+// sob a carga real do pool. Cenário desta operação (área ocupada 2min com a câmera aberta,
+// ociosa 58min no fundo): 34% por rodada contra 3% de verdade no tempo — 11× de inflação,
+// decidida por QUEM ESTAVA OLHANDO. Ponderar por tempo é a Regra 8 do CLAUDE.md (ponderar
+// ANTES da estatística) e a Regra 9 (a resolução do instrumento contaminando a medida).
+export function activePctOf(b: {
+  observedMs?: number;
+  activeMs?: number;
+  samples: number;
+  activeSamples: number;
+}): number {
+  if (b.observedMs) return Math.round(((b.activeMs || 0) / b.observedMs) * 100);
+  if (b.samples) return Math.round((b.activeSamples / b.samples) * 100);
+  return 0;
 }
 // Pico de pessoas num recorte de células (usado pelo KPI do painel Atividade).
 export function peoplePeakOf(cells: Cell[]): number {
@@ -160,7 +186,7 @@ export async function loadDataset(): Promise<Dataset> {
       ...stampOf(b), // turno carimbado pelo hub (aditivo) — a régua do turno depende dele
       idleMin: Math.round(b.idleMs / 60000),
       alerts: b.alerts,
-      activePct: b.samples ? Math.round((b.activeSamples / b.samples) * 100) : 0,
+      activePct: activePctOf(b),
       // amostras cruas: PESO da ocupação na régua do turno (calc/atividade shiftRuler) — sem
       // elas o KPI vira média simples de médias (degradação documentada, não silenciosa).
       samples: b.samples,

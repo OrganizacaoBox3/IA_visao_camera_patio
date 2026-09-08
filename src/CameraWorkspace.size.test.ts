@@ -128,7 +128,14 @@ import { describe, it, expect } from "vitest";
 // server/analysis/) e o TEXTO do aviso em camera/objectBackendNotice.ts (puro, testado).
 // Contabilidade REAL: 1672 → 1709; teto 1715 mantém a folga mínima da convenção (≈5).
 // NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1715;
+// 1715→1726 (para de pedir "pessoa" ao OWL-ViT quando o hub já mede): MEDIDO em produção
+// (2026-09-04) que no piso 0.15 ele marcava EQUIPAMENTO como pessoa — caixa falsa desenhada
+// onde não há ninguém (a supressão de draw.ts só esconde a det que TEM track por cima). Como
+// quem conta pessoa é o servidor, cortar a classe na ORIGEM mata o falso-positivo e poupa
+// inferência. Aqui só a lista filtrada (classesOwl) + o porquê.
+// Contabilidade REAL: 1709 → 1720; teto 1726 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1726;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

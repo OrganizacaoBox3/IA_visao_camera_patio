@@ -39,6 +39,7 @@ const { createInflightSlots } = require("./inflight");
 const model = require("./model");
 const autoscale = require("./autoscale");
 const telemetry = require("./telemetry");
+const health = require("./health");
 const { createPipeline } = require("./pipeline");
 const { pickRoundMs, focusUnion, createFocusRegistry } = require("./focus");
 const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host");
@@ -370,7 +371,10 @@ function createState(id) {
       ROUNDS,
     ),
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
-    window: { frames: 0, zones: new Map() }, // acumulação p/ o ingest "ativ" (~AGG_MS)
+    // Acumulação p/ o ingest "ativ" (~AGG_MS). `observedMs`/`lastRoundAt` sustentam o
+    // indicador de atividade ponderado por TEMPO (pipeline.js: a média por RODADA dependia
+    // de quem estava olhando a câmera — 11× de viés medido).
+    window: { frames: 0, zones: new Map(), observedMs: 0, lastRoundAt: 0 },
     rounds: [], // timestamps das rodadas (p/ fps real no status)
     ageLog: [], // { t, a } idade captura→despacho por rodada (janela 60s — recordFrameAge)
     detsLog: [], // { t, n, x, a, r } pessoas/exclusões/re-associações por rodada (p/ *1m)
@@ -724,6 +728,7 @@ function onFrame(cameraId, buf, ts) {
   const id = String(cameraId);
   const st = states.get(id) || createState(id);
   const now = Date.now();
+  health.observeFrame(st, now); // lacuna/retomada (O(1)) — ANTES de atualizar lastFrameAt
   st.lastFrameAt = now;
   st.lastRelayAt = now; // relé ativo → em modo "relay-less" esta câmera não é puxada do go2rtc
   st.source = "relay";
@@ -744,7 +749,7 @@ function onCamcfgUpdated(p) {
     st.zonesProib = proibZonesOf(st.id); // zonas vigiadas — presence-alert poda estados órfãos por id
     st.zonesObjPessoa = objPessoaZonesOf(st.id); // idem p/ contagem de pessoa em zona objetos
     st.motionIgnore = buildMotionIgnore(st.zonesExcl); // e o mapa de hotspot do gate (mesmas zonas)
-    st.window = { frames: 0, zones: new Map() }; // janela reinicia com a nova geometria
+    st.window = { frames: 0, zones: new Map(), observedMs: 0, lastRoundAt: 0 }; // janela reinicia com a nova geometria
     st.lastTracks = null; // snapshot de coasting carrega a lista de zonas ANTIGA → invalida
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // liga/desliga o tiling na PRÓXIMA rodada
@@ -752,7 +757,7 @@ function onCamcfgUpdated(p) {
     const wasFadiga = st.fadiga;
     st.fadiga = isFadiga(st.id);
     if (st.fadiga !== wasFadiga) {
-      if (st.fadiga) st.window = { frames: 0, zones: new Map() }; // descarta janela pendente
+      if (st.fadiga) st.window = { frames: 0, zones: new Map(), observedMs: 0, lastRoundAt: 0 }; // descarta janela pendente
       emitAnalysisStatus(st.id, st.fadiga ? null : "hub");
     }
   }
@@ -801,6 +806,9 @@ function status() {
     states,
     focusedCams: new Set(focus.ids()),
     targetFpsOf,
+    // Saúde: câmera COM linha e cadência insuficiente não fecha travessia (counting.js exige
+    // ver a MESMA pessoa antes e depois) — o aviso precisa saber quem tem linha.
+    hasTripwireOf: (id) => camcfg.getTripwires(id).length > 0,
     enabled,
     modelFile: path.basename(model.getModelPath()),
     fps: { normal: FPS, line: FPS_LINE, focus: FPS_FOCUS },

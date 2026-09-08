@@ -76,6 +76,26 @@ const BASE_TTL = 1500; // a config PRÉ-F4 — referência FIXA da régua (não 
 const CANDIDATES = [1500, 3000, 4000, 5000, 6000, 8000];
 const SWAP_MS = 5000; // R5: troca de operador no posto (limiar operacional pinado)
 
+// ── JANELA DE HERANCA DE ID, POR REGIME — MEDIDA e PINADA (2026-09-08) ──────────────
+// Achado desta rodada: a regra R5 e COMPARATIVA (`cand.leakAtSwap && !base.leakAtSwap`) e no
+// MOSAICO a BASE ja vaza — entao o regime que o operador FICA OLHANDO passava CALADO. Medido
+// com este mesmo harness, varrendo o ttl de 1500 a 12000:
+//   FULL: a janela ACOMPANHA o ttl (1750ms @1500 · 3150ms @3000 · 5250ms @5000 · 8050ms @8000)
+//   TILE: a janela e 16000ms em TODOS os ttl — o ttl nao manda nela.
+// Quem manda no mosaico e a morte do PARADO por EVIDENCIA, contada em RODADAS
+// (stationaryMaxMisses = 3 ⇒ 4 rodadas × 4000ms = 16s de posse da identidade), contra os 5s
+// que esta mesma regua pinou como a troca de operador mais rapida crivel. Consequencia
+// operacional: no mosaico, quem reocupa um posto ate 16s depois HERDA o id — e com ele o
+// relogio de permanencia — de quem saiu.
+// POR QUE NAO ESTA CONSERTADO AQUI: encurtar a janela e ESCOLHA DE PRODUTO, nao um bug a
+// corrigir (Regra 10 do CLAUDE.md — o piso operacional se ESCOLHE). `cega` (a pessoa PARADA
+// atras de uma obstrucao) e `reocupado` (OUTRA pessoa no mesmo posto) entregam ao tracker o
+// MESMO input: mesma caixa, mesmo lugar, mesmo tamanho, sem aparencia/ReID. Nenhum mecanismo
+// os separa — o que existe e quantos segundos de ausencia se PERDOA. Perdoar menos no mosaico
+// custa a identidade de quem fica parado atras da obstrucao, e a decisao foi CONSCIENTE de
+// manter como esta. O que este arquivo passa a garantir e que a janela nao CRESCA escondida.
+const LEAK_BASELINE = { full: 3150, tile: 16_000 };
+
 // ── FIDELIDADE DO MODELO (o sensor do sensor) ────────────────────────────────
 // O torneio só vale se ele montar o tracker como a PRODUÇÃO monta. Dois fatos do
 // CameraWorkspace.tsx são load-bearing e vivem FORA do meu alcance (outro dono de
@@ -644,9 +664,53 @@ export function runFrontTournament() {
       `  sai da EMISSÃO após stationaryMaxMisses (${T.stationaryMaxMisses}) rodadas sem match = ` +
       `${T.stationaryMaxMisses * REGIMES[0].roundMs}ms na câmera aberta.\n` +
       `  O track SOBREVIVE (o ttl faz o seu trabalho: o id volta o MESMO), mas a caixa PISCA e a zona\n` +
-      `  fica VAZIA nesse intervalo. Quem conserta é a GRAÇA DE EMISSÃO (stationaryMaxMisses), que hoje\n` +
-      `  o CameraWorkspace nem passa ao tracker (default interno) — pendência #F4-w, outro dono de arquivo.\n`,
+      `  fica VAZIA nesse intervalo. Quem conserta é a GRAÇA DE EMISSÃO (stationaryMaxMisses), que já\n` +
+      `  VEM do config (wiring #F4-w fechado — checkWiring o exige) e é contada em RODADAS, não em\n` +
+      `  TEMPO: no mosaico as MESMAS 3 rodadas valem ${T.stationaryMaxMisses * TILE_MS}ms.\n`,
   );
+
+  // ── HERANÇA DE ID: o número MEDIDO, por regime, e a trava contra PIORA ─────────────
+  // A régua R5 só acusa quem INTRODUZ vazamento vs a base — e no mosaico a base já vaza, então
+  // o regime que o operador mais olha passava calado. Aqui a janela é IMPRESSA sempre e travada
+  // contra o baseline PINADO (LEAK_BASELINE): não conserta a escolha, mas tira do silêncio e
+  // quebra o build se um knob futuro ALARGAR a janela sem ninguém decidir isso.
+  const leakFails = [];
+  console.log(`  ── HERANÇA DE ID com o config de hoje (ttl ${T.ttlMs}ms) ──────────────────────`);
+  for (const rg of REGIMES) {
+    const e = results[rg.key][T.ttlMs];
+    const medido = e ? e.leakMs : null;
+    const teto = LEAK_BASELINE[rg.key];
+    const acima = medido != null && medido > SWAP_MS;
+    console.log(
+      `  ${pad(rg.key, 6)} janela ${padS(fmtMs(medido), 9)} (teto pinado ${fmtMs(teto)})` +
+        `${acima ? ` ← ACIMA do limiar de troca de posto (${SWAP_MS}ms): quem reocupa o posto` : " ✓ abaixo do limiar de troca"}`,
+    );
+    if (acima)
+      console.log(
+        `         dentro dessa janela HERDA o id — e o relógio de permanência — de quem saiu.` +
+          `${rg.key === "tile" ? ` No mosaico o ttl NÃO manda nisso: manda a morte do parado por` : ""}`,
+      );
+    if (acima && rg.key === "tile")
+      console.log(`         EVIDÊNCIA, contada em RODADAS (stationaryMaxMisses ${T.stationaryMaxMisses} × ${TILE_MS}ms).`);
+    if (medido != null && teto != null && medido > teto)
+      leakFails.push(
+        `[${rg.key}] a janela de HERANÇA de id CRESCEU: ${fmtMs(medido)} (baseline medido ${fmtMs(teto)})`,
+      );
+  }
+  console.log(
+    `  (é ESCOLHA, não bug: encurtar a janela custa a identidade de quem fica PARADO atrás de uma` +
+      `\n   obstrução — 'cega' e 'reocupado' são o MESMO input para o tracker. O que o gate garante` +
+      `\n   é que ninguém a ALARGUE sem decidir.)\n`,
+  );
+  if (leakFails.length) {
+    console.error(`[eval/front] FALHOU: a janela de herança de id piorou —`);
+    for (const f of leakFails) console.error(`       ✗ ${f}`);
+    console.error(
+      `       Se a piora é INTENCIONAL, mova LEAK_BASELINE neste arquivo declarando o que se compra` +
+        `\n       com ela (rito da régua pinada a priori). Silenciosamente, não.\n`,
+    );
+    return leakFails.length;
+  }
 
   if (T.ttlMs !== winner) {
     console.error(

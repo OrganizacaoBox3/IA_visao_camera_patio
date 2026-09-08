@@ -11,6 +11,7 @@
 "use strict";
 
 const automask = require("./automask");
+const health = require("./health"); // veredito de saúde por câmera + resumo da frota
 
 // ── Sensor do GATE de movimento (engine.recordGateRound alimenta st.gateLog) ──
 // Chaves SEMPRE presentes em reasons1m (zero-fill) — um "0" declarado vale mais que
@@ -158,6 +159,27 @@ function buildStatus(snap) {
       longRange: st.longRange, // true = rodada com tiling no worker
       fadiga: st.fadiga, // true = câmera modo=fadiga (NÃO analisada no hub)
       source: st.source, // origem do último frame ("relay" | "go2rtc")
+      // ESTABILIDADE DO VÍDEO (ADITIVO — health.observeFrame, O(1) por frame): maior lacuna e
+      // nº de retomadas na janela de 60s. Cru aqui p/ transparência; o veredito é o `health`.
+      maxGapMs: st.frameGapMax ?? null,
+      retomadas1m: st.frameRetomadas ?? null,
+      // SAÚDE (ADITIVO): separa "cena vazia" de "não estou medindo" — o falso-OK que fazia
+      // câmera parada, IA parada e IA atrasada mostrarem a MESMA tela (contagem 0, sem aviso).
+      // O veredito carrega o número que o sustenta (health.js `medido`).
+      health: health.classifyCamera({
+        now,
+        lastFrameAt: st.lastFrameAt,
+        lastInferAt: st.lastInferAt,
+        fps: Math.round((st.rounds.length / 60) * 100) / 100,
+        targetFps: targetFpsOf(st),
+        frameAgeP50: frameAge ? frameAge.p50 : null,
+        maxGapMs: st.frameGapMax,
+        retomadas1m: st.frameRetomadas,
+        hasTripwire: !!(snap.hasTripwireOf && snap.hasTripwireOf(id)),
+        // fadiga roda no CLIENTE (ADR-009) → o motor não a cobre; acusar "IA parada" nela
+        // seria acusar o desenho, não uma falha.
+        analiseLigada: snap.enabled !== false && !st.fadiga,
+      }),
     };
     // Auto-máscara: transparência — o operador vê onde a máscara agiu (rects
     // normalizados prontos p/ virar zona de exclusão manual). Formato: automask.statusOf.
@@ -198,6 +220,11 @@ function buildStatus(snap) {
     autoscale: snap.autoscale,
     worker: snap.worker,
     go2rtcPull: snap.go2rtcPull,
+    // RESUMO DA FROTA (ADITIVO): quantas câmeras em cada estado + a lista das problemáticas com
+    // motivo. É o que uma tela de monitoramento consome sem varrer perCamera inteiro.
+    health: health.summarize(
+      Object.fromEntries(Object.entries(perCamera).map(([id, c]) => [id, c.health])),
+    ),
     perCamera,
   };
 }

@@ -231,6 +231,14 @@ alter table ativ_buckets add column if not exists shift_id text;
 alter table ativ_buckets add column if not exists shift text;
 alter table ativ_buckets add column if not exists in_pause boolean;
 alter table ativ_buckets add column if not exists business_date text;
+-- ATIVIDADE PONDERADA POR TEMPO (2026-09-04). `active_samples/samples` é média por RODADA, e as
+-- rodadas NÃO são igualmente espaçadas (a mesma câmera roda a até 6 fps quando alguém a abre e a
+-- 0,05-0,32 fps no fundo) — medido: 34% por rodada contra 3% de verdade no tempo, 11× de viés
+-- causado só por quem estava olhando. Estas duas colunas são o numerador/denominador honestos.
+-- ADITIVAS: as antigas continuam sendo gravadas e o relatório cai nelas quando estas vierem 0
+-- (bucket gravado por hub antigo) — nenhuma linha existente precisa ser reescrita.
+alter table ativ_buckets add column if not exists active_ms bigint default 0;
+alter table ativ_buckets add column if not exists observed_ms bigint default 0;
 alter table ativ_events  add column if not exists shift_id text;
 alter table ativ_events  add column if not exists in_pause boolean;
 alter table ativ_events  add column if not exists business_date text;

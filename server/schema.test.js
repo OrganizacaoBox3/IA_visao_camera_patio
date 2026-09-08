@@ -108,3 +108,131 @@ describe("pgstore.js — read_events.cameras não é mais FABRICADA (auditoria A
     expect(PGSTORE).toMatch(/select ts, ponto, code, cameras, shift from read_events/i);
   });
 });
+
+// COERÊNCIA INSERT × SCHEMA — gate estático (mesmo espírito do resto do arquivo: sem banco,
+// mede o que dá para medir sem ele). Duas classes de regressão que a edição À MÃO de um upsert
+// produz e que nenhum outro sensor pega antes da produção:
+//   1. coluna a mais/a menos que placeholders ⇒ o PG recusa o bind em runtime ("supplies N
+//      parameters"), e o ingest cai no fallback JSON SILENCIOSAMENTE (warnPgDown) — o histórico
+//      para de ir ao banco e ninguém vê.
+//   2. coluna que não existe na tabela ⇒ mesma falha silenciosa. Aconteceu de perto ao somar
+//      active_ms/observed_ms (2026-09-04): 11 colunas → 15 params, tudo escrito à mão.
+describe("pgstore × schema.sql — todo INSERT bate com a tabela", () => {
+  // Colunas conhecidas por tabela: corpo do CREATE TABLE + os ALTER ... ADD COLUMN aditivos.
+  // Recorte por índice (não por RegExp montada por string): o schema é CRLF e uma regex montada
+  // erraria calada — e um sensor estático que não casa nada é um no-op VERDE, a pior falha
+  // possível aqui. Por isso cada teste exige explicitamente ter encontrado o que audita.
+  const colunasDe = (tabela) => {
+    const cols = new Set();
+    const inicio = SCHEMA.toLowerCase().indexOf(`create table if not exists ${tabela} (`);
+    if (inicio >= 0) {
+      const abre = SCHEMA.indexOf("(", inicio);
+      const corpo = SCHEMA.slice(abre + 1, SCHEMA.indexOf("\n);", abre)).replace(/--[^\n]*/g, "");
+      for (const campo of corpo.split(",")) {
+        const m = campo.trim().match(/^([a-z_][a-z0-9_]*)/i);
+        if (m && !/^(primary|unique|foreign|constraint|check)$/i.test(m[1])) cols.add(m[1]);
+      }
+    }
+    for (const linha of SCHEMA.split("\n")) {
+      const m = linha.match(
+        /^alter table\s+([a-z_0-9]+)\s+add column if not exists\s+([a-z_0-9]+)/i,
+      );
+      if (m && m[1].toLowerCase() === tabela) cols.add(m[2]);
+    }
+    return cols;
+  };
+
+  // Parser ciente de parênteses: `read_buckets` escreve jsonb_build_object(...) como VALOR, com
+  // vírgulas dentro. Split ingênuo por "," contaria 11 valores para 7 colunas e o gate mentiria.
+  const grupo = (txt, abre) => {
+    let d = 0;
+    for (let i = abre; i < txt.length; i++) {
+      if (txt[i] === "(") d++;
+      else if (txt[i] === ")" && --d === 0) return { conteudo: txt.slice(abre + 1, i), fim: i };
+    }
+    return null;
+  };
+  const partesTopo = (txt) => {
+    const out = [];
+    let d = 0;
+    let atual = "";
+    for (const ch of txt) {
+      if (ch === "(" || ch === "[") d++;
+      else if (ch === ")" || ch === "]") d--;
+      if (ch === "," && d === 0) {
+        out.push(atual.trim());
+        atual = "";
+      } else atual += ch;
+    }
+    if (atual.trim()) out.push(atual.trim());
+    return out;
+  };
+
+  // Cada SQL vive num template literal próprio ⇒ fatiar por backtick mantém cada INSERT (e o SEU
+  // `do update set`) isolado. Sem isso, um `[\s\S]*?` cruzaria statements e atribuiria a coluna
+  // de um upsert à tabela de outro.
+  const inserts = PGSTORE.split("`")
+    .filter((c) => /^\s*insert into /i.test(c))
+    .map((sql) => {
+      const tabela = sql.match(/insert into ([a-z_0-9]+)/i)[1];
+      const gCols = grupo(sql, sql.indexOf("(", sql.toLowerCase().indexOf(tabela)));
+      const iVals = sql.toLowerCase().indexOf("values", gCols.fim);
+      const gVals = grupo(sql, sql.indexOf("(", iVals));
+      const iSet = sql.toLowerCase().indexOf("do update set");
+      return {
+        tabela,
+        sql,
+        cols: partesTopo(gCols.conteudo),
+        vals: partesTopo(gVals.conteudo),
+        sets: iSet < 0 ? [] : partesTopo(sql.slice(iSet + "do update set".length)),
+      };
+    });
+
+  it("encontrou os INSERTs para auditar (formatação nova não pode silenciar o gate)", () => {
+    expect(inserts.length).toBeGreaterThanOrEqual(8);
+    expect(inserts.map((i) => i.tabela)).toContain("ativ_buckets");
+  });
+
+  it("nº de colunas == nº de valores em todo INSERT", () => {
+    for (const { tabela, cols, vals } of inserts) {
+      expect(vals, `${tabela}: ${cols.length} colunas × ${vals.length} valores`).toHaveLength(
+        cols.length,
+      );
+    }
+  });
+
+  it("os $n de cada statement formam 1..N sem furo (bind completo)", () => {
+    for (const { tabela, sql } of inserts) {
+      const ns = [...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
+      expect(ns.length, `${tabela}: statement sem nenhum parâmetro`).toBeGreaterThan(0);
+      expect([...new Set(ns)].sort((a, b) => a - b), `${tabela}: $n com furo`).toEqual(
+        Array.from({ length: Math.max(...ns) }, (_, i) => i + 1),
+      );
+    }
+  });
+
+  it("toda coluna escrita existe na tabela (CREATE TABLE ou ALTER aditivo)", () => {
+    for (const { tabela, cols } of inserts) {
+      const conhecidas = colunasDe(tabela);
+      expect(conhecidas.size, `${tabela}: tabela não encontrada no schema.sql`).toBeGreaterThan(0);
+      expect(
+        cols.filter((c) => !conhecidas.has(c)),
+        `${tabela}: coluna(s) fora do schema`,
+      ).toEqual([]);
+    }
+  });
+
+  it("toda coluna do `do update set` existe na tabela do PRÓPRIO statement", () => {
+    const comSet = inserts.filter((i) => i.sets.length);
+    expect(comSet.length, "nenhum upsert encontrado — o gate ficaria vazio").toBeGreaterThan(0);
+    for (const { tabela, sets } of comSet) {
+      const conhecidas = colunasDe(tabela);
+      const alvos = sets.map((s) => (s.match(/^([a-z_0-9]+)\s*=/i) || [])[1]).filter(Boolean);
+      expect(alvos.length, `${tabela}: SET sem alvo reconhecido`).toBe(sets.length);
+      expect(
+        alvos.filter((c) => !conhecidas.has(c)),
+        `${tabela}: SET em coluna inexistente`,
+      ).toEqual([]);
+    }
+  });
+});

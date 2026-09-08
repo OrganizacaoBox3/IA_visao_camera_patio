@@ -50,8 +50,11 @@ describe("nenhum arquivo de render interpola o id no rótulo de pessoa (a regres
     it(`${path.basename(file)} não tem \`Pessoa \${...}\` em código`, () => {
       const src = readFileSync(file, "utf8");
       // Remove o texto DENTRO de comentários de linha (os comentários citam o bug de propósito).
+      // O CR cai ANTES do strip: com CRLF (checkout Windows) o `.` do regex nao cruza o
+      // retorno de carro, o `$` nunca era alcancado e o comentario SOBREVIVIA ao strip —
+      // este gate acusava falso positivo em toda maquina Windows.
       const codeOnly = src
-        .split("\n")
+        .split(/\r?\n/)
         .map((l) => l.replace(/\/\/.*$/, ""))
         .join("\n");
       expect(codeOnly).not.toMatch(/`Pessoa \$\{/);

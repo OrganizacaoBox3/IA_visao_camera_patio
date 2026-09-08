@@ -133,4 +133,46 @@ describe("scopeAnalysisStatus", () => {
   it("preserva o mesmo objeto para papéis de equipe", () => {
     expect(scopeAnalysisStatus(status, { papel: "superadmin" })).toBe(status);
   });
+
+  // SAÚDE DA FROTA (aditivo, 2026-09-04): o resumo agrega TODAS as câmeras do hub — passar ele
+  // adiante pelo spread vazaria p/ o "cliente" (a) quantas câmeras existem e (b) os IDs das
+  // problemáticas, que é exatamente o que o escopo por câmera existe pra impedir. Este teste
+  // trava o recálculo sobre as visíveis (mesmo tratamento que o motionGate já tinha).
+  describe("resumo de saúde herda o escopo (não vaza câmera alheia)", () => {
+    const comSaude = {
+      ...status,
+      health: {
+        total: 2,
+        contagem: { "sem-video": 1, ok: 1 },
+        problemas: [{ id: "cam-2", estado: "sem-video", motivo: "nenhum frame há 40s" }],
+      },
+      perCamera: {
+        "cam-1": { skipped1m: 3, skippedTotal: 30, health: { estado: "ok", motivo: "ok" } },
+        "cam-2": {
+          skipped1m: 10,
+          skippedTotal: 100,
+          health: { estado: "sem-video", motivo: "nenhum frame há 40s" },
+        },
+      },
+    };
+
+    it("cliente só vê o resumo das SUAS câmeras (id alheio não aparece nem no total)", () => {
+      const s = scopeAnalysisStatus(comSaude, { papel: "cliente", cameraIds: ["cam-1"] });
+      expect(s.health).toEqual({ total: 1, contagem: { ok: 1 }, problemas: [] });
+      expect(JSON.stringify(s)).not.toContain("cam-2"); // nem id, nem motivo alheio
+    });
+
+    it("cliente com a câmera problemática vê o problema DELA", () => {
+      const s = scopeAnalysisStatus(comSaude, { papel: "cliente", cameraIds: ["cam-2"] });
+      expect(s.health.total).toBe(1);
+      expect(s.health.problemas).toEqual([
+        { id: "cam-2", estado: "sem-video", motivo: "nenhum frame há 40s" },
+      ]);
+    });
+
+    it("status sem o campo health (hub antigo) não inventa resumo", () => {
+      const s = scopeAnalysisStatus(status, { papel: "cliente", cameraIds: ["cam-1"] });
+      expect(s.health).toBeUndefined();
+    });
+  });
 });

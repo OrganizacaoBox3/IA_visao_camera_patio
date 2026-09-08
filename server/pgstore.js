@@ -294,11 +294,18 @@ const J_INGEST = {
           samples: 0,
           activeSamples: 0,
           peoplePeak: 0,
+          // atividade ponderada por TEMPO — semeados aqui p/ o bucket JSON ter a MESMA forma
+          // do SELECT do PG (onde as colunas têm default 0), nunca `undefined` no round-trip.
+          activeMs: 0,
+          observedMs: 0,
           ...stampFields(stamp), // o turno faz parte da CHAVE → constante dentro do bucket
         };
       b.idleMs += Number(sm.idleMs) || 0;
       b.samples += Number(sm.frames) || 0;
       b.activeSamples += Number(sm.activeFrames) || 0;
+      // ADITIVOS: produtor antigo omite ⇒ soma 0 e o consumo cai na média por rodada.
+      b.activeMs = (b.activeMs || 0) + (Number(sm.activeMs) || 0);
+      b.observedMs = (b.observedMs || 0) + (Number(sm.observedMs) || 0);
       b.peoplePeak = Math.max(b.peoplePeak, Number(sm.people) || 0);
       b.area = sm.label ?? null; // como o UPSERT: area/atividade = excluded
       b.atividade = sm.atividade ?? null;
@@ -521,13 +528,17 @@ const INGEST = {
       // Turno POR SAMPLE (janela de ~3s), nunca por hora — e entra na CHAVE do bucket.
       const stamp = stampForZone(p.cameraId, sm.zoneId, now);
       await db.query(
-        `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,idle_ms,samples,active_samples,people_peak,shift_id,shift,in_pause,business_date)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        // active_ms/observed_ms: atividade ponderada por TEMPO (ADITIVOS — ver schema.sql;
+        // somam como samples/active_samples, que continuam gravados p/ retrocompat).
+        `insert into ativ_buckets (id,camera_id,area,atividade,hour_start,idle_ms,samples,active_samples,people_peak,active_ms,observed_ms,shift_id,shift,in_pause,business_date)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          on conflict (id) do update set
            idle_ms=ativ_buckets.idle_ms+excluded.idle_ms,
            samples=ativ_buckets.samples+excluded.samples,
            active_samples=ativ_buckets.active_samples+excluded.active_samples,
            people_peak=greatest(ativ_buckets.people_peak,excluded.people_peak),
+           active_ms=ativ_buckets.active_ms+excluded.active_ms,
+           observed_ms=ativ_buckets.observed_ms+excluded.observed_ms,
            area=excluded.area, atividade=excluded.atividade`,
         [
           ativBucketId(p.cameraId, sm.zoneId, hs, stamp),
@@ -539,6 +550,8 @@ const INGEST = {
           sm.frames,
           sm.activeFrames,
           sm.people,
+          Number(sm.activeMs) || 0,
+          Number(sm.observedMs) || 0,
           stamp ? stamp.shiftId : null,
           stamp ? stamp.shift : null,
           stamp ? stamp.inPause : null,
@@ -724,7 +737,7 @@ const INGEST = {
 // O carimbo de turno viaja nos SELECTs de ativ/flow e passa pelo decodeStamp (sentinela '' →
 // null = fora; NULL → campo AUSENTE = sem carimbo) — o contrato de 3 estados do relatório.
 const BUCKET_SQL = {
-  ativ: `select id, camera_id as "cameraId", area, atividade, hour_start as "hourStart", idle_ms as "idleMs", alerts, samples, active_samples as "activeSamples", people_peak as "peoplePeak", shift_id as "shiftId", shift, in_pause as "inPause", business_date as "businessDate" from ativ_buckets`,
+  ativ: `select id, camera_id as "cameraId", area, atividade, hour_start as "hourStart", idle_ms as "idleMs", alerts, samples, active_samples as "activeSamples", people_peak as "peoplePeak", active_ms as "activeMs", observed_ms as "observedMs", shift_id as "shiftId", shift, in_pause as "inPause", business_date as "businessDate" from ativ_buckets`,
   read: `select id, ponto, hour_start as "hourStart", boxes, reads, multi_reads as "multiReads", passages, per_camera as "perCamera" from read_buckets`,
   obj: `select id, setor, classe, hour_start as "hourStart", samples, count_sum as "countSum", peak, present from obj_buckets`,
   fad: `select id, posto, hour_start as "hourStart", samples, ok, fadiga, celular, duplo, ear_sum as "earSum", ear_samples as "earSamples" from fad_buckets`,
