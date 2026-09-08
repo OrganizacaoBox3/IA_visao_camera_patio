@@ -106,10 +106,29 @@ function createCounter(tripwires = [], opts = {}) {
   const maxDist = opts.maxDist ?? Number.POSITIVE_INFINITY;
   const debounceMs = opts.debounceMs ?? 0;
   const minCrossingFrames = Math.max(1, opts.minCrossingFrames ?? 1);
+  // ── CADENCIA REAL x CADENCIA ALVO (2026-09-08, bug de campo: linha SEMPRE 0) ───────────
+  // Os tres gates de continuidade deste contador foram calibrados para uma rodada de ~0,5-1s.
+  // MEDIDO em producao: a frota roda a 0,1-0,2 analises/s (5-10s por rodada). Nessa escala os
+  // tres disparam juntos, e cada um sozinho ja garante contagem ZERO:
+  //   - staleness (ttl 8000ms): 10s de intervalo > ttl => "continuidade perdida" em TODA rodada
+  //     => re-ancora a posicao e NUNCA avalia o cruzamento;
+  //   - teleporte (maxDist 0.35): um caminhante desloca 0,30 em 5s e 0,60 em 10s => movimento
+  //     HUMANO normal era classificado como salto impossivel;
+  //   - histerese (minCrossingFrames 2): existe p/ rejeitar jitter de bbox de UM frame. A 10s
+  //     por rodada, "um frame" sao 10 SEGUNDOS de evidencia — o motivo do gate nao se aplica.
+  // Os tres passam a escalar com o intervalo OBSERVADO entre updates. Todos 0 = DESLIGADO
+  // (identico ao de hoje); na cadencia sadia o max() escolhe sempre o valor fixo, entao nada
+  // muda onde ja funcionava (provado pelos testes/eval a 500ms).
+  const staleRoundFactor = opts.staleRoundFactor ?? 0; // ttl efetivo = max(ttl, fator x rodada)
+  const maxSpeedNorm = opts.maxSpeedNorm ?? 0; // norm/s: teleporte vira LIMITE DE VELOCIDADE
+  const sustainMaxRoundMs = opts.sustainMaxRoundMs ?? 0; // rodada >= isto => histerese cai p/ 1
 
   let wires = tripwires.map(cloneWire);
   const counts = new Map();
   const last = new Map();
+  // NULL, nao 0: o relogio pode comecar em 0 (eval/teste sintetico) e 0 e um instante VALIDO.
+  let lastUpdateAt = null; // `now` do update anterior
+  let emaRoundMs = null; // cadencia SUSTENTADA (media movel) — base dos gates cadencia-aware
   let frameClock = 0; // relógio de fallback (frames) quando `now` não é informado
 
   for (const w of wires) counts.set(w.id, { in: 0, out: 0 });
@@ -137,6 +156,19 @@ function createCounter(tripwires = [], opts = {}) {
     const t = now ?? ++frameClock;
     const events = [];
     const seen = new Set();
+    // Cadencia desta camera -> gates efetivos da rodada.
+    // A cadência de referência é a SUSTENTADA (média móvel), NUNCA o intervalo desta rodada:
+    // medindo o gap atual, um BURACO (fonte caída, pool afogado) se auto-justificaria — o gate
+    // se adaptaria ao próprio buraco e a pessoa "reapareceria do outro lado" como travessia
+    // observada. Com a média, uma câmera que roda SEMPRE a 5-10s tem seus gates relaxados, mas
+    // um salto de 60s numa câmera de 1s segue sendo continuidade PERDIDA (não conta).
+    const dtRodada = lastUpdateAt == null ? 0 : Math.max(0, t - lastUpdateAt);
+    const roundMs = emaRoundMs == null ? dtRodada : emaRoundMs;
+    if (lastUpdateAt != null)
+      emaRoundMs = emaRoundMs == null ? dtRodada : emaRoundMs + 0.3 * (dtRodada - emaRoundMs);
+    lastUpdateAt = t;
+    const ttlEf = Math.max(ttl, staleRoundFactor * roundMs);
+    const sustainEf = sustainMaxRoundMs > 0 && roundMs >= sustainMaxRoundMs ? 1 : minCrossingFrames;
 
     for (const tr of tracks) {
       seen.add(tr.id);
@@ -147,10 +179,14 @@ function createCounter(tripwires = [], opts = {}) {
         last.set(tr.id, { x: cur.x, y: cur.y, lastSeen: t });
         continue;
       }
-      const stale = t - prev.lastSeen > ttl; // gap sem update → continuidade perdida
+      const dtMs = t - prev.lastSeen;
+      const stale = dtMs > ttlEf; // gap sem update → continuidade perdida
       prev.lastSeen = t; // visto neste frame (mantém vivo p/ TTL)
       const moved = Math.hypot(cur.x - prev.x, cur.y - prev.y);
-      const lost = stale || moved > maxDist; // continuidade perdida (gap/teleporte)
+      // Teleporte por VELOCIDADE quando maxSpeedNorm esta ligado: o orcamento de deslocamento
+      // cresce com o tempo decorrido (movimento humano em 10s NAO e salto impossivel).
+      const maxDistEf = Math.max(maxDist, (maxSpeedNorm * dtMs) / 1000);
+      const lost = stale || moved > maxDistEf; // continuidade perdida (gap/teleporte)
       // HISTERESE: confirma/cancela pendências ANTES do gate de minMove — quem cruza e
       // PARA em cima do lado novo também confirma. Num frame de continuidade perdida
       // não se confirma nada (não inventa contagem).
@@ -162,7 +198,7 @@ function createCounter(tripwires = [], opts = {}) {
           const side = pd.dir === "in" ? s : -s; // >0 sustenta o lado novo; <0 voltou (jitter)
           if (side > 0) {
             pd.sustained += 1;
-            if (pd.sustained >= minCrossingFrames) {
+            if (pd.sustained >= sustainEf) {
               prev.pending.delete(w.id);
               tryCount(prev, tr.id, w, pd.dir, pd.x, pd.y, t, events);
             }
@@ -190,7 +226,7 @@ function createCounter(tripwires = [], opts = {}) {
         else if (d1 > 0 && d2 < 0) dir = "out";
         if (!dir) continue;
         const ip = intersectionPoint(from, cur, w.a, w.b);
-        if (minCrossingFrames > 1) {
+        if (sustainEf > 1) {
           // histerese ligada: NÃO conta ainda — o lado novo precisa se sustentar nos
           // próximos updates (este é o 1º). Um novo cruzamento substitui a pendência.
           (prev.pending ??= new Map()).set(w.id, { dir, x: ip.x, y: ip.y, sustained: 1 });
@@ -205,7 +241,7 @@ function createCounter(tripwires = [], opts = {}) {
 
     // cleanup por TTL de tracks que sumiram
     for (const [id, st] of last) {
-      if (!seen.has(id) && t - st.lastSeen > ttl) last.delete(id);
+      if (!seen.has(id) && t - st.lastSeen > ttlEf) last.delete(id);
     }
     return events;
   }
@@ -246,6 +282,8 @@ function createCounter(tripwires = [], opts = {}) {
   function reset() {
     last.clear();
     frameClock = 0;
+    lastUpdateAt = null; // a cadencia observada recomeca (nao herda o gap da sessao anterior)
+    emaRoundMs = null;
     for (const w of wires) counts.set(w.id, { in: 0, out: 0 });
   }
 

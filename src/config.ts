@@ -139,6 +139,15 @@ export const APP_CONFIG = {
       // plausível de quem se move; a folga só absorve erro de predição. 0 desliga o estágio.
       reassocDist: 0.12,
       reassocMaxGapMs: 2500, // gap máximo desde a última observação p/ tentar o 2º estágio
+      // CADÊNCIA REAL × ALVO (2026-09-08 — o bug que zerava a contagem de linha na frota):
+      // o raio do 2º estágio é `reassocDist + |v|·gap`, e num track visto UMA vez v=0 — sobra só
+      // a folga de 0.12. Numa rodada de 4s (mosaico) ou 5-10s (a cadência REAL do hub sob carga)
+      // um caminhante desloca 0,24-0,60: fora do raio E sem IoU nenhum, o que impede PARA SEMPRE
+      // estabelecer velocidade (para associar precisa de v; para ter v precisa associar) e faz a
+      // MESMA pessoa nascer com id novo a cada rodada — a linha, que exige o MESMO id nos dois
+      // lados, contava ZERO de forma determinística. Espelho: precision.js knobs 27-28.
+      reassocSpeedFloor: 0.15, // norm/s — "não sei a velocidade" ≠ "velocidade zero"
+      reassocGapRoundFactor: 3, // teto de gap = max(fixo, 3× a rodada OBSERVADA)
       // Política LOST (dono: vision/bytetrack.ts · sensor: bytetrack.test.ts · espelho F1):
       // track sem par por MAIS de N rodadas analisadas some do retorno do tracker (desenho/
       // ocupação/contagem) mas vive internamente até ttlMs p/ re-identificação com o MESMO id
@@ -175,6 +184,14 @@ export const APP_CONFIG = {
       counterMaxDist: 0.35,
       minCrossingFrames: 2, // histerese: lado novo sustentado N updates consecutivos antes de contar
       debounceMs: 800, // janela anti-oscilação por (track, linha) pós-cruzamento (counting.ts)
+      // Os três gates de continuidade do counter escalam com a cadência OBSERVADA (espelho dos
+      // knobs 29-31 de precision.js). Sem isso, numa rodada de 4s+ os três disparam juntos e
+      // cada um sozinho zera a contagem: staleness (rodada > ttl ⇒ "continuidade perdida" em
+      // TODA rodada), teleporte (deslocamento humano tratado como salto impossível) e histerese
+      // (o gate existe p/ jitter de UM frame; numa rodada de segundos isso é evidência de sobra).
+      counterStaleRoundFactor: 3,
+      counterMaxSpeedNorm: 0.3, // norm/s — teleporte vira LIMITE DE VELOCIDADE
+      counterSustainMaxRoundMs: 2000, // rodada ≥ isto ⇒ histerese cai p/ 1
     },
   },
 

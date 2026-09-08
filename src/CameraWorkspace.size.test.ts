@@ -145,7 +145,17 @@ import { describe, it, expect } from "vitest";
 // o counter local — agora vivo — detecta um cruzamento sob hub (sem persistir 2×: shouldIngest
 // segue sendo o único portão de escrita). Contabilidade REAL: 1726 → 1742; teto 1747 mantém a
 // folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1747;
+// 1747→1755 (a linha de contagem NUNCA contava na cadência REAL da frota — bug de campo medido):
+// os gates de continuidade do tracker e do counter foram calibrados p/ rodadas de 0,5-1s, e a
+// frota analisa a 0,1-0,2 rodadas/s (5-10s). Nessa escala o raio do 2º estágio (0.12, com v=0 num
+// track visto uma vez) é menor que o deslocamento de um caminhante (0,30-0,60), a identidade morre
+// a cada rodada e a linha fica estruturalmente incapaz de contar. O GROSSO foi para os módulos
+// espelhados (bytetrack.js/ts: piso de velocidade + teto de gap por cadência; counting.js/ts:
+// staleness/teleporte/histerese por cadência) e para precision.js/config.ts (knobs 27-31); aqui
+// sobraram 8 linhas de fiação (5 knobs passados aos dois construtores + o porquê).
+// Contabilidade REAL: 1742 → 1750; teto 1755 mantém a folga mínima da convenção (≈5).
+// NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1755;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {

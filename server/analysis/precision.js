@@ -207,6 +207,20 @@ const PRECISION = Object.freeze({
     //     escape-hatch p/ o caso patológico (det fantasma eternamente re-confirmada —
     //     cujo tratamento certo é a auto-máscara/zona de exclusão, não o tracker).
     stationaryMaxMs: 0,
+    // 27. RAIO do 2o estagio quando a velocidade e DESCONHECIDA (norm/s). O raio e
+    //     `reassocDist + |v|.gap`; num track visto UMA vez v=0, sobrando so a folga fixa
+    //     (0.12). MEDIDO em producao (2026-09-08): a frota analisa a 0,1-0,2/s e um
+    //     caminhante desloca 0,30-0,60 nesse intervalo — fora do raio E sem IoU nenhum, o
+    //     que impedia PARA SEMPRE estabelecer velocidade (deadlock ovo-galinha) e fazia a
+    //     MESMA pessoa nascer com id novo a cada rodada. Com o piso, "nao sei a velocidade"
+    //     deixa de significar "velocidade zero". 0 = desligado. SENSOR: eval/counting.mjs
+    //     (cenario de cadencia DEGRADADA) + bytetrack.test.js.
+    reassocSpeedFloor: 0.15,
+    // 28. Teto de gap do 2o estagio derivado da cadencia OBSERVADA: o fixo (reassocMaxGapMs
+    //     2500) e do ALVO, e a 5-10s por rodada o estagio ficava estruturalmente MORTO (o
+    //     gate nunca podia ser satisfeito). Vira max(fixo, fator x intervalo observado).
+    //     0 = desligado. SENSOR: idem 27.
+    reassocGapRoundFactor: 3,
   }),
 
   // ── Contador de linha (consumidor: engine.js → createCounter) ───────────────
@@ -223,6 +237,18 @@ const PRECISION = Object.freeze({
     // 15. HISTERESE: o lado novo precisa se sustentar 2 rodadas antes de contar
     //     (o update do cruzamento é a 1ª). SENSOR: counting.test.js.
     minCrossingFrames: 2,
+    // ── Os tres knobs abaixo existem porque os gates 12-15 foram calibrados na cadencia
+    //    ALVO (~0,5-1s por rodada) e a frota REAL roda a 5-10s. Nessa escala eles disparam
+    //    juntos e cada um sozinho garante contagem ZERO — medido em producao (linha parada
+    //    em 0/0 em toda a frota). Escalam com o intervalo OBSERVADO; 0 = desligado.
+    // 29. staleness: ttl efetivo = max(ttl, fator x rodada). Rodada lenta NAO e track perdido.
+    staleRoundFactor: 3,
+    // 30. teleporte por VELOCIDADE (norm/s) em vez de distancia fixa: 0,30 em 5s e 0,60 em
+    //     10s sao deslocamentos HUMANOS normais, nao saltos impossiveis.
+    maxSpeedNorm: 0.3,
+    // 31. histerese cai p/ 1 quando a rodada e >= isto: o gate existe p/ rejeitar jitter de
+    //     UM frame; a 2s+ por rodada "um frame" ja e evidencia de sobra.
+    sustainMaxRoundMs: 2000,
   }),
 
   // ── Gate de movimento (consumidor: motion.js defaults + engine.js probe) ────
