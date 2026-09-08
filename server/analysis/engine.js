@@ -41,7 +41,7 @@ const autoscale = require("./autoscale");
 const telemetry = require("./telemetry");
 const health = require("./health");
 const { createPipeline } = require("./pipeline");
-const { pickRoundMs, focusUnion, createFocusRegistry } = require("./focus");
+const { pickRoundMs, idleRoundMs, focusUnion, createFocusRegistry } = require("./focus");
 const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host");
 const { createGo2rtcSource } = require("./go2rtc-source");
 const { createAutoMask, AUTOMASK_ON, AUTOMASK_MODE } = require("./automask");
@@ -59,7 +59,15 @@ const ROUND_MS_LINE = Math.round(1000 / FPS_LINE);
 // Clamp piso = FPS (nunca abaixo do normal); teto 8fps p/ não afogar o pool.
 const FPS_FOCUS = Math.min(8, Math.max(FPS, Number(process.env.ANALYSIS_FPS_FOCUS) || 6));
 const ROUND_MS_FOCUS = Math.round(1000 / FPS_FOCUS);
-const ROUNDS = { normal: ROUND_MS, line: ROUND_MS_LINE, focus: ROUND_MS_FOCUS };
+// Teto da cadência OCIOSA (câmera sem linha/foco/proibida): nunca calar uma câmera por mais
+// que isto — o monitor de saúde e a ocupação por tempo precisam de amostra periódica.
+const ROUND_MS_IDLE_MAX = Math.max(
+  ROUND_MS,
+  Number(process.env.ANALYSIS_IDLE_MAX_MS) || 20_000,
+);
+// `idle` começa IGUAL ao normal: sem medição de capacidade ainda, ninguém é degradado. O
+// reavaliador (reavaliarCadenciaOciosa) o move quando a frota prova estar afogada.
+const ROUNDS = { normal: ROUND_MS, line: ROUND_MS_LINE, focus: ROUND_MS_FOCUS, idle: ROUND_MS };
 const AGG_MS = Math.max(1000, Number(process.env.ANALYSIS_AGG_MS ?? 3000)); // janela do ingest "ativ"
 const PRUNE_MS = 5 * 60_000; // câmera sem frame há tanto tempo sai do estado/status
 // Resolução do tick baseada na cadência MAIS RÁPIDA (foco > linha) p/ o dispatch honrar o boost.
@@ -265,15 +273,30 @@ function focusInflightFor(pool, envRaw) {
 function focusInflight() {
   return focusInflightFor(poolSize, process.env.ANALYSIS_FOCUS_INFLIGHT);
 }
-function maxInflightFor(focused) {
-  return focused ? focusInflight() : 1;
+// Paralelismo por câmera. FOCO já paralelizava; a LINHA passa a paralelizar também (2026-09-08).
+// MEDIDO na simulação da frota real (17 câmeras, 3 workers, 750ms/inferência): com a cadência
+// ociosa cedendo capacidade, permitir 2 jobs em voo na câmera de linha levou as amostras dela
+// de 0,68 para 0,88/s (+29%) — porque uma câmera com 1 job em voo fica LIMITADA pelo
+// ida-e-volta (1/latência), não pela capacidade do pool. Custo declarado: a latência da
+// própria câmera sobe (750→1500ms na simulação), o que é irrelevante contra o limiar de
+// frescor do payload (5000ms) e é o trade-off certo — p/ contar travessia importa AMOSTRA,
+// não latência. Sem linha e sem foco segue serial (1).
+function maxInflightFor(focused, hasLine) {
+  if (focused) return focusInflight();
+  if (hasLine) return Math.min(2, poolSize); // 2 só se o pool tiver 2+ workers
+  return 1;
 }
 
 // (Re)aplica a cadência efetiva ao estado de UMA câmera (foco > linha > normal) + o limite de paralelismo.
 function applyRoundMs(st) {
   const focused = focus.has(st.id);
-  st.roundMs = pickRoundMs({ focused, hasLine: camcfg.getTripwires(st.id).length > 0 }, ROUNDS);
-  st.maxInflight = maxInflightFor(focused); // foco paraleliza; resto serial
+  // hasLine/focused ficam MATERIALIZADOS no estado: o controle de admissão (admission.js) os lê
+  // a cada tick, e consultar camcfg por câmera a cada tick seria custo à toa.
+  st.hasLine = camcfg.getTripwires(st.id).length > 0;
+  st.hasProib = (st.zonesProib || []).length > 0; // segurança: fora da classe ociosa
+  st.focused = focused;
+  st.roundMs = pickRoundMs({ focused, hasLine: st.hasLine, hasProib: st.hasProib }, ROUNDS);
+  st.maxInflight = maxInflightFor(focused, st.hasLine); // foco e LINHA paralelizam
 }
 
 // Reajusta a cadência SÓ das câmeras que entraram/saíram do foco. Câmera focada sem
@@ -332,7 +355,8 @@ function createState(id) {
     id,
     latest: null, // { buf, ts } — último frame recebido (último-vence)
     slots: createInflightSlots(), // inferências em voo desta câmera (contador + órfã + ordem — inflight.js)
-    maxInflight: maxInflightFor(focus.has(id)), // foco paraleliza; resto serial (recalc em applyRoundMs)
+    // foco e LINHA paralelizam; resto serial (recalculado em applyRoundMs)
+    maxInflight: maxInflightFor(focus.has(id), camcfg.getTripwires(id).length > 0),
     // Stagger anti-serrote (perf-round3/frente2-serrote-stagger.md): fase áurea por
     // índice de criação + nascer com lastSentAt=AGORA (não 0) → o 1º despacho cai no
     // PRÓXIMO slot do grid próprio da câmera (dispatchReady, slot absoluto), não no
@@ -376,8 +400,19 @@ function createState(id) {
     lastTracks: null, // último payload de analysis-tracks emitido — re-emissão coasting no skip (C1)
     // Cadência efetiva: se o operador já focou esta câmera antes do 1º frame, ela
     // nasce a FPS_FOCUS; senão com linha @FPS_LINE; senão @FPS (último-vence).
+    // hasLine/focused MATERIALIZADOS aqui também (não só em applyRoundMs): o controle de
+    // admissão os lê a cada tick, e um estado recém-criado precisa da classe correta ANTES
+    // do próximo camcfg-updated/troca de foco — senão a câmera com linha nasceria na classe
+    // "resto" e perderia as vagas justamente na primeira janela de vida.
+    focused: focus.has(id),
+    hasLine: camcfg.getTripwires(id).length > 0,
+    hasProib: proibZonesOf(id).length > 0, // cadência de zona proibida é SEGURANÇA (não ociosa)
     roundMs: pickRoundMs(
-      { focused: focus.has(id), hasLine: camcfg.getTripwires(id).length > 0 },
+      {
+        focused: focus.has(id),
+        hasLine: camcfg.getTripwires(id).length > 0,
+        hasProib: proibZonesOf(id).length > 0,
+      },
       ROUNDS,
     ),
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
@@ -652,6 +687,54 @@ function prune() {
   go2rtcSource.prunePulls(now); // entradas de pull órfãs (stream que só falha/sumiu) saem por idade
 }
 
+// ── REAVALIAÇÃO DA CADÊNCIA OCIOSA (2026-09-08) ───────────────────────────────────────────
+// A demanda declarada da frota pode ser MÚLTIPLOS da capacidade real (medido: ~26 análises/s
+// pedidas contra ~4 entregues, 17 câmeras em 2-3 workers). Quando isso acontece, TODA câmera
+// converge para `capacidade ÷ nº` e a prioridade declarada não é entregue a ninguém — a
+// FOCADA recebia 0,25 de 6 análises/s, e sem cadência não existe contagem de linha (a mesma
+// pessoa tem de ser amostrada dos dois lados da linha).
+//
+// Aqui a cadência da classe OCIOSA (sem linha, sem foco, sem zona proibida) é DERIVADA da
+// capacidade MEDIDA: soma das rodadas realmente executadas na janela de 60s. Pool sobrando ⇒
+// idle == normal e ninguém é degradado (frota pequena não paga nada); pool afogado ⇒ as
+// ociosas cedem até o teto e a capacidade sobra para quem precisa dela.
+//
+// Roda a cada minuto (mesma cadência do logMinute): a decisão é estrutural, não instantânea —
+// reagir a cada tick oscilaria a cadência da frota inteira por ruído de medição.
+function reavaliarCadenciaOciosa() {
+  if (!states.size) return;
+  // Capacidade REAL = rodadas concluídas por segundo na frota (janela rolante de 60s que o
+  // status já usa p/ o fps por câmera). É a única medida honesta: não estimamos por CPU/cores.
+  let rodadas = 0;
+  let demandaProtegida = 0;
+  let ociosas = 0;
+  for (const st of states.values()) {
+    if (st.fadiga) continue; // não é analisada pelo hub (roda no cliente)
+    rodadas += st.rounds.length;
+    const protegida = st.focused || st.hasLine || st.hasProib;
+    if (protegida) demandaProtegida += 1000 / Math.max(1, st.roundMs);
+    else ociosas += 1;
+  }
+  const capacidadeFps = rodadas / 60;
+  const alvo = idleRoundMs({
+    capacidadeFps,
+    demandaProtegidaFps: demandaProtegida,
+    nOciosas: ociosas,
+    roundMsNormal: ROUND_MS,
+    tetoMs: ROUND_MS_IDLE_MAX,
+  });
+  if (alvo === ROUNDS.idle) return; // nada mudou
+  const antes = ROUNDS.idle;
+  ROUNDS.idle = alvo;
+  for (const st of states.values()) applyRoundMs(st); // reaplica a classe a todas
+  console.log(
+    `[analysis] cadência OCIOSA ${antes}ms → ${alvo}ms ` +
+      `(capacidade medida ${capacidadeFps.toFixed(2)}/s · protegidas pedem ` +
+      `${demandaProtegida.toFixed(2)}/s · ${ociosas} ociosa(s)) — ` +
+      `capacidade cedida a foco/linha/proibida`,
+  );
+}
+
 function logMinute() {
   if (!states.size) return;
   const parts = [];
@@ -821,7 +904,14 @@ function status() {
     hasTripwireOf: (id) => camcfg.getTripwires(id).length > 0,
     enabled,
     modelFile: path.basename(model.getModelPath()),
-    fps: { normal: FPS, line: FPS_LINE, focus: FPS_FOCUS },
+    // `idle` é a cadência DERIVADA da capacidade medida (reavaliarCadenciaOciosa) — expor é
+    // parte do conserto: a frota cedendo cadência p/ linha/foco tem de ser VISÍVEL, não tácita.
+    fps: {
+      normal: FPS,
+      line: FPS_LINE,
+      focus: FPS_FOCUS,
+      idle: Math.round((1000 / ROUNDS.idle) * 100) / 100,
+    },
     motionGate: {
       enabled: MOTION_GATE_ON,
       ratio: PRECISION.gate.motionRatio,
@@ -889,6 +979,7 @@ async function init({ io, cameras }) {
   timers.push(setInterval(() => pipeline.flushWindows(states), AGG_MS));
   timers.push(setInterval(prune, 60_000));
   timers.push(setInterval(logMinute, 60_000));
+  timers.push(setInterval(reavaliarCadenciaOciosa, 60_000));
   // Ronda de pull go2rtc na cadência MAIS RÁPIDA. Inerte (no-op) enquanto o go2rtc
   // estiver desligado — OFF por default sem custo além de um guard por tick.
   timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE, ROUND_MS_FOCUS)));
@@ -925,6 +1016,7 @@ module.exports = {
   stop,
   // Puros re-exportados de focus.js (contrato de teste — focus.test.js; não são runtime):
   pickRoundMs,
+  idleRoundMs,
   focusUnion,
   // PURO (contrato de teste — engine.test.js): mapa de ignore do gate a partir das zonas de
   // exclusão. Exposto porque é o ponto onde o hub honra (ou descarta) `points` — spec §5.

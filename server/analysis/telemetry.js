@@ -204,6 +204,9 @@ function buildStatus(snap) {
     targetFps: snap.fps.normal,
     lineFps: snap.fps.line, // cadência das câmeras com linha/tripwire
     focusFps: snap.fps.focus, // cadência da câmera em foco (tela cheia)
+    // Cadência da classe OCIOSA (sem linha/foco/zona proibida), DERIVADA da capacidade medida.
+    // Igual a targetFps = pool sobrando (ninguém degradado); menor = frota cedeu p/ quem precisa.
+    idleFps: snap.fps.idle,
     focused: [...focusedCams], // ids das câmeras focadas (união entre dashboards)
     autoMask: { mode: automask.AUTOMASK_MODE }, // modo global ("off"|"suggest"|"hide")
     // Gate de movimento — config + PROVA DO GANHO (inferências puladas).
