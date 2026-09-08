@@ -421,3 +421,58 @@ describe("createOccupancy — heatmap com decaimento", () => {
     expect(occ.rawGrid()[0]).toBe(0);
   });
 });
+
+// ── CADÊNCIA REAL × CADÊNCIA ALVO (bug de campo 2026-09-08: linha SEMPRE 0/0) ────────────────
+// POR QUE ESTE BLOCO EXISTE: os três gates de continuidade (ttl/maxDist/minCrossingFrames) foram
+// calibrados p/ uma rodada de ~0,5-1s. A frota REAL analisa a 0,1-0,2 rodadas/s (5-10s por
+// rodada — medido no /api/analysis/status: 16 de 17 câmeras em "ia-atrasada"). Nessa escala os
+// três disparam JUNTOS e cada um sozinho já garante contagem ZERO — determinístico, não "recall
+// baixo". Estes testes travam o conserto: com os knobs cadência-aware LIGADOS a travessia conta
+// na cadência degradada, e com eles DESLIGADOS ela volta a não contar (prova que o gate é real).
+describe("counter — cadência DEGRADADA (5-10s por rodada)", () => {
+  const WIRE = { id: "L1", a: { x: 0.5, y: 0 }, b: { x: 0.5, y: 1 } }; // linha vertical no meio
+  const PROD = { minMove: 0.01, ttl: 8000, maxDist: 0.35, debounceMs: 800, minCrossingFrames: 2 };
+  const CADENCIA = { staleRoundFactor: 3, maxSpeedNorm: 0.3, sustainMaxRoundMs: 2000 };
+
+  // Uma pessoa (id fixo — a identidade é problema do tracker) atravessa da esquerda p/ direita.
+  function travessia(roundMs, opts) {
+    const c = createCounter([WIRE], opts);
+    for (let k = 0; k * roundMs <= 20_000; k++) {
+      const cx = 0.15 + 0.06 * ((k * roundMs) / 1000); // 0,06 norm/s = caminhada
+      if (cx > 0.9) break;
+      c.update([{ id: 1, cx, cy: 0.6, foot: { x: cx, y: 0.6 } }], k * roundMs);
+    }
+    return c.counts()["L1"];
+  }
+
+  it("SEM os knobs, a 5s por rodada a travessia NÃO conta (o bug medido)", () => {
+    expect(travessia(5000, PROD)).toEqual({ in: 0, out: 0 });
+  });
+
+  it("SEM os knobs, a 10s por rodada também não conta", () => {
+    expect(travessia(10_000, PROD)).toEqual({ in: 0, out: 0 });
+  });
+
+  it("COM os knobs, conta 1 saída a 5s por rodada", () => {
+    expect(travessia(5000, { ...PROD, ...CADENCIA })).toEqual({ in: 0, out: 1 });
+  });
+
+  it("COM os knobs, conta 1 saída a 10s por rodada", () => {
+    expect(travessia(10_000, { ...PROD, ...CADENCIA })).toEqual({ in: 0, out: 1 });
+  });
+
+  it("na cadência SADIA os knobs não mudam nada (max() escolhe o valor fixo)", () => {
+    expect(travessia(500, PROD)).toEqual(travessia(500, { ...PROD, ...CADENCIA }));
+    expect(travessia(500, PROD)).toEqual({ in: 0, out: 1 });
+  });
+
+  it("gap MUITO maior que a cadência ainda é continuidade perdida (não conta)", () => {
+    // Rodadas de 1s estabelecem a cadência; então um buraco de 60s (fonte caída) e a pessoa
+    // reaparece do outro lado. Isso NÃO é travessia observada — é ausência de medição.
+    const c = createCounter([WIRE], { ...PROD, ...CADENCIA });
+    c.update([{ id: 1, cx: 0.3, cy: 0.6, foot: { x: 0.3, y: 0.6 } }], 1000);
+    c.update([{ id: 1, cx: 0.32, cy: 0.6, foot: { x: 0.32, y: 0.6 } }], 2000);
+    c.update([{ id: 1, cx: 0.8, cy: 0.6, foot: { x: 0.8, y: 0.6 } }], 62_000);
+    expect(c.counts()["L1"]).toEqual({ in: 0, out: 0 });
+  });
+});

@@ -310,6 +310,11 @@ function byteTrackerOpts() {
     // política LOST (track sem match some da emissão mas vive interno até o TTL).
     reassocDist: t.reassocDist,
     reassocMaxGapMs: t.reassocMaxGapMs,
+    // Knobs 27-28: o 2o estagio derivado da cadencia OBSERVADA. Sem eles, a 5-10s por rodada
+    // (a cadencia REAL medida da frota) o estagio fica MORTO e a mesma pessoa vira id novo a
+    // cada rodada — o que zerava a contagem de linha em toda a frota.
+    reassocSpeedFloor: t.reassocSpeedFloor,
+    reassocGapRoundFactor: t.reassocGapRoundFactor,
     lostAfterMisses: t.lostAfterMisses,
     refuteMaxDist: t.refuteMaxDist, // knob 22b — teto da refutação LOCAL por realocação
     // Estado ESTACIONÁRIO (knobs 23-26 — spec-tracking-pessoa-parada §2 C2): pessoa parada é
@@ -346,6 +351,11 @@ function createState(id) {
       maxDist: PRECISION.counter.maxDist, // gate de teleporte
       debounceMs: PRECISION.counter.debounceMs,
       minCrossingFrames: PRECISION.counter.minCrossingFrames, // histerese: lado novo sustentado
+      // Knobs 29-31: os gates de continuidade escalam com a cadencia OBSERVADA. Na cadencia
+      // REAL da frota (5-10s/rodada) os tres fixos disparavam juntos e a linha contava ZERO.
+      staleRoundFactor: PRECISION.counter.staleRoundFactor,
+      maxSpeedNorm: PRECISION.counter.maxSpeedNorm,
+      sustainMaxRoundMs: PRECISION.counter.sustainMaxRoundMs,
     }),
     zonesAtiv: ativZonesOf(id),
     zonesExcl: exclZonesOf(id), // pessoas com o pé aqui são descartadas antes do tracking

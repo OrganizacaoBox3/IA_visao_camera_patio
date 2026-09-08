@@ -72,6 +72,13 @@ const KNOBS = {
   maxDist: PRECISION.counter.maxDist, // gate de teleporte do counter
   debounceMs: PRECISION.counter.debounceMs,
   minCrossingFrames: PRECISION.counter.minCrossingFrames, // histerese: lado novo sustentado 2 rodadas
+  // Cadência-aware (knobs 27-31) — sem passá-los aqui o sensor mediria um tracker/counter que
+  // NÃO é o de produção (a fragilidade que o comentário acima já denuncia).
+  reassocSpeedFloor: PRECISION.tracker.reassocSpeedFloor,
+  reassocGapRoundFactor: PRECISION.tracker.reassocGapRoundFactor,
+  staleRoundFactor: PRECISION.counter.staleRoundFactor,
+  maxSpeedNorm: PRECISION.counter.maxSpeedNorm,
+  sustainMaxRoundMs: PRECISION.counter.sustainMaxRoundMs,
 };
 
 // Tripwire, geradores e os 12 cenários: fonte ÚNICA em eval/crossing-scenarios.mjs — os
@@ -94,6 +101,8 @@ function runScenario(sc) {
     reassocDist: KNOBS.reassocDist, // sem estes 3, o 2º estágio/LOST caíam nos defaults internos
     reassocMaxGapMs: KNOBS.reassocMaxGapMs, // do bytetrack.js — o sensor mediria outro tracker
     lostAfterMisses: KNOBS.lostAfterMisses, // se o painel mudasse (espelha engine.js:227-237)
+    reassocSpeedFloor: KNOBS.reassocSpeedFloor,
+    reassocGapRoundFactor: KNOBS.reassocGapRoundFactor,
   });
   const counter = createCounter([WIRE], {
     minMove: KNOBS.minMove,
@@ -101,6 +110,9 @@ function runScenario(sc) {
     maxDist: KNOBS.maxDist,
     debounceMs: KNOBS.debounceMs,
     minCrossingFrames: KNOBS.minCrossingFrames,
+    staleRoundFactor: KNOBS.staleRoundFactor,
+    maxSpeedNorm: KNOBS.maxSpeedNorm,
+    sustainMaxRoundMs: KNOBS.sustainMaxRoundMs,
   });
   // Estado mínimo por câmera — espelho dos campos de engine.js createState que o
   // pipeline toca (zonas vazias e autoMask null = caminho neutro).
@@ -136,6 +148,19 @@ function runScenario(sc) {
 }
 
 
+// Variante de runScenario com a cadência INJETADA — o bloco de cadência degradada precisa medir
+// o MESMO pipeline em outro roundMs (KNOBS.roundMs é o alvo, fixo). Mesmo wiring, só o relógio
+// muda: é exatamente a variável que estava fora do alcance do sensor.
+function runScenarioAt(sc, roundMs) {
+  const salvo = KNOBS.roundMs;
+  KNOBS.roundMs = roundMs;
+  try {
+    return runScenario(sc);
+  } finally {
+    KNOBS.roundMs = salvo;
+  }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 console.log(
   `\n[eval/counting] Sensor fim-a-fim de contagem+tracking — dets sintéticas → pipeline.js (bytetrack+counting+payload) de produção`,
@@ -162,6 +187,47 @@ for (const sc of SCENARIOS) {
   if (!ok) console.log(`  ${" ".repeat(w0)}  (${sc.why})`);
 }
 
+
+// ── CADÊNCIA DEGRADADA — o sensor que FALTAVA (bug de campo 2026-09-08) ──────────────────────
+// Tudo acima roda a 500ms/rodada: a cadência ALVO de uma câmera com linha (ANALYSIS_FPS_LINE=2).
+// A frota REAL, medida em produção (/api/analysis/status), analisa a 0,1-0,2 rodadas/s — 5 a 10
+// SEGUNDOS por rodada, com 16 de 17 câmeras em "ia-atrasada". Nessa escala TODOS os gates de
+// continuidade (raio do 2º estágio, teto de gap, staleness, teleporte, histerese) foram
+// calibrados p/ um mundo que não existe, e a contagem de linha era ZERO em toda a frota —
+// determinístico, não "recall baixo". O eval não via NADA disso porque só media o alvo.
+// Este bloco fecha o ponto cego: a MESMA travessia, amostrada na cadência REAL.
+const DEGRADADAS = [5000, 10_000]; // ms/rodada: foco real (0,2/s) e frota real (0,1/s)
+const PASSO = 0.06; // norm/s — caminhada (mesma velocidade dos cenários acima)
+let degradadaFailed = 0;
+console.log(`
+  ── CADÊNCIA DEGRADADA (a cadência REAL da frota, não o alvo) ──────────────`);
+console.log(`  ${"rodada".padEnd(9)} ${"ids".padStart(4)}  ${"in/out".padStart(7)}  esperado  STATUS`);
+for (const roundMs of DEGRADADAS) {
+  // Pessoa cruzando a linha (WIRE de crossing-scenarios) da esquerda p/ direita, amostrada
+  // nesta cadência: o deslocamento POR RODADA é o que quebrava tudo (0,30 a 5s; 0,60 a 10s).
+  const rounds = [];
+  for (let k = 0; ; k++) {
+    const cx = 0.15 + PASSO * ((k * roundMs) / 1000);
+    if (cx > 0.9) break;
+    rounds.push([{ class: "person", score: 0.9, bbox: [cx - 0.04, 0.38, 0.08, 0.22] }]);
+  }
+  const { flows, emitted } = runScenarioAt({ rounds }, roundMs);
+  const ids = new Set(emitted.flat().map((t) => t.id)).size;
+  const ins = flows.filter((f) => f.dir === "in").length;
+  const outs = flows.filter((f) => f.dir === "out").length;
+  const ok = ids === 1 && ins + outs === 1;
+  if (!ok) degradadaFailed += 1;
+  console.log(
+    `  ${(roundMs + "ms").padEnd(9)} ${String(ids).padStart(4)}  ${(ins + "/" + outs).padStart(7)}  ${"1 travessia".padEnd(8)}  ${ok ? "OK" : "FALHOU ←"}`,
+  );
+}
+console.log(
+  `  (a MESMA pessoa tem de manter 1 id e a travessia tem de ser contada UMA vez. Se este bloco
+` +
+    `   falhar, a linha voltou a ser estruturalmente incapaz de contar na cadência que a frota tem.)
+`,
+);
+
 // ── Cenários ESTACIONÁRIOS (pessoa parada × gate de movimento — spec C3/F2):
 // suite própria em stationary.mjs (gate simulado fiel ao engine.gateAndDispatch +
 // régua CA-8 pinada); roda no MESMO rito p/ o torneio nunca mais ser cego a dwell.
@@ -173,7 +239,7 @@ const stationaryFailed = runStationarySuite();
 // o knob por fora dela. Um rito, dois motores.
 const frontFailed = runFrontTournament();
 
-if (failed || stationaryFailed || frontFailed) {
+if (failed || degradadaFailed || stationaryFailed || frontFailed) {
   if (failed) {
     console.error(
       `\n[eval/counting] FALHOU: ${failed} de ${SCENARIOS.length} cenário(s) fora do contrato (contagem in/out ou payload de tracks).`,
@@ -185,6 +251,16 @@ if (failed || stationaryFailed || frontFailed) {
       `       Cenários do fix-rastro FALHANDO contra código pré-fix é o esperado — ver docs/analises/fix-rastro-tracking.md.\n`,
     );
   }
+  if (degradadaFailed)
+    console.error(
+      `
+[eval/counting] FALHOU: a contagem de linha NÃO funciona na cadência REAL da frota
+` +
+        `       (${degradadaFailed} cadência(s) degradada(s) sem contar). Foi exatamente este o bug
+` +
+        `       de campo de 2026-09-08: gates calibrados no ALVO, frota rodando 10× mais devagar.
+`,
+    );
   if (stationaryFailed)
     console.error(
       `\n[eval/counting] FALHOU: ${stationaryFailed} cenário(s) ESTACIONÁRIO(s) fora da régua CA-8 — ver [eval/stationary] acima.\n`,

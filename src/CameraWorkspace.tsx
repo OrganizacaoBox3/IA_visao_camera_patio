@@ -600,6 +600,10 @@ export function CameraWorkspace({
         birthContainment: T.birthContainment, // duplicata PARCIAL (contida) não nasce 2º track
         reassocDist: T.reassocDist,
         reassocMaxGapMs: T.reassocMaxGapMs,
+        // Cadência-aware (config.people.track): sem estes dois, na rodada de 4s do MOSAICO o
+        // 2º estágio fica MORTO e a mesma pessoa vira id novo a cada rodada.
+        reassocSpeedFloor: T.reassocSpeedFloor,
+        reassocGapRoundFactor: T.reassocGapRoundFactor,
         lostAfterMisses: T.lostAfterMisses,
         // ESTADO ESTACIONÁRIO: os 4 knobs agora VÊM do config (antes o tracker herdava os defaults
         // internos, que só COINCIDIAM — mudar o config não movia nada; #F4-w). config.people.track
@@ -833,6 +837,10 @@ export function CameraWorkspace({
           maxDist: T.counterMaxDist,
           debounceMs: T.debounceMs,
           minCrossingFrames: T.minCrossingFrames,
+          // Gates de continuidade escalam com a cadência OBSERVADA (ver config.people.track).
+          staleRoundFactor: T.counterStaleRoundFactor,
+          maxSpeedNorm: T.counterMaxSpeedNorm,
+          sustainMaxRoundMs: T.counterSustainMaxRoundMs,
         }));
       const occ =
         occRef.current ??

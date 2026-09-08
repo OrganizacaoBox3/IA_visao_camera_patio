@@ -33,12 +33,28 @@ describe("PRECISION — defaults calibrados (mudança exige eval antes/depois �
     expect(PRECISION.tracker.lostAfterMisses).toBe(1);
   });
 
-  it("counter: espelho de APP_CONFIG.people.track do front (0.01/0.35/800/2)", () => {
+  // Knobs 27-28 (2026-09-08): os DOIS gates do 2º estágio derivados da cadência OBSERVADA. Não
+  // são ajuste fino — sem eles, na cadência REAL da frota (5-10s/rodada) o estágio fica MORTO,
+  // a mesma pessoa vira id novo a cada rodada e a contagem de linha é ZERO em toda a frota
+  // (bug de campo medido). Ligados por default: 0 desliga. SENSOR: eval/counting.mjs, bloco
+  // "CADÊNCIA DEGRADADA" (mutação verificada: zerar o piso reprova o eval).
+  it("tracker cadência-aware: piso de velocidade 0.15 norm/s e teto de gap 3× a rodada", () => {
+    expect(PRECISION.tracker.reassocSpeedFloor).toBe(0.15);
+    expect(PRECISION.tracker.reassocGapRoundFactor).toBe(3);
+  });
+
+  it("counter: espelho de APP_CONFIG.people.track do front (0.01/0.35/800/2 + cadência-aware)", () => {
     expect(PRECISION.counter).toEqual({
       minMove: 0.01,
       maxDist: 0.35,
       debounceMs: 800,
       minCrossingFrames: 2,
+      // Knobs 29-31 (2026-09-08): os três gates de continuidade escalam com a cadência
+      // OBSERVADA. Espelho no front: counterStaleRoundFactor/counterMaxSpeedNorm/
+      // counterSustainMaxRoundMs em config.people.track. SENSOR: eval/counting.mjs.
+      staleRoundFactor: 3,
+      maxSpeedNorm: 0.3,
+      sustainMaxRoundMs: 2000,
     });
   });
 

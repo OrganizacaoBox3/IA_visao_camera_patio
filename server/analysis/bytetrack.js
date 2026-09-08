@@ -152,6 +152,26 @@ function createByteTracker(opts = {}) {
   const birthContainment = opts.birthContainment ?? 0.7;
   const reassocDist = opts.reassocDist ?? 0.12;
   const reassocMaxGapMs = opts.reassocMaxGapMs ?? 2500;
+  // ── CADÊNCIA REAL × CADÊNCIA ALVO (2026-09-08, bug de campo: linha SEMPRE 0) ──────────
+  // O raio do 2º estágio é `reassocDist + |v|·gap`. Num track visto UMA vez v=0, então o raio
+  // é só a folga fixa (0.12). MEDIDO em produção: a frota roda a 0,1-0,2 análises/s (não o alvo
+  // de 1-6), e nesse intervalo um caminhante desloca 0,30-0,60 do quadro — muito além de 0,12 e
+  // sem NENHUMA sobreposição de IoU (bbox ~0,08 de largura). Deadlock ovo-galinha: estabelecer
+  // velocidade exige associar duas observações; associar exige velocidade. Resultado medido:
+  // a MESMA pessoa nascia com id novo a cada rodada (3 ids numa travessia) e a linha, que
+  // precisa do MESMO id nos dois lados, contava ZERO — determinístico, não "recall baixo".
+  //   • reassocSpeedFloor (norm/s): quando v é DESCONHECIDA, assumir uma velocidade humana
+  //     plausível em vez de assumir ZERO. Vira `max(|v|, piso)·gap` no raio.
+  //   • reassocGapRoundFactor: o teto de gap (2500ms) também é do alvo — a 5-10s por rodada o
+  //     2º estágio ficava estruturalmente MORTO (o gate nunca podia ser satisfeito). Passa a
+  //     ser `max(fixo, fator × intervalo OBSERVADO entre rodadas)`.
+  // Ambos 0 = DESLIGADO (comportamento idêntico ao de hoje) — na cadência sadia o termo do piso
+  // é irrelevante (gap pequeno) e o teto fixo já basta, então nada muda onde já funcionava.
+  // ANTI-TROCA intacto: o par INEQUÍVOCO segue mandando — com 2 pessoas plausíveis no raio o
+  // tracker RECUSA associar (id novo) em vez de arriscar trocar de pessoa. VERIFICADO com duas
+  // pessoas em sentidos opostos na cadência degradada: nenhuma contagem ERRADA aparece.
+  const reassocSpeedFloorPerMs = (opts.reassocSpeedFloor ?? 0) / 1000; // knob em norm/s → norm/ms
+  const reassocGapRoundFactor = opts.reassocGapRoundFactor ?? 0;
   const lostAfterMisses = opts.lostAfterMisses ?? 1;
   const refuteMaxDist = opts.refuteMaxDist ?? 0.6;
   // Estado ESTACIONÁRIO (F3) — defaults ESPELHAM precision.js (fonte única do painel).
@@ -163,6 +183,9 @@ function createByteTracker(opts = {}) {
   let seq = 0;
   let tracks = [];
   let reassociations = 0; // acumulado de re-associações do 2º estágio (sensor: telemetry)
+  let lastUpdateAt = null; // `now` da rodada anterior → intervalo OBSERVADO (gates cadência-aware)
+  // NULL, não 0: o relógio pode começar em 0 (eval/teste sintético) e `0` é um instante VÁLIDO.
+  let emaRoundMs = null; // cadência SUSTENTADA (média móvel), não o gap atual
 
   // BBox PREDITA p/ o gate de associação: última observada + velocidade × dt
   // (dt limitado ao TTL — além disso o track morre de qualquer forma).
@@ -281,6 +304,16 @@ function createByteTracker(opts = {}) {
     const high = [];
     const low = [];
     for (let i = 0; i < dets.length; i++) (dets[i].score >= highScore ? high : low).push(i);
+    // Intervalo OBSERVADO entre rodadas analisadas — a cadência REAL desta câmera, medida aqui
+    // (o tracker é o único que vê todas as rodadas). Base dos gates cadência-aware acima.
+    // Cadência SUSTENTADA (média móvel), NÃO o gap desta rodada: um buraco (fonte caída) não
+    // pode auto-justificar o próprio teto e destravar re-associação por cima dele — isso seria
+    // herança de identidade disfarçada. Câmera que roda SEMPRE devagar relaxa; salto não.
+    const dtRodada = lastUpdateAt == null ? 0 : Math.max(0, now - lastUpdateAt);
+    const roundMs = emaRoundMs == null ? dtRodada : emaRoundMs;
+    if (lastUpdateAt != null)
+      emaRoundMs = emaRoundMs == null ? dtRodada : emaRoundMs + 0.3 * (dtRodada - emaRoundMs);
+    lastUpdateAt = now;
 
     const pred = tracks.map((t) => predictBBox(t, now));
     const detUsed = new Set();
@@ -349,8 +382,12 @@ function createByteTracker(opts = {}) {
         if (trkUsed.has(ti) || tracks[ti].stationary) continue;
         const t = tracks[ti];
         const gap = now - t.lastSeen;
-        if (gap <= 0 || gap > reassocMaxGapMs) continue;
-        const radius = reassocDist + Math.hypot(t.vx, t.vy) * gap;
+        // Teto de gap e RAIO derivados da cadência OBSERVADA (ver knobs no topo): uma rodada
+        // lenta não é um track perdido, e velocidade DESCONHECIDA não é velocidade ZERO.
+        const gapMax = Math.max(reassocMaxGapMs, reassocGapRoundFactor * roundMs);
+        if (gap <= 0 || gap > gapMax) continue;
+        const vMag = Math.max(Math.hypot(t.vx, t.vy), reassocSpeedFloorPerMs);
+        const radius = reassocDist + vMag * gap;
         const pcx = pred[ti][0] + pred[ti][2] / 2;
         const pcy = pred[ti][1] + pred[ti][3] / 2;
         for (const di of high) {
@@ -537,6 +574,8 @@ function createByteTracker(opts = {}) {
     /** Descarta todos os tracks (não reseta a sequência de ids nem o acumulado de stats). */
     reset: () => {
       tracks = [];
+      lastUpdateAt = null; // a cadência observada recomeça (senão a 1ª rodada herdaria o gap velho)
+      emaRoundMs = null;
     },
     /**
      * Sensores da política anti-rastro: re-associações acumuladas + LOST ocultos agora
