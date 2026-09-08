@@ -40,6 +40,7 @@ const model = require("./model");
 const autoscale = require("./autoscale");
 const telemetry = require("./telemetry");
 const health = require("./health");
+const { createHealthIncidents } = require("./health-incidents");
 const { createPipeline } = require("./pipeline");
 const { pickRoundMs, idleRoundMs, focusUnion, createFocusRegistry } = require("./focus");
 const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host");
@@ -813,6 +814,85 @@ async function evaluateAutoscale() {
   }
 }
 
+// ── INCIDENTES DE SAÚDE → ALARME/WhatsApp (2026-09-08) ───────────────────────────────────
+// health.js já sabia dizer "sem vídeo / IA parada / IA atrasada", mas o veredito morria no
+// /api/analysis/status: NINGUÉM era avisado. Aqui ele fecha o ciclo, passando pela máquina de
+// incidentes (health-incidents.js) — que garante 1 incidente por condição, renotificação
+// periódica sem incidente novo, e colapso SISTÊMICO quando a mesma condição atinge várias
+// câmeras (medido: 16 de 17 em "ia-atrasada" por saturação do pool — 1 causa, não 16).
+//
+// A jusante é o caminho JÁ existente e intocado: alarmPipeline.handleAlert → política de alarme
+// (dedup/flood/flap/shelve/turno) → canais (WhatsApp/Andon) → alarm-event.
+const HEALTH_INCIDENTS_ON = !/^(0|false|no|off)$/i.test(
+  String(process.env.ANALYSIS_HEALTH_ALERTS ?? "1"),
+);
+const HEALTH_TICK_MS = Math.max(10_000, Number(process.env.ANALYSIS_HEALTH_TICK_MS) || 30_000);
+const healthIncidents = createHealthIncidents({
+  confirmMs: Number(process.env.ANALYSIS_HEALTH_CONFIRM_MS) || undefined,
+  renotifyMs: Number(process.env.ANALYSIS_HEALTH_RENOTIFY_MS) || undefined,
+  resolveMs: Number(process.env.ANALYSIS_HEALTH_RESOLVE_MS) || undefined,
+  sistemicoMin: Number(process.env.ANALYSIS_HEALTH_SISTEMICO_MIN) || undefined,
+});
+
+// Texto do alarme. Curto, com o NÚMERO que sustenta o veredito e o que fazer a respeito —
+// mensagem de alarme sem número é opinião. O "⚠" marca CRÍTICO na taxonomia (alarm/classify).
+const ESTADO_TXT = Object.freeze({
+  "sem-video": "sem vídeo",
+  "video-instavel": "vídeo instável",
+  "ia-parada": "análise parada (vídeo chegando)",
+  "ia-atrasada": "análise atrasada",
+  "linha-sem-cadencia": "linha sem cadência p/ contar",
+});
+const dur = (ms) => {
+  const s = Math.round(Math.max(0, ms) / 1000);
+  if (s < 90) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 90 ? `${m}min` : `${(m / 60).toFixed(1)}h`;
+};
+function textoDoIncidente(a) {
+  const est = ESTADO_TXT[a.estado] || a.estado;
+  if (a.escopo === "frota") {
+    const n = (a.cameras || []).length;
+    if (a.tipo === "fechar") return `Frota normalizada: ${est} resolvido (durou ${dur(a.duracaoMs)})`;
+    const cab = a.tipo === "renotificar" ? `AINDA ABERTO há ${dur(a.duracaoMs)}` : "⚠ Incidente de frota";
+    return `${cab}: ${n} câmeras com ${est} — causa provável ÚNICA (capacidade de análise). Ver /api/analysis/status`;
+  }
+  const alvo = a.rotulo || a.cameraId;
+  if (a.tipo === "fechar") return `${alvo}: normalizada — ${est} resolvido (durou ${dur(a.duracaoMs)})`;
+  if (a.tipo === "renotificar") return `${alvo}: AINDA ${est} há ${dur(a.duracaoMs)}${a.motivo ? ` (${a.motivo})` : ""}`;
+  if (a.tipo === "agravar") return `⚠ ${alvo}: PIOROU para ${est}${a.motivo ? ` (${a.motivo})` : ""}`;
+  return `⚠ ${alvo}: ${est}${a.motivo ? ` (${a.motivo})` : ""}`;
+}
+
+/** Avalia a saúde da frota e emite SÓ as transições (abrir/agravar/renotificar/fechar). */
+function avaliarIncidentesSaude() {
+  if (!HEALTH_INCIDENTS_ON || !enabled || stopping || !states.size) return;
+  const now = Date.now();
+  // REUSA o veredito que a telemetria já calcula: incidente e tela não podem divergir.
+  const snap = status();
+  const vereditos = {};
+  for (const [id, c] of Object.entries(snap.perCamera || {})) if (c && c.health) vereditos[id] = c.health;
+  const { acoes } = healthIncidents.observe(vereditos, now, cameraLabelOf);
+  for (const a of acoes) {
+    const texto = textoDoIncidente(a);
+    // `tipo: "saude"` é uma classe PRÓPRIA na taxonomia de alarme: falha de infraestrutura não
+    // é evento de operação. Consequência declarada: destinatário que filtra por tipo precisa
+    // incluir "saude" (quem não filtra recebe normalmente).
+    if (ctx)
+      alarmPipeline.handleAlert(
+        {
+          text: texto,
+          ts: now,
+          cameraId: a.cameraId || undefined,
+          tipo: "saude",
+          incidenteId: a.incidenteId,
+        },
+        { cameras: ctx.cameras, io: ctx.io },
+      );
+    console.log(`[analysis:saude] ${a.tipo}/${a.escopo} ${a.incidenteId} — ${texto}`);
+  }
+}
+
 // ── API pública (consumida pelo index.js / routes/analysis.js) ───────────────
 
 /** Frame do relé (webcam OU RTSP). Guarda só o MAIS NOVO por câmera (último-vence). */
@@ -902,6 +982,9 @@ function status() {
     // Saúde: câmera COM linha e cadência insuficiente não fecha travessia (counting.js exige
     // ver a MESMA pessoa antes e depois) — o aviso precisa saber quem tem linha.
     hasTripwireOf: (id) => camcfg.getTripwires(id).length > 0,
+    // Incidentes de saúde ABERTOS (aditivo): o que já foi NOTIFICADO e segue de pé. A UI mostra
+    // os por câmera E o sistêmico; a mensagem é que colapsa, o registro não.
+    incidentesSaude: HEALTH_INCIDENTS_ON ? healthIncidents.abertos(Date.now()) : [],
     enabled,
     modelFile: path.basename(model.getModelPath()),
     // `idle` é a cadência DERIVADA da capacidade medida (reavaliarCadenciaOciosa) — expor é
@@ -980,6 +1063,7 @@ async function init({ io, cameras }) {
   timers.push(setInterval(prune, 60_000));
   timers.push(setInterval(logMinute, 60_000));
   timers.push(setInterval(reavaliarCadenciaOciosa, 60_000));
+  if (HEALTH_INCIDENTS_ON) timers.push(setInterval(avaliarIncidentesSaude, HEALTH_TICK_MS));
   // Ronda de pull go2rtc na cadência MAIS RÁPIDA. Inerte (no-op) enquanto o go2rtc
   // estiver desligado — OFF por default sem custo além de um guard por tick.
   timers.push(setInterval(go2rtcSource.pullTick, Math.min(ROUND_MS, ROUND_MS_LINE, ROUND_MS_FOCUS)));
@@ -1017,6 +1101,9 @@ module.exports = {
   // Puros re-exportados de focus.js (contrato de teste — focus.test.js; não são runtime):
   pickRoundMs,
   idleRoundMs,
+  // SEAM de teste: o texto que o operador lê no WhatsApp é contrato de produto (mensagem de
+  // alarme sem número é opinião) — testado em health-incidents.test.js.
+  textoDoIncidente,
   focusUnion,
   // PURO (contrato de teste — engine.test.js): mapa de ignore do gate a partir das zonas de
   // exclusão. Exposto porque é o ponto onde o hub honra (ou descarta) `points` — spec §5.

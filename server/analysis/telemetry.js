@@ -207,6 +207,10 @@ function buildStatus(snap) {
     // Cadência da classe OCIOSA (sem linha/foco/zona proibida), DERIVADA da capacidade medida.
     // Igual a targetFps = pool sobrando (ninguém degradado); menor = frota cedeu p/ quem precisa.
     idleFps: snap.fps.idle,
+    // INCIDENTES DE SAÚDE abertos (aditivo): o que já foi notificado e segue de pé — por câmera
+    // e o SISTÊMICO (mesma condição em N câmeras = 1 causa). O colapso é da MENSAGEM; aqui o
+    // registro aparece inteiro, senão a tela esconderia o que o WhatsApp resumiu.
+    incidentesSaude: snap.incidentesSaude || [],
     focused: [...focusedCams], // ids das câmeras focadas (união entre dashboards)
     autoMask: { mode: automask.AUTOMASK_MODE }, // modo global ("off"|"suggest"|"hide")
     // Gate de movimento — config + PROVA DO GANHO (inferências puladas).
