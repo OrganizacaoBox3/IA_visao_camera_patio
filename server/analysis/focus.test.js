@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const engine = require("./engine");
-const { pickRoundMs, focusUnion } = engine;
+const { pickRoundMs, idleRoundMs, focusUnion } = engine;
 
 // round-ms sintéticos (não dependem dos env do módulo) p/ os testes puros.
 const ROUNDS = { normal: 1000, line: 500, focus: 167 };
@@ -110,5 +110,67 @@ describe("setFocus/clearFocus — união POR SOCKET + disconnect limpa (via stat
     engine.setFocus("t_sockB", "camK");
     engine.clearFocus("t_sockA"); // nunca focou nada
     expect(focused().has("camK")).toBe(true);
+  });
+});
+
+
+// ── CADENCIA OCIOSA DERIVADA (2026-09-08) ────────────────────────────────────────────────────
+// POR QUE ESTE BLOCO EXISTE: a prioridade declarada (foco > linha > normal) NUNCA era entregue
+// sob saturacao. MEDIDO em producao: 17 cameras / 2-3 workers = capacidade ~4 inferencias/s
+// contra ~26/s de demanda declarada => toda camera nivelada em capacidade÷n, e a FOCADA
+// recebendo 0,25 de 6 analises/s. Sem cadencia nao ha contagem de linha (a mesma pessoa tem de
+// ser amostrada dos dois lados). Tambem MEDIDO: ordenar a fila por prioridade nao realoca nada
+// (0,84 -> 0,85) — quem realoca e REDUZIR a demanda de quem nao precisa de cadencia.
+describe("pickRoundMs — classe OCIOSA e a protecao da zona proibida", () => {
+  const R = { focus: 167, line: 500, normal: 1000, idle: 10_000 };
+
+  it("foco vence tudo, inclusive linha", () => {
+    expect(pickRoundMs({ focused: true, hasLine: true, hasProib: true }, R)).toBe(167);
+  });
+
+  it("linha vence proibida e ociosa", () => {
+    expect(pickRoundMs({ hasLine: true, hasProib: true }, R)).toBe(500);
+  });
+
+  it("zona PROIBIDA nunca cai na cadencia ociosa (cadencia ali e SEGURANCA)", () => {
+    expect(pickRoundMs({ hasProib: true }, R)).toBe(1000);
+  });
+
+  it("sem linha, sem foco e sem proibida -> cadencia OCIOSA", () => {
+    expect(pickRoundMs({}, R)).toBe(10_000);
+  });
+
+  it("`idle` ausente = comportamento ANTERIOR (retrocompativel)", () => {
+    expect(pickRoundMs({}, { focus: 167, line: 500, normal: 1000 })).toBe(1000);
+  });
+});
+
+describe("idleRoundMs — deriva da capacidade MEDIDA (nao e numero solto)", () => {
+  const base = { roundMsNormal: 1000, tetoMs: 20_000 };
+
+  it("pool SOBRANDO devolve o normal — frota pequena nao paga nada", () => {
+    expect(idleRoundMs({ capacidadeFps: 10, demandaProtegidaFps: 2, nOciosas: 2, ...base })).toBe(1000);
+  });
+
+  it("o cenario REAL da frota: 14 ociosas, capacidade 4/s, protegida 10/s => teto", () => {
+    expect(idleRoundMs({ capacidadeFps: 4, demandaProtegidaFps: 10, nOciosas: 14, ...base })).toBe(20_000);
+  });
+
+  it("capacidade parcial reparte a sobra entre as ociosas", () => {
+    expect(idleRoundMs({ capacidadeFps: 4, demandaProtegidaFps: 2, nOciosas: 10, ...base })).toBe(5000);
+  });
+
+  it("sem ociosas ou sem medicao de capacidade, NAO mexe (degrada p/ o normal)", () => {
+    expect(idleRoundMs({ capacidadeFps: 4, demandaProtegidaFps: 1, nOciosas: 0, ...base })).toBe(1000);
+    expect(idleRoundMs({ capacidadeFps: 0, demandaProtegidaFps: 0, nOciosas: 14, ...base })).toBe(1000);
+  });
+
+  it("e monotona: mais ociosas na mesma capacidade nunca ACELERA a classe ociosa", () => {
+    const f = (n) => idleRoundMs({ capacidadeFps: 4, demandaProtegidaFps: 2, nOciosas: n, ...base });
+    for (let n = 1; n < 30; n++) expect(f(n + 1)).toBeGreaterThanOrEqual(f(n));
+  });
+
+  it("respeita o teto (nunca cala uma camera para sempre — a saude precisa ve-la)", () => {
+    expect(idleRoundMs({ capacidadeFps: 0.5, demandaProtegidaFps: 10, nOciosas: 50, ...base })).toBe(20_000);
   });
 });
