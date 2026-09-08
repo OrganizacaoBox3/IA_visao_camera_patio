@@ -2,7 +2,7 @@
 // Provam a DECISÃO de agendamento (intervalo/gate/opts) e a conversão HubTrack→Track/pseudo-dets
 // SEM tocar no laço de vídeo. Regressões viram teste (CLAUDE.md §6).
 import { describe, it, expect } from "vitest";
-import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./rafSteps";
+import { detectionInterval, shouldRunDetection, detectScheduleOpts, freshDetsOf } from "./rafSteps";
 import { applyHubAnalysis, type HubApplyRefs } from "./useHubAnalysis";
 import { type Detection } from "../vision/model";
 import type { HubAnalysis, HubZone, Track } from "../CameraWorkspace";
@@ -39,6 +39,24 @@ describe("detectScheduleOpts", () => {
     expect(opts.tiles).toBeDefined();
     expect(opts.tileWidth).toBeDefined();
     expect(opts.minScore).toBeDefined();
+  });
+});
+
+// freshDetsOf — a REGRESSÃO EXATA que este teste existe pra travar: sob engine "hub", needPersons
+// é false, o detector local nunca roda e a revisão local NUNCA muda — sem o termo do hub, o
+// counter de linhas ficava PARADO pra sempre (pessoas cruzando na tela, contagem em 0/0).
+describe("freshDetsOf", () => {
+  it("nenhuma revisão mudou → sem novidade", () => {
+    expect(freshDetsOf(3, 3, 100, 100)).toBe(false);
+  });
+  it("só a revisão LOCAL mudou (câmera sem hub) → novidade", () => {
+    expect(freshDetsOf(4, 3, 100, 100)).toBe(true);
+  });
+  it("só o ts do HUB mudou (engine hub — a revisão local nunca avança) → novidade", () => {
+    expect(freshDetsOf(0, 0, 200, 100)).toBe(true);
+  });
+  it("as duas mudaram → ainda novidade (não é XOR)", () => {
+    expect(freshDetsOf(4, 3, 200, 100)).toBe(true);
   });
 });
 

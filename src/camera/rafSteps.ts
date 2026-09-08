@@ -44,3 +44,20 @@ export function detectScheduleOpts(
     : { schedule };
   return { tiled: mode === "full", opts };
 }
+
+// FRESCOR de `tracks` p/ o counter de linhas (2026-09-08): existem DUAS fontes independentes que
+// podem alimentar tracksRef.current — o detector LOCAL (tfjs/coco, gate needPersons) e o payload
+// do HUB (applyHubAnalysis, engine "hub"). Sob engine "hub" o cliente nunca roda o detector local
+// (needPersons exclui !hubActive de propósito — evita pagar tfjs/coco à toa quando o motor já
+// manda os tracks), então a revisão LOCAL nunca avança. Se o counter só olhasse essa revisão, ele
+// ficava PARADO pra sempre sob hub — pessoas cruzando visivelmente na tela e nada contado (bug
+// medido: o painel "sessão local" nunca saía de 0/0 com o motor ligado). `freshDetsOf` combina as
+// DUAS revisões — qualquer uma nova é "há novidade pra avaliar cruzamento".
+export function freshDetsOf(
+  localRev: number,
+  consumedLocalRev: number,
+  hubTs: number,
+  consumedHubTs: number,
+): boolean {
+  return localRev !== consumedLocalRev || hubTs !== consumedHubTs;
+}

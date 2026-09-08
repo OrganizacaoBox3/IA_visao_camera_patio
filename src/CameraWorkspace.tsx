@@ -83,7 +83,12 @@ import { useWebrtcTransport } from "./camera/useWebrtcTransport";
 import { useHubAnalysis, applyHubAnalysis, HUB_TRACKS_STALE_MS } from "./camera/useHubAnalysis";
 import { TrackInterpolator, toDisplayTracks } from "./camera/interpolate";
 import { createCadenceMeter } from "./camera/cadence";
-import { detectionInterval, shouldRunDetection, detectScheduleOpts } from "./camera/rafSteps";
+import {
+  detectionInterval,
+  shouldRunDetection,
+  detectScheduleOpts,
+  freshDetsOf,
+} from "./camera/rafSteps";
 import { CamDrawer, type DrawerTab } from "./camera/CamDrawer";
 import { type TimelineItem } from "./camera/tabs/TimelineTab";
 import "./camera/cine.css";
@@ -238,6 +243,7 @@ export function CameraWorkspace({
   const trackerRef = useRef<ByteTracker | null>(null);
   const detsRevRef = useRef(0); // incrementa quando detectFrame entrega resultado novo
   const consumedDetsRevRef = useRef(0); // última rodada consumida pelo tracker/counter
+  const consumedHubTsRef = useRef(0); // espelho do par acima p/ payload do HUB — ver freshDetsOf
   const peakRef = useRef(0);
   const pausedRef = useRef(false);
   const eventIdRef = useRef(0);
@@ -338,6 +344,7 @@ export function CameraWorkspace({
     hubFirstSeenRef,
     hubFlowRef,
     hubFlowToday,
+    requestFlowRefresh,
   } = useHubAnalysis(analysisEngine, cameraId, getHubAnalysis);
 
   // (A fusão tag↔pessoa — useCameraTagLabels/useFloorTags/useFunnelDiagnosis — migrou para o
@@ -788,11 +795,21 @@ export function CameraWorkspace({
       now: number,
       needPersons: boolean,
     ): { tracks: Track[]; freshDets: boolean } => {
-      const freshDets = detsRevRef.current !== consumedDetsRevRef.current;
-      if (needPersons && freshDets) {
+      // freshDets ANTES de qualquer consumo (senão o consumo abaixo apagaria a novidade que este
+      // retorno deveria reportar); combina a rodada LOCAL e o payload do HUB — ver freshDetsOf.
+      const freshDets = freshDetsOf(
+        detsRevRef.current,
+        consumedDetsRevRef.current,
+        hubTracksTsRef.current,
+        consumedHubTsRef.current,
+      );
+      const localFresh = detsRevRef.current !== consumedDetsRevRef.current;
+      if (needPersons && localFresh) {
         consumedDetsRevRef.current = detsRevRef.current;
         updateTracks(dets, ativ, f.w, f.h, now);
       }
+      if (hubTracksTsRef.current !== consumedHubTsRef.current)
+        consumedHubTsRef.current = hubTracksTsRef.current;
       const tracks = tracksRef.current;
       if (tracks.length > peakRef.current) peakRef.current = tracks.length;
       return { tracks, freshDets };
@@ -845,6 +862,10 @@ export function CameraWorkspace({
               dir: ev.dir,
               ts: Date.now(),
             });
+          // Hub: counter local é MIRROR do servidor (mesmos tracks, counting.js/ts espelhados) —
+          // nunca persiste aqui (shouldIngest barra acima). Só fura o timer de 30s do MESMO poll
+          // (useHubAnalysis) — a soma exibida não muda, apenas a latência até refleti-la.
+          else requestFlowRefresh();
         }
         if (crossings.length) twCountsRef.current = counter.counts(); // re-snapshota só com evento (HUD)
       }
@@ -1248,7 +1269,7 @@ export function CameraWorkspace({
       vfcVideoRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getFrame, mode, cameraId, label]);
+  }, [getFrame, mode, cameraId, label, requestFlowRefresh]);
 
   function drawScene(canvas: HTMLCanvasElement, viewport: HTMLDivElement, f: FrameSource) {
     const dpr = window.devicePixelRatio || 1;

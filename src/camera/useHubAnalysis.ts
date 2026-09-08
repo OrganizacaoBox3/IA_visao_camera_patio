@@ -3,7 +3,7 @@
 // `analysis-tracks` @1fps; a câmera vira ESPELHO (desenha os tracks/zonas servidos) e SUPRIME os
 // ingests locais duplicáveis (tabela em camera/ingestPolicy.ts). Engine "local" → efeitos
 // inertes = pipeline local idêntico ao de sempre.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Detection } from "../vision/model";
 import { type TripwireCounts } from "../vision/counting";
 import { loadFlowToday } from "../report/store";
@@ -133,10 +133,17 @@ export function useHubAnalysis(
   // é SÓ o valor do servidor, re-buscado a cada ~30s. Modo local: efeito inerte → comportamento atual.
   const hubFlowRef = useRef<Record<string, TripwireCounts>>({}); // lido no rAF (HUD, sem alocar)
   const [hubFlowToday, setHubFlowToday] = useState<Record<string, TripwireCounts>>({});
+  // Função de refresh ATUAL exposta por ref (câmera/engine podem trocar sem remontar o hook) +
+  // guarda de sobreposição: uma rajada de cruzamentos (várias pessoas em sequência) não deve
+  // empilhar requisições — a resposta da 1ª já cobre as seguintes.
+  const refreshFlowRef = useRef<() => void>(() => {});
+  const refreshingRef = useRef(false);
   useEffect(() => {
     if (analysisEngine !== "hub") return; // local → nada muda (flowBase carrega 1×, como hoje)
     let cancelled = false;
-    const refresh = () =>
+    const refresh = () => {
+      if (refreshingRef.current) return;
+      refreshingRef.current = true;
       loadFlowToday(cameraId)
         .then((acc) => {
           if (cancelled) return;
@@ -145,17 +152,30 @@ export function useHubAnalysis(
           setHubFlowToday((prev) => (JSON.stringify(prev) === JSON.stringify(acc) ? prev : acc));
         })
         .catch(() => {
-          /* mantém o último valor exibido; o próximo tick tenta de novo */
+          /* mantém o último valor exibido; o próximo tick (ou o próximo cruzamento) tenta de novo */
+        })
+        .finally(() => {
+          refreshingRef.current = false;
         });
+    };
+    refreshFlowRef.current = refresh;
     refresh();
     const t = setInterval(refresh, HUB_FLOW_REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(t);
+      refreshFlowRef.current = () => {};
       hubFlowRef.current = {};
       setHubFlowToday({});
     };
   }, [analysisEngine, cameraId]);
+  // Gatilho SOB DEMANDA (chamado pelo rAF quando o counter local — agora vivo, ver
+  // CameraWorkspace.trackingStage — detecta um cruzamento sob engine "hub"): fura os até 30s do
+  // timer e busca o total do servidor JÁ. Não muda a SEMÂNTICA do "hoje" (segue sendo só o valor
+  // do servidor — ver comentário acima); só encurta a LATÊNCIA do mesmo poll que já existia.
+  const requestFlowRefresh = useCallback(() => {
+    refreshFlowRef.current();
+  }, []);
 
   return {
     analysisEngineRef,
@@ -165,5 +185,6 @@ export function useHubAnalysis(
     hubFirstSeenRef,
     hubFlowRef,
     hubFlowToday,
+    requestFlowRefresh,
   };
 }

@@ -135,7 +135,17 @@ import { describe, it, expect } from "vitest";
 // inferência. Aqui só a lista filtrada (classesOwl) + o porquê.
 // Contabilidade REAL: 1709 → 1720; teto 1726 mantém a folga mínima da convenção (≈5).
 // NÃO medir com `Measure-Object -Line`.
-const MAX_LINES = 1726;
+// 1726→1747 (linhas de contagem contavam ERRADO sob engine "hub" — bug real, medido: pessoas
+// cruzando visivelmente na tela e a contagem em 0/0): needPersons exclui !hubActive (o cliente não
+// paga tfjs/coco à toa quando o hub já manda tracks), então detsRevRef NUNCA incrementava sob hub
+// e freshDets ficava preso em false pra sempre — countingStage nunca avaliava cruzamento nos tracks
+// que o hub ATUALIZAVA (applyHubAnalysis, hubTracksTsRef). O GROSSO foi EXTRAÍDO — freshDetsOf,
+// pura e testada, em camera/rafSteps.ts; aqui sobrou fiação: 1 ref (consumedHubTsRef), a chamada +
+// consumo, e o gatilho que fura os 30s do poll do "hoje" (useHubAnalysis.requestFlowRefresh) quando
+// o counter local — agora vivo — detecta um cruzamento sob hub (sem persistir 2×: shouldIngest
+// segue sendo o único portão de escrita). Contabilidade REAL: 1726 → 1742; teto 1747 mantém a
+// folga mínima da convenção (≈5). NÃO medir com `Measure-Object -Line`.
+const MAX_LINES = 1747;
 
 describe("CameraWorkspace — ratchet de tamanho (anti-reengorda)", () => {
   it(`não cresce além de ${MAX_LINES} linhas sem decisão consciente`, () => {
