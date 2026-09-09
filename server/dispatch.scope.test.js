@@ -167,3 +167,75 @@ describe("dispatch.targets — escopo por câmera (papel cliente)", () => {
     );
   });
 });
+
+// ── ALARME DE SAÚDE VAI SÓ PARA A ADMINISTRAÇÃO (decisão do dono, 2026-09-09) ────────────────
+// Vídeo caindo, câmera instável e IA parada/atrasada são falha de INFRAESTRUTURA nossa. Mandar
+// isso ao operador ou ao CLIENTE é ruído sobre quem não tem como agir — e, no caso do cliente,
+// é expor problema interno de operação. Estes testes travam a regra nos dois sentidos: quem NÃO
+// pode, não recebe; e os alarmes de OPERAÇÃO seguem intactos para todos (a regra é por TIPO, não
+// um bloqueio geral que fecharia o canal sem querer).
+describe("dispatch.targets — alarme de SAÚDE só para administração", () => {
+  const SAUDE = { tipo: "saude", critico: true };
+
+  it("superadmin RECEBE alarme de saúde", async () => {
+    const tag = Date.now();
+    await makeNotifiableUser({
+      usuario: `sa-saude-${tag}`,
+      papel: "superadmin",
+      whatsapp: "5588910000001",
+    });
+    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000001")).toBe(true);
+  });
+
+  it("operador (papel usuario) NÃO recebe alarme de saúde", async () => {
+    const tag = Date.now();
+    await makeNotifiableUser({
+      usuario: `op-saude-${tag}`,
+      papel: "usuario",
+      whatsapp: "5588910000002",
+    });
+    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000002")).toBe(false);
+  });
+
+  it("CLIENTE não recebe alarme de saúde nem da câmera que é dele", async () => {
+    const tag = Date.now();
+    await makeNotifiableUser({
+      usuario: `cli-saude-${tag}`,
+      papel: "cliente",
+      cameraIds: ["cam-1"],
+      whatsapp: "5588910000003",
+    });
+    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000003")).toBe(false);
+  });
+
+  it("engenheiro não recebe por default (a regra diz ADMIN; ampliar é decisão explícita)", async () => {
+    const tag = Date.now();
+    await makeNotifiableUser({
+      usuario: `eng-saude-${tag}`,
+      papel: "engenheiro",
+      whatsapp: "5588910000004",
+    });
+    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000004")).toBe(false);
+  });
+
+  it("o MESMO destinatário segue recebendo alarme de OPERAÇÃO (a regra é por tipo)", async () => {
+    const tag = Date.now();
+    await makeNotifiableUser({
+      usuario: `op-oper-${tag}`,
+      papel: "usuario",
+      whatsapp: "5588910000005",
+    });
+    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000005")).toBe(false);
+    expect(dispatch.targets(META, "cam-1").some((x) => x.numero === "5588910000005")).toBe(true);
+  });
+
+  it("papelPodeReceber: tipo sem regra libera todos (não fecha canal por engano)", () => {
+    for (const papel of ["superadmin", "engenheiro", "usuario", "cliente"]) {
+      expect(dispatch.papelPodeReceber(papel, "atividade")).toBe(true);
+      expect(dispatch.papelPodeReceber(papel, "presenca")).toBe(true);
+      expect(dispatch.papelPodeReceber(papel, undefined)).toBe(true);
+    }
+    expect(dispatch.papelPodeReceber("superadmin", "saude")).toBe(true);
+    expect(dispatch.papelPodeReceber("usuario", "saude")).toBe(false);
+  });
+});

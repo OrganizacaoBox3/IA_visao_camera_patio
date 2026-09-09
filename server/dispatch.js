@@ -61,6 +61,27 @@ function formatWhatsApp(text, meta, ts, s = settings.get()) {
   return linhas.filter((l) => l !== null).join("\n");
 }
 
+// ── QUEM PODE RECEBER, POR TIPO DE ALARME (2026-09-09) ───────────────────────────────────────
+// Decisão do dono: alarme de VÍDEO/INSTABILIDADE/saúde da IA vai SÓ para a administração. É
+// falha de INFRAESTRUTURA nossa (câmera caída, pool de análise afogado, rede oscilando) — não é
+// evento de operação, e mandá-lo para o operador ou para o CLIENTE é ruído sobre quem não tem
+// como agir. Os alarmes de OPERAÇÃO (atividade, presença, fadiga, leitura, objetos) seguem
+// exatamente como estavam: sem restrição de papel aqui, filtrados só pelas preferências do
+// destinatário e pelo escopo de câmeras do papel "cliente".
+//
+// Env ALERT_PAPEIS_SAUDE permite ampliar sem deploy (ex.: "superadmin,engenheiro").
+const PAPEIS_SAUDE = String(process.env.ALERT_PAPEIS_SAUDE || "superadmin")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const PAPEIS_POR_TIPO = { saude: PAPEIS_SAUDE };
+
+/** O PAPEL do dono do número pode receber este tipo de alarme? (tipo sem regra = todos). */
+function papelPodeReceber(papel, tipo) {
+  const permitidos = PAPEIS_POR_TIPO[String(tipo || "").toLowerCase()];
+  return !permitidos || permitidos.includes(String(papel || "").toLowerCase());
+}
+
 function passes(f, meta) {
   if (f.somenteCriticos && !meta.critico) return false;
   if (Array.isArray(f.tipos) && f.tipos.length && !f.tipos.includes(meta.tipo)) return false;
@@ -75,6 +96,9 @@ function targets(meta, cameraId) {
     const owner = users.getById(r.userId);
     if (!owner || !owner.ativo || !r.ativo || !r.numero || !r.optInEm) continue;
     if (owner.papel === "cliente" && !users.canSeeCamera(owner, cameraId)) continue;
+    // Restrição por PAPEL do tipo de alarme (saúde → só administração). Vem ANTES das
+    // preferências do destinatário: preferência não concede acesso que o papel não tem.
+    if (!papelPodeReceber(owner.papel, meta && meta.tipo)) continue;
     if (!passes({ somenteCriticos: r.somenteCriticos, tipos: r.tipos }, meta)) continue;
     map.set(r.numero, r.nome);
   }
@@ -113,4 +137,4 @@ function dispatchAlert(text, ts, priority, cameraId) {
   if (sent.size > 800) for (const [k, t] of sent) if (now - t > DEDUP_MS) sent.delete(k);
 }
 
-module.exports = { dispatchAlert, targets, formatWhatsApp };
+module.exports = { dispatchAlert, targets, formatWhatsApp, papelPodeReceber, PAPEIS_POR_TIPO };

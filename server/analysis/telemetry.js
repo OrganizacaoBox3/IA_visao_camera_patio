@@ -102,6 +102,30 @@ function frameAgeStatsOf(log) {
  *     autoscale:{mode,tier,pin,choked,idle,lastSwitchAt}, worker, go2rtcPull }
  * @returns {object} payload do /api/analysis/status (shape estável)
  */
+// CPU/memória do PROCESSO do hub. `process.cpuUsage()` é acumulado desde o boot: guardamos a
+// amostra anterior e derivamos a % da janela (mesma técnica do sampleCpu do pool). Janela mínima
+// de 5s para o número não oscilar por ruído de amostragem; até a 1ª janela fechar devolve null —
+// "ainda não medi" não é "0%".
+let cpuAnterior = null;
+function hubUso(now) {
+  const cpu = process.cpuUsage();
+  const mem = process.memoryUsage();
+  let cpuPct = null;
+  if (!cpuAnterior) {
+    cpuAnterior = { user: cpu.user, system: cpu.system, t: now };
+  } else if (now - cpuAnterior.t >= 5000) {
+    const dms = (cpu.user + cpu.system - cpuAnterior.user - cpuAnterior.system) / 1000;
+    cpuPct = Math.round((dms / (now - cpuAnterior.t)) * 1000) / 10; // % de UM core
+    cpuAnterior = { user: cpu.user, system: cpu.system, t: now };
+  }
+  return {
+    cpuPct,
+    rssMb: Math.round(mem.rss / 1e5) / 10,
+    heapMb: Math.round(mem.heapUsed / 1e5) / 10,
+    uptimeS: Math.round(process.uptime()),
+  };
+}
+
 function buildStatus(snap) {
   const { now, states, focusedCams, targetFpsOf } = snap;
   const perCamera = {};
@@ -211,6 +235,18 @@ function buildStatus(snap) {
     // e o SISTÊMICO (mesma condição em N câmeras = 1 causa). O colapso é da MENSAGEM; aqui o
     // registro aparece inteiro, senão a tela esconderia o que o WhatsApp resumiu.
     incidentesSaude: snap.incidentesSaude || [],
+    // CUSTO por rodada (cost.js): decode (JPEG→tensor, sharp) × inferência (ONNX), p50/p95 na
+    // janela de 60s. É a decomposição que separa "o modelo está caro" de "o transporte está
+    // caro" — os dois têm remédios OPOSTOS, e sem separar se mexe no lugar errado. O worker já
+    // media os dois; o host descartava o decode e guardava só o último inferMs de uma câmera.
+    custo: (snap.worker && snap.worker.custo) || null,
+    // CONSUMO DO PRÓPRIO HUB (aditivo). `worker.cpuPct` mede só o pool de inferência; o hub paga
+    // por fora o relé/socket, o decode de thumbnail do gate (sharp) e o pull do go2rtc. Sem este
+    // número, "o servidor está no limite?" não tem resposta honesta — sobrava só a fatia dos
+    // workers, que é a MENOR parte quando há stream sendo decodificado. Os ffmpeg do go2rtc são
+    // processos FILHOS (fora deste process.cpuUsage): quem fecha a conta é a métrica da MÁQUINA
+    // (flyctl) — o relatório precisa dizer isso, não fingir cobertura que não tem.
+    hub: hubUso(now),
     focused: [...focusedCams], // ids das câmeras focadas (união entre dashboards)
     autoMask: { mode: automask.AUTOMASK_MODE }, // modo global ("off"|"suggest"|"hide")
     // Gate de movimento — config + PROVA DO GANHO (inferências puladas).
