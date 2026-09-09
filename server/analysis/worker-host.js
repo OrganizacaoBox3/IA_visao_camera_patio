@@ -25,6 +25,7 @@
 
 const { fork } = require("node:child_process");
 const path = require("node:path");
+const { createCostWindow } = require("./cost");
 
 // ── Lógica PURA (testável, determinística) ───────────────────────────────────
 
@@ -160,6 +161,10 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
       cpuSample: null, // { user, system, t }
       cpuPct: 0,
       inflight: new Map(), // jobId → cameraId (jobs em voo NESTE worker — carga + never-blind)
+      // CUSTO por rodada (cost.js): decode × inferência, p50/p95 na janela de 60s. O worker já
+      // media os dois e mandava na resposta; o host descartava o decode e guardava só o ÚLTIMO
+      // inferMs de uma câmera — sem isso, "está lento" não tem onde ser investigado.
+      cost: createCostWindow(),
     };
   }
 
@@ -243,6 +248,7 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
     const captureTs = msg.ts || Date.now();
     if (!st.slots.settle(msg.id, captureTs)) return;
     st.lastMs = msg.inferMs || 0;
+    w.cost.observe(Date.now(), msg.decodeMs, msg.inferMs);
     onDets(st, Array.isArray(msg.dets) ? msg.dets : [], captureTs, Math.max(0, Date.now() - captureTs));
   }
 
@@ -337,6 +343,17 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
   }
 
   /** Métricas agregadas + por worker (aditivo). cpuPct = SOMA (total de cores usados). */
+  // Custo AGREGADO da frota: junta as janelas de todos os workers numa só, para o /status
+  // responder "onde vão os ms de uma rodada?" com UM número por eixo (decode × inferência).
+  // Somar percentis de janelas separadas seria errado — aqui as amostras são reunidas antes.
+  function custoAgregado() {
+    const todos = createCostWindow();
+    const now = Date.now();
+    for (const w of workers)
+      for (const a of w.cost.amostras(now)) todos.observe(a.t, a.decodeMs, a.inferMs);
+    return todos.resumo(now);
+  }
+
   function stats() {
     const per = workers.map((w) => ({
       id: w.id,
@@ -345,6 +362,7 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
       cpuPct: w.cpuPct,
       respawns: w.respawns,
       load: w.inflight.size,
+      custo: w.cost.resumo(Date.now()),
     }));
     const readyCount = per.reduce((a, w) => a + (w.ready ? 1 : 0), 0);
     return {
@@ -352,6 +370,8 @@ function createWorkerPool({ states, getModelPath, onDets, isStopping, getSize, f
       size: workers.length,
       readyCount,
       cpuPct: per.reduce((a, w) => a + w.cpuPct, 0), // agregado: total de cores usados pelo pool
+      // Custo AGREGADO da frota (soma das janelas): é o número que responde "onde vão os ms?".
+      custo: custoAgregado(),
       respawns: per.reduce((a, w) => a + w.respawns, 0),
       pids: per.map((w) => w.pid),
       workers: per,
