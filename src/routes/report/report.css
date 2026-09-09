@@ -158,3 +158,90 @@
     break-inside: avoid;
   }
 }
+
+/* ── EFICIÊNCIA DO POSTO ─────────────────────────────────────────────────────
+   Bloco que vai na TELA e no PDF. A conta aberta (tabela) é parte do produto: um número de
+   eficiência sem denominador visível é indefensável numa reunião — e é justamente numa reunião
+   que este PDF vai ser aberto. */
+.rep-ef-title {
+  margin: 0 0 var(--sp-3);
+  font-size: 1rem;
+  font-weight: 650;
+}
+.rep-ef-lens {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.rep-ef-conta {
+  width: 100%;
+  margin-top: var(--sp-3);
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.rep-ef-conta th,
+.rep-ef-conta td {
+  padding: var(--sp-2) 0;
+  text-align: left;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+.rep-ef-conta th {
+  font-weight: 500;
+  color: var(--text-dim);
+  width: 46%;
+}
+.rep-ef-formula {
+  color: var(--text-dim);
+}
+.rep-ef-motivo,
+.rep-ef-vazio {
+  margin: var(--sp-3) 0 0;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.rep-ef-nota {
+  margin: var(--sp-3) 0 0;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+@media print {
+  /* Tinta sobre papel branco (mesma exceção declarada no bloco de impressão acima). O painel
+     não pode quebrar entre páginas: a taxa numa folha e o denominador noutra é como o número
+     perde a defesa. */
+  .rep-ef {
+    break-inside: avoid;
+    border-color: #ccc;
+    background: #fff;
+  }
+  .rep-ef-conta th,
+  .rep-ef-conta td {
+    border-top-color: #ddd;
+  }
+  .rep-ef-lens,
+  .rep-ef-conta th,
+  .rep-ef-formula,
+  .rep-ef-motivo,
+  .rep-ef-vazio,
+  .rep-ef-nota {
+    color: #444;
+  }
+}
+.rep-ef-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.rep-ef-meta input {
+  width: 6rem;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}

@@ -75,6 +75,8 @@ import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel } from "./report/ObjetosPanel";
 import { FadigaPanel } from "./report/FadigaPanel";
 import { AlarmesPanel } from "./report/AlarmesPanel";
+import { EficienciaPanel } from "./report/EficienciaPanel";
+import { eficiencia } from "../report/calc/eficiencia";
 
 // As 4 dimensões de câmera (o modo é por CÂMERA e elas são mutuamente exclusivas).
 const DIMS = ["atividade", "leitura", "objetos", "fadiga"] as const;
@@ -230,6 +232,27 @@ export function ReportPage() {
   const [area, setArea] = useState<string | "Todas">("Todas");
   const [ponto, setPonto] = useState<string | "Todos">("Todos");
   const [setor, setSetor] = useState<string | "Todos">("Todos");
+  // META de produção (caixas/hora trabalhada) — entrada de NEGÓCIO: o sistema não tem como
+  // inferi-la. Persiste no NAVEGADOR (limitação declarada: é por posto de trabalho de quem abre
+  // o relatório, não compartilhada entre usuários). Mover para o cadastro da zona é o próximo
+  // passo natural, e exige tocar o allowlist de camcfg — fora do escopo desta entrega.
+  const [metaPorHora, setMetaPorHoraState] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem("vp-report-meta-hora"));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch {
+      return null; // navegador sem storage (aba anônima/bloqueio) → sem meta, sem quebrar
+    }
+  });
+  const setMetaPorHora = (v: number | null) => {
+    setMetaPorHoraState(v);
+    try {
+      if (v === null) localStorage.removeItem("vp-report-meta-hora");
+      else localStorage.setItem("vp-report-meta-hora", String(v));
+    } catch {
+      /* sem storage: a meta vale só nesta sessão */
+    }
+  };
   const [posto, setPosto] = useState<string | "Todos">("Todos");
   const [tab, setTab] = useState<RepTab>("quando");
   const [printedAt, setPrintedAt] = useState("");
@@ -372,6 +395,21 @@ export function ReportPage() {
   const noHistory = empty === "no-history";
   const emptyWindow = empty === "empty-window";
   const ready = !loading && !error && !noHistory && !emptyWindow; // painéis só com dado no recorte
+
+  // EFICIÊNCIA DO POSTO — combina as DUAS dimensões que sozinhas não respondem: presença (régua
+  // de turno da Atividade) e volume (caixas da Leitura). Só o Resumo carrega as duas ao mesmo
+  // tempo (os outros modos deixam a dimensão vizinha em "off"), então é lá que o bloco vive.
+  // Cada elo ausente vira `null` com motivo declarado — nunca um zero que pareça medição.
+  const ef = useMemo(() => {
+    const ruler = atividade.summary?.ruler;
+    return eficiencia({
+      horasTurno: ruler?.stamped ? ruler.hoursInShift : 0,
+      ocupacaoPct: ruler?.occupancyPct ?? null,
+      volume: leitura.summary ? leitura.summary.rk.boxes : null,
+      metaPorHora,
+      unidade: "caixas",
+    });
+  }, [atividade.summary, leitura.summary, metaPorHora]);
   // Dias de histórico do recorte (o texto do vazio de janela diz o que EXISTE — no Resumo, o
   // maior entre as dimensões, que é o alcance real do histórico do site).
   const historyDays = isResumo
@@ -451,6 +489,8 @@ export function ReportPage() {
       objetos,
       fadiga,
       alarmes: { ak: al.ak, alarmsView: al.alarmsView },
+      // Só o Resumo tem as duas dimensões da eficiência; nas outras abas vai null e a seção some.
+      eficiencia: isResumo ? { ef, metaPorHora } : null,
     });
     downloadCSVFile(`relatorio_${mode}_${period}_${dateStamp(now)}.csv`, buildCSV(sections));
   }
@@ -562,6 +602,18 @@ export function ReportPage() {
         {/* N2 — Resumo: só as dimensões COM DADO NO RECORTE (`hasWindow`, não `has`) + o cartão de
             Alarmes. Um cartão de zeros/100% para uma dimensão que não operou no período é o mesmo
             falso-OK dos KPIs; a dimensão segue acessível pelo seletor, com o vazio honesto lá. */}
+        {/* EFICIÊNCIA — manchete executiva, na tela e no PDF. Vem ANTES dos cartões por dimensão:
+            é a leitura que o gestor abre o relatório para fazer; o resto é o detalhamento dela. */}
+        {ready && isResumo && (
+          <EficienciaPanel
+            ef={ef}
+            metaPorHora={metaPorHora}
+            onMetaChange={setMetaPorHora}
+            periodLabel={PERIOD_LABEL[period]}
+            filtroLabel={`Turno: ${shiftLabel}`}
+          />
+        )}
+
         {ready && isResumo && (
           <ResumoPanel
             periodLabel={PERIOD_LABEL[period]}
