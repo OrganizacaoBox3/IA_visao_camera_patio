@@ -10,9 +10,9 @@ import "./report.css";
 export { SectionTitle } from "../../ui";
 
 // Aba interna (Radix Tabs) compartilhada entre os modos — o estado vive no ReportPage.
-// "fluxo" só existe no modo Atividade (e só quando o hub expõe o kind "flow"); ao trocar de
-// modo o ReportPage devolve o estado para "quando".
-export type RepTab = "quando" | "onde" | "tendencia" | "eventos" | "fluxo";
+// As quatro perguntas que todo modo responde. ("fluxo" saiu daqui em 2026-09-10: virou MODO,
+// não aba — ver o cabeçalho de FluxoPanel.)
+export type RepTab = "quando" | "onde" | "tendencia" | "eventos";
 
 // Nível de cômputo de um view-model de modo (useAtividadeVM & irmãos): "off" = modo inativo,
 // nada computa; "summary" = Resumo executivo, só janela+KPIs+insights; "full" = modo aberto,

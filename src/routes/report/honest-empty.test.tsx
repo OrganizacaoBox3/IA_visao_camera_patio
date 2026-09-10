@@ -297,7 +297,6 @@ describe("AtividadePanel — bucket com idleMs=0 e frames>0", () => {
       byAtiv={{ rows: [], max: 1 }}
       evo={{ bars: [{ dayIndex: 0, label: "20/07", idleMin: 0 }], max: 1 }}
       evt={[]}
-      flow={null}
       tab={tab}
       onTabChange={() => {}}
     />
@@ -360,7 +359,6 @@ describe("AtividadePanel — bucket com idleMs=0 e frames>0", () => {
         byAtiv={{ rows: [], max: 1 }}
         evo={{ bars: [], max: 1 }}
         evt={[]}
-        flow={null}
         tab="quando"
         onTabChange={() => {}}
       />,

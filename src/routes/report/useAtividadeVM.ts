@@ -1,6 +1,6 @@
 // View-model do modo ATIVIDADE do Relatório. Computa SÓ o que a visão atual precisa:
 // "off" → nada; "summary" (Resumo executivo) → janela + KPIs + insights; "full" → também
-// gráficos/ranking/eventos/fluxo. Hooks incondicionais (ordem estável) — o gate é interno
+// gráficos/ranking/eventos. Hooks incondicionais (ordem estável) — o gate é interno
 // aos memos. As agregações são as puras de report/calc; aqui só a moradia dos memos.
 import { useMemo } from "react";
 import {
@@ -14,10 +14,6 @@ import {
   shiftRuler,
   idleMeasurement,
   type IdleMeasurement,
-  flowWindow,
-  flowKpis,
-  flowByHour,
-  flowByLine,
   type Dataset,
   type EventRow,
   type Filters,
@@ -26,12 +22,10 @@ import {
   type ShiftDef,
   type ShiftFilter,
   type ShiftRuler,
-  type FlowDataset,
 } from "../../report/calc";
 import { peoplePeakOf } from "../../report/store";
 import { filterByWindow, byShift } from "./aggregate";
 import type { ByShift, VmView } from "./chrome";
-import type { FlowView } from "./AtividadePanel";
 
 const EMPTY_DS: Dataset = { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() };
 
@@ -54,16 +48,12 @@ export type AtividadeDetails = {
   evo: ReturnType<typeof evolution>;
   byShiftA: ByShift;
   evt: EventRow[];
-  // Fluxo respeita período/turno; o filtro de ÁREA não se aplica (buckets são câmera×linha).
-  // null = hub sem o kind "flow" → seção/aba ocultas (graceful).
-  flowView: FlowView | null;
 };
 
 export function useAtividadeVM(args: {
   view: VmView;
   ds: Dataset | null;
   events: EventRow[];
-  flowDs: FlowDataset | null;
   period: Period;
   shift: ShiftFilter;
   area: string | "Todas";
@@ -77,7 +67,7 @@ export function useAtividadeVM(args: {
    *  "não calculei" nunca pode virar "não há dado" (o gate de vazio depende disto). */
   windowCells: number | null;
 } {
-  const { view, ds, events, flowDs, period, shift, area, shifts } = args;
+  const { view, ds, events, period, shift, area, shifts } = args;
   const dataset = ds ?? EMPTY_DS;
   const off = view === "off";
   const full = view === "full";
@@ -103,16 +93,6 @@ export function useAtividadeVM(args: {
   const details = useMemo<AtividadeDetails | null>(() => {
     if (!full || !base) return null;
     const aCur = base.cur;
-    let flowView: FlowView | null = null;
-    if (flowDs) {
-      const cells = flowWindow(flowDs, period, shift);
-      flowView = {
-        hasAny: flowDs.cells.length > 0,
-        k: flowKpis(cells),
-        byHour: flowByHour(cells),
-        byLine: flowByLine(cells),
-      };
-    }
     return {
       hm: heatmap(aCur, area === "Todas" ? dataset.areas : [area]),
       rank: ranking(aCur, dataset.areas),
@@ -123,9 +103,8 @@ export function useAtividadeVM(args: {
         0,
         80,
       ),
-      flowView,
     };
-  }, [full, base, dataset, events, flowDs, period, shift, area, shifts]);
+  }, [full, base, dataset, events, period, shift, area, shifts]);
 
   return {
     dataset,
