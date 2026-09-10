@@ -24,21 +24,15 @@ import { KpiRow, Kpi, Delta } from "./KpiRow";
 import { Heatmap, heatColor } from "./Heatmap";
 import { RankingBars } from "./RankingBars";
 import { TrendSection } from "./TrendChart";
-import { FlowBiChart } from "./FlowChart";
 import { EventsTable } from "./EventsTable";
-import type { FlowLineRow } from "../../report/calc";
 
 type Kpis = ReturnType<typeof kpis>;
 type ByAtiv = { rows: { atividade: string; idleMin: number; alerts: number }[]; max: number };
 
-// Fluxo de pessoas já agregado pelo view-model (calc/flow): recorte período/turno.
-// `null` no prop = hub antigo sem o kind "flow" → a seção inteira some (graceful).
-export type FlowView = {
-  hasAny: boolean; // existe ALGUM cruzamento no histórico (independente do recorte)
-  k: { in: number; out: number; lines: number };
-  byHour: { hours: { in: number; out: number }[]; max: number };
-  byLine: { rows: FlowLineRow[]; max: number };
-};
+// O FLUXO SAIU DAQUI (2026-09-10): virou MODO próprio — `FluxoPanel`/`useFluxoVM`. Era a 4ª aba
+// deste painel, dentro de um modo cujo filtro é ÁREA — que não se aplica a cruzamento nenhum (a
+// linha de contagem é por CÂMERA). O painel precisava de uma nota explicando por que o filtro ao
+// lado não valia para ele; relatório que precisa se desculpar pelo filtro está no lugar errado.
 
 // Selo de ociosidade NÃO MEDIDA (auditoria A6). Aparece no lugar do número/gráfico — a tela
 // declara a ausência de medição em vez de exibir "0m", que se lê como "nada parou".
@@ -63,7 +57,6 @@ export function AtividadePanel({
   byAtiv,
   evo,
   evt,
-  flow,
   tab,
   onTabChange,
 }: {
@@ -82,13 +75,9 @@ export function AtividadePanel({
   byAtiv: ByAtiv;
   evo: ReturnType<typeof evolution>;
   evt: EventRow[];
-  flow: FlowView | null; // null = hub sem o kind "flow" → seção oculta
   tab: RepTab;
   onTabChange: (v: RepTab) => void;
 }) {
-  // "fluxo" só é uma aba válida quando o hub expõe o kind "flow"; se o estado herdou "fluxo"
-  // e a seção sumiu (refresh/hub antigo), cai para "quando" sem efeito colateral.
-  const activeTab = tab === "fluxo" && !flow ? "quando" : tab;
   const noIdle = idleUnavailable(idle); // observou e veio zerado ⇒ não medido, não "sem parada"
   return (
     <>
@@ -163,16 +152,13 @@ export function AtividadePanel({
       <Tabs
         className="rep-tabs flex-1"
         ariaLabel="Seção"
-        value={activeTab}
+        value={tab}
         onValueChange={(v) => onTabChange(v as RepTab)}
         items={[
           { value: "quando", label: "Quando para" },
           { value: "onde", label: "Onde para" },
           { value: "tendencia", label: "Tendência" },
           { value: "eventos", label: `Eventos (${evt.length})` },
-          // Fluxo de pessoas DENTRO do fluxo rolável: aba própria em vez de bloco
-          // fixo abaixo das tabs (que espremia o tabpanel a ~60px em 1920 e clipava em 1366).
-          ...(flow ? [{ value: "fluxo", label: "Fluxo de pessoas" }] : []),
         ]}
       >
         <TabsContent value="quando" className={REP_TABPANEL_CLS}>
@@ -284,90 +270,8 @@ export function AtividadePanel({
             )}
           />
         </TabsContent>
-        {/* Fluxo de pessoas — parte da história de atividade, não um modo novo.
-            Vive como ABA (dentro do painel rolável) p/ nunca espremer as demais seções. */}
-        {flow && (
-          <TabsContent value="fluxo" className={REP_TABPANEL_CLS}>
-            <FlowSection flow={flow} />
-          </TabsContent>
-        )}
       </Tabs>
       <HistoryFooter />
-    </>
-  );
-}
-
-// ── Fluxo (linhas de contagem) — in/out agregados dos buckets persistidos no hub ──
-// Respeita período/turno (recorte feito no view-model via calc/flow). O filtro de
-// ÁREA não se aplica: cruzamentos são registrados por câmera×linha, sem área.
-function FlowSection({ flow }: { flow: FlowView }) {
-  const { hasAny, k, byHour, byLine } = flow;
-  if (!hasAny || k.in + k.out === 0) {
-    // Estados vazios curtos (padrão das notas existentes): sem linha/cruzamento × recorte vazio.
-    return (
-      <section className="panel flex-1">
-        <SectionTitle>Fluxo de pessoas — linhas de contagem</SectionTitle>
-        <p className="empty-note">
-          {hasAny
-            ? "Sem cruzamentos no período/turno selecionado."
-            : "Nenhum cruzamento registrado ainda. Desenhe uma linha de contagem na câmera (Central) — cada passagem vira entrada/saída aqui."}
-        </p>
-      </section>
-    );
-  }
-  // Rótulo humano por linha: nome da câmera; com 2+ linhas na mesma câmera, sufixo "linha N"
-  // (ordem estável pelo id — o tripwireId cru só vai ao CSV/tooltip).
-  const linesOfCam = new Map<string, string[]>();
-  for (const r of byLine.rows) {
-    const arr = linesOfCam.get(r.cameraId) ?? [];
-    arr.push(r.tripwireId);
-    linesOfCam.set(r.cameraId, arr);
-  }
-  for (const arr of linesOfCam.values()) arr.sort();
-  const lineLabel = (r: FlowLineRow) => {
-    const cam = r.cameraLabel || r.cameraId;
-    const ids = linesOfCam.get(r.cameraId) ?? [];
-    return ids.length > 1 ? `${cam} · linha ${ids.indexOf(r.tripwireId) + 1}` : cam;
-  };
-  return (
-    <>
-      <section className="panel">
-        <SectionTitle>Fluxo de pessoas — linhas de contagem</SectionTitle>
-        {/* going-gray: fluxo é informação neutra — sem cor saturada.
-            O "saldo (entradas − saídas)" desceu p/ o CSV: número cru sem faixa-alvo. O saldo
-            AGORA se lê no gráfico bidirecional abaixo (a assimetria entre as duas metades). */}
-        <KpiRow fit>
-          <Kpi value={k.in} label="entradas no período" />
-          <Kpi value={k.out} label="saídas no período" />
-          <Kpi
-            value={k.lines}
-            label={k.lines === 1 ? "linha com cruzamento" : "linhas com cruzamento"}
-          />
-        </KpiRow>
-        <p className="muted text-label">
-          Respeita período e turno. O filtro de área não se aplica ao fluxo (cruzamentos são por
-          câmera × linha, sem área).
-        </p>
-      </section>
-      {/* UM gráfico bidirecional no lugar de "Entradas por hora" + "Saídas por hora" (dois
-          gráficos com o mesmo eixo e a mesma escala, lidos em par p/ responder uma pergunta). */}
-      <section className="panel">
-        <SectionTitle>Entradas e saídas por hora</SectionTitle>
-        <FlowBiChart hours={byHour.hours} max={byHour.max} />
-      </section>
-      <section className="panel flex-1">
-        <SectionTitle>Por linha / câmera</SectionTitle>
-        <RankingBars
-          rows={byLine.rows.map((r) => ({
-            key: `${r.cameraId}|${r.tripwireId}`,
-            label: <span title={r.tripwireId}>{lineLabel(r)}</span>,
-            value: r.in + r.out,
-            valueText: `${r.in} entradas · ${r.out} saídas`,
-          }))}
-          max={byLine.max}
-          emptyNote="Sem cruzamentos no período."
-        />
-      </section>
     </>
   );
 }

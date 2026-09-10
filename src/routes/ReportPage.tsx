@@ -61,6 +61,7 @@ import {
 } from "./report/labels";
 import { useReportData } from "./report/useReportData";
 import { useAtividadeVM } from "./report/useAtividadeVM";
+import { useFluxoVM } from "./report/useFluxoVM";
 import { useLeituraVM } from "./report/useLeituraVM";
 import { useObjetosVM } from "./report/useObjetosVM";
 import { useFadigaVM } from "./report/useFadigaVM";
@@ -71,6 +72,7 @@ import { SaudeMotorPanel } from "./report/SaudeMotorPanel";
 import { ReportTools } from "./report/ReportTools";
 import { ResumoPanel } from "./report/ResumoPanel";
 import { AtividadePanel } from "./report/AtividadePanel";
+import { FluxoPanel } from "./report/FluxoPanel";
 import { LeituraPanel } from "./report/LeituraPanel";
 import { ObjetosPanel } from "./report/ObjetosPanel";
 import { FadigaPanel } from "./report/FadigaPanel";
@@ -88,22 +90,36 @@ type Dim = (typeof DIMS)[number];
 const SEG_LABEL: Record<Mode, string> = {
   resumo: "Resumo",
   atividade: "Atividade",
+  fluxo: "Linhas",
   leitura: "Leitura",
   objetos: "Objetos",
   fadiga: "Operador",
   alarmes: "Alarmes",
 };
 
-// Filtro específico do modo (mesmo <Select> p/ ponto/setor/posto/área — só muda a fonte).
-// "Todas" (área) × "Todos" (demais) preservados como valores-sentinela.
+// Filtro específico do modo (mesmo <Select> p/ ponto/setor/posto/área/linha — só muda a fonte).
+// "Todas" (área/linha) × "Todos" (demais) preservados como valores-sentinela.
+// `options` (e não uma lista de strings) porque a LINHA de contagem tem chave ≠ rótulo: a chave
+// é `cameraId|tripwireId`, que nunca se mostra a ninguém.
 type ModeFilter = {
   aria: string;
   value: string;
   set: (v: string) => void;
-  allValue: string;
-  allLabel: string;
-  items: string[];
+  options: { value: string; label: string }[];
 };
+const filtroDeLista = (
+  aria: string,
+  value: string,
+  set: (v: string) => void,
+  allValue: string,
+  allLabel: string,
+  items: string[],
+): ModeFilter => ({
+  aria,
+  value,
+  set,
+  options: [{ value: allValue, label: allLabel }, ...items.map((x) => ({ value: x, label: x }))],
+});
 
 // Barra de recorte GLOBAL (.rep-filters): período + turno à esquerda, ações à direita.
 // Enxugada na unificação: o filtro do MODO desceu p/ a seção (ver SectionFilter — a barra que
@@ -254,6 +270,8 @@ export function ReportPage() {
     }
   };
   const [posto, setPosto] = useState<string | "Todos">("Todos");
+  // Filtro PRÓPRIO do modo Linhas: a chave `cameraId|tripwireId` (sentinela "Todas").
+  const [linha, setLinha] = useState<string | "Todas">("Todas");
   const [tab, setTab] = useState<RepTab>("quando");
   const [printedAt, setPrintedAt] = useState("");
 
@@ -273,16 +291,24 @@ export function ReportPage() {
   const has = useMemo(
     () => ({
       atividade: (data.ds?.cells.length ?? 0) > 0,
+      fluxo: (data.flowDs?.cells.length ?? 0) > 0,
       leitura: (data.rds?.cells.length ?? 0) > 0,
       objetos: (data.ods?.cells.length ?? 0) > 0,
       fadiga: (data.fds?.cells.length ?? 0) > 0,
       alarmes: alarms.length > 0,
     }),
-    [data.ds, data.rds, data.ods, data.fds, alarms],
+    [data.ds, data.flowDs, data.rds, data.ods, data.fds, alarms],
   );
   const dims: Dim[] = DIMS.filter((d) => has[d]);
+  // "Linhas" NÃO é uma das 4 dimensões de câmera (o `modo` da câmera não decide se ela tem
+  // tripwire): entra como modo próprio, e só quando existe cruzamento no histórico do site.
   // "Alarmes" é SEÇÃO fixa da tela (N3) — existe sempre, com estado de vazio próprio e honesto.
-  const modeOptions: Mode[] = ["resumo", ...dims, "alarmes"];
+  const modeOptions: Mode[] = [
+    "resumo",
+    ...dims,
+    ...(has.fluxo ? (["fluxo"] as Mode[]) : []),
+    "alarmes",
+  ];
   // O modo escolhido pode deixar de existir (F5 depois de limpar o histórico): cai no Resumo.
   const mode: Mode = modeOptions.includes(modeState) ? modeState : "resumo";
 
@@ -309,12 +335,12 @@ export function ReportPage() {
     view: viewFor("atividade"),
     ds: data.ds,
     events: data.allEvents,
-    flowDs: data.flowDs,
     period,
     shift,
     area,
     shifts,
   });
+  const fluxo = useFluxoVM({ view: viewFor("fluxo"), ds: data.flowDs, period, shift, linha });
   const leitura = useLeituraVM({
     view: viewFor("leitura"),
     ds: data.rds,
@@ -343,6 +369,7 @@ export function ReportPage() {
   const al = useAlarmesVM({ active: mode === "alarmes", alarms, period });
 
   const isResumo = mode === "resumo";
+  const isFluxo = mode === "fluxo";
   const isReading = mode === "leitura";
   const isObjects = mode === "objetos";
   const isFadiga = mode === "fadiga";
@@ -363,21 +390,32 @@ export function ReportPage() {
   // e ver o vazio honesto; `hasWindow` manda em quem vira NÚMERO.
   const hasWindow = {
     atividade: (atividade.windowCells ?? 0) > 0,
+    fluxo: (fluxo.windowCells ?? 0) > 0,
     leitura: (leitura.windowCells ?? 0) > 0,
     objetos: (objWindowCells ?? 0) > 0,
     fadiga: (fadiga.windowCells ?? 0) > 0,
     alarmes: al.akPeriod.total > 0,
   };
-  const modeWindowCells = isReading
-    ? leitura.windowCells
-    : isObjects
-      ? objWindowCells
-      : isFadiga
-        ? fadiga.windowCells
-        : atividade.windowCells;
+  const modeWindowCells = isFluxo
+    ? fluxo.windowCells
+    : isReading
+      ? leitura.windowCells
+      : isObjects
+        ? objWindowCells
+        : isFadiga
+          ? fadiga.windowCells
+          : atividade.windowCells;
   // Alarmes tem estado de vazio próprio (dentro da view); não entra nos gates genéricos.
   // Resumo só é "vazio" quando NENHUMA dimensão (nem os alarmes) tem dado.
-  const modeVm = isReading ? leitura : isObjects ? objetos : isFadiga ? fadiga : atividade;
+  const modeVm = isFluxo
+    ? fluxo
+    : isReading
+      ? leitura
+      : isObjects
+        ? objetos
+        : isFadiga
+          ? fadiga
+          : atividade;
   const live = !loading && !error && !isAlarmes;
   // Dois vazios DIFERENTES, com textos diferentes: nunca houve dado × não houve NESTE recorte.
   const empty: ModeEmpty = !live
@@ -418,15 +456,20 @@ export function ReportPage() {
         leitura.dataset.days,
         objetos.dataset.days,
         fadiga.dataset.days,
+        fluxo.dataset.days,
       )
     : modeVm.dataset.days;
   const { alarmPriority, alarmState } = al;
+  // A CHAVE do filtro de linha é `cameraId|tripwireId`; o rótulo é o humano do calc — mesma
+  // separação chave/rótulo do turno, pelo mesmo motivo (o que se exibe nunca é a chave).
+  const linhaLabel = linha === "Todas" ? "Todas as linhas" : fluxo.labelOf(linha);
   const filters = {
     mode,
     period,
     shift,
     shiftLabel,
     area,
+    linhaLabel,
     ponto,
     setor,
     posto,
@@ -436,41 +479,32 @@ export function ReportPage() {
   const lens = reportLens(filters);
   const filtroLabel = reportFiltroLabel(filters);
   // Filtro específico do modo (tipo ModeFilter acima) — só muda a fonte por modo.
-  const modeFilter: ModeFilter = isReading
+  const modeFilter: ModeFilter = isFluxo
     ? {
-        aria: "Ponto",
-        value: ponto,
-        set: setPonto,
-        allValue: "Todos",
-        allLabel: "Todos os pontos",
-        items: leitura.dataset.pontos,
+        aria: "Linha de contagem",
+        value: linha,
+        set: setLinha,
+        // Opções do dataset INTEIRO (não do recorte): uma linha que não contou nada no período
+        // é exatamente a que o gestor precisa poder abrir para descobrir por quê.
+        options: [
+          { value: "Todas", label: "Todas as linhas" },
+          ...fluxo.lineOptions.map((o) => ({ value: o.key, label: o.label })),
+        ],
       }
-    : isObjects
-      ? {
-          aria: "Setor",
-          value: setor,
-          set: setSetor,
-          allValue: "Todos",
-          allLabel: "Todos os setores",
-          items: objetos.dataset.setores,
-        }
-      : isFadiga
-        ? {
-            aria: "Posto",
-            value: posto,
-            set: setPosto,
-            allValue: "Todos",
-            allLabel: "Todos os postos",
-            items: fadiga.dataset.postos,
-          }
-        : {
-            aria: "Área",
-            value: area,
-            set: setArea,
-            allValue: "Todas",
-            allLabel: "Todas as áreas",
-            items: atividade.dataset.areas,
-          };
+    : isReading
+      ? filtroDeLista("Ponto", ponto, setPonto, "Todos", "Todos os pontos", leitura.dataset.pontos)
+      : isObjects
+        ? filtroDeLista(
+            "Setor",
+            setor,
+            setSetor,
+            "Todos",
+            "Todos os setores",
+            objetos.dataset.setores,
+          )
+        : isFadiga
+          ? filtroDeLista("Posto", posto, setPosto, "Todos", "Todos os postos", fadiga.dataset.postos)
+          : filtroDeLista("Área", area, setArea, "Todas", "Todas as áreas", atividade.dataset.areas);
 
   // CSV "rico": metadados + indicadores + detalhamento + eventos, num arquivo só (auto-
   // descritivo). A montagem por modo vive em ./report/csv.ts (reportSections).
@@ -488,6 +522,7 @@ export function ReportPage() {
       leitura,
       objetos,
       fadiga,
+      fluxo,
       alarmes: { ak: al.ak, alarmsView: al.alarmsView },
       // Só o Resumo tem as duas dimensões da eficiência; nas outras abas vai null e a seção some.
       eficiencia: isResumo ? { ef, metaPorHora } : null,
@@ -509,8 +544,10 @@ export function ReportPage() {
         subtitle={
           isAlarmes
             ? "alarmes · fila de eventos (metadados)"
-            : isReading
-              ? "leitura · código de barras"
+            : isFluxo
+              ? "linhas de contagem · entradas e saídas"
+              : isReading
+                ? "leitura · código de barras"
               : isObjects
                 ? "objetos · contagem/presença"
                 : isFadiga
@@ -523,11 +560,7 @@ export function ReportPage() {
       >
         <SegmentedControl<Mode>
           value={mode}
-          onChange={(m) => {
-            setMode(m);
-            // a aba "fluxo" só existe no modo Atividade — devolve o estado compartilhado.
-            if (tab === "fluxo" && m !== "atividade") setTab("quando");
-          }}
+          onChange={setMode}
           ariaLabel="Modo do relatório"
           options={modeOptions.map((m) => ({ value: m, label: SEG_LABEL[m] }))}
         />
@@ -623,6 +656,16 @@ export function ReportPage() {
                 ? { k: atividade.summary.k, tips: atividade.summary.tips }
                 : null
             }
+            fluxo={
+              hasWindow.fluxo && fluxo.summary
+                ? {
+                    k: fluxo.summary.k,
+                    topLineLabel: fluxo.summary.topLine
+                      ? fluxo.labelOf(fluxo.summary.topLine)
+                      : null,
+                  }
+                : null
+            }
             fadiga={
               hasWindow.fadiga && fadiga.summary
                 ? {
@@ -657,10 +700,7 @@ export function ReportPage() {
               value={modeFilter.value}
               onChange={modeFilter.set}
               ariaLabel={modeFilter.aria}
-              options={[
-                { value: modeFilter.allValue, label: modeFilter.allLabel },
-                ...modeFilter.items.map((x) => ({ value: x, label: x })),
-              ]}
+              options={modeFilter.options}
             />
           </SectionFilter>
         )}
@@ -678,9 +718,21 @@ export function ReportPage() {
             byAtiv={atividade.details.byAtiv}
             evo={atividade.details.evo}
             evt={atividade.details.evt}
-            flow={atividade.details.flowView}
             tab={tab}
             onTabChange={setTab}
+          />
+        )}
+
+        {ready && isFluxo && fluxo.summary && fluxo.details && (
+          <FluxoPanel
+            lens={lens}
+            k={fluxo.summary.k}
+            kPrev={fluxo.summary.kPrev}
+            tips={fluxo.summary.tips}
+            byHour={fluxo.details.byHour}
+            byLine={fluxo.details.byLine}
+            evo={fluxo.details.evo}
+            labelOf={fluxo.labelOf}
           />
         )}
 

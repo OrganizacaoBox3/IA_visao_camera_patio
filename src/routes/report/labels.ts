@@ -9,10 +9,18 @@ import {
   type AlarmState,
 } from "../../types/alarm";
 
-export type Mode = "resumo" | "atividade" | "leitura" | "objetos" | "fadiga" | "alarmes";
+export type Mode =
+  | "resumo"
+  | "atividade"
+  | "fluxo"
+  | "leitura"
+  | "objetos"
+  | "fadiga"
+  | "alarmes";
 export const MODE_LABEL: Record<Mode, string> = {
   resumo: "Resumo executivo",
   atividade: "Atividade",
+  fluxo: "Linhas de contagem",
   leitura: "Leitura",
   objetos: "Objetos",
   fadiga: "Operador (fadiga)",
@@ -32,6 +40,9 @@ export type ReportFilters = {
    *  com `shiftLabelOf`, porque a CHAVE do filtro hoje é o id do turno, não o texto exibido. */
   shiftLabel: string;
   area: string | "Todas";
+  /** rótulo JÁ resolvido da linha de contagem (a chave é `cameraId|tripwireId`, que não se
+   *  mostra a ninguém) — mesmo motivo do `shiftLabel`. */
+  linhaLabel: string;
   ponto: string | "Todos";
   setor: string | "Todos";
   posto: string | "Todos";
@@ -45,6 +56,10 @@ export function reportLens(f: ReportFilters): string {
   switch (f.mode) {
     case "alarmes":
       return `${PERIOD_LABEL[f.period]} · Prioridade: ${f.alarmPriority === "Todas" ? "todas" : ALARM_PRIORITY_LABEL[f.alarmPriority]} · Estado: ${f.alarmState === "Todos" ? "todos" : ALARM_STATE_LABEL[f.alarmState]}`;
+    case "fluxo":
+      // Filtro de LINHA, não de área: o cruzamento é por câmera×linha (foi por não caber no
+      // filtro de área que o fluxo saiu de dentro do modo Atividade).
+      return `${PERIOD_LABEL[f.period]} · ${f.linhaLabel} · ${turno}`;
     case "leitura":
       return `${PERIOD_LABEL[f.period]} · ${f.ponto === "Todos" ? "Todos os pontos" : f.ponto} · ${turno}`;
     case "objetos":
@@ -61,6 +76,8 @@ export function reportFiltroLabel(f: ReportFilters): string {
   switch (f.mode) {
     case "alarmes":
       return `Prioridade ${f.alarmPriority === "Todas" ? "todas" : ALARM_PRIORITY_LABEL[f.alarmPriority]} · Estado ${f.alarmState === "Todos" ? "todos" : ALARM_STATE_LABEL[f.alarmState]}`;
+    case "fluxo":
+      return f.linhaLabel;
     case "leitura":
       return f.ponto === "Todos" ? "Todos os pontos" : f.ponto;
     case "objetos":
