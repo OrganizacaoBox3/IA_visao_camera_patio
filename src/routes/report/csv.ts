@@ -5,6 +5,7 @@
 // LGPD: só indicadores agregados, nunca imagens.
 
 import { fmtMin } from "../../report/calc";
+import { MOTIVO_TEXTO, type Eficiencia } from "../../report/calc/eficiencia";
 import type {
   ShiftRuler,
   Period,
@@ -34,6 +35,32 @@ import type { FadigaSummary } from "./useFadigaVM";
 export { buildCSV, downloadCSVFile, dateStamp, type CsvSection } from "../../report/csv";
 
 // ── Cabeçalho (metadados do recorte, comum a todos os modos) ──
+// ── Eficiência do posto (a decomposição: taxa · ritmo · aproveitamento) ──
+// Vai no CSV pelo mesmo motivo que vai no PDF: o número precisa viajar com o DENOMINADOR. Quem
+// receber a planilha tem de conseguir refazer a conta sem pedir explicação a ninguém.
+export function eficienciaSection(p: { ef: Eficiencia; metaPorHora: number | null }): CsvSection {
+  const { ef } = p;
+  const val = (v: number | null, s = "") => (v === null ? "não medido" : `${v}${s}`);
+  return {
+    title: "EFICIÊNCIA DO POSTO",
+    rows: [
+      ["Taxa de eficiência", val(ef.taxaPct, "%")],
+      [`Ritmo (${ef.unidade}/hora com presença)`, val(ef.produtividadeEfetiva)],
+      ["Aproveitamento do turno", val(ef.aproveitamentoPct, "%")],
+      [`Rendimento do posto (${ef.unidade}/hora de turno)`, val(ef.produtividadeBruta)],
+      ["Horas de turno (pausas fora)", val(ef.horasTurno, " h")],
+      ["Horas com presença detectada", val(ef.horasComPresenca, " h")],
+      ["Meta informada", p.metaPorHora ? `${p.metaPorHora} ${ef.unidade}/hora` : "não informada"],
+      ["Fórmula", "taxa = ritmo ÷ meta · rendimento = ritmo × aproveitamento"],
+      ...(ef.motivo ? [["Observação", MOTIVO_TEXTO[ef.motivo]]] : []),
+      [
+        "Escopo",
+        "Mede o POSTO, não a pessoa: presença anônima por amostragem de câmera, sem identificação.",
+      ],
+    ],
+  };
+}
+
 export function metaSection(p: {
   modeLabel: string;
   periodLabel: string;
@@ -355,6 +382,8 @@ export function reportSections(p: {
   };
   fadiga: { summary: FadigaSummary | null };
   alarmes: { ak: AlarmKpis; alarmsView: AlarmEvent[] };
+  /** Eficiência do recorte (só o Resumo a computa — as outras abas não têm as duas dimensões). */
+  eficiencia?: { ef: Eficiencia; metaPorHora: number | null } | null;
 }): CsvSection[] {
   const { mode, atividade, leitura, objetos, fadiga, alarmes } = p;
   const sections: CsvSection[] = [
@@ -366,6 +395,10 @@ export function reportSections(p: {
       now: p.now,
     }),
   ];
+  // A eficiência entra ANTES do resumo por dimensão (é a manchete) e NÃO depende de as 4
+  // dimensões existirem — o próprio cálculo já declara o elo que faltar.
+  if (mode === "resumo" && p.eficiencia)
+    sections.push(eficienciaSection(p.eficiencia));
   if (
     mode === "resumo" &&
     atividade.summary &&
