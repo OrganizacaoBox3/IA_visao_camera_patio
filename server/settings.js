@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const { statePath } = require("./state-dir");
 const db = require("./db");
+const { clampMs } = require("./alarm/intervals");
 
 const FILE = statePath("notif-settings.json");
 let usingPg = false;
@@ -13,6 +14,11 @@ const DEFAULTS = {
   incluirLocal: true,
   incluirHora: true,
   incluirRodape: true,
+  // INTERVALO DE RENOTIFICAÇÃO de incidente aberto (ms). Enquanto o problema persiste, o
+  // operador é LEMBRADO nesta cadência — sem que se abra incidente novo (health-incidents.js).
+  // Era fixo em 30 min e só mudável por env, ou seja: inalcançável para quem usa o sistema.
+  // Agora é config de notificação, do mesmo dono (superadmin) que já define marca e títulos.
+  renotifyMs: 30 * 60_000,
   tipos: {
     atividade: { ativo: true, titulo: "Operação · Parada de área", instrucao: "" },
     fadiga: { ativo: true, titulo: "Segurança · Operador", instrucao: "" },
@@ -39,6 +45,10 @@ function normalize(p) {
     incluirLocal: p.incluirLocal !== false,
     incluirHora: p.incluirHora !== false,
     incluirRodape: p.incluirRodape !== false,
+    // clampMs devolve null no que não é número — aí vale o default. Valor fora dos limites é
+    // PRESO (1min..24h), nunca rejeitado: config salva e ignorada em silêncio é pior que
+    // config ajustada, porque o usuário acha que configurou.
+    renotifyMs: clampMs(p.renotifyMs) ?? DEFAULTS.renotifyMs,
     tipos,
   };
 }

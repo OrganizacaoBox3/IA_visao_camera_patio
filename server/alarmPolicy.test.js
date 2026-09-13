@@ -63,9 +63,21 @@ describe("classify — palavra-chave → tipo + crítico", () => {
 });
 
 describe("priorityOf — 3 níveis (advisory/high/critical)", () => {
-  it("⚠ (meta.critico) → critical", () => {
+  // MUDANÇA DE CONTRATO (2026-09-13): o "⚠" NÃO decide mais emergência. Medido: todo emissor
+  // do produto prefixa a mensagem com ele, então 10 de 12 textos reais saíam como `critical`
+  // contra a meta de ≤5% que a própria tela de saúde exibe. Quando tudo é crítico, nada é.
+  // Quem decide agora é a natureza do evento (alarm/severity.js); o marcador no texto vale,
+  // no máximo, ATENÇÃO. Este teste passou a travar exatamente isso.
+  it("⚠ no texto (emissor legado) → high, NUNCA critical", () => {
     const t = "⚠ Doca 3: parada crítica";
-    expect(policy.priorityOf(t, policy.classify(t))).toBe("critical");
+    expect(policy.priorityOf(t, policy.classify(t))).toBe("high");
+  });
+  it("crítico agora exige o EVENTO declarado pelo emissor", () => {
+    const t = "Doca 3: presença em área proibida (Cofre)"; // sem "⚠" nenhum
+    expect(policy.priorityOf(t, policy.classify(t), { tipo: "presenca" })).toBe("critical");
+    expect(policy.priorityOf(t, policy.classify(t), { tipo: "saude", evento: "sem-video" })).toBe(
+      "critical",
+    );
   });
   it("offline/feed/timeout/falha → high", () => {
     expect(policy.priorityOf("Câmera offline", policy.classify("Câmera offline"))).toBe("high");
@@ -146,10 +158,24 @@ describe("evaluate — caminhos determinísticos (com tempo controlado)", () => 
   });
 
   it("alarme novo passa com prioridade classificada", () => {
+    // Sem tipo DECLARADO no payload, a tabela de severidade não opina (o `classify` só
+    // chutaria "atividade" a partir do texto) e vale a heurística legada: texto sem gatilho
+    // nenhum é informativo. É o que impede "Painel: teste" de nascer como ATENÇÃO.
     const r = policy.evaluate({ text: "Painel: teste", ts: BASE });
     expect(r).not.toBeNull();
     expect(r.priority).toBe("advisory");
     expect(r.text).toBe("Painel: teste");
+  });
+
+  it("o tipo DECLARADO manda na prioridade (é o contrato novo do emissor)", () => {
+    vi.setSystemTime(BASE + 200_000); // fora da janela de dedup dos casos anteriores
+    const r = policy.evaluate({
+      text: "Doca 9: presença em área proibida (Cofre)",
+      ts: BASE + 200_000,
+      cameraId: "cam-decl",
+      tipo: "presenca",
+    });
+    expect(r.priority).toBe("critical");
   });
 
   it("deduplica repetição da mesma chave na janela e volta a passar após a janela", () => {

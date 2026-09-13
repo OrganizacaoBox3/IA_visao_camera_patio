@@ -24,6 +24,18 @@ export type Cell = ShiftStamp & {
   /** amostras do bucket — PESO da ocupação (sem elas, activePct vira média simples de médias). */
   samples?: number;
   activeSamples?: number;
+  // ── COBERTURA DA ANÁLISE (2026-09-13) — ver calc/cobertura.ts ──────────────────────────────
+  // Estes três já existiam no bucket do hub e eram DESCARTADOS ao montar a célula. Sem eles o
+  // relatório não tinha como distinguir "0 ocorrências" de "não medimos esta hora", que é a
+  // diferença entre operação tranquila e câmera cega.
+  /** câmera de origem — a cobertura é por CÂMERA×hora (uma câmera cega não é a frota cega). */
+  cameraId?: string;
+  /** início ABSOLUTO da hora do bucket (epoch-ms). Guardado cru de propósito: reconstruir a
+   *  hora a partir de dayIndex+hour erraria na borda do fuso (startMs é limite UTC). */
+  hourStart?: number;
+  /** tempo REALMENTE observado pela análise naquela hora (ms). O hub já o mede com teto por
+   *  rodada — buraco maior que o teto é ausência de medição, não observação (pipeline.js). */
+  observedMs?: number;
 };
 export type Dataset = {
   days: number;

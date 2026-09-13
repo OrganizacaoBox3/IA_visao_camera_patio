@@ -19,6 +19,7 @@ const { shelveKeyFor, isShelved, shelve, unshelve, listShelved } = require("./al
 const { init } = require("./alarm/persist");
 const { recordEmit, metrics: baseMetrics } = require("./alarm/metrics");
 const { suppressedByShift, shiftMetrics } = require("./alarm/shift");
+const { suppressedByCameraState, cameraStateMetrics } = require("./alarm/camera-gate");
 
 // Limpeza preguiçosa dos mapas para evitar crescimento ilimitado.
 function gc(now) {
@@ -49,11 +50,23 @@ function evaluate(p, deps = {}) {
   const ts = p.ts || Date.now();
   const now = Date.now();
   const meta = classify(text);
-  const priority = priorityOf(text, meta);
 
   const cameraId = pickCamera(p, text);
   const zona = pickZona(p, text);
   const tipo = p.tipo || meta.tipo;
+  // A PRIORIDADE vem da NATUREZA do evento (alarm/severity.js), não da grafia do texto.
+  //
+  // ATENÇÃO ao que é passado aqui: `p.tipo` (o tipo DECLARADO pelo emissor), nunca o `tipo`
+  // resolvido acima. O resolvido cai em `meta.tipo`, que é o PALPITE do classify sobre o texto
+  // — e o palpite default é "atividade". Deixar a tabela agir sobre um palpite promoveria a
+  // ATENÇÃO qualquer mensagem solta que ninguém classificou ("Painel: teste"), que é a mesma
+  // inflação de severidade que esta mudança veio consertar, só que pela outra ponta.
+  // Sem tipo declarado, quem decide continua sendo a heurística de texto legada.
+  const priority = priorityOf(text, meta, {
+    tipo: p.tipo,
+    evento: p.evento,
+    severidade: p.severidade,
+  });
 
   // 0) Shelving — silêncio temporário (manutenção). Camada anterior a tudo;
   //    vale mesmo com a política desligada (é uma ação explícita do operador).
@@ -73,6 +86,14 @@ function evaluate(p, deps = {}) {
   //     usuário (como o shelve), não racionalização opcional. Fail-open lá dentro; toda
   //     supressão é contada (metrics().suppressedByShift) e logada.
   if (suppressedByShift({ cameraId, zona, tipo, text }, now, deps.shiftSources)) return null;
+
+  // 0c) GATE DE ESTADO OPERACIONAL — a câmera DEVERIA estar funcionando agora?
+  //     Terceira camada irmã (shelve = ação pontual do operador; turno = janela da zona;
+  //     estado = situação do ATIVO). Mesmo ponto do pipeline e pelo mesmo motivo: um alarme
+  //     de câmera em manutenção não pode nem consumir a chave de dedup, senão o primeiro
+  //     alarme REAL depois que ela voltar à produção seria engolido como "repetição".
+  //     Vale com a política desligada: é cadastro do usuário, não racionalização opcional.
+  if (suppressedByCameraState({ cameraId, tipo }, now, deps.cameraSources)) return null;
 
   // Política desligada → só classifica e repassa (retrocompatível),
   // contabilizando a emissão para as métricas.
@@ -118,11 +139,18 @@ function evaluate(p, deps = {}) {
 function metrics() {
   const m = baseMetrics();
   const s = shiftMetrics(m.now);
+  const c = cameraStateMetrics(m.now);
   return {
     ...m,
     suppressedByShift: s.total,
     suppressedByShiftLastHour: s.lastHour,
     suppressedByShiftReasons: s.byReason,
+    // Mesmo contrato do gate de turno, pelo mesmo motivo: quem cala, mostra que calou. A
+    // quebra é por ESTADO (teste/manutenção/desativada) porque as três têm leituras
+    // diferentes — "em manutenção" é trabalho programado, "desativada" é ativo fora de uso.
+    suppressedByCameraState: c.total,
+    suppressedByCameraStateLastHour: c.lastHour,
+    suppressedByCameraStateEstados: c.byEstado,
   };
 }
 

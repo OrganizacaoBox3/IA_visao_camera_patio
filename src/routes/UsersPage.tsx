@@ -22,6 +22,7 @@ import {
   type WaStatus,
   type Recipient,
   type NotifSettings,
+  type NotifPreview,
   type ConnectedCamera,
 } from "../api";
 import { UsersTab } from "./users/UsersTab";
@@ -57,7 +58,7 @@ export function UsersPage() {
     principal: false,
   });
   const [notif, setNotif] = useState<NotifSettings | null>(null);
-  const [preview, setPreview] = useState<Record<string, string> | null>(null);
+  const [preview, setPreview] = useState<NotifPreview | null>(null);
   const [secao, setSecao] = useState<"usuarios" | "notificacoes" | "cameras">("usuarios");
   const [confirmRemove, setConfirmRemove] = useState<ConfirmRemove | null>(null);
 

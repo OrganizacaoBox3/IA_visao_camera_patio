@@ -25,9 +25,87 @@ import {
   type WaStatus,
   type Recipient,
   type NotifSettings,
+  type NotifPreview,
   type AdminUser,
 } from "../../api";
+import {
+  INTERVALO_PRESETS,
+  clampIntervalo,
+  ehIntervaloPreset,
+  intervaloDeMinutos,
+  intervaloHumano,
+} from "../../types/intervalos";
 import type { ConfirmRemove } from "./types";
+
+// ── LEMBRETE DE INCIDENTE ABERTO (2026-09-13) ────────────────────────────────────────────────
+// Enquanto o problema persiste, o operador é LEMBRADO nesta cadência — sem que se abra
+// incidente novo. Era fixo em 30 min e só mudável por variável de ambiente, ou seja:
+// inalcançável para quem usa o sistema. O campo "personalizado" existe porque toda lista
+// fechada acaba errando o caso de alguém (a operação que quer 45 min tinha de escolher entre
+// esperar demais e ser lembrada demais).
+const PERSONALIZADO = "custom";
+
+function LembreteField({
+  ms,
+  onChange,
+}: {
+  ms: number;
+  onChange: (ms: number) => void;
+}) {
+  // "Personalizado" fica pinado enquanto o campo está aberto: sem isto, digitar "30" faria o
+  // Select pular de volta para o preset e o campo sumir debaixo do dedo de quem digita.
+  const [custom, setCustom] = useState(!ehIntervaloPreset(ms));
+  const [minutos, setMinutos] = useState(String(Math.round(ms / 60_000)));
+  const lido = intervaloDeMinutos(minutos);
+  // Avisa ANTES de salvar quando o número digitado vai ser ajustado pelos limites — config
+  // salva diferente do que se pediu, em silêncio, é pior que config recusada.
+  const ajustado = lido !== null && lido !== Math.round(Number(minutos) * 60_000);
+  return (
+    <Field label="Lembrar de incidente aberto a cada" className="flex-1 min-w-0">
+      <div className="flex flex-wrap items-center gap-[var(--sp-2)]">
+        <Select
+          value={custom ? PERSONALIZADO : String(clampIntervalo(ms) ?? ms)}
+          onChange={(v) => {
+            if (v === PERSONALIZADO) {
+              setCustom(true);
+              setMinutos(String(Math.round(ms / 60_000)));
+              return;
+            }
+            setCustom(false);
+            onChange(Number(v));
+          }}
+          ariaLabel="Intervalo do lembrete"
+          options={[
+            ...INTERVALO_PRESETS.map((p) => ({ value: String(p.ms), label: p.label })),
+            { value: PERSONALIZADO, label: "Personalizado…" },
+          ]}
+        />
+        {custom && (
+          <>
+            <Input
+              aria-label="Intervalo personalizado em minutos"
+              value={minutos}
+              inputMode="numeric"
+              className="w-[7rem]"
+              onChange={(e) => {
+                setMinutos(e.target.value);
+                const v = intervaloDeMinutos(e.target.value);
+                if (v !== null) onChange(v);
+              }}
+            />
+            <span className="text-label text-text-dim">minutos</span>
+          </>
+        )}
+        <span className="text-label text-text-dim">
+          {lido === null && custom
+            ? "informe os minutos"
+            : `lembra a cada ${intervaloHumano(custom ? lido : ms)}`}
+          {ajustado && " (ajustado ao limite de 1 min a 24 h)"}
+        </span>
+      </div>
+    </Field>
+  );
+}
 
 const TIPO_LABEL: Record<string, string> = {
   atividade: "Atividade / parada",
@@ -56,8 +134,8 @@ type Props = {
   setNovoDest: Dispatch<SetStateAction<NovoDest>>;
   notif: NotifSettings | null;
   setNotif: Dispatch<SetStateAction<NotifSettings | null>>;
-  preview: Record<string, string> | null;
-  setPreview: Dispatch<SetStateAction<Record<string, string> | null>>;
+  preview: NotifPreview | null;
+  setPreview: Dispatch<SetStateAction<NotifPreview | null>>;
   setErr: Dispatch<SetStateAction<string | null>>;
   setConfirmRemove: Dispatch<SetStateAction<ConfirmRemove | null>>;
 };
@@ -260,6 +338,10 @@ export function NotificacoesTab({
                 onChange={(e) => setNotif({ ...notif, marca: e.target.value })}
               />
             </Field>
+            <LembreteField
+              ms={notif.renotifyMs}
+              onChange={(renotifyMs) => setNotif({ ...notif, renotifyMs })}
+            />
             {/* Grupo rotulado (achado 8.5): os 3 toggles deixam de flutuar soltos à direita
                 do input — uma linha própria com rótulo diz o que eles incluem. */}
             <div
@@ -326,12 +408,33 @@ export function NotificacoesTab({
             </Button>
             <Button onClick={onPreview}>Pré-visualizar</Button>
           </div>
+          {/* DUAS COLUNAS POR TIPO: o que a EQUIPE recebe e o que o CLIENTE recebe. Quem
+              configura precisa ver a mensagem que sai da empresa antes de ela sair — antes
+              deste par, a versão do cliente não era vista por ninguém. Quando o tipo não
+              chega ao cliente, a coluna DIZ isso, em vez de mostrar um texto que nunca será
+              enviado. */}
           {preview && (
             <div className="notif-preview">
               {Object.entries(preview).map(([t, m]) => (
                 <div key={t}>
                   <span className="np-tag">{TIPO_LABEL[t] ?? t}</span>
-                  <pre>{m}</pre>
+                  <div className="np-cols">
+                    <div>
+                      <span className="np-who">Equipe</span>
+                      <pre>{m.equipe}</pre>
+                    </div>
+                    <div>
+                      <span className="np-who">Cliente</span>
+                      {m.cliente ? (
+                        <pre>{m.cliente}</pre>
+                      ) : (
+                        <p className="np-nao">
+                          Não é enviado ao cliente — informativo e resumo de rajada ficam com a
+                          equipe.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

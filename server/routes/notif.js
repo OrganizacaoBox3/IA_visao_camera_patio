@@ -4,6 +4,8 @@ const recipients = require("../recipients");
 const settings = require("../settings");
 const dispatch = require("../dispatch");
 const { classify } = require("../alarm/classify");
+const { severityOf } = require("../alarm/severity");
+const { clienteRecebe } = require("../alarm/audience");
 const whatsapp = require("../whatsapp");
 
 async function handle(req, res, ctx) {
@@ -68,9 +70,25 @@ async function handle(req, res, ctx) {
       leitura: "⚠ Ponto 1: taxa de leitura 72% (abaixo de 80%)",
       objetos: "📦 caixa entrou em Setor 2",
     };
+    // DUAS versões por tipo (2026-09-13): quem configura precisa VER o que o cliente recebe.
+    // Antes o preview só mostrava a mensagem da equipe — e a do cliente, que é a que sai da
+    // empresa, nunca era vista por ninguém antes de chegar no celular de quem contrata.
+    // A gravidade do exemplo vem da política (alarm/severity.js), não do "⚠" do texto: o
+    // preview tem de mostrar a MESMA régua do envio real.
     const out = {};
-    for (const [tipo, txt] of Object.entries(samples))
-      out[tipo] = dispatch.formatWhatsApp(txt, classify(txt), now, s);
+    for (const [tipo, txt] of Object.entries(samples)) {
+      const meta = { ...classify(txt), tipo };
+      meta.priority = severityOf({ tipo }) || "high";
+      meta.critico = meta.priority === "critical";
+      out[tipo] = {
+        equipe: dispatch.formatWhatsApp(txt, meta, now, s, "equipe"),
+        // `null` = este tipo/gravidade NÃO chega ao cliente. A tela diz isso em texto, em vez
+        // de exibir uma mensagem que nunca será enviada.
+        cliente: clienteRecebe(meta)
+          ? dispatch.formatWhatsApp(txt, meta, now, s, "cliente")
+          : null,
+      };
+    }
     json(res, 200, out);
     return true;
   }

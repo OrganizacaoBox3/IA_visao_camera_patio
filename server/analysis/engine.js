@@ -829,7 +829,11 @@ const HEALTH_INCIDENTS_ON = !/^(0|false|no|off)$/i.test(
 const HEALTH_TICK_MS = Math.max(10_000, Number(process.env.ANALYSIS_HEALTH_TICK_MS) || 30_000);
 const healthIncidents = createHealthIncidents({
   confirmMs: Number(process.env.ANALYSIS_HEALTH_CONFIRM_MS) || undefined,
-  renotifyMs: Number(process.env.ANALYSIS_HEALTH_RENOTIFY_MS) || undefined,
+  // A cadência de LEMBRETE é config de usuário (superadmin, tela de Notificações) e é lida a
+  // cada avaliação — mudar na tela vale no próximo tick, sem reiniciar o hub. O env continua
+  // valendo como override de operação (quem tem acesso ao systemd manda mais que a UI).
+  renotifyMs: () =>
+    Number(process.env.ANALYSIS_HEALTH_RENOTIFY_MS) || require("../settings").get().renotifyMs,
   resolveMs: Number(process.env.ANALYSIS_HEALTH_RESOLVE_MS) || undefined,
   sistemicoMin: Number(process.env.ANALYSIS_HEALTH_SISTEMICO_MIN) || undefined,
 });
@@ -885,6 +889,11 @@ function avaliarIncidentesSaude() {
           ts: now,
           cameraId: a.cameraId || undefined,
           tipo: "saude",
+          // `evento` é o que a tabela de severidade lê (alarm/severity.js): sem-video é
+          // CRÍTICO (não estamos vendo nada), ia-atrasada é ATENÇÃO (o vídeo chega, o número
+          // é que atrasa) e o fechamento é INFORMATIVO (boa notícia nunca é crítica). Antes
+          // disso, TODOS saíam como crítico — porque o texto começava com "⚠".
+          evento: a.escopo === "frota" ? "frota" : a.tipo === "fechar" ? "fechar" : a.estado,
           incidenteId: a.incidenteId,
         },
         { cameras: ctx.cameras, io: ctx.io },

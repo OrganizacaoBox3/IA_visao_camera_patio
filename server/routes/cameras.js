@@ -7,6 +7,7 @@ const users = require("../users");
 const { bearer } = require("../http-auth");
 const videoTicket = require("../video-ticket");
 const { visibleCameras } = require("../socket-scope");
+const { estadoDe } = require("../camera-state");
 
 async function handle(req, res, ctx) {
   const { json, readBody, requireAuth, requireSuper, cameraList } = ctx;
@@ -70,6 +71,11 @@ async function handle(req, res, ctx) {
         id: String(c.id),
         label: String(c.label || c.id),
         online: c.kind === "rtsp" ? ["online", "idle"].includes(rtspState.get(c.id)) : true,
+        // ESTADO OPERACIONAL (aditivo): metadado, não segredo — a url com credencial continua
+        // fora desta rota. Quem consome: o relatório, para não contar como "período sem
+        // medição" a câmera que estava DESATIVADA (não era para medir), e a tela de saúde.
+        // Nó de navegador / fonte legada não tem cadastro dinâmico → "producao" (fail-open).
+        estado: estadoDe(cameraStore.get(String(c.id)) || c),
       })),
     });
     return true;

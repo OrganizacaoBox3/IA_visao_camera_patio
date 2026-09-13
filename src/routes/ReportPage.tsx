@@ -78,7 +78,11 @@ import { ObjetosPanel } from "./report/ObjetosPanel";
 import { FadigaPanel } from "./report/FadigaPanel";
 import { AlarmesPanel } from "./report/AlarmesPanel";
 import { EficienciaPanel } from "./report/EficienciaPanel";
+import { CoberturaCard } from "./report/CoberturaCard";
 import { eficiencia } from "../report/calc/eficiencia";
+import { cobertura } from "../report/calc";
+import { getConnectedCameras, type ConnectedCamera } from "../api";
+import { cameraEstadoDe } from "../types/cameraEstado";
 
 // As 4 dimensões de câmera (o modo é por CÂMERA e elas são mutuamente exclusivas).
 const DIMS = ["atividade", "leitura", "objetos", "fadiga"] as const;
@@ -284,6 +288,32 @@ export function ReportPage() {
       .then(setShifts)
       .catch(() => setShifts([]));
   }, []);
+
+  // CÂMERAS + ESTADO (p/ a cobertura). Falha ISOLADA, como o resto: sem a lista, a cobertura
+  // é calculada com TODAS as câmeras no denominador — conservador (uma câmera desativada
+  // apareceria como buraco), nunca otimista. Errar para o lado de "cobri menos do que parece"
+  // é o lado seguro de uma métrica cuja função é justamente desconfiar dos zeros.
+  const [camerasEstado, setCamerasEstado] = useState<ConnectedCamera[]>([]);
+  useEffect(() => {
+    getConnectedCameras()
+      .then((r) => setCamerasEstado(r.cameras))
+      .catch(() => setCamerasEstado([]));
+  }, []);
+  const camerasDesativadas = useMemo(
+    () =>
+      new Set(
+        camerasEstado.filter((c) => cameraEstadoDe(c) === "desativada").map((c) => c.id),
+      ),
+    [camerasEstado],
+  );
+
+  // COBERTURA DA ANÁLISE — "quanto do período foi realmente analisado". Do dataset INTEIRO
+  // (não da janela filtrada): o denominador precisa das horas que NÃO geraram célula, que são
+  // exatamente as que somem da tabela quando a câmera fica cega. Ver calc/cobertura.ts.
+  const cob = useMemo(
+    () => cobertura(data.ds ?? { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() }, period, camerasDesativadas),
+    [data.ds, period, camerasDesativadas],
+  );
 
   // ── Quais dimensões EXISTEM neste site (têm dado no histórico) ──
   // `modo` é por CÂMERA e os 4 modos são mutuamente exclusivos: num CD de câmeras de ocupação,
@@ -526,6 +556,9 @@ export function ReportPage() {
       alarmes: { ak: al.ak, alarmsView: al.alarmsView },
       // Só o Resumo tem as duas dimensões da eficiência; nas outras abas vai null e a seção some.
       eficiencia: isResumo ? { ef, metaPorHora } : null,
+      // A cobertura viaja em TODO modo: é o que permite ler os zeros da planilha sem quem a
+      // gerou por perto (que é exatamente como o CSV é aberto).
+      cobertura: cob,
     });
     downloadCSVFile(`relatorio_${mode}_${period}_${dateStamp(now)}.csv`, buildCSV(sections));
   }
@@ -637,6 +670,10 @@ export function ReportPage() {
             falso-OK dos KPIs; a dimensão segue acessível pelo seletor, com o vazio honesto lá. */}
         {/* EFICIÊNCIA — manchete executiva, na tela e no PDF. Vem ANTES dos cartões por dimensão:
             é a leitura que o gestor abre o relatório para fazer; o resto é o detalhamento dela. */}
+        {/* COBERTURA antes de tudo (inclusive da eficiência): se o período não foi observado,
+            todo número abaixo é suspeito — e descobrir isso no rodapé é tarde demais. */}
+        {ready && isResumo && <CoberturaCard c={cob} periodLabel={PERIOD_LABEL[period]} />}
+
         {ready && isResumo && (
           <EficienciaPanel
             ef={ef}

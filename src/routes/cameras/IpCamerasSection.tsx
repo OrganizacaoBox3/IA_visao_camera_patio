@@ -5,7 +5,6 @@ import { APP_CONFIG } from "../../config";
 import { useAuth } from "../../auth";
 import {
   Button,
-  Switch,
   Checkbox,
   Select,
   Input,
@@ -38,6 +37,13 @@ import {
   type CameraTransport,
   type NewCamera,
 } from "../../api";
+import {
+  CAMERA_ESTADOS,
+  CAMERA_ESTADO_LABEL,
+  CAMERA_ESTADO_NOTA,
+  cameraEstadoDe,
+  type CameraEstado,
+} from "../../types/cameraEstado";
 
 // ── Lista UNIFICADA de câmeras (/cameras) ──────────────────────────────────────────────────
 // Antes esta tela tinha DUAS listas que se sobrepunham: "Câmeras IP / RTSP" (cadastro/identidade
@@ -262,11 +268,14 @@ export function CamerasList() {
     }
   }
 
-  async function toggleEnabled(c: IpCamera) {
+  // ESTADO OPERACIONAL no lugar do liga/desliga (2026-09-13). O Switch só sabia dizer duas
+  // coisas, e o problema é de QUATRO: uma câmera em manutenção não está "parada" (ela continua
+  // medindo) nem "ativa" (ela não deve notificar ninguém). Ver src/types/cameraEstado.ts.
+  async function setEstado(c: IpCamera, estado: CameraEstado) {
     setBusy(true);
     try {
-      await updateCamera(c.id, { enabled: !c.enabled });
-      toast(c.enabled ? "Câmera desabilitada." : "Câmera habilitada.", "ok");
+      await updateCamera(c.id, { estado });
+      toast(`${c.label}: ${CAMERA_ESTADO_LABEL[estado].toLowerCase()}.`, "ok");
       await load();
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Não foi possível atualizar a câmera.", "alert");
@@ -371,22 +380,35 @@ export function CamerasList() {
                 <span className="cam-status" data-online={row.online ? "1" : "0"}>
                   {row.online ? "Online" : "Offline"}
                 </span>
+                {/* going-gray: produção é o NORMAL (selo neutro, sem cor); qualquer outro
+                    estado é desvio DECLARADO — âmbar, não vermelho: é escolha do time, não
+                    falha do sistema. A consequência vai por extenso no HelpTip porque
+                    "Teste" sozinho não conta a ninguém que a câmera parou de notificar. */}
                 {row.ip && (
-                  <label className="switch">
-                    <Switch
-                      checked={row.ip.enabled}
-                      onCheckedChange={() => void toggleEnabled(row.ip!)}
-                      disabled={busy}
-                      ariaLabel={
-                        row.ip.enabled
-                          ? `Desabilitar ${row.label}`
-                          : `Habilitar ${row.label}`
-                      }
-                    />{" "}
-                    {row.ip.enabled ? "Ativa" : "Parada"}
-                  </label>
+                  <span className="cam-estado">
+                    <Badge tone={cameraEstadoDe(row.ip) === "producao" ? undefined : "warn"}>
+                      {CAMERA_ESTADO_LABEL[cameraEstadoDe(row.ip)]}
+                    </Badge>
+                    <HelpTip label="O que este estado faz">
+                      {CAMERA_ESTADO_NOTA[cameraEstadoDe(row.ip)]}
+                    </HelpTip>
+                  </span>
                 )}
                 <div className="cam-set-controls">
+                  {row.ip && (
+                    <div className="cam-set-field">
+                      <FieldLabel>Estado operacional</FieldLabel>
+                      <Select
+                        value={cameraEstadoDe(row.ip)}
+                        onChange={(v) => void setEstado(row.ip!, v as CameraEstado)}
+                        ariaLabel="Estado operacional"
+                        options={CAMERA_ESTADOS.map((e) => ({
+                          value: e,
+                          label: CAMERA_ESTADO_LABEL[e],
+                        }))}
+                      />
+                    </div>
+                  )}
                   <div className="cam-set-field">
                     <FieldLabel>Tipo da câmera</FieldLabel>
                     <Select

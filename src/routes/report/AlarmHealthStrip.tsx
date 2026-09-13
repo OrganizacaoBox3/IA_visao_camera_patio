@@ -20,6 +20,7 @@ import { Sparkline } from "../../components/Sparkline";
 import { Alert, Button, Loading, SectionTitle, StatusDot, Tooltip } from "../../ui";
 import { getAlarmMetrics, type AlarmCounts, type AlarmMetrics } from "../../api";
 import { shiftSuppressionReasonLabel, type AlarmShiftSuppression } from "../../types/alarm";
+import { CAMERA_ESTADO_LABEL, type CameraEstado } from "../../types/cameraEstado";
 import "./health.css";
 
 const REFRESH_MS = 7000; // auto-refresh leve (5–10s) — o ÚNICO timer do Relatório
@@ -66,9 +67,17 @@ export function faixaSemNadaAReportar(m: {
   overTarget: boolean;
   shelvedActive: number;
   suppressedByShift?: number | null;
+  suppressedByCameraState?: number | null;
 }): boolean {
   return (
-    m.inWindow === 0 && !m.overTarget && m.shelvedActive === 0 && !(m.suppressedByShift ?? 0)
+    m.inWindow === 0 &&
+    !m.overTarget &&
+    m.shelvedActive === 0 &&
+    !(m.suppressedByShift ?? 0) &&
+    // Câmera em teste/manutenção está calando alarme AGORA. Enquanto isso durar, a faixa fica
+    // aberta: quem está cego de propósito precisa ver que está cego, senão o silêncio da tela
+    // vira "está tudo bem" — o falso-OK que esta faixa inteira existe para evitar.
+    !(m.suppressedByCameraState ?? 0)
   );
 }
 
@@ -209,6 +218,8 @@ export function AlarmHealthStrip() {
 
         <ShiftSuppression m={metrics} />
 
+        <CameraStateSuppression m={metrics} />
+
         {/* Distribuição por prioridade da JANELA. A 2ª barra ("última hora") morreu: janela=10min
             × hora=60min davam escalas quase iguais — era duplicata visual (spec §2.3).
             Ela vive AQUI, ao lado dos KPIs de 10 min, porque é o MESMO relógio — nunca no corpo
@@ -227,6 +238,37 @@ export function AlarmHealthStrip() {
         </div>
       )}
     </section>
+  );
+}
+
+// Tile "Calados por estado da câmera" (2026-09-13). Irmão do de turno e pelo mesmo motivo:
+// supressão silenciosa mata a confiança no sistema de alarme. Going-gray: é o gate FUNCIONANDO
+// (uma câmera em manutenção NÃO deve alarmar) → neutro, nunca cor de alerta. Hub anterior a
+// esta onda não manda os campos: o tile diz "não informado" em vez de exibir um 0 mentiroso.
+function CameraStateSuppression({ m }: { m: Metrics }) {
+  const total = m.suppressedByCameraState;
+  if (typeof total !== "number")
+    return (
+      <div className="ah-kpi">
+        <span className="ah-kpi__label">Calados por estado da câmera</span>
+        <span className="ah-kpi__value">—</span>
+        <span className="ah-kpi__sub">não informado por este hub</span>
+      </div>
+    );
+  const porEstado = m.suppressedByCameraStateEstados || {};
+  const quebra = Object.entries(porEstado)
+    .sort((a, b) => b[1] - a[1])
+    .map(([estado, n]) => `${CAMERA_ESTADO_LABEL[estado as CameraEstado] ?? estado}: ${n}`)
+    .join(" · ");
+  return (
+    <div className="ah-kpi">
+      <span className="ah-kpi__label">Calados por estado da câmera</span>
+      <span className="ah-kpi__value">{total}</span>
+      <span className="ah-kpi__sub">{m.suppressedByCameraStateLastHour || 0} na última hora</span>
+      <span className="ah-kpi__sub">
+        {quebra || "nenhum alarme calado por estado na última hora"}
+      </span>
+    </div>
   );
 }
 
