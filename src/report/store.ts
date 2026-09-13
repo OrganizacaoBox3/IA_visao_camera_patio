@@ -191,6 +191,12 @@ export async function loadDataset(): Promise<Dataset> {
       // elas o KPI vira média simples de médias (degradação documentada, não silenciosa).
       samples: b.samples,
       activeSamples: b.activeSamples,
+      // COBERTURA (calc/cobertura.ts): estes três vinham no bucket e eram jogados fora aqui.
+      // São o que permite ao relatório dizer "medi 42min desta hora" em vez de fingir que a
+      // hora inteira foi observada — e, portanto, separar "zero ocorrência" de "não medido".
+      cameraId: b.cameraId,
+      hourStart: b.hourStart,
+      observedMs: typeof b.observedMs === "number" ? b.observedMs : undefined,
       atividade: b.atividade,
       // o SELECT do hub expõe people_peak como "peoplePeak" (campo aditivo — hub antigo omite)
       peoplePeak: typeof b.peoplePeak === "number" ? b.peoplePeak : 0,

@@ -20,7 +20,16 @@ import type {
   FadigaEventRow,
   AlarmKpis,
 } from "../../report/calc";
-import { deltaPct, flowLineKey, type FlowKpis, type FlowLineRow } from "../../report/calc";
+import {
+  deltaPct,
+  flowLineKey,
+  coberturaConfiavel,
+  duracaoHumana,
+  MOTIVO_COBERTURA_TEXTO,
+  type Cobertura,
+  type FlowKpis,
+  type FlowLineRow,
+} from "../../report/calc";
 import type { AlarmEvent } from "../../types/alarm";
 import { alarmSection, type CsvSection } from "../../report/csv";
 import { classLabel } from "./ObjetosPanel";
@@ -189,6 +198,39 @@ export function atividadeSections(p: {
     ]),
   });
   return out;
+}
+
+// ── Cobertura da análise ──────────────────────────────────────────────────────────────────────
+// A seção que impede a planilha de mentir por omissão. Um CSV com "0 alertas" é lido como
+// operação tranquila; se aquele período teve 30% de cobertura, a leitura correta é "não faço
+// ideia". O veredito vai por EXTENSO, não só o número — a planilha é aberta numa reunião, sem
+// quem a gerou por perto para explicar o que 30% significa.
+export function coberturaSection(c: Cobertura): CsvSection {
+  const rows: (string | number)[][] =
+    c.pct === null
+      ? [
+          ["Cobertura da análise", "não medido"],
+          ["Motivo", c.motivo ? MOTIVO_COBERTURA_TEXTO[c.motivo] : "—"],
+        ]
+      : [
+          ["Cobertura da análise (%)", c.pct],
+          ["Tempo analisado", duracaoHumana(c.observadoMs)],
+          ["Tempo esperado (denominador)", duracaoHumana(c.esperadoMs)],
+          ["Câmeras consideradas", c.cameras],
+          ["Horas sem dado nenhum", c.horasSemDado],
+          ["Horas esperadas", c.horasEsperadas],
+          [
+            "Como ler os zeros deste relatório",
+            coberturaConfiavel(c)
+              ? "como MEDIÇÃO: onde não há ocorrência, houve observação"
+              : "com RESSALVA: um zero pode ser ausência de medição, não ausência de ocorrência",
+          ],
+        ];
+  rows.push([
+    "Escopo",
+    "cobertura do PERÍODO, sem recorte de turno (hora sem dado não tem carimbo de turno); câmera desativada fora da conta",
+  ]);
+  return { title: "COBERTURA DA ANÁLISE", headers: ["Indicador", "Valor"], rows };
 }
 
 // ── Fluxo (linhas de contagem): indicadores + por linha + tendência diária ──
@@ -427,6 +469,8 @@ export function reportSections(p: {
   alarmes: { ak: AlarmKpis; alarmsView: AlarmEvent[] };
   /** Eficiência do recorte (só o Resumo a computa — as outras abas não têm as duas dimensões). */
   eficiencia?: { ef: Eficiencia; metaPorHora: number | null } | null;
+  /** Cobertura da análise no período — viaja em TODO modo (ver coberturaSection). */
+  cobertura?: Cobertura | null;
 }): CsvSection[] {
   const { mode, atividade, leitura, objetos, fadiga, fluxo, alarmes } = p;
   const sections: CsvSection[] = [
@@ -438,6 +482,9 @@ export function reportSections(p: {
       now: p.now,
     }),
   ];
+  // A COBERTURA vem logo depois dos metadados, antes de qualquer indicador: quem abre a
+  // planilha precisa saber se pode ler os zeros como medição ANTES de olhar os zeros.
+  if (p.cobertura) sections.push(coberturaSection(p.cobertura));
   // A eficiência entra ANTES do resumo por dimensão (é a manchete) e NÃO depende de as 4
   // dimensões existirem — o próprio cálculo já declara o elo que faltar.
   if (mode === "resumo" && p.eficiencia)

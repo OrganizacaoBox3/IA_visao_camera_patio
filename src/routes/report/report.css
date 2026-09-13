@@ -311,3 +311,81 @@
     color: #444;
   }
 }
+
+/* ── COBERTURA DA ANÁLISE ────────────────────────────────────────────────────
+   Vai na TELA e no PDF, antes de qualquer indicador: se o período não foi observado, todo
+   número abaixo é suspeito. Going-gray com exceção deliberada — cobertura boa é o normal
+   (neutro); abaixo do piso é anormalidade DE MEDIÇÃO, e aí a cor é informação. */
+.rep-cob-title {
+  margin: 0 0 var(--sp-3);
+  font-size: 1rem;
+  font-weight: 650;
+}
+.rep-cob-lens {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.rep-cob-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.rep-cob-pct {
+  font-family: var(--mono);
+  font-size: 2rem;
+  font-weight: 650;
+  line-height: 1;
+  color: var(--text);
+}
+.rep-cob-pct[data-baixa="1"] {
+  color: var(--state-warn);
+}
+.rep-cob-txt {
+  flex: 1;
+  min-width: 14rem;
+}
+.rep-cob-conta,
+.rep-cob-nota,
+.rep-cob-vazio,
+.rep-cob-esc {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.rep-cob-esc {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+}
+.rep-cob-alerta {
+  margin: var(--sp-1) 0 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  font-size: 0.82rem;
+  color: var(--state-warn-fg);
+}
+.rep-cob[data-baixa="1"] {
+  border-color: var(--state-warn-border);
+}
+@media print {
+  /* Tinta sobre papel branco (mesma exceção dos demais blocos impressos). O card não pode
+     quebrar entre páginas: a cobertura numa folha e o denominador noutra perde a defesa. */
+  .rep-cob {
+    break-inside: avoid;
+    border-color: #ccc;
+    background: #fff;
+  }
+  .rep-cob-lens,
+  .rep-cob-conta,
+  .rep-cob-nota,
+  .rep-cob-vazio,
+  .rep-cob-esc {
+    color: #444;
+  }
+  .rep-cob-alerta,
+  .rep-cob-pct[data-baixa="1"] {
+    color: #8a6100;
+  }
+}

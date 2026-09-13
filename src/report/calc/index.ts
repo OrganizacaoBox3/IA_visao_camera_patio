@@ -37,3 +37,4 @@ export * from "./objetos";
 export * from "./fadiga";
 export * from "./alarmes";
 export * from "./flow";
+export * from "./cobertura";
