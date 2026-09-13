@@ -2629,3 +2629,29 @@ button.rail-item {
   cursor: pointer;
   font: inherit;
 }
+
+/* Pré-visualização da notificação — DUAS colunas por tipo (equipe × cliente). Quem configura
+   precisa ver a mensagem que sai da empresa antes de ela sair. Em tela estreita empilha. */
+.notif-preview .np-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+@media (max-width: 720px) {
+  .notif-preview .np-cols {
+    grid-template-columns: 1fr;
+  }
+}
+.notif-preview .np-who {
+  display: block;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-1);
+}
+.notif-preview .np-nao {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}

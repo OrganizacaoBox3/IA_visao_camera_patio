@@ -129,6 +129,16 @@
   color: var(--state-warn-fg);
 }
 
+/* Estado OPERACIONAL (produção/teste/manutenção/desativada) — selo + a consequência no
+   HelpTip ao lado. Fica junto do status de conexão de propósito: "Online + Manutenção" é uma
+   combinação legítima e frequente, e o operador precisa ler as duas coisas de uma vez. */
+.cam-estado {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
+}
+
 /* Rodapé das seções (ação primária à esquerda, fora da lista). */
 .cam-sec-foot {
   display: flex;

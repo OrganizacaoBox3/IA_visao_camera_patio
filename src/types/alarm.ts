@@ -78,6 +78,19 @@ export type AlarmShiftSuppression = {
   suppressedByShiftLastHour?: number;
   /** quebra por MOTIVO na última hora — a chave é o motivo do gate (ver rótulos abaixo). */
   suppressedByShiftReasons?: Record<string, number>;
+
+  // ── SUPRIMIDOS PELO ESTADO OPERACIONAL DA CÂMERA (2026-09-13) ──────────────────────────────
+  // Câmera em teste/manutenção/desativada não notifica (server/alarm/camera-gate.js). Mesma
+  // doutrina do gate de turno, mesmo contrato aditivo, e pelo MESMO motivo: silêncio sem
+  // rastro é como se perde a confiança num sistema de alarme. Enquanto houver alarme calado
+  // por aqui, a faixa de saúde fica aberta — o operador precisa saber que está cego de
+  // propósito, senão o silêncio vira "está tudo bem".
+  /** total suprimido desde o boot do hub (contador volátil). */
+  suppressedByCameraState?: number;
+  /** suprimidos na última hora (a leitura "está calando AGORA?"). */
+  suppressedByCameraStateLastHour?: number;
+  /** quebra por ESTADO na última hora (teste | manutencao | desativada). */
+  suppressedByCameraStateEstados?: Record<string, number>;
 };
 
 /** Motivos que o gate de turno reporta (server/alarm/shift.js). Chave desconhecida (motivo novo no
@@ -99,10 +112,13 @@ export function shiftSuppressionReasonLabel(reason: string): string {
 // Going-gray: advisory=info (azul, não-alarme), high=warn (amarelo), critical=critical (vermelho).
 // Cor SEMPRE via token --state-* — nunca RGB cru (o token é o dono da paleta).
 
+// Vocabulário das 3 gravidades. "Atenção" (não "Alta") e "Crítico" (não "Crítica") são as
+// palavras que a operação usa — e são as MESMAS do cabeçalho do WhatsApp (server/dispatch.js
+// CABECALHO): o operador que vê "ATENÇÃO" no celular precisa achar "Atenção" na tela.
 export const ALARM_PRIORITY_LABEL: Record<AlarmPriority, string> = {
   advisory: "Informativo",
-  high: "Alta",
-  critical: "Crítica",
+  high: "Atenção",
+  critical: "Crítico",
 };
 export const ALARM_STATE_LABEL: Record<AlarmState, string> = {
   new: "Novo",

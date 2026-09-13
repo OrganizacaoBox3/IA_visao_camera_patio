@@ -5,6 +5,7 @@
 const fs = require("node:fs");
 const { statePath } = require("./state-dir");
 const crypto = require("node:crypto");
+const { ehEstado, estadoDe } = require("./camera-state");
 
 const FILE = statePath("cameras.json");
 const TRANSPORTS = ["tcp", "udp", "http", "auto"]; // só se aplica a fontes rtsp://
@@ -38,10 +39,25 @@ function init() {
   return list;
 }
 
+// ESTADO OPERACIONAL (2026-09-13): o cadastro passou a distinguir produção / teste /
+// manutenção / desativada. `enabled` continua existindo e vira DERIVADO — contrato aditivo:
+// quem só lê `enabled` (rtsp.js, UI antiga, control-plane) não muda de comportamento, e
+// registro antigo em disco é migrado na leitura por `estadoDe` (enabled:false → desativada).
+// Ver o porquê de cada estado em camera-state.js.
+function comEstado(rec) {
+  if (!rec) return rec;
+  const estado = estadoDe(rec);
+  return { ...rec, estado, enabled: estado !== "desativada" };
+}
+
 function all() {
-  return list;
+  return list.map(comEstado);
 }
 function get(id) {
+  return comEstado(list.find((c) => c.id === id)) || null;
+}
+/** Registro CRU (sem derivar estado) — uso interno do update/remove. */
+function raw(id) {
   return list.find((c) => c.id === id) || null;
 }
 
@@ -58,16 +74,17 @@ function create(p) {
     fps: clampNum(p.fps, 1, 30),
     width: clampNum(p.width, 160, 1920),
     quality: clampNum(p.quality, 1, 31),
-    enabled: p.enabled !== false,
+    // `estado` explícito vence; sem ele, o `enabled` do payload decide (retrocompat da API).
+    estado: ehEstado(p.estado) ? p.estado : p.enabled === false ? "desativada" : "producao",
     criadoEm: Date.now(),
   };
   list.push(rec);
   save();
-  return { camera: rec };
+  return { camera: comEstado(rec) };
 }
 
 function update(id, patch) {
-  const rec = get(id);
+  const rec = raw(id);
   if (!rec) return { error: "câmera não encontrada" };
   patch = patch || {};
   if (typeof patch.label === "string" && patch.label.trim()) rec.label = patch.label.trim();
@@ -83,9 +100,14 @@ function update(id, patch) {
   if (patch.fps !== undefined) rec.fps = clampNum(patch.fps, 1, 30);
   if (patch.width !== undefined) rec.width = clampNum(patch.width, 160, 1920);
   if (patch.quality !== undefined) rec.quality = clampNum(patch.quality, 1, 31);
-  if (typeof patch.enabled === "boolean") rec.enabled = patch.enabled;
+  // `estado` é a fonte da verdade; `enabled` continua aceito e é traduzido (o toggle antigo
+  // da UI nunca escolhe "teste"/"manutenção" — ligar de volta devolve a câmera à produção).
+  if (ehEstado(patch.estado)) rec.estado = patch.estado;
+  else if (typeof patch.enabled === "boolean")
+    rec.estado = patch.enabled ? "producao" : "desativada";
+  delete rec.enabled; // derivado a partir daqui — não se persiste um campo que é calculado
   save();
-  return { camera: rec };
+  return { camera: comEstado(rec) };
 }
 
 function remove(id) {

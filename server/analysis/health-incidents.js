@@ -67,10 +67,23 @@ const ehProblema = (estado) => gravidadeDe(estado) > 0;
 
 /**
  * Máquina de incidentes de saúde. Estado encapsulado; determinístico dado o histórico.
- * @param {{confirmMs?:number, renotifyMs?:number, resolveMs?:number, sistemicoMin?:number}} [opts]
+ *
+ * `renotifyMs` aceita NÚMERO ou FUNÇÃO. A função existe porque a cadência de lembrete virou
+ * configuração de usuário (settings.renotifyMs, superadmin): lida a cada avaliação, mudar o
+ * intervalo na tela passa a valer no próximo tick, sem reiniciar o hub. O módulo continua PURO
+ * — quem sabe de onde vem o número é o engine, que injeta o getter.
+ * @param {{confirmMs?:number, renotifyMs?:number|(()=>number), resolveMs?:number, sistemicoMin?:number}} [opts]
  */
 function createHealthIncidents(opts = {}) {
   const cfg = { ...DEFAULTS, ...opts };
+  /** Cadência de lembrete AGORA. Valor inválido cai no default — a máquina nunca para de
+   *  renotificar por causa de uma config corrompida (0 ou NaN faria renotificar a cada tick,
+   *  que é a inundação que este módulo existe para evitar). */
+  function renotifyMs() {
+    const v = typeof cfg.renotifyMs === "function" ? cfg.renotifyMs() : cfg.renotifyMs;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULTS.renotifyMs;
+  }
   // cameraId → { estado, desde, aberto, incidenteId, notificadoEm, okDesde, pico }
   const porCamera = new Map();
   // estado → { incidenteId, desde, notificadoEm, ids[] } (incidente SISTÊMICO aberto)
@@ -179,7 +192,7 @@ function createHealthIncidents(opts = {}) {
           motivo,
           desde: m.desde,
         });
-      } else if (now - m.notificadoEm >= cfg.renotifyMs) {
+      } else if (now - m.notificadoEm >= renotifyMs()) {
         m.notificadoEm = now;
         acoes.push({
           tipo: "renotificar",
@@ -243,7 +256,7 @@ function createHealthIncidents(opts = {}) {
         });
       } else {
         s.ids = ids;
-        if (now - s.notificadoEm >= cfg.renotifyMs) {
+        if (now - s.notificadoEm >= renotifyMs()) {
           s.notificadoEm = now;
           acoesFinais.push({
             tipo: "renotificar",
@@ -309,7 +322,7 @@ function createHealthIncidents(opts = {}) {
       porCamera.clear();
       sistemicos.clear();
     },
-    config: () => ({ ...cfg }),
+    config: () => ({ ...cfg, renotifyMs: renotifyMs() }),
   };
 }
 

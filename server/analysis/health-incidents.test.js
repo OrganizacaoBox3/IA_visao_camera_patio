@@ -14,7 +14,7 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { createHealthIncidents } = require("./health-incidents");
+const { createHealthIncidents, DEFAULTS } = require("./health-incidents");
 
 const T0 = 1_000_000;
 const seg = (n) => n * 1000;
@@ -315,5 +315,52 @@ describe("textoDoIncidente — o que chega no WhatsApp", () => {
     expect(f(45_000)).toContain("45s");
     expect(f(10 * 60_000)).toContain("10min");
     expect(f(3 * 60 * 60_000)).toContain("3.0h");
+  });
+});
+
+// ── CADÊNCIA DE LEMBRETE CONFIGURÁVEL (2026-09-13) ───────────────────────────────────────────
+// O intervalo de renotificação virou configuração de usuário (settings.renotifyMs). Ele é lido
+// A CADA avaliação, e não uma vez na construção, para que mudar na tela valha no próximo tick
+// sem reiniciar o hub. Estes testes travam as duas pontas: que a função é mesmo consultada, e
+// que uma config corrompida não transforma o lembrete na inundação que o módulo evita.
+describe("renotifyMs como FUNÇÃO — cadência configurável em runtime", () => {
+  const doente = { "cam-1": { estado: "sem-video", motivo: "sem frame" } };
+  const T = 1_700_000_000_000;
+
+  /** Abre o incidente e devolve a máquina já com ele aberto (passado o confirmMs). */
+  function comIncidenteAberto(opts) {
+    const m = createHealthIncidents({ confirmMs: 1000, ...opts });
+    m.observe(doente, T);
+    const r = m.observe(doente, T + 1001);
+    expect(r.acoes.map((a) => a.tipo)).toContain("abrir");
+    return m;
+  }
+
+  it("consulta a função a cada avaliação — mudar o valor vale no próximo tick", () => {
+    let cadencia = 60 * 60_000; // 1 h
+    const m = comIncidenteAberto({ renotifyMs: () => cadencia });
+    // 10 min depois, com cadência de 1h: nada.
+    expect(m.observe(doente, T + 1001 + 10 * 60_000).acoes).toHaveLength(0);
+    // O usuário baixa para 5 min na tela. A MESMA máquina passa a lembrar.
+    cadencia = 5 * 60_000;
+    const r = m.observe(doente, T + 1001 + 20 * 60_000);
+    expect(r.acoes.map((a) => a.tipo)).toContain("renotificar");
+  });
+
+  it("config corrompida (0/NaN/negativo) cai no default em vez de renotificar a cada tick", () => {
+    for (const ruim of [0, NaN, -5, null, undefined, "trinta"]) {
+      const m = comIncidenteAberto({ renotifyMs: () => ruim });
+      // Um tick 1s depois NÃO pode renotificar — com 0 ou NaN, renotificaria sempre.
+      expect(m.observe(doente, T + 2001).acoes).toHaveLength(0);
+      expect(m.config().renotifyMs).toBe(DEFAULTS.renotifyMs);
+    }
+  });
+
+  it("número simples (uso legado) continua funcionando igual", () => {
+    const m = comIncidenteAberto({ renotifyMs: 5 * 60_000 });
+    expect(m.observe(doente, T + 1001 + 60_000).acoes).toHaveLength(0);
+    expect(m.observe(doente, T + 1001 + 5 * 60_000).acoes.map((a) => a.tipo)).toContain(
+      "renotificar",
+    );
   });
 });

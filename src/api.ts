@@ -153,13 +153,19 @@ export type NotifSettings = {
   incluirLocal: boolean;
   incluirHora: boolean;
   incluirRodape: boolean;
+  /** Cadência do LEMBRETE de incidente aberto, em ms (1 min a 24 h). O hub prende no limite —
+   *  ver server/alarm/intervals.js e o espelho em src/types/intervalos.ts. */
+  renotifyMs: number;
   tipos: Record<string, NotifTipo>;
 };
 export const getNotifSettings = () => apiGet<NotifSettings>("/api/notif-settings");
 export const saveNotifSettings = (s: NotifSettings) =>
   apiSend<NotifSettings>("PATCH", "/api/notif-settings", s);
+/** Pré-visualização por tipo, com UMA versão por público. `cliente: null` = este tipo não
+ *  chega ao cliente (informativo/resumo de rajada ficam na equipe — server/alarm/audience.js). */
+export type NotifPreview = Record<string, { equipe: string; cliente: string | null }>;
 export const previewNotif = (s: NotifSettings) =>
-  apiSend<Record<string, string>>("POST", "/api/notif-preview", s);
+  apiSend<NotifPreview>("POST", "/api/notif-preview", s);
 
 // ── Destinatários WhatsApp (superadmin) ──
 export type Recipient = {
@@ -387,6 +393,9 @@ export const deleteShift = (id: string) =>
 // que a DashboardPage já escuta — o client só dispara a chamada HTTP.
 // SEGURANÇA/LGPD: `url` é SENSÍVEL (pode conter credenciais user:pass). NUNCA logar a url; ao
 // exibir/editar, mascarar as credenciais (maskCameraUrl). O contrato aceita rtsp/rtsps/http(s).
+import type { CameraEstado } from "./types/cameraEstado";
+export type { CameraEstado };
+
 export type CameraTransport = "tcp" | "udp" | "http" | "auto"; // só relevante p/ rtsp
 export type Camera = {
   id: string;
@@ -396,7 +405,12 @@ export type Camera = {
   fps?: number; // 1–30
   width?: number; // 160–1920
   quality?: number; // 1–31 (menor = melhor)
+  /** DERIVADO de `estado` pelo servidor (`estado !== "desativada"`). Mantido no contrato para
+   *  não quebrar consumidor antigo; quem decide é `estado`. */
   enabled: boolean;
+  /** Estado OPERACIONAL (server/camera-state.js). Opcional no tipo porque hub anterior a
+   *  2026-09-13 não o manda — o front migra com `cameraEstadoDe` em vez de assumir. */
+  estado?: CameraEstado;
   criadoEm: number; // epoch-ms
 };
 // Corpo do POST (label opcional; url obrigatória). PATCH aceita qualquer subconjunto.
@@ -408,6 +422,7 @@ export type NewCamera = {
   width?: number;
   quality?: number;
   enabled?: boolean;
+  estado?: CameraEstado;
 };
 
 // Validação de URL no cliente (espelha o backend): deve começar com rtsp/rtsps/http/https.
@@ -441,7 +456,15 @@ export const deleteCamera = (id: string) =>
 // GET /api/cameras/connected → { cameras: [{ id, label, online }] }. Diferente do registro
 // /api/cameras (superadmin-only, com url SENSÍVEL), esta lista é só identidade+estado — sem url —
 // e vale para QUALQUER autenticado; inclui nós locais/webcam que não têm cadastro IP.
-export type ConnectedCamera = { id: string; label: string; online: boolean };
+export type ConnectedCamera = {
+  id: string;
+  label: string;
+  online: boolean;
+  /** Estado operacional (aditivo — hub anterior a 2026-09-13 omite; o front migra com
+   *  `cameraEstadoDe`). O relatório usa para tirar a câmera DESATIVADA do denominador de
+   *  cobertura: não medir o que não era para medir não é buraco. */
+  estado?: CameraEstado;
+};
 export const getConnectedCameras = () =>
   apiGet<{ cameras: ConnectedCamera[] }>("/api/cameras/connected");
 

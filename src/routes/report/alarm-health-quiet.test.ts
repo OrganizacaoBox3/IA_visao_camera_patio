@@ -30,8 +30,16 @@ describe("faixaSemNadaAReportar — o colapso é para o silêncio, não para o m
     expect(faixaSemNadaAReportar({ ...quieto, suppressedByShift: 3 })).toBe(false);
   });
 
-  it("hub antigo sem o campo de supressão não impede o colapso (ausência ≠ movimento)", () => {
+  it("supressão por ESTADO da câmera reabre — quem está cego de propósito precisa ver", () => {
+    // Uma câmera em manutenção está calando alarme AGORA. Se a faixa se recolhesse, a tela
+    // ficaria idêntica à de um sistema saudável — que é o falso-OK que ela existe para evitar.
+    expect(faixaSemNadaAReportar({ ...quieto, suppressedByCameraState: 1 })).toBe(false);
+  });
+
+  it("hub antigo sem os campos de supressão não impede o colapso (ausência ≠ movimento)", () => {
     expect(faixaSemNadaAReportar({ ...quieto, suppressedByShift: null })).toBe(true);
     expect(faixaSemNadaAReportar({ ...quieto, suppressedByShift: undefined })).toBe(true);
+    expect(faixaSemNadaAReportar({ ...quieto, suppressedByCameraState: null })).toBe(true);
+    expect(faixaSemNadaAReportar({ ...quieto, suppressedByCameraState: undefined })).toBe(true);
   });
 });

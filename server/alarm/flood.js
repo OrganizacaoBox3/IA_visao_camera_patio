@@ -56,7 +56,12 @@ function applyFlood(cameraId, zona, text, ts, priority, now, meta) {
       { cameraId, zonas: nZonas, suprimidos: st.n, janelaMs: FLOOD_WINDOW_MS },
       "[alarm] inundação colapsada em resumo",
     );
-    return makeDecision(resumo, ts, maxPriority(priority, "critical"), {
+    // A RAJADA NÃO ESCALA MAIS PARA CRÍTICO (2026-09-13). O resumo é SINTOMA: os alertas que
+    // ele colapsou já saíram (ou serão reemitidos) com a gravidade de cada um. Forçar
+    // `critical` aqui contava o mesmo problema duas vezes e era uma das fontes dos 83% de
+    // crítico medidos. O piso "high" preserva a intenção original — rajada merece atenção —
+    // sem rebaixar um crítico legítimo que estivesse no meio dela (maxPriority).
+    return makeDecision(resumo, ts, maxPriority(priority, "high"), {
       cameraId,
       zona: "*",
       tipo: meta.tipo,
