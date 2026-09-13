@@ -40,8 +40,8 @@ export function FadigaPanel({
 }) {
   // A aba "onde" MORREU (renderizava o MESMO heatmap da aba "quando" — duplicação declarada no
   // próprio código). O estado da aba é COMPARTILHADO entre os modos: se o gestor chega aqui com
-  // "onde"/"fluxo" herdados de Atividade, cai em "quando" — sem aba fantasma, sem painel vazio.
-  const activeTab = tab === "onde" || tab === "fluxo" ? "quando" : tab;
+  // "onde" herdado de Atividade cai em "quando" — sem aba fantasma, sem painel vazio.
+  const activeTab = tab === "onde" ? "quando" : tab;
   return (
     <>
       <RepLens lens={lens} />

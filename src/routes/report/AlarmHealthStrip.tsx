@@ -15,9 +15,9 @@
 // Posição no topo, e não no rodapé: se o alarme está inundando, TODO número abaixo é suspeito —
 // a saúde precede a leitura. Going-gray: base neutra; cor saturada só p/ o % crítico fora do alvo.
 import { useCallback, useEffect, useState } from "react";
-import { TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import { Sparkline } from "../../components/Sparkline";
-import { Alert, Loading, SectionTitle, StatusDot, Tooltip } from "../../ui";
+import { Alert, Button, Loading, SectionTitle, StatusDot, Tooltip } from "../../ui";
 import { getAlarmMetrics, type AlarmCounts, type AlarmMetrics } from "../../api";
 import { shiftSuppressionReasonLabel, type AlarmShiftSuppression } from "../../types/alarm";
 import "./health.css";
@@ -52,12 +52,33 @@ function fmtDuration(ms: number): string {
   return `${sec}s`;
 }
 
+/** A FAIXA TEM ALGO A DIZER? Decisão PURA (testável fora do React — é o padrão da casa para
+ *  regra que decide o que a tela mostra).
+ *
+ *  Going-gray levado às últimas consequências: com zero alarme na janela, nada acima do alvo,
+ *  nada silenciado e nada suprimido, os 5 cartões são uma TELA INTEIRA DE ZEROS antes do
+ *  primeiro número do relatório — e tela de zeros ensina o gestor a rolar sem ler. Nesse estado
+ *  a faixa vira UMA LINHA que afirma o mesmo ("nada a reportar"), com o detalhe a um clique.
+ *  Qualquer sinal de vida (um alarme que seja, um silenciamento, uma supressão) reabre tudo:
+ *  o colapso é para o silêncio, nunca para esconder movimento. */
+export function faixaSemNadaAReportar(m: {
+  inWindow: number;
+  overTarget: boolean;
+  shelvedActive: number;
+  suppressedByShift?: number | null;
+}): boolean {
+  return (
+    m.inWindow === 0 && !m.overTarget && m.shelvedActive === 0 && !(m.suppressedByShift ?? 0)
+  );
+}
+
 export function AlarmHealthStrip() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rateHist, setRateHist] = useState<number[]>([]);
   const [critHist, setCritHist] = useState<number[]>([]);
+  const [expandido, setExpandido] = useState(false);
 
   const load = useCallback(async (cancelled: () => boolean) => {
     try {
@@ -100,6 +121,7 @@ export function AlarmHealthStrip() {
       </section>
     );
   if (!metrics) return null;
+  const quieta = faixaSemNadaAReportar(metrics);
 
   return (
     <section className="ah-strip" aria-label="Saúde do sistema de alarmes">
@@ -119,7 +141,19 @@ export function AlarmHealthStrip() {
         </Alert>
       )}
 
-      <div className="ah-kpis">
+      {/* Silêncio → uma linha. O texto AFIRMA o estado (não é um "nada aqui" vazio): quem lê
+          sabe que a janela foi observada e que ela veio limpa. O detalhe fica a um clique. */}
+      {quieta && !expandido && (
+        <p className="ah-strip__quiet">
+          Nenhum alarme na janela de {fmtDuration(metrics.windowMs)} · nada silenciado · nada
+          suprimido por turno.{" "}
+          <Button variant="ghost" onClick={() => setExpandido(true)} aria-expanded={false}>
+            <ChevronRight size={14} strokeWidth={1.75} aria-hidden /> ver os números
+          </Button>
+        </p>
+      )}
+
+      <div className="ah-kpis" hidden={quieta && !expandido}>
         <div className="ah-kpi">
           <span className="ah-kpi__label">Taxa de alarmes</span>
           <span className="ah-kpi__value">
@@ -184,6 +218,14 @@ export function AlarmHealthStrip() {
           <PriorityDist counts={metrics.byPriorityWindow} />
         </div>
       </div>
+
+      {quieta && expandido && (
+        <div>
+          <Button variant="ghost" onClick={() => setExpandido(false)} aria-expanded>
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden /> recolher
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

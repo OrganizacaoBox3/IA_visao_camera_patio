@@ -15,6 +15,7 @@ import {
   type ReadingKpis,
   type ObjectKpis,
   type FadigaKpis,
+  type FlowKpis,
 } from "../../report/calc";
 import { Card } from "../../ui";
 import { classLabel } from "./ObjetosPanel";
@@ -30,12 +31,14 @@ export type ResumoFadiga = {
 };
 export type ResumoLeitura = { rk: ReadingKpis; rtips: string[] };
 export type ResumoObjetos = { ok: ObjectKpis; oLoads: number };
+export type ResumoFluxo = { k: FlowKpis; topLineLabel: string | null };
 export type ResumoAlarmes = { ak: AlarmKpis };
 
 export function ResumoPanel({
   periodLabel,
   shiftLabel,
   atividade,
+  fluxo,
   fadiga,
   leitura,
   objetos,
@@ -46,6 +49,7 @@ export function ResumoPanel({
   shiftLabel: string;
   // null = dimensão SEM DADO no histórico → o cartão não existe (não vira um cartão de zeros).
   atividade: ResumoAtividade | null;
+  fluxo: ResumoFluxo | null;
   fadiga: ResumoFadiga | null;
   leitura: ResumoLeitura | null;
   objetos: ResumoObjetos | null;
@@ -86,6 +90,36 @@ export function ResumoPanel({
             <div className="rc-foot">
               área mais parada: {atividade.k.topArea} ·{" "}
               {String(atividade.k.peakHour).padStart(2, "0")}h
+            </div>
+          </Card>
+        )}
+
+        {/* LINHAS DE CONTAGEM — o 6º cartão. O fluxo existia no relatório desde sempre e nunca
+            aparecia no Resumo: estava enterrado numa aba do modo Atividade. going-gray: volume de
+            passagem não é anormalidade, então nenhum destes números ganha cor. */}
+        {fluxo && (
+          <Card className="resumo-card" onClick={() => onOpenMode("fluxo")}>
+            <div className="rc-h">
+              Fluxo <span className="muted">linhas de contagem</span>
+            </div>
+            <div className="rc-kpis">
+              <div className="rc-k">
+                <b>{fluxo.k.in.toLocaleString("pt-BR")}</b>
+                <span>entradas</span>
+              </div>
+              <div className="rc-k">
+                <b>{fluxo.k.out.toLocaleString("pt-BR")}</b>
+                <span>saídas</span>
+              </div>
+              <div className="rc-k">
+                <b>{fluxo.k.peakHour === null ? "—" : `${String(fluxo.k.peakHour).padStart(2, "0")}h`}</b>
+                <span>pico</span>
+              </div>
+            </div>
+            <div className="rc-foot">
+              {fluxo.topLineLabel
+                ? `linha de maior movimento: ${fluxo.topLineLabel}`
+                : `${fluxo.k.lines} linha${fluxo.k.lines === 1 ? "" : "s"} monitorada${fluxo.k.lines === 1 ? "" : "s"}`}
             </div>
           </Card>
         )}

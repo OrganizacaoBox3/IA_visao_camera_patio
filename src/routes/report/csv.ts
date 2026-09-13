@@ -20,7 +20,7 @@ import type {
   FadigaEventRow,
   AlarmKpis,
 } from "../../report/calc";
-import type { FlowLineRow } from "../../report/calc";
+import { deltaPct, flowLineKey, type FlowKpis, type FlowLineRow } from "../../report/calc";
 import type { AlarmEvent } from "../../types/alarm";
 import { alarmSection, type CsvSection } from "../../report/csv";
 import { classLabel } from "./ObjetosPanel";
@@ -30,6 +30,7 @@ import type { AtividadeSummary, AtividadeDetails } from "./useAtividadeVM";
 import type { LeituraSummary, LeituraDetails } from "./useLeituraVM";
 import type { ObjetosSummary, ObjetosDetails } from "./useObjetosVM";
 import type { FadigaSummary } from "./useFadigaVM";
+import type { FluxoSummary, FluxoDetails } from "./useFluxoVM";
 
 // Primitivas re-exportadas: a página monta/serializa/baixa importando só deste módulo.
 export { buildCSV, downloadCSVFile, dateStamp, type CsvSection } from "../../report/csv";
@@ -121,11 +122,9 @@ export function atividadeSections(p: {
   rankRows: { area: string; idleMin: number; alerts: number }[];
   byAtivRows: { atividade: string; idleMin: number; alerts: number }[];
   byShiftA: ByShift;
-  // null = hub sem o kind "flow" → seções de fluxo omitidas (área não se aplica ao fluxo).
-  flow: { k: { in: number; out: number; lines: number }; lineRows: FlowLineRow[] } | null;
   evt: EventRow[];
 }): CsvSection[] {
-  const { k, peoplePeak, ruler, rankRows, byAtivRows, byShiftA, flow, evt } = p;
+  const { k, peoplePeak, ruler, rankRows, byAtivRows, byShiftA, evt } = p;
   const out: CsvSection[] = [
     {
       title: "INDICADORES",
@@ -178,23 +177,6 @@ export function atividadeSections(p: {
       ],
     });
   }
-  if (flow) {
-    out.push({
-      title: "FLUXO DE PESSOAS (linhas de contagem)",
-      headers: ["Indicador", "Valor"],
-      rows: [
-        ["Entradas", flow.k.in],
-        ["Saídas", flow.k.out],
-        ["Saldo (entradas − saídas)", flow.k.in - flow.k.out],
-        ["Linhas com cruzamento", flow.k.lines],
-      ],
-    });
-    out.push({
-      title: "FLUXO POR LINHA",
-      headers: ["Câmera", "Linha (id)", "Entradas", "Saídas"],
-      rows: flow.lineRows.map((r) => [r.cameraLabel || r.cameraId, r.tripwireId, r.in, r.out]),
-    });
-  }
   out.push({
     title: `EVENTOS (${evt.length})`,
     headers: ["Data/hora", "Área", "Câmera", "Duração (min)", "Turno"],
@@ -207,6 +189,62 @@ export function atividadeSections(p: {
     ]),
   });
   return out;
+}
+
+// ── Fluxo (linhas de contagem): indicadores + por linha + tendência diária ──
+// Era um par de tabelas penduradas no CSV de ATIVIDADE, sem comparação nem tendência. Agora é
+// modo próprio e o CSV acompanha: o SALDO sai rotulado como conferência de instalação (não meta)
+// e o período ANTERIOR viaja junto — um total sozinho não diz se subiu ou caiu, e o arquivo é
+// aberto sem quem o gerou por perto.
+export function fluxoSections(p: {
+  k: FlowKpis;
+  kPrev: FlowKpis;
+  lineRows: FlowLineRow[];
+  evoBars: { label: string; in: number; out: number }[];
+  /** chave → rótulo humano (o mesmo da tela; a chave crua não é para olho humano). */
+  labelOf: (key: string) => string;
+}): CsvSection[] {
+  const { k, kPrev, lineRows, evoBars, labelOf } = p;
+  const pad2 = (h: number) => String(h).padStart(2, "0");
+  const variacao = deltaPct(k.total, kPrev.total);
+  return [
+    {
+      title: "TRAVESSIAS (linhas de contagem)",
+      headers: ["Indicador", "Valor"],
+      rows: [
+        ["Entradas", k.in],
+        ["Saídas", k.out],
+        ["Travessias (entradas + saídas)", k.total],
+        // Sem período anterior no histórico não existe variação — "0%" leria como "estável".
+        ["Variação vs. período anterior (%)", variacao === null ? "não medido" : variacao],
+        ["Travessias no período anterior", kPrev.total],
+        ["Hora de pico", k.peakHour === null ? "não medido" : `${pad2(k.peakHour)}h`],
+        ["Linhas com cruzamento", k.lines],
+        ["Saldo (entradas − saídas)", k.saldo],
+        [
+          "Observação sobre o saldo",
+          "conferência da linha, não meta: num ponto de passagem quem entra acaba saindo — saldo alto indica linha mal posicionada ou travessia perdida de um lado",
+        ],
+      ],
+    },
+    {
+      title: "POR LINHA",
+      headers: ["Linha", "Câmera", "Linha (id)", "Entradas", "Saídas", "Travessias"],
+      rows: lineRows.map((r) => [
+        labelOf(flowLineKey(r.cameraId, r.tripwireId)),
+        r.cameraLabel || r.cameraId,
+        r.tripwireId,
+        r.in,
+        r.out,
+        r.in + r.out,
+      ]),
+    },
+    {
+      title: "TENDÊNCIA DIÁRIA",
+      headers: ["Dia", "Entradas", "Saídas"],
+      rows: evoBars.map((b) => [b.label, b.in, b.out]),
+    },
+  ];
 }
 
 // ── Leitura (indicadores + por ponto/câmera/turno + leituras) ──
@@ -381,11 +419,16 @@ export function reportSections(p: {
     details: ObjetosDetails | null;
   };
   fadiga: { summary: FadigaSummary | null };
+  fluxo: {
+    summary: FluxoSummary | null;
+    details: FluxoDetails | null;
+    labelOf: (key: string) => string;
+  };
   alarmes: { ak: AlarmKpis; alarmsView: AlarmEvent[] };
   /** Eficiência do recorte (só o Resumo a computa — as outras abas não têm as duas dimensões). */
   eficiencia?: { ef: Eficiencia; metaPorHora: number | null } | null;
 }): CsvSection[] {
-  const { mode, atividade, leitura, objetos, fadiga, alarmes } = p;
+  const { mode, atividade, leitura, objetos, fadiga, fluxo, alarmes } = p;
   const sections: CsvSection[] = [
     metaSection({
       modeLabel: MODE_LABEL[mode],
@@ -426,11 +469,17 @@ export function reportSections(p: {
         rankRows: details.rank.rows,
         byAtivRows: details.byAtiv.rows,
         byShiftA: details.byShiftA,
-        // Fluxo só quando o hub expõe o kind "flow" (hub antigo → omite).
-        flow: details.flowView
-          ? { k: details.flowView.k, lineRows: details.flowView.byLine.rows }
-          : null,
         evt: details.evt,
+      }),
+    );
+  } else if (mode === "fluxo" && fluxo.summary && fluxo.details) {
+    sections.push(
+      ...fluxoSections({
+        k: fluxo.summary.k,
+        kPrev: fluxo.summary.kPrev,
+        lineRows: fluxo.details.byLine.rows,
+        evoBars: fluxo.details.evo.bars,
+        labelOf: fluxo.labelOf,
       }),
     );
   } else if (mode === "leitura" && leitura.summary && leitura.details) {

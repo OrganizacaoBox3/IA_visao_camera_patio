@@ -10,7 +10,7 @@
 //     server/routes/data.js:36). O botão antigo aparecia para todos só para dizer "não": um botão
 //     que existe para negar é ruído, não é segurança.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Hourglass, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Hourglass, Trash2 } from "lucide-react";
 import {
   AlertDialog,
   Alert,
@@ -212,6 +212,13 @@ export function ReportTools({
   const [camsErr, setCamsErr] = useState<string | null>(null);
   const [zonesErr, setZonesErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  // O FORMULÁRIO DE SILENCIAMENTO NASCE FECHADO (limpeza da tela, 2026-09-10). Ele ocupava ~500px
+  // de formulário permanentemente aberto no rodapé de TODOS os modos do relatório — inclusive nos
+  // que não têm nada a ver com alarme. O que NÃO se esconde é o ESTADO: o resumo ao lado do
+  // disclosure diz quantos silenciamentos estão ativos, e a seção abre sozinha quando há algum
+  // (alerta calado é anormalidade: going-gray manda mostrar, não esconder).
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [autoAberto, setAutoAberto] = useState(false);
 
   // Builder do silenciamento: 3 Selects (câmera → zona → tipo) MONTAM a chave `cameraId|zona|tipo`
   // do contrato do back por baixo — ninguém digita chave crua.
@@ -250,9 +257,13 @@ export function ReportTools({
       });
   }, []);
   useEffect(() => {
-    void loadShelves();
-    loadCams();
-  }, [loadShelves, loadCams]);
+    void loadShelves(); // sempre: é o ESTADO exibido no resumo do disclosure, mesmo fechado
+  }, [loadShelves]);
+  // A lista de CÂMERAS só serve ao formulário: com a seção fechada (o caso comum), o relatório
+  // deixa de fazer esse GET na abertura da página. Carrega na primeira expansão.
+  useEffect(() => {
+    if (toolsOpen) loadCams();
+  }, [toolsOpen, loadCams]);
 
   // Zonas da câmera escolhida (rótulos) — zonas de exclusão nunca alarmam, ficam de fora.
   useEffect(() => {
@@ -353,10 +364,41 @@ export function ReportTools({
     }
   }
 
+  const ativos = shelves.status === "ok" ? shelves.items.length : null;
+  // Abre UMA vez, quando a carga revelar silenciamento ativo — depois respeita o clique do
+  // usuário (fechar de novo não pode ser desfeito pelo próximo render).
+  useEffect(() => {
+    if (!autoAberto && ativos !== null && ativos > 0) {
+      setToolsOpen(true);
+      setAutoAberto(true);
+    }
+  }, [ativos, autoAberto]);
+  const resumoShelves =
+    shelves.status === "loading"
+      ? "carregando…"
+      : ativos === null
+        ? "estado desconhecido"
+        : ativos === 0
+          ? "nenhum alarme silenciado"
+          : `${ativos} silenciamento${ativos === 1 ? "" : "s"} ativo${ativos === 1 ? "" : "s"}`;
+
   return (
     <section className="ah-tools" aria-label="Ferramentas">
-      <SectionTitle>Ferramentas — engenharia</SectionTitle>
-      <div className="ah-cols">
+      <div className="ah-tools__head">
+        <Button variant="ghost" onClick={() => setToolsOpen((v) => !v)} aria-expanded={toolsOpen}>
+          {toolsOpen ? (
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <ChevronRight size={14} strokeWidth={1.75} aria-hidden />
+          )}
+          Ferramentas — engenharia
+        </Button>
+        {/* going-gray: só ganha cor quando HÁ alerta calado (é o que muda a leitura do relatório). */}
+        <span className="ah-tools__state" style={ativos ? { color: "var(--state-warn)" } : undefined}>
+          {resumoShelves}
+        </span>
+      </div>
+      <div className="ah-cols" hidden={!toolsOpen}>
         <section className="ah-kpi">
           <SectionTitle flush>Silenciamentos ativos</SectionTitle>
           <ShelvesList

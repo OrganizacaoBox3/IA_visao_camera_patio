@@ -553,10 +553,10 @@ test("Tabs (Relatório): setas/clique trocam a aba e só o tabpanel ativo é exi
 
   const tablist = page.getByRole("tablist", { name: "Seção" });
   await expect(tablist).toBeVisible();
-  // 5 abas: Quando/Onde/Tendência/Eventos + "Fluxo de pessoas" (o hub do e2e expõe o
-  // kind "flow", então a aba condicional existe — comportamento real do produto).
-  await expect(tablist.getByRole("tab")).toHaveCount(5);
-  await expect(tablist.getByRole("tab", { name: "Fluxo de pessoas" })).toBeVisible();
+  // 4 abas: Quando/Onde/Tendência/Eventos. "Fluxo de pessoas" era a 5ª e VIROU MODO próprio
+  // (2026-09-10) — o filtro deste modo é ÁREA, que não se aplica a cruzamento de linha.
+  await expect(tablist.getByRole("tab")).toHaveCount(4);
+  await expect(tablist.getByRole("tab", { name: "Fluxo de pessoas" })).toHaveCount(0);
 
   // Estado inicial: "Quando para" ativa; um único tabpanel no DOM, com o conteúdo certo.
   const tQuando = tablist.getByRole("tab", { name: "Quando para" });
@@ -580,6 +580,41 @@ test("Tabs (Relatório): setas/clique trocam a aba e só o tabpanel ativo é exi
   await expect(tOnde).toHaveAttribute("aria-selected", "false");
   await expect(page.getByRole("tabpanel")).toHaveCount(1);
   await expect(page.getByRole("tabpanel")).toContainText("Tendência (14 dias)");
+});
+
+// Modo LINHAS (fluxo) — o relatório das linhas de contagem, promovido de aba para modo próprio.
+// Cobre o que a promoção comprou e a aba não tinha: filtro PRÓPRIO por linha (o de área nunca se
+// aplicou a cruzamento) e o saldo exibido como CONFERÊNCIA, nunca como meta de operação.
+// Mesmo motivo do teste acima para o mock: o hub do e2e sobe sem Postgres.
+test("Relatório · modo Linhas: filtro por linha e saldo rotulado como conferência", async ({
+  page,
+}) => {
+  await login(page);
+
+  const hourStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  await page.route("**/api/data/flow/buckets", (route) =>
+    route.fulfill({
+      json: [
+        { cameraId: "e2e", cameraLabel: "Doca", tripwireId: "w1", hourStart, in: 12, out: 9 },
+        { cameraId: "e2e", cameraLabel: "Doca", tripwireId: "w2", hourStart, in: 4, out: 5 },
+      ],
+    }),
+  );
+
+  await page.getByRole("link", { name: /Relatório/i }).click();
+  // SegmentedControl é um ToggleGroup single do Radix: os itens têm role=radio.
+  await page.getByRole("radio", { name: "Linhas" }).click();
+
+  // O KPI e o rótulo do saldo (o texto que impede a leitura "gente sobrando no prédio").
+  await expect(page.getByText("entradas", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/Saldo \(entradas − saídas\)/)).toBeVisible();
+  await expect(page.getByText(/não meta/)).toBeVisible();
+
+  // Filtro PRÓPRIO do modo: linha, não área — e as duas linhas da câmera vêm nomeadas.
+  const filtro = page.getByRole("combobox", { name: "Linha de contagem" });
+  await expect(filtro).toBeVisible();
+  await filtro.click();
+  await expect(page.getByRole("option", { name: "Doca · linha 2" })).toBeVisible();
 });
 
 // AlertDialog destrutivo (Radix) na remoção de usuário — substitui o antigo window.confirm.

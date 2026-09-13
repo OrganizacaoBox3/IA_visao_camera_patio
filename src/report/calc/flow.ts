@@ -20,8 +20,12 @@ export type FlowCell = ShiftStamp & {
 };
 export type FlowDataset = { days: number; cells: FlowCell[]; startMs: number };
 
-/** Recorte "current" do período/turno (janela idêntica à de windows() — sem previous:
- *  o fluxo não exibe delta vs. período anterior). */
+/** Chave de uma LINHA (câmera × tripwire). Uma função só: a chave era remontada à mão em cada
+ *  agregação, e chave divergente é o jeito clássico de dois números do mesmo relatório não
+ *  fecharem. O `|` não aparece em id de câmera/tripwire (ambos são slug/gerados). */
+export const flowLineKey = (cameraId: string, tripwireId: string) => `${cameraId}|${tripwireId}`;
+
+/** Recorte "current" do período/turno. */
 export function flowWindow(ds: FlowDataset, period: Period, shift: ShiftFilter): FlowCell[] {
   const W = periodDays[period];
   const lo = ds.days - W;
@@ -29,17 +33,50 @@ export function flowWindow(ds: FlowDataset, period: Period, shift: ShiftFilter):
   return ds.cells.filter((c) => c.dayIndex >= lo && c.dayIndex <= hi && inShift(c, shift));
 }
 
-/** Totais do recorte: entradas, saídas e nº de linhas distintas com cruzamento. */
-export function flowKpis(cells: FlowCell[]): { in: number; out: number; lines: number } {
+/** Janela ANTERIOR de mesmo tamanho — base do delta período×período (as outras dimensões já
+ *  tinham; o fluxo não, e sem ela "1.240 entradas" não diz se subiu ou caiu). */
+export function flowPrevWindow(ds: FlowDataset, period: Period, shift: ShiftFilter): FlowCell[] {
+  const W = periodDays[period];
+  const lo = Math.max(0, ds.days - 2 * W);
+  const hi = ds.days - W - 1;
+  if (hi < 0) return [];
+  return ds.cells.filter((c) => c.dayIndex >= lo && c.dayIndex <= hi && inShift(c, shift));
+}
+
+export type FlowKpis = {
+  in: number;
+  out: number;
+  /** entradas − saídas. Num corredor fechado tende a zero; desvio grande é linha mal posicionada
+   *  ou travessia que o motor perdeu de um lado (é DIAGNÓSTICO, não meta de operação). */
+  saldo: number;
+  /** total de travessias (entradas + saídas) — o volume que a linha realmente mediu. */
+  total: number;
+  lines: number;
+  /** hora de maior movimento. `null` sem nenhuma travessia (não existe pico de nada). */
+  peakHour: number | null;
+};
+
+/** Totais do recorte: entradas, saídas, saldo, total, nº de linhas e hora de pico. */
+export function flowKpis(cells: FlowCell[]): FlowKpis {
   let inSum = 0;
   let outSum = 0;
   const lines = new Set<string>();
+  const porHora = new Array(24).fill(0) as number[];
   for (const c of cells) {
     inSum += c.in;
     outSum += c.out;
-    lines.add(`${c.cameraId}|${c.tripwireId}`);
+    porHora[c.hour] += c.in + c.out;
+    lines.add(flowLineKey(c.cameraId, c.tripwireId));
   }
-  return { in: inSum, out: outSum, lines: lines.size };
+  const maxHora = Math.max(...porHora);
+  return {
+    in: inSum,
+    out: outSum,
+    saldo: inSum - outSum,
+    total: inSum + outSum,
+    lines: lines.size,
+    peakHour: maxHora > 0 ? porHora.indexOf(maxHora) : null,
+  };
 }
 
 /** Série por hora do dia (0..23) com in/out somados + máximo p/ escala das barras. */
@@ -67,7 +104,7 @@ export type FlowLineRow = {
 export function flowByLine(cells: FlowCell[]): { rows: FlowLineRow[]; max: number } {
   const m = new Map<string, FlowLineRow>();
   for (const c of cells) {
-    const key = `${c.cameraId}|${c.tripwireId}`;
+    const key = flowLineKey(c.cameraId, c.tripwireId);
     const r = m.get(key) ?? {
       cameraId: c.cameraId,
       cameraLabel: c.cameraLabel,
@@ -83,4 +120,80 @@ export function flowByLine(cells: FlowCell[]): { rows: FlowLineRow[]; max: numbe
   const rows = [...m.values()].sort((a, b) => b.in + b.out - (a.in + a.out));
   const max = Math.max(1, ...rows.map((r) => r.in + r.out));
   return { rows, max };
+}
+
+
+/** Recorte por LINHA (câmera×tripwire). "Todas" devolve tudo — o fluxo ganhou filtro próprio
+ *  porque o de ÁREA nunca se aplicou a ele: cruzamento é por câmera×linha, sem noção de área. */
+export function flowOfLine(cells: FlowCell[], lineKey: string | "Todas"): FlowCell[] {
+  if (!lineKey || lineKey === "Todas") return cells;
+  return cells.filter((c) => flowLineKey(c.cameraId, c.tripwireId) === lineKey);
+}
+
+/** Série DIÁRIA (últimos N dias do dataset) de entradas/saídas — a tendência que faltava.
+ *  Mesma geometria do evolution() de atividade: dia-índice → rótulo dd/mm. */
+export function flowEvolution(
+  ds: FlowDataset,
+  shift: ShiftFilter,
+  lineKey: string | "Todas" = "Todas",
+  lastN = 14,
+): { bars: { dayIndex: number; label: string; in: number; out: number }[]; max: number } {
+  const lo = Math.max(0, ds.days - lastN);
+  const bars: { dayIndex: number; label: string; in: number; out: number }[] = [];
+  for (let d = lo; d < ds.days; d++) {
+    let entradas = 0;
+    let saidas = 0;
+    for (const c of ds.cells) {
+      if (c.dayIndex !== d || !inShift(c, shift)) continue;
+      if (lineKey !== "Todas" && flowLineKey(c.cameraId, c.tripwireId) !== lineKey) continue;
+      entradas += c.in;
+      saidas += c.out;
+    }
+    const date = new Date(ds.startMs + d * 86_400_000);
+    bars.push({
+      dayIndex: d,
+      label: date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
+      in: entradas,
+      out: saidas,
+    });
+  }
+  const max = Math.max(1, ...bars.map((b) => Math.max(b.in, b.out)));
+  return { bars, max };
+}
+
+/** Opções do seletor de linha: rótulo humano ("Câmera · linha N" quando a câmera tem mais de
+ *  uma) já resolvido aqui, para tela, PDF e CSV nomearem a MESMA linha do mesmo jeito. */
+export function flowLineOptions(
+  cells: FlowCell[],
+): { key: string; label: string; cameraLabel: string; tripwireId: string }[] {
+  const porCamera = new Map<string, Set<string>>();
+  const labelDe = new Map<string, string>();
+  for (const c of cells) {
+    if (!porCamera.has(c.cameraId)) porCamera.set(c.cameraId, new Set());
+    porCamera.get(c.cameraId)!.add(c.tripwireId);
+    if (c.cameraLabel) labelDe.set(c.cameraId, c.cameraLabel);
+  }
+  const out: { key: string; label: string; cameraLabel: string; tripwireId: string }[] = [];
+  for (const [cameraId, ids] of porCamera) {
+    const cam = labelDe.get(cameraId) || cameraId;
+    const ordenados = [...ids].sort();
+    for (const tripwireId of ordenados)
+      out.push({
+        key: flowLineKey(cameraId, tripwireId),
+        label: ordenados.length > 1 ? `${cam} · linha ${ordenados.indexOf(tripwireId) + 1}` : cam,
+        cameraLabel: cam,
+        tripwireId,
+      });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+}
+
+/** Resolve a CHAVE da linha no rótulo humano. Existe para que tela, PDF e CSV nomeiem a mesma
+ *  linha do mesmo jeito — a chave (`cameraId|tripwireId`) nunca é para olho humano. Linha que
+ *  saiu do dataset (câmera removida) volta a própria chave em vez de sumir do relatório. */
+export function flowLabelResolver(
+  options: ReturnType<typeof flowLineOptions>,
+): (key: string) => string {
+  const m = new Map(options.map((o) => [o.key, o.label]));
+  return (key) => m.get(key) ?? key;
 }
