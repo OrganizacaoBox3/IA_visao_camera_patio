@@ -29,6 +29,14 @@ function percentileOf(sorted, p) {
 
 const r4 = (v) => Math.round(v * 10000) / 10000;
 
+// Gate de turno (shift-gate.js) — lido em runtime, não capturado no load: um require circular
+// (engine → telemetry → shift-gate → alarm/shift → camcfg) já quebrou o boot antes.
+function shiftGateOn() {
+  return process.env.ANALYSIS_SHIFT_GATE === "1";
+}
+const contarShift = (perCamera, estado) =>
+  Object.values(perCamera).filter((c) => c && c.shift === estado).length;
+
 /**
  * Agrega a janela de 60s de rodadas GATEADAS de uma câmera.
  * @returns {{skipped1m:number, skipMoving1m:number, ratioP50:number, ratioP95:number, reasons1m:object}}
@@ -173,6 +181,12 @@ function buildStatus(snap) {
         ratioP95: gate.ratioP95,
         reasons1m: gate.reasons1m,
       },
+      // GATE DE TURNO (ADITIVO): por que esta câmera está — ou não está — sendo analisada.
+      // "ativa" analisa agora · "fora-janela" tem turno e está fora dele (economia esperada)
+      // · "sem-turno" está CADASTRADA e não vigia nada, porque ninguém atribuiu janela
+      // (pendência operacional) · null = gate desligado, não se aplica.
+      // Sem este campo, no painel "sem turno" e "câmera quebrada" viram o mesmo silêncio.
+      shift: st.shiftEstado ?? null,
       lastMs: st.lastMs,
       // IDADE DO QUADRO no despacho (ADITIVO). Leia JUNTO com `lastMs`: este é o transporte
       // (câmera→hub), aquele é a inferência — a soma é o que o operador sente. `null` = nenhuma
@@ -268,6 +282,15 @@ function buildStatus(snap) {
     health: health.summarize(
       Object.fromEntries(Object.entries(perCamera).map(([id, c]) => [id, c.health])),
     ),
+    // RESUMO DO GATE DE TURNO (ADITIVO): o contador que separa economia de cegueira, pronto
+    // para a tela. `semTurno` é o número que precisa incomodar — são câmeras cadastradas que
+    // não vigiam nada. `on:false` significa gate desligado: todas analisam, nada a mostrar.
+    shiftGate: {
+      on: shiftGateOn(),
+      ativas: contarShift(perCamera, "ativa"),
+      foraJanela: contarShift(perCamera, "fora-janela"),
+      semTurno: contarShift(perCamera, "sem-turno"),
+    },
     perCamera,
   };
 }

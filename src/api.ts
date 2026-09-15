@@ -486,6 +486,21 @@ export type AnalysisWorker = {
   size: number; // workers no pool
   readyCount: number; // quantos estão prontos AGORA
   cpuPct: number; // agregado do pool (soma dos N; 100% = 1 core inteiro)
+  /**
+   * CUSTO por rodada, decomposto — decode (transporte: JPEG→tensor) × inferência (o modelo).
+   * O hub já mandava isto e o tipo não declarava, então nenhuma tela via: o painel dizia QUE
+   * estava caro e nunca ONDE. Importa porque os remédios são opostos — decode dominante pede
+   * resolução/tiling; inferência dominante pede tier de modelo. Medido em produção 15/09:
+   * decode 59ms, inferência 825ms → 93% é o modelo.
+   * `null` na janela sem amostra: "não medi" nunca é "é grátis".
+   */
+  custo?: {
+    n: number; // amostras na janela de 60s
+    rodadasPorS: number;
+    decodeMs: { p50: number; p95: number } | null;
+    inferMs: { p50: number; p95: number } | null;
+    totalMs: { p50: number; p95: number } | null;
+  };
   respawns: number; // reinícios acumulados desde o boot do hub
   pids?: (number | null)[];
   workers?: {
@@ -541,6 +556,15 @@ export type AnalysisCamera = {
   skippedTotal?: number;
   motion: number; // último ratio de movimento (0..1)
   gate?: AnalysisGate;
+  /**
+   * GATE DE TURNO desta câmera — por que ela está, ou não está, sendo analisada:
+   *   "ativa"       analisando agora
+   *   "fora-janela" tem turno declarado e está fora dele (economia esperada)
+   *   "sem-turno"   CADASTRADA e não vigia nada — ninguém atribuiu janela (pendência)
+   *   null          gate desligado, não se aplica
+   * Sem este campo, no painel "sem turno" e "câmera quebrada" são o mesmo silêncio.
+   */
+  shift?: "ativa" | "fora-janela" | "sem-turno" | null;
   lastMs: number; // duração da última inferência
   frameAge?: AnalysisFrameAge | null; // idade captura→despacho (aditivo — hubs antigos não mandam)
   dets1m: number;
@@ -572,6 +596,23 @@ export type AnalysisStatus = {
   };
   autoscale?: AnalysisAutoscale;
   worker?: AnalysisWorker;
+  /**
+   * GATE DE TURNO — o resumo que separa ECONOMIA de CEGUEIRA.
+   *
+   * `foraJanela` é economia funcionando: a câmera tem turno declarado e está fora dele.
+   * `semTurno` é o número que precisa incomodar: câmera CADASTRADA que não vigia nada, porque
+   * ninguém atribuiu janela a ela. Os dois derrubam CPU igual — e é exatamente por isso que
+   * não podem aparecer somados: um parque inteiro sem turno leria como economia bem-sucedida.
+   *
+   * `on:false` = gate desligado, todas analisam (os contadores vêm zerados).
+   * Campo OPCIONAL: hub anterior a esta onda não manda, e ausente é "não sei", nunca "está bom".
+   */
+  shiftGate?: {
+    on: boolean;
+    ativas: number;
+    foraJanela: number;
+    semTurno: number;
+  };
   go2rtcPull?: {
     active: boolean;
     mode: string;

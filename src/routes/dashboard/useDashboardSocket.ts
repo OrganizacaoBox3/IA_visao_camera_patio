@@ -15,6 +15,17 @@ import { type AlarmEvent } from "../../api";
 import { type Camera, type CameraStatus } from "./types";
 import { newFrameEntry, type FrameEntry } from "./useFrameRelay";
 
+/**
+ * Estado do GATE DE TURNO por câmera (campo aditivo de `analysis-status`):
+ *   "ativa"       analisando agora
+ *   "fora-janela" tem turno declarado e está fora dele — pausa esperada
+ *   "sem-turno"   CADASTRADA e não vigia nada: ninguém atribuiu janela (pendência)
+ *   null          gate desligado, hub antigo, ou ainda não informado — "não sei"
+ * O null é deliberadamente o mesmo para "desligado" e "não sei": nenhum dos dois autoriza a
+ * interface a afirmar que está tudo certo.
+ */
+export type ShiftEstado = "ativa" | "fora-janela" | "sem-turno" | null;
+
 type Deps = {
   token: string | null;
   logout: (reason?: string) => void;
@@ -39,6 +50,8 @@ export type DashboardSocket = {
   statuses: Record<string, CameraStatus>;
   // Fonte da ANÁLISE por câmera — anti-duplicação de ingest (ADR-009).
   analysisEngines: Record<string, "hub" | "local">;
+  /** Gate de turno por câmera — null = gate desligado ou hub antigo ("não sei"). */
+  shiftEstados: Record<string, ShiftEstado>;
   // Sincronização ao vivo — revisão de tripwires por câmera (ADR-006).
   revByCamera: Map<string, number>;
   // Sincronização ao vivo — revisão da CALIBRAÇÃO (homografia) por câmera. Mesmo idioma do
@@ -120,6 +133,7 @@ export function useDashboardSocket({
   // O hub anuncia via `analysis-status {cameraId, engine:"hub"|"local"}` quais câmeras o MOTOR
   // server-side analisa (ADR-009). Hub antigo sem o evento → mapa vazio → tudo "local".
   const [analysisEngines, setAnalysisEngines] = useState<Record<string, "hub" | "local">>({});
+  const [shiftEstados, setShiftEstados] = useState<Record<string, ShiftEstado>>({});
   // Cada `camcfg-updated{kind:"tripwires",cameraId}` incrementa o contador daquela câmera; o
   // número é repassado às tiles via `tripwiresRev` (re-busca dos tripwires). (ADR-006)
   const [revByCamera, setRevByCamera] = useState<Map<string, number>>(new Map());
@@ -148,6 +162,9 @@ export function useDashboardSocket({
       // `analysis-status` emitido no connect repovoa. Sem o evento (hub antigo/motor desligado),
       // tudo volta a "local" — o default seguro (browser volta a gravar).
       setAnalysisEngines({});
+      // Idem para o gate de turno: o hub novo repovoa no snapshot do connect. Manter o mapa
+      // antigo mostraria "sem turno" de um hub que talvez nem tenha o gate.
+      setShiftEstados({});
       // A reconexão perde as rooms no servidor: reanuncia o conjunto assistido para voltar
       // a receber frames (o efeito de feeds ativos cobre as MUDANÇAS; aqui cobre o re-connect).
       socket.emit("watch", { ids: [...activeIdsRef.current] });
@@ -177,13 +194,26 @@ export function useDashboardSocket({
     // Fonte da análise por câmera (snapshot no connect + mudanças; ADR-009). Update funcional
     // que PRESERVA a referência quando nada mudou (evita re-render da grade à toa).
     // Payload defensivo: engine desconhecida degrada p/ "local" (browser grava — sem buraco).
-    socket.on("analysis-status", (p: { cameraId: string; engine: "hub" | "local" }) => {
-      if (!p || typeof p.cameraId !== "string") return;
-      const engine = p.engine === "hub" ? "hub" : "local";
-      setAnalysisEngines((prev) =>
-        prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
-      );
-    });
+    socket.on(
+      "analysis-status",
+      (p: { cameraId: string; engine: "hub" | "local"; shift?: ShiftEstado }) => {
+        if (!p || typeof p.cameraId !== "string") return;
+        const engine = p.engine === "hub" ? "hub" : "local";
+        setAnalysisEngines((prev) =>
+          prev[p.cameraId] === engine ? prev : { ...prev, [p.cameraId]: engine },
+        );
+        // GATE DE TURNO (campo aditivo): por que a câmera está ou não sendo analisada. Lido
+        // defensivamente — hub anterior a esta onda não manda, e ausente é "não sei", nunca
+        // "está tudo bem". Valor fora do enum degrada para null pelo mesmo motivo.
+        const shift: ShiftEstado =
+          p.shift === "ativa" || p.shift === "fora-janela" || p.shift === "sem-turno"
+            ? p.shift
+            : null;
+        setShiftEstados((prev) =>
+          prev[p.cameraId] === shift ? prev : { ...prev, [p.cameraId]: shift },
+        );
+      },
+    );
     // Overlays servidos (ADR-009): guarda o último payload por câmera no REF (sem setState — ver
     // hubAnalysisRef). O mapeamento fio→domínio é a função PURA `toHubAnalysis` (testada); aqui só
     // sobra o roteamento por cameraId.
@@ -283,6 +313,7 @@ export function useDashboardSocket({
     connected,
     statuses,
     analysisEngines,
+    shiftEstados,
     revByCamera,
     calibrationRevByCamera,
     zonesRevByCamera,

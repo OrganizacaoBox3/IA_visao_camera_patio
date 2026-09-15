@@ -437,8 +437,12 @@ function createState(id) {
   return st;
 }
 
-function emitAnalysisStatus(cameraId, engine) {
-  if (ctx) emitScopedByCamera(ctx.io, "analysis-status", { cameraId, engine }, cameraId);
+// `shift` é campo ADITIVO do contrato `analysis-status` (CLAUDE.md §3: adicione, não quebre).
+// Vai por TRANSIÇÃO, nunca por tick: o tick roda 4×/s e reemitir a cada volta inundaria a room
+// para dizer a mesma coisa. Undefined quando não há estado (gate desligado / câmera de fadiga).
+function emitAnalysisStatus(cameraId, engine, shift) {
+  if (ctx)
+    emitScopedByCamera(ctx.io, "analysis-status", { cameraId, engine, shift: shift ?? null }, cameraId);
 }
 
 // ── Amostragem: tick escolhe o último frame por câmera, GATA por movimento e despacha ─
@@ -455,6 +459,22 @@ function tick() {
     // câmera não dorme (zona proibida armada "fora-turnos" inclusive).
     if (SHIFT_GATE_ON) {
       const sono = cameraPodeDormir(st.id, now);
+      // ESTADO para a INTERFACE (telemetry → /api/analysis/status → painel). O log de minuto
+      // serve a quem lê log; o operador precisa ver na tela por que uma câmera não está
+      // analisando. Sem isto, "sem turno" e "câmera quebrada" são indistinguíveis no painel —
+      // o mesmo falso-OK que o SaudeMotorPanel existe para matar.
+      const estadoNovo = sono.dorme
+        ? sono.motivo === "sem-config"
+          ? "sem-turno"
+          : "fora-janela"
+        : "ativa";
+      // Só avisa a interface na TRANSIÇÃO (ver emitAnalysisStatus): entrou no turno, saiu dele,
+      // ou perdeu/ganhou a atribuição de turno. É o que faz o tile mudar de estado na hora, em
+      // vez de esperar o próximo polling do relatório.
+      if (st.shiftEstado !== estadoNovo) {
+        st.shiftEstado = estadoNovo;
+        emitAnalysisStatus(st.id, st.fadiga ? null : "hub", estadoNovo);
+      }
       if (sono.dorme) {
         // Contadores SEPARADOS: "fora-janela" é a economia funcionando; "sem-config" é câmera
         // parada porque ninguém atribuiu turno — pendência operacional, não economia. Somados
@@ -463,6 +483,10 @@ function tick() {
         else st.shiftSkips = (st.shiftSkips || 0) + 1;
         continue;
       }
+    } else {
+      // Gate desligado: o estado não é "ativa" (isso afirmaria que há janela declarada e ela
+      // está vigente) — é "não se aplica". A UI mostra ausência, não normalidade.
+      st.shiftEstado = null;
     }
     // Guarda de despacho PURA (worker-host.dispatchReady): fadiga, coalescência (≤1 job
     // em voo por câmera), último-vence e cadência por SLOT ABSOLUTO com fase áurea por
@@ -992,7 +1016,14 @@ function snapshotTo(socket) {
   // Fadiga: engine:null (o hub não cobre pessoa nela — front mantém o modo especializado local).
   for (const [id, st] of states) {
     if (canSeeCamera(socket.data.user, id))
-      socket.emit("analysis-status", { cameraId: id, engine: st.fadiga ? null : "hub" });
+      // `shift` no snapshot de conexão: quem acabou de abrir o painel precisa ver o estado
+      // ATUAL de cada câmera, não esperar a próxima transição (que numa câmera sem turno pode
+      // nunca chegar — ela fica parada, e parada é justamente o que precisa aparecer).
+      socket.emit("analysis-status", {
+        cameraId: id,
+        engine: st.fadiga ? null : "hub",
+        shift: st.shiftEstado ?? null,
+      });
   }
 }
 

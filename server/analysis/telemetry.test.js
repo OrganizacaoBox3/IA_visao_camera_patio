@@ -138,6 +138,11 @@ describe("buildStatus — agregação por câmera", () => {
       fadiga: false,
       source: "go2rtc",
       gate: GATE_ZERO, // bloco ADITIVO do sensor do gate (sem rodadas na janela)
+      // GATE DE TURNO (aditivo, 2026-09-15): `null` = o gate de turno não se aplica a este
+      // estado (desligado, ou câmera nunca avaliada pelo tick). Mesmo princípio do frameAge:
+      // `null` é "não se aplica / não sei", e nunca deve virar "ativa" por conveniência — dizer
+      // "ativa" afirmaria que existe janela declarada E que ela está vigente agora.
+      shift: null,
       // ESTABILIDADE (aditivo, 2026-09-04 — health.observeFrame): `null` porque este estado
       // sintético nunca recebeu frame pelo observador. Mesmo princípio do frameAge acima:
       // ausência de medição é `null`, NUNCA 0 (0 aqui afirmaria "vídeo perfeitamente estável").

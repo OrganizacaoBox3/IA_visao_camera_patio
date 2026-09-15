@@ -68,6 +68,7 @@ export function DashboardPage() {
     connected,
     statuses,
     analysisEngines,
+    shiftEstados,
     revByCamera,
     calibrationRevByCamera,
     zonesRevByCamera,
@@ -313,6 +314,7 @@ export function DashboardPage() {
                 // (antes só pegava fechando/reabrindo a câmera ou recarregando a página).
                 zonesRev={zonesRevByCamera.get(c.id) ?? 0}
                 status={statuses[c.id]}
+                shift={shiftEstados[c.id] ?? null}
                 analysisEngine={analysisEngines[c.id] ?? defaultEngine}
                 getHubAnalysis={hubGetterFor(c.id)}
                 transport={transportOf(c.id)}
