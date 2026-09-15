@@ -74,6 +74,25 @@ COCO 80) → **drop-in absoluto**: só troca o `.onnx`. Todos `onnx-community/*-
 
 Ou seja: rode o 1º boot com `ANALYSIS_ENABLED=1` (baixa o modelo); dali em diante o default liga.
 
+## Gate de TURNO — não analisar o que ninguém vai alertar (`ANALYSIS_SHIFT_GATE`, default **0**)
+
+`ANALYSIS_SHIFT_GATE=1` faz o motor **pular a rodada inteira** (sem thumbnail, sem inferência)
+quando **nenhum alarme daquela câmera seria possível naquele instante**. Sem ele, o motor produz
+24/7 e o turno só descarta depois (`server/alarm/shift.js` — "o motor sempre produz, a política
+suprime"): CPU gasta para gerar alerta que não sai e, pela spec de turnos, nem entra na conta de
+eficiência (fora do turno é *Schedule Loss*).
+
+Quem decide é o **mesmo** `shiftGate` da política — nunca uma segunda leitura de turno (duas
+fontes divergindo é a armadilha 1 da spec, e aqui o estrago seria o motor dormindo enquanto o
+alarme se acha armado). Enquanto UMA zona puder alertar, a câmera fica acordada — inclusive a
+zona proibida com `arming: "fora-turnos"`, que existe para pegar invasão **fora** do expediente
+e que um gate ingênuo ("fora do turno, desliga") mataria em silêncio.
+
+**Só economiza onde há configuração:** zona sem `shiftIds` é 24/7 por design da spec e segue
+24/7 aqui; câmera sem zona nenhuma nunca dorme (pode estar ali por linha de contagem ou foco).
+Visibilidade obrigatória: rodadas dormidas saem no log de minuto como `[dormiu/turno: N]` —
+economia silenciosa é indistinguível de motor quebrado.
+
 ## Env (defaults entre parênteses)
 
 `ANALYSIS_MODEL` (**s** — `n|s|m`; ver §Modelo) · `ANALYSIS_FPS` (1) · `ANALYSIS_HIGH_SCORE`

@@ -34,6 +34,7 @@ const { emitScopedByCamera } = require("../socket-scope");
 const alarmPipeline = require("../alarm/pipeline"); // alarme server-side (presença em zona proibida)
 const { PRECISION, trackTtlMs } = require("./precision");
 const { formatResumo } = require("./cost");
+const { cameraPodeDormir, GATE_ON: SHIFT_GATE_ON } = require("./shift-gate");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { createInflightSlots } = require("./inflight");
@@ -446,6 +447,16 @@ function tick() {
   const now = Date.now();
   for (const st of states.values()) {
     if (st.gating) continue; // decode de thumbnail em voo → não reentra (evita despacho duplo)
+    // GATE DE TURNO (shift-gate.js): se NENHUM alarme desta câmera seria possível agora, pula a
+    // rodada inteira — sem thumbnail, sem inferência. Vem ANTES do dispatchReady de propósito:
+    // só o decode do thumbnail custa 8,28ms de CPU medidos (ver decodeThumb), e pagá-lo para
+    // produzir um alarme que a política vai descartar é o desperdício que este gate corta.
+    // Quem decide é o MESMO gate da política de alarme — enquanto uma zona puder alertar, a
+    // câmera não dorme (zona proibida armada "fora-turnos" inclusive).
+    if (SHIFT_GATE_ON && cameraPodeDormir(st.id, now).dorme) {
+      st.shiftSkips = (st.shiftSkips || 0) + 1; // visibilidade: sai no log de minuto
+      continue;
+    }
     // Guarda de despacho PURA (worker-host.dispatchReady): fadiga, coalescência (≤1 job
     // em voo por câmera), último-vence e cadência por SLOT ABSOLUTO com fase áurea por
     // câmera (anti-serrote — frente2). Único choke point — pega relé E pull go2rtc.
@@ -753,7 +764,13 @@ function logMinute() {
       if (g.moving > 0) nBlind += 1;
     }
     const skips = MOTION_GATE_ON && nSkip ? ` (${nSkip} pulos/gate${nBlind ? `, ${nBlind} c/ gente em movimento` : ""})` : "";
-    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}`);
+    // DORMIU POR TURNO: rodadas puladas pelo shift-gate no minuto. Sai no log SEMPRE que houver,
+    // pelo mesmo motivo que alarm/shift.js conta as supressões: economia silenciosa é
+    // indistinguível de motor quebrado, e é assim que se perde a confiança no sistema. Zera a
+    // cada minuto — o número é "neste minuto", não acumulado desde o boot.
+    const dormiu = st.shiftSkips ? ` [dormiu/turno: ${st.shiftSkips}]` : "";
+    st.shiftSkips = 0;
+    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}${dormiu}`);
   }
   const w = workerHost.stats();
   const perW = w.workers.map((x) => `#${x.id}${x.ready ? "" : "!"}:${x.cpuPct}%`).join(" ");
