@@ -88,10 +88,23 @@ alarme se acha armado). Enquanto UMA zona puder alertar, a câmera fica acordada
 zona proibida com `arming: "fora-turnos"`, que existe para pegar invasão **fora** do expediente
 e que um gate ingênuo ("fora do turno, desliga") mataria em silêncio.
 
-**Só economiza onde há configuração:** zona sem `shiftIds` é 24/7 por design da spec e segue
-24/7 aqui; câmera sem zona nenhuma nunca dorme (pode estar ali por linha de contagem ou foco).
-Visibilidade obrigatória: rodadas dormidas saem no log de minuto como `[dormiu/turno: N]` —
-economia silenciosa é indistinguível de motor quebrado.
+**SEM TURNO = NÃO PROCESSA** (decisão do dono, 15/09/2026). Dentro do motor isto INVERTE o
+fail-open da spec: zona sem `shiftIds` (ou só com ids órfãos/turno inativo) não justifica gastar
+CPU, e câmera sem zona nenhuma também dorme. O gate de ALARME segue fail-open e intocado — o que
+muda é quando o motor gasta CPU, não quando o alarme dispara.
+
+> **Antes de ligar, leia:** com as zonas sem turno atribuído, `ANALYSIS_SHIFT_GATE=1` **para a
+> análise inteira** — o sistema fica cego até alguém configurar os turnos na tela. Confira o
+> cadastro ANTES de ligar, e o log de minuto DEPOIS.
+
+Por isso os dois motivos de sono são separados no log de minuto:
+
+| no log | significa | ação |
+|---|---|---|
+| `[dormiu/turno: N]` | fora da janela declarada | nenhuma — é a economia funcionando |
+| `[PARADA/SEM-TURNO: N]` | ninguém atribuiu turno à zona | **atribuir turno**; a câmera não está vigiando |
+
+Somar os dois num número só faria um parque inteiro cego ler como economia bem-sucedida.
 
 ## Env (defaults entre parênteses)
 

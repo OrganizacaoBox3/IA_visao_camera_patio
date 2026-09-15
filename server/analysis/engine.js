@@ -453,9 +453,16 @@ function tick() {
     // produzir um alarme que a política vai descartar é o desperdício que este gate corta.
     // Quem decide é o MESMO gate da política de alarme — enquanto uma zona puder alertar, a
     // câmera não dorme (zona proibida armada "fora-turnos" inclusive).
-    if (SHIFT_GATE_ON && cameraPodeDormir(st.id, now).dorme) {
-      st.shiftSkips = (st.shiftSkips || 0) + 1; // visibilidade: sai no log de minuto
-      continue;
+    if (SHIFT_GATE_ON) {
+      const sono = cameraPodeDormir(st.id, now);
+      if (sono.dorme) {
+        // Contadores SEPARADOS: "fora-janela" é a economia funcionando; "sem-config" é câmera
+        // parada porque ninguém atribuiu turno — pendência operacional, não economia. Somados
+        // num número só, um parque inteiro cego leria como sucesso.
+        if (sono.motivo === "sem-config") st.semTurnoSkips = (st.semTurnoSkips || 0) + 1;
+        else st.shiftSkips = (st.shiftSkips || 0) + 1;
+        continue;
+      }
     }
     // Guarda de despacho PURA (worker-host.dispatchReady): fadiga, coalescência (≤1 job
     // em voo por câmera), último-vence e cadência por SLOT ABSOLUTO com fase áurea por
@@ -769,8 +776,15 @@ function logMinute() {
     // indistinguível de motor quebrado, e é assim que se perde a confiança no sistema. Zera a
     // cada minuto — o número é "neste minuto", não acumulado desde o boot.
     const dormiu = st.shiftSkips ? ` [dormiu/turno: ${st.shiftSkips}]` : "";
+    // SEM TURNO grita mais alto que o sono normal: a câmera não está economizando, está PARADA
+    // esperando configuração. Sem essa distinção, um parque inteiro sem turno atribuído leria
+    // como economia bem-sucedida — falso-OK clássico, e o caro: ninguém vigiando e ninguém sabendo.
+    const semTurno = st.semTurnoSkips ? ` [PARADA/SEM-TURNO: ${st.semTurnoSkips}]` : "";
     st.shiftSkips = 0;
-    parts.push(`${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}${dormiu}`);
+    st.semTurnoSkips = 0;
+    parts.push(
+      `${id}${st.longRange ? "[LR]" : ""}${src}: ${fps}fps ${st.lastMs}ms${skips}${dormiu}${semTurno}`,
+    );
   }
   const w = workerHost.stats();
   const perW = w.workers.map((x) => `#${x.id}${x.ready ? "" : "!"}:${x.cpuPct}%`).join(" ");
