@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { TriangleAlert, Video } from "lucide-react";
+import { Clock, TriangleAlert, Video } from "lucide-react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
@@ -315,6 +315,29 @@ const VIOLADA_PILL: CSSProperties = {
   pointerEvents: "none",
 };
 
+// Pílula do GATE DE TURNO. Mesma geometria da VIOLADA (ficam em linhas diferentes: esta desce
+// mais). Going-gray aplicado com critério: "sem turno" é ANORMAL (câmera cadastrada que não
+// vigia nada → âmbar, cor saturada), "fora do turno" é NORMAL (pausa programada → neutro).
+// Tratar os dois com a mesma cor seria voltar ao problema: economia e cegueira indistinguíveis.
+const SHIFT_PILL = (anormal: boolean): CSSProperties => ({
+  position: "absolute",
+  top: "54px",
+  left: "6px",
+  zIndex: 3,
+  maxWidth: "calc(100% - 12px)",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "5px",
+  fontFamily: "var(--mono)",
+  fontSize: "11px",
+  background: anormal ? "var(--state-warn-bg)" : "var(--state-neutral-bg)",
+  color: anormal ? "var(--state-warn-fg)" : "var(--state-neutral-fg)",
+  border: `1px solid ${anormal ? "var(--state-warn)" : "var(--state-neutral)"}`,
+  borderRadius: "9999px",
+  padding: "2px 8px",
+  pointerEvents: "none",
+});
+
 // Lista de zonas: uma linha só; se não couber, corta com reticências. O texto ÍNTEGRO continua na
 // região viva (sr-only) — a AT nunca perde zona. NADA de "+N": número sobre a imagem é invariante
 // da casa (a contagem vive no painel).
@@ -352,6 +375,12 @@ type CameraTileProps = {
   // cada `camcfg-updated {kind:"zones"}` → o tile re-busca a lista em vez de ficar com geometria
   // obsoleta até remontar. OPCIONAL/retrocompatível; primitiva → amigável ao React.memo abaixo.
   zonesRev?: number;
+  /**
+   * GATE DE TURNO desta câmera. O tile PRECISA dizer isso: sem o aviso, uma câmera que o gate
+   * desligou fica visualmente idêntica a uma câmera quebrada — as duas mostram nada. Era o que
+   * acontecia com 11 das 15 câmeras em produção (15/09), e ninguém saberia pela tela.
+   */
+  shift?: "ativa" | "fora-janela" | "sem-turno" | null;
   // Transporte de vídeo do tile: "webrtc" → exibe via <video-stream> (go2rtc); "mjpeg"/ausente →
   // canvas + relé socket.io. Por câmera (camcfg). Primitiva → amigável ao React.memo abaixo.
   transport?: "mjpeg" | "webrtc";
@@ -378,6 +407,7 @@ export const CameraTile = memo(function CameraTile({
   getFrame,
   tripwiresRev,
   status,
+  shift,
   analysisEngine,
   getHubAnalysis,
   calibrationRev,
@@ -502,8 +532,30 @@ export const CameraTile = memo(function CameraTile({
           <span style={VIOLADA_PILL_ZONES}>· {violadas.join(" · ")}</span>
         </span>
       )}
+      {/* GATE DE TURNO — o aviso que separa "desligada de propósito" de "quebrada". Não anuncia
+          "ativa": normalidade não pede pílula (going-gray). aria-hidden porque a frase completa
+          vai na região viva abaixo, e ler as duas seria repetição na AT. */}
+      {(shift === "sem-turno" || shift === "fora-janela") && (
+        <span style={SHIFT_PILL(shift === "sem-turno")} aria-hidden="true">
+          {shift === "sem-turno" ? (
+            <TriangleAlert size={12} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Clock size={12} strokeWidth={1.75} aria-hidden />
+          )}
+          {shift === "sem-turno" ? "SEM TURNO" : "fora do turno"}
+        </span>
+      )}
       <span className="sr-only" role="status">
         {emViolacao ? `Área restrita violada em ${camera.label}: ${violadas.join(", ")}.` : ""}
+      </span>
+      {/* O gate de turno em texto, com a CONSEQUÊNCIA junto — a pílula é só a marca gráfica.
+          Região própria (não a de violação) para que um aviso não sobrescreva o outro. */}
+      <span className="sr-only" role="status">
+        {shift === "sem-turno"
+          ? `${camera.label}: sem turno atribuído. Esta câmera não está sendo analisada e não gera alerta.`
+          : shift === "fora-janela"
+            ? `${camera.label}: fora do turno. Análise pausada até o próximo turno.`
+            : ""}
       </span>
       <Tooltip content={status?.lastError || st.text}>
         {/* Pílula de status (.cam-status-pill em go2rtc-tile.css): estático na classe; só a COR da

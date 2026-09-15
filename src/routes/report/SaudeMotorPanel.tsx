@@ -262,6 +262,34 @@ function TechDetail({ status }: { status: AnalysisStatus }) {
             <b>workers</b> {w.readyCount}/{w.size} prontos · cpu {w.cpuPct}% · respawns {w.respawns}
           </li>
         )}
+        {/* CONSUMO DE PROCESSAMENTO, decomposto. O hub media isto desde sempre e nenhuma tela
+            mostrava: dizia QUE estava caro, nunca ONDE. Importa porque os remédios são opostos —
+            decode alto pede resolução/transporte; inferência alta pede tier de modelo. */}
+        {w?.custo?.decodeMs && w.custo.inferMs && (
+          <li>
+            <Tooltip content="Onde vai o tempo de cada rodada de análise (p50/p95, janela de 60s). 'decode' é preparar a imagem; 'inferência' é o modelo de IA pensando. O que domina aqui diz onde mexer para baratear.">
+              <span>
+                <b>custo/rodada</b> decode {Math.round(w.custo.decodeMs.p50)}/
+                {Math.round(w.custo.decodeMs.p95)}ms · inferência{" "}
+                {Math.round(w.custo.inferMs.p50)}/{Math.round(w.custo.inferMs.p95)}ms ·{" "}
+                {w.custo.rodadasPorS} rodadas/s
+              </span>
+            </Tooltip>
+          </li>
+        )}
+        {/* GATE DE TURNO: os dois motivos SEPARADOS. Somados num número só, um parque inteiro
+            sem turno leria como economia bem-sucedida — o falso-OK que esta faixa existe para matar. */}
+        {status.shiftGate?.on && (
+          <li>
+            <Tooltip content="Câmeras que o gate de turno deixou de analisar. 'fora do turno' é economia funcionando; 'sem turno' é câmera cadastrada que não vigia nada e precisa de configuração.">
+              <span>
+                <b>turnos</b> {status.shiftGate.ativas} analisando ·{" "}
+                {status.shiftGate.foraJanela} fora do turno ·{" "}
+                {status.shiftGate.semTurno} SEM TURNO
+              </span>
+            </Tooltip>
+          </li>
+        )}
         <li>
           <b>cadência</b> normal {status.targetFps} · linha {status.lineFps} · foco{" "}
           {status.focusFps} fps

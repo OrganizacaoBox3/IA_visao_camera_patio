@@ -392,3 +392,70 @@ describe("ordenação", () => {
     expect(buildEngineHealth(input)).toEqual(buildEngineHealth(input));
   });
 });
+
+// ── GATE DE TURNO ─────────────────────────────────────────────────────────────
+// O risco que estes testes guardam é de ALARME FALSO EM MASSA: uma câmera desligada pelo gate
+// tem fps 0 e, sem desvio, cairia em "Nenhum frame chegou ao motor" com nível `down`. Em
+// produção (15/09) isso seriam 11 de 15 câmeras acusadas de quebradas ao mesmo tempo — e uma
+// faixa que grita errado onze vezes é uma faixa que ninguém lê na décima segunda.
+describe("gate de turno: zero por decisão não é zero por falha", () => {
+  it("SEM TURNO vira aviso de configuração — nunca 'câmera quebrada'", () => {
+    const h = buildEngineHealth({
+      status: status({ perCamera: { "cam-1": cam({ fps: 0, shift: "sem-turno" }) } }),
+      error: null,
+      cameras: [{ id: "cam-1", label: "Doca 3", online: true }],
+    });
+    const f = h.findings.find((x) => x.id === "cam-sem-turno:cam-1");
+    expect(f).toBeDefined();
+    expect(f?.level).toBe("warn");
+    // ASSERT NEGATIVO: o diagnóstico de falha de vídeo não pode aparecer.
+    expect(h.findings.some((x) => x.id.startsWith("cam-no-frames"))).toBe(false);
+    expect(h.findings.some((x) => x.id.startsWith("cam-idle"))).toBe(false);
+    expect(readable(h)).not.toContain("Nenhum frame chegou");
+    // E o operador tem de ler a CONSEQUÊNCIA, não só o estado.
+    expect(f?.soWhat).toContain("não significa área vazia");
+  });
+
+  it("FORA DO TURNO é informativo — pausa programada não é problema", () => {
+    const h = buildEngineHealth({
+      status: status({ perCamera: { "cam-1": cam({ fps: 0, shift: "fora-janela" }) } }),
+      error: null,
+      cameras: [],
+    });
+    const f = h.findings.find((x) => x.id === "cam-fora-turno:cam-1");
+    expect(f?.level).toBe("info");
+    expect(h.findings.some((x) => x.id.startsWith("cam-no-frames"))).toBe(false);
+  });
+
+  it("câmera desligada pelo gate não entra na conta de 'esperadas'", () => {
+    // Senão a cobertura apareceria como "0 de 2 analisando" — o painel acusaria metade da frota
+    // parada quando ela foi desligada de propósito.
+    const h = buildEngineHealth({
+      status: status({
+        perCamera: { "cam-1": cam(), "cam-2": cam({ fps: 0, shift: "sem-turno" }) },
+      }),
+      error: null,
+      cameras: [],
+    });
+    expect(h.expected).toBe(1);
+    expect(h.analyzing).toBe(1);
+  });
+
+  it("shift ausente (hub antigo) não muda nada — o diagnóstico normal continua valendo", () => {
+    // Retrocompatibilidade: campo aditivo ausente NÃO pode virar "sem turno" nem silenciar a
+    // falha real. Câmera sem frames segue sendo reportada como sem frames.
+    const h = buildEngineHealth({
+      status: status({ perCamera: { "cam-1": cam({ fps: 0, shift: undefined }) } }),
+      error: null,
+      cameras: [],
+    });
+    // Qual dos dois diagnósticos de falha sai depende de ter havido rodadas na janela
+    // (no-frames × idle); o que este teste trava é que UM deles sai, com nível `down`.
+    const falha = h.findings.find(
+      (x) => x.id.startsWith("cam-no-frames") || x.id.startsWith("cam-idle"),
+    );
+    expect(falha?.level).toBe("down");
+    expect(h.findings.some((x) => x.id.startsWith("cam-sem-turno"))).toBe(false);
+    expect(h.findings.some((x) => x.id.startsWith("cam-fora-turno"))).toBe(false);
+  });
+});

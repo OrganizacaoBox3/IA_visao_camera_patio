@@ -230,6 +230,39 @@ export function buildEngineHealth(input: EngineHealthInput): EngineHealth {
       });
       continue;
     }
+    // ── GATE DE TURNO: zero por DECISÃO, não por falha ────────────────────────
+    // Vem ANTES do teste de fps porque estas câmeras têm fps 0 por desenho. Sem este desvio,
+    // elas cairiam em `cam-no-frames` com nível "down" — o painel acusaria 11 câmeras
+    // QUEBRADAS quando na verdade o gate as desligou de propósito. Alarme falso em massa
+    // treina a pessoa a ignorar a faixa inteira, e aí o aviso verdadeiro morre com ele.
+    if (cam.shift === "sem-turno") {
+      // WARN, não info: a câmera está CADASTRADA, o vídeo dela chega, e ninguém está olhando
+      // para ele. É pendência de configuração — e quem lê o relatório precisa saber que aquela
+      // área não tem cobertura nenhuma no período, em vez de ler "0 pessoas" como "área vazia".
+      findings.push({
+        id: `cam-sem-turno:${id}`,
+        level: "warn",
+        camera: name,
+        what: "Cadastrada, mas sem turno atribuído — o motor não analisa esta câmera.",
+        soWhat:
+          "Nenhuma pessoa é detectada nela em nenhum horário, e nenhum alerta sai: o zero desta " +
+          "câmera não significa área vazia. Atribua um turno à zona para voltar a vigiar.",
+      });
+      continue; // não entra em `expected`: não se espera análise de quem foi desligado
+    }
+    if (cam.shift === "fora-janela") {
+      // INFO: é a economia funcionando exatamente como projetada. Aparece porque silêncio não
+      // explicado viraria suspeita de falha na próxima vez que alguém olhasse o relatório.
+      findings.push({
+        id: `cam-fora-turno:${id}`,
+        level: "info",
+        camera: name,
+        what: "Fora do turno declarado — análise pausada no horário.",
+        soWhat:
+          "Dentro do turno ela volta sozinha. O zero deste período é esperado, não falta de dado.",
+      });
+      continue;
+    }
     expected += 1;
     const rounds = roundsIn(cam);
     if (cam.fps <= 0) {
