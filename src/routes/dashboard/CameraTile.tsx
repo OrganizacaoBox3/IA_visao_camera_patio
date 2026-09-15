@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert, Video } from "lucide-react";
 import { type FrameSource } from "../../frame";
 import { CameraWorkspace, type HubAnalysis } from "../../CameraWorkspace";
 import { FadigaView } from "../../FadigaView";
@@ -397,9 +397,24 @@ export const CameraTile = memo(function CameraTile({
   const inner = isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
   ) : paused ? (
-    // Outra câmera aberta: placeholder leve; o feed processador fica DESMONTADO (sem rAF).
-    // No caminho WebRTC isto também DESMONTA o <video-stream> → solta o stream (pausa de fundo).
-    <div className="tile tile-open">em pausa</div>
+    // VÍDEO SOB DEMANDA. Antes isto era só "pausa de fundo" (outra câmera aberta); agora é
+    // também o estado de REPOUSO da grade, que deixou de streamar sozinha. O feed processador
+    // fica DESMONTADO (sem rAF) e, no caminho WebRTC, o <video-stream> também → solta o stream.
+    //
+    // POR QUE a grade parou de streamar: medido em produção (14/09/2026) — painel aberto levou
+    // o load da máquina de 8,04 para 15,63 (4 vCPU), e ficou aberto 17% das horas de uma semana.
+    // A plataforma alerta por WhatsApp; a imagem serve ao SETUP (desenhar zona, conferir
+    // enquadramento), não a um plantão de olhos. O vídeo do painel disputava CPU com a análise
+    // que gera o alerta — painel esquecido atrasava a detecção que o sistema existe para fazer.
+    //
+    // O tile NÃO fica cego: a pílula de status e o sinal de VIOLADA são irmãos deste bloco (ver
+    // o wrapper abaixo) e seguem vivos — o que sai é só o VÍDEO. Clique abre ao vivo.
+    <button type="button" className="tile tile-open" onClick={openSelf} style={TILE_BTN_RESET}>
+      <span className="cam-tile__repouso">
+        <Video size={18} strokeWidth={1.5} aria-hidden />
+        ver ao vivo
+      </span>
+    </button>
   ) : transport === "webrtc" ? (
     // Vídeo fluido via go2rtc, sem inferência local aqui; as caixas do hub vêm interpoladas
     // por cima (TrackOverlay). Clique/Enter/Espaço abre a câmera, como nos demais. <button>

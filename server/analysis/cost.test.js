@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { createCostWindow, percentil } = require("./cost");
+const { createCostWindow, percentil, formatResumo } = require("./cost");
 
 const T0 = 1_000_000;
 
@@ -125,5 +125,36 @@ describe("amostras — base do agregado da frota", () => {
     const w = createCostWindow({ janelaMs: 5000 });
     w.observe(T0, 1, 1);
     expect(w.amostras(T0 + 6000)).toHaveLength(0);
+  });
+});
+
+describe("formatResumo — a decomposição no log de minuto", () => {
+  it("separa decode de inferência com p50/p95 e a cadência", () => {
+    const w = createCostWindow();
+    // 4 rodadas na janela: decode barato e estável, inferência cara com cauda.
+    w.observe(T0, 100, 400);
+    w.observe(T0 + 1000, 100, 400);
+    w.observe(T0 + 2000, 100, 400);
+    w.observe(T0 + 3000, 120, 900);
+    const s = formatResumo(w.resumo(T0 + 3000));
+    expect(s).toContain("decode 100/120ms");
+    expect(s).toContain("infer 400/900ms");
+    expect(s).toContain("rod/s");
+  });
+
+  it("janela VAZIA devolve string vazia — não afirma medição onde não houve", () => {
+    // O falso-OK que este teste trava: logar `decode 0/0ms` com n=0 leria como "o decode é
+    // grátis", quando o fato é que ninguém mediu nada (motor recém-ligado, frota toda no gate).
+    const w = createCostWindow();
+    expect(formatResumo(w.resumo(T0))).toBe("");
+    expect(formatResumo(null)).toBe("");
+    expect(formatResumo(undefined)).toBe("");
+    expect(formatResumo({ n: 3 })).toBe("");
+  });
+
+  it("arredonda para inteiro — ms fracionário no log é ruído, não precisão", () => {
+    const w = createCostWindow();
+    w.observe(T0, 10.4, 20.6);
+    expect(formatResumo(w.resumo(T0))).toContain("decode 10/10ms");
   });
 });

@@ -88,4 +88,26 @@ function createCostWindow(opts = {}) {
   };
 }
 
-module.exports = { createCostWindow, percentil, JANELA_MS };
+/**
+ * Resumo → trecho do log de minuto. PURO (o formato é testável; o console não).
+ *
+ * POR QUE: `resumo()` já separava decode × inferência, mas o número morria dentro de
+ * `stats()` — o log de produção mostrava só `cpu~112%`, que diz QUE está caro e não ONDE.
+ * Sem a decomposição no log, "está lento" não tem onde ser investigado e a otimização vira
+ * chute: exatamente o erro que o cabeçalho deste arquivo registra ter custado dois
+ * mecanismos embarcados e revertidos. Com ela, o remédio se lê direto:
+ *   decode dominante     → TRANSPORTE (resolução do JPEG, tiling, sharp);
+ *   inferência dominante → MODELO (tier/input/threads do ORT).
+ *
+ * p50/p95 juntos porque a média esconde a cauda e é a CAUDA que enche a fila do worker.
+ * Janela vazia (motor recém-ligado, frota toda pulada pelo gate) devolve "" — um log com
+ * `decode 0/0ms` afirmaria medição onde não houve nenhuma.
+ */
+function formatResumo(resumo) {
+  const r = resumo || {};
+  if (!r.n || !r.decodeMs || !r.inferMs) return "";
+  const par = (m) => `${Math.round(m.p50)}/${Math.round(m.p95)}ms`;
+  return ` decode ${par(r.decodeMs)} infer ${par(r.inferMs)} (${r.rodadasPorS} rod/s)`;
+}
+
+module.exports = { createCostWindow, percentil, formatResumo, JANELA_MS };

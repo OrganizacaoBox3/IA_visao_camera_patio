@@ -33,6 +33,7 @@ const { canSeeCamera } = require("../users");
 const { emitScopedByCamera } = require("../socket-scope");
 const alarmPipeline = require("../alarm/pipeline"); // alarme server-side (presença em zona proibida)
 const { PRECISION, trackTtlMs } = require("./precision");
+const { formatResumo } = require("./cost");
 const { createByteTracker } = require("./bytetrack");
 const { createCounter } = require("./counting");
 const { createInflightSlots } = require("./inflight");
@@ -756,8 +757,12 @@ function logMinute() {
   }
   const w = workerHost.stats();
   const perW = w.workers.map((x) => `#${x.id}${x.ready ? "" : "!"}:${x.cpuPct}%`).join(" ");
+  // CUSTO no log (cost.js:formatResumo): `cpu~%` diz QUE está caro, não ONDE. A decomposição
+  // decode × inferência já era medida e morria dentro de stats() — sem ela no log de produção,
+  // otimizar é chutar. Vazio quando a janela não tem amostra (não inventa medição).
+  const custo = formatResumo(w.custo);
   console.log(
-    `[analysis] pool ${w.readyCount}/${w.size} cpu~${w.cpuPct}% (${perW}) · ${parts.join(" · ")}`,
+    `[analysis] pool ${w.readyCount}/${w.size} cpu~${w.cpuPct}%${custo} (${perW}) · ${parts.join(" · ")}`,
   );
 }
 
