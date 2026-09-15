@@ -409,10 +409,31 @@ export const CameraTile = memo(function CameraTile({
     //
     // O tile NÃO fica cego: a pílula de status e o sinal de VIOLADA são irmãos deste bloco (ver
     // o wrapper abaixo) e seguem vivos — o que sai é só o VÍDEO. Clique abre ao vivo.
-    <button type="button" className="tile tile-open" onClick={openSelf} style={TILE_BTN_RESET}>
+    // `title="Abrir câmera"` é CONTRATO DE SELETOR do e2e (declarado em CameraWorkspace.tsx:1534,
+    // usado 9× em app.spec.ts) e agora tem de morar aqui: em repouso este placeholder É o
+    // affordance de abrir a câmera, porque a grade não monta mais o CameraWorkspace. Sem ele, todo
+    // teste que abre uma câmera para exercitar zona/calibração/Select para de achar onde clicar.
+    // O fluxo que o e2e descreve — clicar no tile abre a câmera — segue verdadeiro; só mudou o que
+    // o tile mostra antes do clique. `aria-label` carrega o nome da câmera (o texto visível é
+    // genérico e igual em todos os tiles; leitor de tela precisa distinguir qual é qual).
+    <button
+      type="button"
+      className="tile tile-open"
+      onClick={openSelf}
+      style={TILE_BTN_RESET}
+      aria-label={`Abrir câmera ${camera.label}`}
+      title="Abrir câmera"
+    >
       <span className="cam-tile__repouso">
-        <Video size={18} strokeWidth={1.5} aria-hidden />
-        ver ao vivo
+        {/* O NOME é o conteúdo principal do tile em repouso, não enfeite: sem vídeo, é a única
+            coisa que diz ao operador QUAL câmera é esta. A primeira versão deste placeholder
+            mostrava só "ver ao vivo" em todos os tiles — grade ilegível, e o e2e pegou
+            (`getByText('E2E-CAM')` não achava o nome em lugar nenhum do painel). */}
+        <span className="cam-tile__nome">{camera.label}</span>
+        <span className="cam-tile__acao">
+          <Video size={14} strokeWidth={1.5} aria-hidden />
+          ver ao vivo
+        </span>
       </span>
     </button>
   ) : transport === "webrtc" ? (
