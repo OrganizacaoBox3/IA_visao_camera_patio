@@ -74,6 +74,38 @@ COCO 80) → **drop-in absoluto**: só troca o `.onnx`. Todos `onnx-community/*-
 
 Ou seja: rode o 1º boot com `ANALYSIS_ENABLED=1` (baixa o modelo); dali em diante o default liga.
 
+## Gate de TURNO — não analisar o que ninguém vai alertar (`ANALYSIS_SHIFT_GATE`, default **0**)
+
+`ANALYSIS_SHIFT_GATE=1` faz o motor **pular a rodada inteira** (sem thumbnail, sem inferência)
+quando **nenhum alarme daquela câmera seria possível naquele instante**. Sem ele, o motor produz
+24/7 e o turno só descarta depois (`server/alarm/shift.js` — "o motor sempre produz, a política
+suprime"): CPU gasta para gerar alerta que não sai e, pela spec de turnos, nem entra na conta de
+eficiência (fora do turno é *Schedule Loss*).
+
+Quem decide é o **mesmo** `shiftGate` da política — nunca uma segunda leitura de turno (duas
+fontes divergindo é a armadilha 1 da spec, e aqui o estrago seria o motor dormindo enquanto o
+alarme se acha armado). Enquanto UMA zona puder alertar, a câmera fica acordada — inclusive a
+zona proibida com `arming: "fora-turnos"`, que existe para pegar invasão **fora** do expediente
+e que um gate ingênuo ("fora do turno, desliga") mataria em silêncio.
+
+**SEM TURNO = NÃO PROCESSA** (decisão do dono, 15/09/2026). Dentro do motor isto INVERTE o
+fail-open da spec: zona sem `shiftIds` (ou só com ids órfãos/turno inativo) não justifica gastar
+CPU, e câmera sem zona nenhuma também dorme. O gate de ALARME segue fail-open e intocado — o que
+muda é quando o motor gasta CPU, não quando o alarme dispara.
+
+> **Antes de ligar, leia:** com as zonas sem turno atribuído, `ANALYSIS_SHIFT_GATE=1` **para a
+> análise inteira** — o sistema fica cego até alguém configurar os turnos na tela. Confira o
+> cadastro ANTES de ligar, e o log de minuto DEPOIS.
+
+Por isso os dois motivos de sono são separados no log de minuto:
+
+| no log | significa | ação |
+|---|---|---|
+| `[dormiu/turno: N]` | fora da janela declarada | nenhuma — é a economia funcionando |
+| `[PARADA/SEM-TURNO: N]` | ninguém atribuiu turno à zona | **atribuir turno**; a câmera não está vigiando |
+
+Somar os dois num número só faria um parque inteiro cego ler como economia bem-sucedida.
+
 ## Env (defaults entre parênteses)
 
 `ANALYSIS_MODEL` (**s** — `n|s|m`; ver §Modelo) · `ANALYSIS_FPS` (1) · `ANALYSIS_HIGH_SCORE`

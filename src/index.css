@@ -611,6 +611,37 @@ label.file input {
 .tile:hover {
   border-color: var(--accent);
 }
+/* REPOUSO do tile (vídeo sob demanda): a grade não streama sozinha — o vídeo sobe no clique.
+   Going-gray: estado normal é neutro (--text-dim), sem cor saturada; a informação que importa
+   em repouso (status, VIOLADA) segue nos irmãos deste bloco, não aqui. */
+.cam-tile__repouso {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+/* O NOME domina: sem vídeo, é o que identifica a câmera. Quebra em vez de vazar do tile. */
+.cam-tile__nome {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+/* A ação é secundária (--text-dim): o tile já é clicável inteiro. */
+.cam-tile__acao {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
 .tile.alerting {
   border-color: var(--state-critical);
   box-shadow: 0 0 0 1px var(--state-critical);

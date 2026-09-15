@@ -15,6 +15,7 @@ import { AlarmDrawer } from "./dashboard/AlarmDrawer";
 import { useFrameRelay } from "./dashboard/useFrameRelay";
 import { useDashboardSocket } from "./dashboard/useDashboardSocket";
 import { useVideoTransport } from "./dashboard/useVideoTransport";
+import { useIdleVideo } from "./dashboard/useIdleVideo";
 import { useAlarms } from "./dashboard/useAlarms";
 import { useCamCfgs } from "./useCamCfgs";
 import "./alarms.css";
@@ -78,6 +79,15 @@ export function DashboardPage() {
   // Transporte de vídeo no painel (go2rtc/WebRTC vs relé MJPEG) + auto-fallback WebRTC→MJPEG.
   const { transportOf, handleWebrtcFail } = useVideoTransport(cfgOf);
 
+  // OCIOSIDADE: a câmera aberta se fecha sozinha quando o painel é abandonado (5 min sem gesto,
+  // ou aba oculta). Sem isto, "uma câmera por vez" ainda deixaria UM stream de pé a noite toda
+  // — foi exatamente o padrão medido em produção: 16 Mbps contínuos por 11 horas seguidas, e
+  // domingo com zero. A decisão é pura e testada em dashboard/idle.ts.
+  const painelOcioso = useIdleVideo();
+  useEffect(() => {
+    if (painelOcioso && openId != null) setOpenId(null);
+  }, [painelOcioso, openId]);
+
   // ── Paginação dos feeds: só os feeds da página atual são montados (CameraWorkspace) → só eles
   //    processam inferência. A grade mostra SEMPRE todas as câmeras conectadas; a paginação recorta
   //    esse conjunto (na ordem que o hub envia). ──
@@ -104,8 +114,13 @@ export function DashboardPage() {
   // aberta seguem intactos (ela é a ativa).
   useEffect(() => {
     const active = new Set<string>();
+    // VÍDEO SOB DEMANDA: conjunto ativo = SÓ a câmera aberta. Em repouso ele fica VAZIO e o
+    // `watch` abaixo anuncia lista vazia → o hub para de relayar frames de vídeo para este
+    // cliente. É aqui que a economia sai do navegador e chega ao SERVIDOR: antes, um painel
+    // aberto em repouso fazia o hub empurrar N câmeras continuamente. O plano de controle
+    // (`analysis-tracks`, broadcast à room) não depende disto e segue chegando — o painel
+    // continua sabendo de violação de zona sem receber um frame sequer.
     if (openId) active.add(openId);
-    else for (const c of pageCameras) active.add(c.id);
     openIdRef.current = openId; // ref lida pelo drainDecode (aberta = decode nativo, sem resize)
     const prev = activeIdsRef.current;
     activeIdsRef.current = active;
@@ -279,9 +294,15 @@ export function DashboardPage() {
                 key={`wrap-${c.id}`}
                 camera={c}
                 isOpen={c.id === openId}
-                // Tile de FUNDO (outra câmera aberta) pausa: vira placeholder leve e desmonta
-                // o CameraWorkspace (para rAF/motion/draw). Só a câmera aberta segue processando.
-                paused={openId != null && c.id !== openId}
+                // VÍDEO SOB DEMANDA: só a câmera ABERTA exibe imagem — uma por vez. Em repouso
+                // (nenhuma aberta) a grade inteira fica em placeholder, sem <video-stream> e sem
+                // CameraWorkspace (rAF/motion/draw desmontados). Antes só pausava o FUNDO de uma
+                // câmera aberta, e a grade streamava N câmeras sozinha: era um DVR que ninguém
+                // pediu. Medido em produção: com painel aberto o load foi a 15,63 contra 8,04 sem
+                // ninguém (4 vCPU), 17% das horas de uma semana — CPU tirada da análise que
+                // dispara o alerta de WhatsApp, que é o produto. Status e VIOLADA seguem visíveis
+                // no tile em repouso; o que sai é só o vídeo.
+                paused={c.id !== openId}
                 isFadiga={isFadiga(c.id)}
                 getFrame={getterFor(c.id)}
                 tripwiresRev={revByCamera.get(c.id) ?? 0}
