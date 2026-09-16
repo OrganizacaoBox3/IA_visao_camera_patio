@@ -1077,90 +1077,6 @@ label.file input {
 .only-print {
   display: none;
 }
-@media print {
-  .no-print,
-  .rail,
-  .skip-link {
-    display: none !important;
-  }
-  /* cores categóricas (heatmap, barras, KPIs) precisam imprimir fielmente */
-  html,
-  body {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  @page {
-    margin: 14mm;
-  }
-  body,
-  .report {
-    background: #fff;
-    color: #111;
-  }
-  .shell {
-    display: block;
-  }
-  .shell-main {
-    overflow: visible;
-  }
-  .report.page {
-    height: auto;
-  }
-  .rep-body {
-    overflow: visible;
-  }
-
-  .only-print {
-    display: block;
-  }
-  .print-head {
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #111;
-  }
-  .print-head .ph-title {
-    font-size: 18px;
-    font-weight: 700;
-    color: #111;
-  }
-  .print-head .ph-sub {
-    font-size: 12px;
-    color: #333;
-    margin-top: 3px;
-  }
-  .print-head .ph-meta {
-    font-size: 10px;
-    color: #666;
-    margin-top: 5px;
-  }
-
-  .panel,
-  .rep-resumo {
-    border-color: #ccc;
-    background: #fff;
-    break-inside: avoid;
-  }
-  .kpi.big {
-    border-color: #ccc;
-    background: #fff;
-  }
-  .kpi-row,
-  .heatmap,
-  .evo,
-  .obj-matrix-wrap,
-  .rep-2col {
-    break-inside: avoid;
-  }
-  .rtable thead {
-    display: table-header-group;
-  } /* repete o cabeçalho da tabela a cada página */
-  .rtable tr {
-    break-inside: avoid;
-  }
-  .resumo-card {
-    border: 1px solid #ccc !important;
-  }
-}
 
 /* Limite por área (zone card) — regras de <select> nativo removidas (morto:
    o controle é o átomo Radix Select). */
@@ -2685,4 +2601,148 @@ button.rail-item {
   margin: 0;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   IMPRESSÃO — ESTE BLOCO FICA NO FIM DO ARQUIVO, E ISSO É REQUISITO, NÃO ARRUMAÇÃO.
+
+   Ele já viveu no meio do arquivo (linha ~1080) e o resultado foi um PDF de 240px de largura:
+   `.shell { display: block }` daqui perdia para `.shell { display: grid }` da linha 1212 —
+   mesma especificidade, e no empate quem vence é quem vem DEPOIS. Com o grid de pé e o rail
+   escondido por `display:none`, o `.shell-main` caía na COLUNA DO RAIL: o relatório inteiro
+   saía numa tira estreita, com uma palavra por linha.
+
+   Pior no papel de verdade: A4 tem ~794px de viewport, o que ainda dispara o responsivo de
+   `max-width: 900px` (rail de 52px). Sem este bloco por último, o PDF sairia com ~52px úteis.
+
+   Regra, então: impressão é a ÚLTIMA palavra da folha de estilo. Nada de `!important` —
+   o que conserta é a ordem, e ela precisa continuar sendo a última.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+@media print {
+  /* ── TINTA SOBRE PAPEL: os TOKENS viram claros aqui ──────────────────────────────────────
+     O app é dark-first: --text é quase branco. A folha pintava o FUNDO de branco e deixava os
+     tokens de texto como estavam — resultado medido no PDF de 16/09: o "90%" da cobertura, os
+     números dos cartões do Resumo e o "2.500 saídas" saíam em cinza-claro sobre branco, ou
+     seja, os NÚMEROS — que são o produto do relatório — eram a parte menos legível da página.
+     A folha antiga consertava isso selector a selector (.rep-ef-*, .print-head), o que deixa
+     de fora tudo que ainda não foi lembrado e tudo que vier depois.
+     Remapear o TOKEN conserta a classe inteira do problema, inclusive componente futuro: quem
+     usa var(--text) passa a imprimir preto sem saber que existe impressão. */
+  :root {
+    --bg: #fff;
+    --panel: #fff;
+    --panel-2: #fafafa;
+    --border: #ccc;
+    --border-soft: #e2e2e2;
+    --text: #111;
+    --text-dim: #444;
+    --text-muted: #666;
+    --line: #ddd;
+    /* Neutro no papel não pode ser o cinza-claro da tela (some no branco). */
+    --state-neutral: #666;
+    --state-neutral-fg: #555;
+    --state-neutral-dim: #777;
+    /* Hues de estado escurecem o suficiente para ter contraste em branco, mantendo a
+       identidade (going-gray: a cor continua significando a mesma coisa). */
+    --state-info: #0369a1;
+    --state-info-fg: #075985;
+    --state-ok: #15803d;
+    --state-ok-fg: #166534;
+    --state-warn: #a16207;
+    --state-warn-fg: #854d0e;
+    --state-critical: #b91c1c;
+    --state-critical-fg: #991b1b;
+    /* Tints de fundo: no papel, chip colorido vira branco com borda — economiza tinta e
+       evita o bloco escuro que a trilha das barras mostrava no PDF. */
+    --state-neutral-bg: #fff;
+    --state-ok-bg: #fff;
+    --state-info-bg: #fff;
+    --state-warn-bg: #fff;
+    --state-critical-bg: #fff;
+    --accent: #0369a1;
+    --accent-bg: #fff;
+    --ctrl-bg: #fff;
+  }
+  .no-print,
+  .rail,
+  .skip-link {
+    display: none !important;
+  }
+  /* cores categóricas (heatmap, barras, KPIs) precisam imprimir fielmente */
+  html,
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  @page {
+    margin: 14mm;
+  }
+  body,
+  .report {
+    background: #fff;
+    color: #111;
+  }
+  .shell {
+    display: block;
+  }
+  .shell-main {
+    overflow: visible;
+  }
+  .report.page {
+    height: auto;
+  }
+  .rep-body {
+    overflow: visible;
+  }
+
+  .only-print {
+    display: block;
+  }
+  .print-head {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #111;
+  }
+  .print-head .ph-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111;
+  }
+  .print-head .ph-sub {
+    font-size: 12px;
+    color: #333;
+    margin-top: 3px;
+  }
+  .print-head .ph-meta {
+    font-size: 10px;
+    color: #666;
+    margin-top: 5px;
+  }
+
+  .panel,
+  .rep-resumo {
+    border-color: #ccc;
+    background: #fff;
+    break-inside: avoid;
+  }
+  .kpi.big {
+    border-color: #ccc;
+    background: #fff;
+  }
+  .kpi-row,
+  .heatmap,
+  .evo,
+  .obj-matrix-wrap,
+  .rep-2col {
+    break-inside: avoid;
+  }
+  .rtable thead {
+    display: table-header-group;
+  } /* repete o cabeçalho da tabela a cada página */
+  .rtable tr {
+    break-inside: avoid;
+  }
+  .resumo-card {
+    border: 1px solid #ccc !important;
+  }
 }
