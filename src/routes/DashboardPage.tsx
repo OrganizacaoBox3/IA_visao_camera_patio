@@ -16,6 +16,7 @@ import { useFrameRelay } from "./dashboard/useFrameRelay";
 import { useDashboardSocket } from "./dashboard/useDashboardSocket";
 import { useVideoTransport } from "./dashboard/useVideoTransport";
 import { useIdleVideo } from "./dashboard/useIdleVideo";
+import { ServidorIndicador } from "./dashboard/ServidorIndicador";
 import { useAlarms } from "./dashboard/useAlarms";
 import { useCamCfgs } from "./useCamCfgs";
 import "./alarms.css";
@@ -203,6 +204,10 @@ export function DashboardPage() {
           o fix #2 (.page:has(.cam-overlay) > .page-head) esconde o header com câmera aberta e
           os alvos ≥44px do mobile (index.css) selecionam por ele. */}
       <PageHeader title="Central" className="page-head">
+        {/* SERVIDOR: consumo de processamento e o que está sendo analisado, no cabeçalho e sem
+            clique. O SaudeMotorPanel (Relatório) segue dono do diagnóstico; este responde a
+            pergunta de operação — "o servidor está dando conta agora?" — onde as câmeras estão. */}
+        <ServidorIndicador />
         {/* Ação ÚNICA de câmeras: leva à tela /cameras, que adiciona/gerencia tanto câmera IP
             (superadmin) quanto o nó local (webcam) — visível a todos. */}
         <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
