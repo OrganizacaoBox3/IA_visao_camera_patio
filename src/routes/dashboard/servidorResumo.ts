@@ -9,8 +9,12 @@
 
 import type { AnalysisStatus } from "../../api";
 
-/** Pool afogando: 255% ≈ 85% dos 3 workers do hub em produção. Acima disso a fila cresce e a
- *  análise atrasa, então é estado que pede ação humana — não é pico normal. */
+/**
+ * Limiar de "afogando", aplicado à SOMA hub + pool (100% = um núcleo).
+ * 255% ≈ 64% da máquina de produção (4 vCPU = 400%). Escolhido abaixo da saturação medida —
+ * a máquina começou a formar fila de CPU por volta de 340% — para o aviso chegar ANTES de a
+ * análise atrasar, não junto com o atraso.
+ */
 export const CPU_AFOGANDO_PCT = 255;
 
 export type ServidorResumo = {
@@ -37,7 +41,22 @@ export function servidorResumo(
   // Motor parado domina: qualquer número de CPU ao lado disso seria distração.
   if (!status.enabled) return { ...vazio, nivel: "down", manchete: "análise DESLIGADA" };
 
-  const cpu = status.worker?.cpuPct ?? null;
+  // CPU = HUB + POOL, e a soma não é capricho:
+  //   · o `worker.cpuPct` só é recalculado QUANDO UM WORKER RESPONDE (worker-host:sampleCpu).
+  //     Com o gate de turno ligado e 4 câmeras a 0,2 fps, as respostas ficam raras e o número
+  //     CONGELA — foi assim que o indicador exibiu "0% cpu" num servidor que estava trabalhando.
+  //   · e o pool cobre só a inferência. Medido em produção: 2,5 vCPU com 4 câmeras analisando,
+  //     porque receber e manter 15 streams custa independente de análise. O hub é essa parte.
+  // `hub.cpuPct` vem do process.cpuUsage() em janela própria de 5s, então atualiza mesmo com o
+  // motor ocioso — é o que impede o congelamento.
+  // RESSALVA que o tooltip declara: o go2rtc roda em processo SEPARADO e não entra nesta soma.
+  const cpuHub = status.hub?.cpuPct ?? null;
+  const cpuPool = status.worker?.cpuPct ?? null;
+  // Só é `null` quando NENHUM dos dois foi medido; um lado ausente não zera o outro.
+  const cpu =
+    cpuHub === null && cpuPool === null
+      ? null
+      : Math.round(((cpuHub ?? 0) + (cpuPool ?? 0)) * 10) / 10;
   const inferMs = status.worker?.custo?.inferMs?.p50 ?? null;
   const sg = status.shiftGate;
   // Gate desligado não tem câmera parada por turno — e o número de "analisando" passa a ser

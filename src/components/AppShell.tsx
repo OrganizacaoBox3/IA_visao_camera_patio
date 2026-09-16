@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "../auth";
+import { ServidorIndicador } from "../routes/dashboard/ServidorIndicador";
 import type { Papel } from "../auth";
 import { listCameras, getConnectedCameras, type Camera, type ConnectedCamera } from "../api";
 import { DropdownMenu, Tooltip, type DropdownItem } from "../ui";
@@ -545,6 +546,10 @@ export function AppShell() {
             </button>
           }
         />
+        {/* SERVIDOR: consumo de processamento e o que está sendo analisado. Mora AQUI, no shell,
+            porque é estado do SISTEMA e não de uma página — no cabeçalho da Central ele sumia ao
+            trocar de tela. `iconOnly` já é a convenção do rail estreito/mobile. */}
+        <ServidorIndicador iconOnly={iconOnly} />
         <Tooltip content="Processamento local · sem identificação individual">
           <div className="rail-foot" aria-hidden>
             <ShieldCheck size={16} strokeWidth={1.75} />

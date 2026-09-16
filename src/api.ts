@@ -595,6 +595,15 @@ export type AnalysisStatus = {
     skippedTotal: number;
   };
   autoscale?: AnalysisAutoscale;
+  /**
+   * CPU/memória do PROCESSO DO HUB — ingest, relé de frames, persistência. O hub mandava e o
+   * tipo não declarava, então nenhuma tela via; e é a MAIOR parte do consumo: medido em
+   * produção (15/09), a máquina usava 2,5 vCPU com apenas 4 câmeras analisando, porque receber
+   * e manter 15 streams custa independente da análise. Mostrar só o pool de inferência pinta
+   * um servidor folgado enquanto ele está cheio.
+   * `cpuPct` é `null` até a primeira janela de 5s fechar — "ainda não medi" não é "0%".
+   */
+  hub?: { cpuPct: number | null; rssMb: number; heapMb: number; uptimeS: number };
   worker?: AnalysisWorker;
   /**
    * GATE DE TURNO — o resumo que separa ECONOMIA de CEGUEIRA.
