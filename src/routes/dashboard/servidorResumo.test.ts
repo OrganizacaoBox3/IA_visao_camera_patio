@@ -38,6 +38,7 @@ function status(over: Partial<AnalysisStatus> = {}): AnalysisStatus {
       skipped1m: 0,
       skippedTotal: 0,
     },
+    hub: { cpuPct: 40, rssMb: 300, heapMb: 120, uptimeS: 900 },
     worker: {
       ready: true,
       size: 3,
@@ -60,7 +61,7 @@ function status(over: Partial<AnalysisStatus> = {}): AnalysisStatus {
 describe("servidorResumo — o que a pílula pode afirmar", () => {
   it("operação normal: neutro, com os números do hub", () => {
     const r = servidorResumo(status(), false);
-    expect(r).toMatchObject({ nivel: "ok", cpu: 90, inferMs: 825, analisando: 1, paradas: 0 });
+    expect(r).toMatchObject({ nivel: "ok", cpu: 130, inferMs: 825, analisando: 1, paradas: 0 }); // 40 hub + 90 pool
     expect(r?.manchete).toBeNull();
   });
 
@@ -101,17 +102,23 @@ describe("servidorResumo — o que a pílula pode afirmar", () => {
     expect(r?.analisando).toBe(4);
   });
 
-  it("pool afogando puxa para atenção mesmo sem câmera parada", () => {
-    const afogado = (cpuPct: number) =>
+  it("servidor afogando puxa para atenção mesmo sem câmera parada", () => {
+    // O limiar vale para a SOMA hub+pool, porque é ela que corresponde ao que a máquina gasta.
+    const afogado = (hubPct: number, poolPct: number) =>
       servidorResumo(
         status({
-          worker: { ready: true, size: 3, readyCount: 3, cpuPct, respawns: 0 },
+          hub: { cpuPct: hubPct, rssMb: 300, heapMb: 120, uptimeS: 900 },
+          worker: { ready: true, size: 3, readyCount: 3, cpuPct: poolPct, respawns: 0 },
           shiftGate: { on: true, ativas: 15, foraJanela: 0, semTurno: 0 },
         }),
         false,
       );
-    expect(afogado(CPU_AFOGANDO_PCT + 1)?.nivel).toBe("warn");
-    expect(afogado(CPU_AFOGANDO_PCT)?.nivel).toBe("ok"); // borda: o limiar não dispara nele mesmo
+    expect(afogado(100, CPU_AFOGANDO_PCT - 99)?.nivel).toBe("warn"); // soma 256
+    expect(afogado(100, CPU_AFOGANDO_PCT - 100)?.nivel).toBe("ok"); // soma 255: borda não dispara
+    // E o ponto da correção: pool congelado em 0 não pode esconder um hub carregado. Era assim
+    // que o indicador mostrava "0% cpu" com o servidor trabalhando no ingest.
+    expect(afogado(300, 0)?.nivel).toBe("warn");
+    expect(afogado(300, 0)?.cpu).toBe(300);
   });
 
   it("gate desligado: 'analisando' conta quem produziu inferência, e não há câmera parada", () => {
@@ -129,7 +136,12 @@ describe("servidorResumo — o que a pílula pode afirmar", () => {
 
   it("hub antigo sem os campos aditivos não vira normalidade falsa nem quebra", () => {
     const r = servidorResumo(
-      status({ worker: undefined, shiftGate: undefined, perCamera: { a: cam({ fps: 0 }) } }),
+      status({
+        hub: undefined,
+        worker: undefined,
+        shiftGate: undefined,
+        perCamera: { a: cam({ fps: 0 }) },
+      }),
       false,
     );
     expect(r?.cpu).toBeNull(); // "não medido", não 0%

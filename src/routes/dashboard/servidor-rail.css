@@ -1,0 +1,81 @@
+/* ── Indicador de SERVIDOR no rodapé do menu lateral (ServidorIndicador.tsx) ────────────────
+   Estado do SISTEMA, não de uma página: por isso vive no shell e aparece em toda rota.
+   Going-gray: neutro em operação normal; âmbar só quando há ação humana pendente (câmera
+   cadastrada sem turno) ou o servidor está afogando; vermelho para motor desligado e para
+   "sem resposta" — desconhecido não é bom. */
+.srv-rail {
+  margin: var(--sp-2);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--state-neutral);
+  background: var(--state-neutral-bg);
+  color: var(--state-neutral-fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.srv-rail[data-level="warn"] {
+  border-color: var(--state-warn);
+  background: var(--state-warn-bg);
+  color: var(--state-warn-fg);
+}
+.srv-rail[data-level="down"],
+.srv-rail[data-level="unknown"] {
+  border-color: var(--state-critical);
+  background: var(--state-critical-bg);
+  color: var(--state-critical-fg);
+}
+.srv-rail__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9.5px;
+  opacity: 0.75;
+  margin-bottom: 2px;
+}
+.srv-rail__linha {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srv-rail__linha b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* O número que precisa incomodar ganha peso próprio, não só a cor da caixa. */
+.srv-rail__alerta {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.srv-rail__manchete {
+  font-weight: 600;
+  white-space: normal;
+}
+/* Rail estreito (52–60px) e mobile: ícone + CPU, o resto no tooltip. */
+.srv-rail--min {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px;
+}
+.srv-rail__min-num {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+/* Bottom-nav (≤640px): o rodapé do rail já é escondido ali (.rail-foot), e o indicador segue a
+   mesma regra — num bottom-nav de 5 slots ele roubaria espaço da navegação. O dado continua
+   acessível na Central pelo tile e no Relatório pelo painel de saúde. */
+@media (max-width: 640px) {
+  .srv-rail {
+    display: none;
+  }
+}
