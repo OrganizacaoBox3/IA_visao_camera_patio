@@ -220,6 +220,9 @@ export async function loadEvents(): Promise<EventRow[]> {
     ts: e.ts,
     area: e.area,
     camera: e.camera ?? e.cameraId ?? "—",
+    // ADITIVO: o id viaja ao lado do rótulo para o filtro por câmera poder recortar. O rótulo
+    // continua sendo o que a tabela exibe — id não é para olho humano.
+    cameraId: e.cameraId,
     durationMin: e.durationMin,
     ...stampOf(e),
     shift: e.shift,

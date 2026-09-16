@@ -427,8 +427,12 @@ export function ReportTools({
               ) : undefined
             }
           >
+            {/* "Câmera do silenciamento", e não "Câmera": desde 2026-09-16 o relatório tem um
+                filtro GLOBAL por câmera, e dois controles com o mesmo nome acessível na mesma
+                página deixam quem usa leitor de tela sem saber qual é qual. O nome específico
+                também é mais honesto — aqui a câmera é o ALVO do silêncio, não um recorte. */}
             <Select
-              ariaLabel="Câmera"
+              ariaLabel="Câmera do silenciamento"
               value={fCam}
               onChange={(v) => {
                 setFCam(v);

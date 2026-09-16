@@ -39,7 +39,8 @@ export type MotivoAusencia =
   | "sem-turno" // o hub não carimbou turno no recorte (ou recorte vazio) → sem denominador
   | "sem-presenca" // turno medido, mas sem medição de ocupação → não dá p/ isolar a efetiva
   | "sem-volume" // não há indicador de volume no recorte (operação sem leitura de código)
-  | "sem-meta"; // tudo medido, mas ninguém informou a meta → a TAXA não existe
+  | "sem-meta" // tudo medido, mas ninguém informou a meta → a TAXA não existe
+  | "volume-de-outro-recorte"; // NUMERADOR e DENOMINADOR vêm de recortes diferentes
 
 export type EficienciaEntrada = {
   /** horas-bucket DENTRO do turno, pausas já excluídas (shiftRuler.hoursInShift). */
@@ -52,6 +53,18 @@ export type EficienciaEntrada = {
   metaPorHora?: number | null;
   /** rótulo da unidade de volume, só p/ o texto de quem exibe ("caixas"). */
   unidade?: string;
+  /**
+   * O VOLUME é de um recorte MAIOR que a presença? Então a divisão é inválida e nada é exibido.
+   *
+   * MEDIDO em 16/09/2026, e é o motivo desta flag existir: com o filtro por câmera ligado, a
+   * presença passou a ser de UMA câmera (37,8h da Portaria) enquanto o volume continuou sendo o
+   * da frota (12.541 caixas — o bucket de leitura é gravado por PONTO, não por câmera). A conta
+   * cuspiu 331,8 caixas/hora contra 95,7 sem o filtro: 3,5× inflado, com cara de medição.
+   *
+   * Um número que mistura denominadores não é "aproximado", é inválido — e este é o pior tipo,
+   * porque parece preciso. Quem chama levanta a flag; aqui a eficiência inteira CALA.
+   */
+  volumeForaDoRecorte?: boolean;
 };
 
 export type Eficiencia = {
@@ -93,7 +106,13 @@ export function eficiencia(e: EficienciaEntrada): Eficiencia {
   // Sem horas de turno não há denominador nenhum: nem bruta, nem efetiva, nem taxa.
   if (horasTurno <= 0) return vazio;
 
-  const volume = typeof e.volume === "number" && Number.isFinite(e.volume) ? e.volume : null;
+  // NUMERADOR DE OUTRO RECORTE: trata-se o volume como ausente. Não é conservadorismo — é que
+  // dividir caixas da frota por horas de uma câmera não produz uma aproximação ruim, produz um
+  // número sem significado. O motivo específico faz a tela explicar em vez de só mostrar "—".
+  const volume =
+    e.volumeForaDoRecorte || !(typeof e.volume === "number" && Number.isFinite(e.volume))
+      ? null
+      : e.volume;
   const ocupacaoPct =
     typeof e.ocupacaoPct === "number" && Number.isFinite(e.ocupacaoPct)
       ? Math.max(0, Math.min(100, e.ocupacaoPct))
@@ -119,7 +138,8 @@ export function eficiencia(e: EficienciaEntrada): Eficiencia {
 
   // O motivo aponta o elo que faltou, do mais estrutural ao mais superficial.
   let motivo: MotivoAusencia | null = null;
-  if (volume === null) motivo = "sem-volume";
+  if (e.volumeForaDoRecorte) motivo = "volume-de-outro-recorte";
+  else if (volume === null) motivo = "sem-volume";
   else if (horasComPresenca === null || horasComPresenca <= 0) motivo = "sem-presenca";
   else if (meta === null) motivo = "sem-meta";
 
@@ -145,4 +165,6 @@ export const MOTIVO_TEXTO: Record<MotivoAusencia, string> = {
     "Sem indicador de volume no recorte (leitura de código) — a eficiência precisa de algo produzido para contar.",
   "sem-meta":
     "Meta não informada — os valores por hora aparecem, mas não há percentual a afirmar sem o esperado.",
+  "volume-de-outro-recorte":
+    "Recorte por câmera ativo: a presença é desta câmera, mas o volume de caixas é medido por PONTO (a frota inteira). Dividir um pelo outro daria um número sem significado, então nenhuma produtividade é exibida — remova o filtro de câmera para ver a eficiência.",
 };

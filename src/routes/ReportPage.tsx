@@ -80,7 +80,16 @@ import { AlarmesPanel } from "./report/AlarmesPanel";
 import { EficienciaPanel } from "./report/EficienciaPanel";
 import { CoberturaCard } from "./report/CoberturaCard";
 import { eficiencia } from "../report/calc/eficiencia";
-import { cobertura } from "../report/calc";
+import {
+  cobertura,
+  datasetDaCamera,
+  fluxoDaCamera,
+  eventosDaCamera,
+  opcoesDeCamera,
+  rotuloDaCamera,
+  avisoDeAlcance,
+  TODAS_CAMERAS,
+} from "../report/calc";
 import { getConnectedCameras, type ConnectedCamera } from "../api";
 import { cameraEstadoDe } from "../types/cameraEstado";
 
@@ -138,6 +147,9 @@ function FilterBar({
   shift,
   setShift,
   shiftItems,
+  camera,
+  setCamera,
+  cameraItems,
   refresh,
   downloadCSV,
   printPDF,
@@ -150,6 +162,11 @@ function FilterBar({
   setShift: (v: ShiftFilter) => void;
   /** turnos do CADASTRO (+ legados presentes no dado) — nunca mais 3 strings hardcoded. */
   shiftItems: { value: string; label: string }[];
+  /** recorte por CÂMERA — global, ao lado de período e turno, porque a câmera atravessa os
+   *  modos (área/ponto/setor recortam DENTRO de um modo) e é o objeto que o cliente nomeia. */
+  camera: string;
+  setCamera: (v: string) => void;
+  cameraItems: { value: string; label: string }[];
   refresh: () => void;
   downloadCSV: () => void;
   printPDF: () => void;
@@ -173,6 +190,19 @@ function FilterBar({
           onChange={setShift}
           ariaLabel="Turno"
           options={[{ value: ALL_SHIFTS, label: "Turno: todos" }, ...shiftItems]}
+        />
+      )}
+      {/* Só aparece com MAIS DE UMA câmera no cadastro: com uma só, o seletor não recorta
+          nada e vira cromo. (Com zero, idem.) */}
+      {cameraItems.length > 1 && (
+        <Select
+          value={camera}
+          onChange={setCamera}
+          ariaLabel="Câmera"
+          options={[
+            { value: TODAS_CAMERAS, label: "Todas as câmeras" },
+            ...cameraItems,
+          ]}
         />
       )}
       <div className="spacer" />
@@ -276,6 +306,9 @@ export function ReportPage() {
   const [posto, setPosto] = useState<string | "Todos">("Todos");
   // Filtro PRÓPRIO do modo Linhas: a chave `cameraId|tripwireId` (sentinela "Todas").
   const [linha, setLinha] = useState<string | "Todas">("Todas");
+  // RECORTE POR CÂMERA (global). Guardado pelo ID; o rótulo é resolvido na hora de exibir —
+  // mesma separação chave/rótulo do turno e da linha.
+  const [camera, setCamera] = useState<string>(TODAS_CAMERAS);
   const [tab, setTab] = useState<RepTab>("quando");
   const [printedAt, setPrintedAt] = useState("");
 
@@ -307,12 +340,44 @@ export function ReportPage() {
     [camerasEstado],
   );
 
+  // ── O RECORTE POR CÂMERA, APLICADO NO DATASET ────────────────────────────────────────────
+  // Filtrar aqui, e não dentro de cada agregação, é o que mantém `calc/` intocado: janela,
+  // régua de turno, heatmap, evolução, eficiência e cobertura passam a enxergar só o recorte
+  // sem nenhuma delas precisar aprender o que é uma câmera. Ver calc/camera.ts — inclusive a
+  // lista de quem NÃO consegue recortar (objetos/fadiga não gravam a câmera no bucket).
+  const dsCam = useMemo(() => (data.ds ? datasetDaCamera(data.ds, camera) : null), [data.ds, camera]);
+  const flowCam = useMemo(
+    () => (data.flowDs ? fluxoDaCamera(data.flowDs, camera) : null),
+    [data.flowDs, camera],
+  );
+  const eventosCam = useMemo(
+    () => eventosDaCamera(data.allEvents, camera),
+    [data.allEvents, camera],
+  );
+  const alarmesCam = useMemo(() => eventosDaCamera(alarms, camera), [alarms, camera]);
+  const cameraItems = useMemo(
+    () =>
+      opcoesDeCamera(camerasEstado.map((c) => ({ id: c.id, label: c.label }))).map((c) => ({
+        value: c.id,
+        label: c.label,
+      })),
+    [camerasEstado],
+  );
+  const cameraLabel = rotuloDaCamera(camera, camerasEstado);
+  // A câmera saiu do cadastro (removida enquanto o relatório estava aberto)? O recorte continua
+  // valendo sobre o histórico — some do seletor, mas o cabeçalho segue dizendo de quem é.
+
   // COBERTURA DA ANÁLISE — "quanto do período foi realmente analisado". Do dataset INTEIRO
   // (não da janela filtrada): o denominador precisa das horas que NÃO geraram célula, que são
   // exatamente as que somem da tabela quando a câmera fica cega. Ver calc/cobertura.ts.
   const cob = useMemo(
-    () => cobertura(data.ds ?? { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() }, period, camerasDesativadas),
-    [data.ds, period, camerasDesativadas],
+    () =>
+      cobertura(
+        dsCam ?? { days: 0, areas: [], cameraOf: {}, cells: [], startMs: Date.now() },
+        period,
+        camerasDesativadas,
+      ),
+    [dsCam, period, camerasDesativadas],
   );
 
   // ── Quais dimensões EXISTEM neste site (têm dado no histórico) ──
@@ -320,14 +385,16 @@ export function ReportPage() {
   // 3 dimensões ficam permanentemente vazias. Elas não viram botão nem cartão de zeros.
   const has = useMemo(
     () => ({
-      atividade: (data.ds?.cells.length ?? 0) > 0,
-      fluxo: (data.flowDs?.cells.length ?? 0) > 0,
+      // Com recorte de câmera, o botão do modo segue o RECORTE: oferecer "Linhas" para uma
+      // câmera sem tripwire abriria um modo permanentemente vazio.
+      atividade: (dsCam?.cells.length ?? 0) > 0,
+      fluxo: (flowCam?.cells.length ?? 0) > 0,
       leitura: (data.rds?.cells.length ?? 0) > 0,
       objetos: (data.ods?.cells.length ?? 0) > 0,
       fadiga: (data.fds?.cells.length ?? 0) > 0,
-      alarmes: alarms.length > 0,
+      alarmes: alarmesCam.length > 0,
     }),
-    [data.ds, data.flowDs, data.rds, data.ods, data.fds, alarms],
+    [dsCam, flowCam, data.rds, data.ods, data.fds, alarmesCam],
   );
   const dims: Dim[] = DIMS.filter((d) => has[d]);
   // "Linhas" NÃO é uma das 4 dimensões de câmera (o `modo` da câmera não decide se ela tem
@@ -346,14 +413,14 @@ export function ReportPage() {
   // (linhas sem carimbo). Um site já 100% carimbado não exibe as 3 strings mortas.
   const shiftItems = useMemo(() => {
     const rows: ShiftRow[] = [
-      ...(data.ds?.cells ?? []),
+      ...(dsCam?.cells ?? []),
       ...(data.rds?.cells ?? []),
       ...(data.ods?.cells ?? []),
       ...(data.fds?.cells ?? []),
-      ...data.allEvents,
+      ...eventosCam,
     ];
     return shiftOptions(shifts, legacyShiftsIn(rows));
-  }, [shifts, data.ds, data.rds, data.ods, data.fds, data.allEvents]);
+  }, [shifts, dsCam, data.rds, data.ods, data.fds, eventosCam]);
   // A CHAVE do filtro é o id do turno; o rótulo (lente/impressão/CSV) é o NOME do cadastro.
   const shiftLabel = shiftLabelOf(shift, shifts);
 
@@ -363,14 +430,14 @@ export function ReportPage() {
     mode === m ? "full" : mode === "resumo" ? "summary" : "off";
   const atividade = useAtividadeVM({
     view: viewFor("atividade"),
-    ds: data.ds,
-    events: data.allEvents,
+    ds: dsCam,
+    events: eventosCam,
     period,
     shift,
     area,
     shifts,
   });
-  const fluxo = useFluxoVM({ view: viewFor("fluxo"), ds: data.flowDs, period, shift, linha });
+  const fluxo = useFluxoVM({ view: viewFor("fluxo"), ds: flowCam, period, shift, linha });
   const leitura = useLeituraVM({
     view: viewFor("leitura"),
     ds: data.rds,
@@ -396,7 +463,7 @@ export function ReportPage() {
     shift,
     posto,
   });
-  const al = useAlarmesVM({ active: mode === "alarmes", alarms, period });
+  const al = useAlarmesVM({ active: mode === "alarmes", alarms: alarmesCam, period });
 
   const isResumo = mode === "resumo";
   const isFluxo = mode === "fluxo";
@@ -474,10 +541,14 @@ export function ReportPage() {
       horasTurno: ruler?.stamped ? ruler.hoursInShift : 0,
       ocupacaoPct: ruler?.occupancyPct ?? null,
       volume: leitura.summary ? leitura.summary.rk.boxes : null,
+      // Com recorte de CÂMERA, a presença é de uma câmera e o volume continua sendo o da frota
+      // (o bucket de leitura é por PONTO — ver calc/camera.ts). A eficiência inteira cala, com
+      // motivo próprio, em vez de imprimir 331,8 caixas/hora contra 95,7 reais.
+      volumeForaDoRecorte: camera !== TODAS_CAMERAS,
       metaPorHora,
       unidade: "caixas",
     });
-  }, [atividade.summary, leitura.summary, metaPorHora]);
+  }, [atividade.summary, leitura.summary, metaPorHora, camera]);
   // Dias de histórico do recorte (o texto do vazio de janela diz o que EXISTE — no Resumo, o
   // maior entre as dimensões, que é o alcance real do histórico do site).
   const historyDays = isResumo
@@ -499,6 +570,7 @@ export function ReportPage() {
     shift,
     shiftLabel,
     area,
+    cameraLabel,
     linhaLabel,
     ponto,
     setor,
@@ -507,6 +579,13 @@ export function ReportPage() {
     alarmState,
   };
   const lens = reportLens(filters);
+  // O Resumo agrega dimensões, então não usa a lente por-modo (que fala de área/ponto/setor).
+  // Mas ele PRECISA carregar o recorte de câmera: é esta string que vai no cabeçalho IMPRESSO,
+  // e uma folha que não diz de qual câmera está falando é indefensável numa reunião — foi
+  // exatamente o furo medido em 16/09 (o PDF do Resumo saía sem a câmera no cabeçalho).
+  const lensResumo = `${PERIOD_LABEL[period]}${
+    camera === TODAS_CAMERAS ? "" : ` · Câmera: ${cameraLabel}`
+  } · Turno: ${shiftLabel}`;
   const filtroLabel = reportFiltroLabel(filters);
   // Filtro específico do modo (tipo ModeFilter acima) — só muda a fonte por modo.
   const modeFilter: ModeFilter = isFluxo
@@ -626,6 +705,9 @@ export function ReportPage() {
         shift={shift}
         setShift={setShift}
         shiftItems={shiftItems}
+        camera={camera}
+        setCamera={setCamera}
+        cameraItems={cameraItems}
         refresh={refresh}
         downloadCSV={downloadCSV}
         printPDF={printPDF}
@@ -634,7 +716,7 @@ export function ReportPage() {
       <div className="print-head only-print" aria-hidden>
         <div className="ph-title">Relatório Operacional · {MODE_LABEL[mode]}</div>
         <div className="ph-sub">
-          {isResumo ? `${PERIOD_LABEL[period]} · Turno: ${shiftLabel}` : lens}
+          {isResumo ? lensResumo : lens}
         </div>
         <div className="ph-meta">
           Gerado em {printedAt || "—"} · indicadores agregados, sem imagens (LGPD)
@@ -660,7 +742,7 @@ export function ReportPage() {
         {noHistory && <EmptyHistory mode={mode} dataSource={dataSource} />}
         {emptyWindow && (
           <EmptyWindow
-            lens={isResumo ? `${PERIOD_LABEL[period]} · Turno: ${shiftLabel}` : lens}
+            lens={isResumo ? lensResumo : lens}
             days={historyDays}
           />
         )}
@@ -672,7 +754,16 @@ export function ReportPage() {
             é a leitura que o gestor abre o relatório para fazer; o resto é o detalhamento dela. */}
         {/* COBERTURA antes de tudo (inclusive da eficiência): se o período não foi observado,
             todo número abaixo é suspeito — e descobrir isso no rodapé é tarde demais. */}
-        {ready && isResumo && <CoberturaCard c={cob} periodLabel={PERIOD_LABEL[period]} />}
+        {ready && isResumo && (
+          <CoberturaCard
+            c={cob}
+            periodLabel={
+              camera === TODAS_CAMERAS
+                ? PERIOD_LABEL[period]
+                : `${PERIOD_LABEL[period]} · ${cameraLabel}`
+            }
+          />
+        )}
 
         {ready && isResumo && (
           <EficienciaPanel
@@ -680,13 +771,21 @@ export function ReportPage() {
             metaPorHora={metaPorHora}
             onMetaChange={setMetaPorHora}
             periodLabel={PERIOD_LABEL[period]}
-            filtroLabel={`Turno: ${shiftLabel}`}
+            filtroLabel={
+              camera === TODAS_CAMERAS
+                ? `Turno: ${shiftLabel}`
+                : `${cameraLabel} · Turno: ${shiftLabel}`
+            }
           />
         )}
 
         {ready && isResumo && (
           <ResumoPanel
-            periodLabel={PERIOD_LABEL[period]}
+            periodLabel={
+              camera === TODAS_CAMERAS
+                ? PERIOD_LABEL[period]
+                : `${PERIOD_LABEL[period]} · ${cameraLabel}`
+            }
             shiftLabel={shiftLabel}
             atividade={
               hasWindow.atividade && atividade.summary
@@ -715,7 +814,13 @@ export function ReportPage() {
             }
             leitura={
               hasWindow.leitura && leitura.summary
-                ? { rk: leitura.summary.rk, rtips: leitura.summary.rtips }
+                ? {
+                    rk: leitura.summary.rk,
+                    rtips: leitura.summary.rtips,
+                    // A leitura é gravada por PONTO: o recorte de câmera não a alcança, e o
+                    // cartão diz isso onde o número está (ver calc/camera.ts).
+                    foraDoRecorte: camera !== TODAS_CAMERAS,
+                  }
                 : null
             }
             objetos={
@@ -726,6 +831,20 @@ export function ReportPage() {
             alarmes={has.alarmes ? { ak: al.akPeriod } : null}
             onOpenMode={setMode}
           />
+        )}
+
+        {/* O RECORTE POR CÂMERA NÃO ALCANÇA TUDO — e quem não alcança, DIZ.
+            Objetos e fadiga gravam o bucket por setor/posto e não guardam de qual câmera o dado
+            veio; leitura separa as LEITURAS por câmera mas mede as CAIXAS por ponto. Mostrar o
+            número inteiro sob um cabeçalho que diz "Doca 1" seria um número CERTO sob um rótulo
+            ERRADO — e ninguém desconfia de um número certo. A regra mora em calc/camera.ts. */}
+        {/* No Resumo NÃO: lá cada cartão declara o próprio alcance, ao lado do próprio número
+            (que é onde a ressalva alcança quem lê só o número). Aqui o painel INTEIRO é de outro
+            recorte, então o aviso vem antes dele. */}
+        {ready && !isResumo && avisoDeAlcance(mode, camera) && (
+          <Alert tone="warn">
+            <b>Recorte por câmera não se aplica a este modo.</b> {avisoDeAlcance(mode, camera)}
+          </Alert>
         )}
 
         {/* N4 — Dimensão. O filtro do recorte vive COM a seção (não no header global).

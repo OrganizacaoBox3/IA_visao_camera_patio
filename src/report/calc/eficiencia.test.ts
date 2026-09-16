@@ -139,3 +139,52 @@ describe("eficiencia — robustez", () => {
     expect(eficiencia(base).unidade).toBe("caixas");
   });
 });
+
+// ── NUMERADOR DE UM RECORTE, DENOMINADOR DE OUTRO (2026-09-16) ───────────────────────────────
+// O filtro por câmera recorta a PRESENÇA (a célula de atividade sabe a câmera) mas não recorta
+// o VOLUME (o bucket de leitura é gravado por PONTO). Medido na tela: 37,8h de presença da
+// Portaria contra as 12.541 caixas da frota → 331,8 caixas/hora impressas, contra 95,7 reais.
+// 3,5× inflado, e com cara de precisão — o pior tipo de número errado, porque ninguém desconfia.
+describe("eficiencia — recusa a divisão entre recortes diferentes", () => {
+  const base: EficienciaEntrada = {
+    horasTurno: 60,
+    ocupacaoPct: 63,
+    volume: 12_541,
+    metaPorHora: 20,
+    unidade: "caixas",
+  };
+
+  it("com a flag, NADA de produtividade é exibido — e o motivo é específico", () => {
+    const r = eficiencia({ ...base, volumeForaDoRecorte: true });
+    expect(r.produtividadeBruta).toBeNull();
+    expect(r.produtividadeEfetiva).toBeNull();
+    expect(r.taxaPct).toBeNull();
+    expect(r.motivo).toBe("volume-de-outro-recorte");
+  });
+
+  it("o que FOI medido no recorte continua aparecendo (presença é da câmera certa)", () => {
+    const r = eficiencia({ ...base, volumeForaDoRecorte: true });
+    expect(r.horasTurno).toBe(60);
+    expect(r.aproveitamentoPct).toBe(63);
+    expect(r.horasComPresenca).toBe(37.8);
+  });
+
+  it("sem a flag, o MESMO dado produz o número inflado — é o que a flag existe para impedir", () => {
+    const semFlag = eficiencia(base);
+    expect(semFlag.produtividadeEfetiva).toBeCloseTo(331.8, 1);
+    expect(eficiencia({ ...base, volumeForaDoRecorte: true }).produtividadeEfetiva).toBeNull();
+  });
+
+  it("a flag vence até a meta informada (não existe taxa sobre denominador inválido)", () => {
+    expect(eficiencia({ ...base, volumeForaDoRecorte: true, metaPorHora: 20 }).taxaPct).toBeNull();
+  });
+
+  it("flag falsa/ausente não muda nada do comportamento antigo", () => {
+    expect(eficiencia({ ...base, volumeForaDoRecorte: false })).toEqual(eficiencia(base));
+  });
+
+  it("o texto do motivo explica a CAUSA e a saída (remover o filtro)", () => {
+    expect(MOTIVO_TEXTO["volume-de-outro-recorte"]).toMatch(/PONTO/);
+    expect(MOTIVO_TEXTO["volume-de-outro-recorte"]).toMatch(/remova o filtro de câmera/);
+  });
+});

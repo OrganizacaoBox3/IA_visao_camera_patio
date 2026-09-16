@@ -30,6 +30,10 @@ export type ResumoFadiga = {
   ftips: string[];
 };
 export type ResumoLeitura = { rk: ReadingKpis; rtips: string[] };
+/** Cartões cuja fonte NÃO se recorta por câmera precisam dizê-lo NO cartão. Um aviso no rodapé
+ *  da página não alcança quem lê só o número — e o cartão, sob um cabeçalho que diz "Portaria",
+ *  afirmaria por omissão um recorte que não houve. */
+type ForaDoRecorte = { foraDoRecorte?: boolean };
 export type ResumoObjetos = { ok: ObjectKpis; oLoads: number };
 export type ResumoFluxo = { k: FlowKpis; topLineLabel: string | null };
 export type ResumoAlarmes = { ak: AlarmKpis };
@@ -51,7 +55,7 @@ export function ResumoPanel({
   atividade: ResumoAtividade | null;
   fluxo: ResumoFluxo | null;
   fadiga: ResumoFadiga | null;
-  leitura: ResumoLeitura | null;
+  leitura: (ResumoLeitura & ForaDoRecorte) | null;
   objetos: ResumoObjetos | null;
   alarmes: ResumoAlarmes | null;
   onOpenMode: (m: Mode) => void;
@@ -202,7 +206,15 @@ export function ResumoPanel({
                 <span>no-reads</span>
               </div>
             </div>
-            <div className="rc-foot">ponto de maior volume: {leitura.rk.topPonto}</div>
+            <div className="rc-foot">
+              ponto de maior volume: {leitura.rk.topPonto}
+              {leitura.foraDoRecorte && (
+                <>
+                  {" · "}
+                  <b>todas as câmeras</b> (leitura é medida por ponto)
+                </>
+              )}
+            </div>
           </Card>
         )}
 
