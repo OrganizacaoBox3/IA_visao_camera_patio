@@ -1,4 +1,4 @@
-# Deploy na DigitalOcean — Visão de Pátio
+# Deploy na DigitalOcean — Visão Computacional
 
 Roteiro passo-a-passo para rodar o `visao_computacional_mvp` na sua melhor versão na VPS
 da DigitalOcean. **Cenário real desta VPS:** ela é compartilhada — as portas **80/443 já

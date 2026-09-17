@@ -121,7 +121,7 @@ Arquivo: `src/auth.tsx`.
 
 ### Tela de login (`LoginScreen`, `src/auth.tsx:37-73`)
 
-- Card centralizado (`.login-screen` / `.login-card`) com marca "▣ Visão de Pátio".
+- Card centralizado (`.login-screen` / `.login-card`) com marca "▣ Visão Computacional".
 - Usa os componentes do design system: `Field` + `Input` para usuário e senha, `Button`
   primário em bloco. O erro é exibido no `Field` da senha (`:66`).
 - Estados locais: `usuario`, `senha`, `busy`, `err`. Submit desabilitado enquanto vazio

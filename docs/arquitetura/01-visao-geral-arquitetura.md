@@ -1,6 +1,6 @@
 # Visão Geral e Arquitetura do Sistema
 
-> **Projeto:** Visão de Pátio — POC / MVP de visão computacional industrial
+> **Projeto:** Visão Computacional — POC / MVP de visão computacional industrial
 > **Pacotes:** `visao_patio_mvp` (frontend) + `visao_patio_hub` (servidor)
 > **Documento:** gerado a partir da leitura do código-fonte (não altera a pasta `docs/produto/`).
 > **Data de geração:** 2026-06-28
@@ -9,7 +9,7 @@
 
 ## 1. Propósito do sistema
 
-O **Visão de Pátio** é um MVP web de **inteligência operacional por área** baseado em
+O **Visão Computacional** é um MVP web de **inteligência operacional por área** baseado em
 visão computacional. Ele transforma câmeras comuns (webcams, celulares e câmeras IP/RTSP)
 em sensores de operação, analisando o vídeo para extrair indicadores como movimentação,
 ocupação, contagem de pessoas, permanência, leitura de códigos de barras e fadiga de

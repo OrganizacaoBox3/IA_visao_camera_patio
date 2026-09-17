@@ -51,6 +51,11 @@ type AuthCtx = {
   user: AuthUser;
   isSuper: boolean;
   canConfigure: boolean;
+  /** `cliente` = quem CONTRATA o monitoramento (não opera o sistema). Vê só as câmeras
+   *  alocadas a ele e, desde 17/09/2026, NÃO recebe vídeo ao vivo — vê as áreas demarcadas
+   *  desenhadas. O produto é a notificação; imagem ao vivo é ferramenta de setup, e o painel
+   *  aberto custa CPU da análise que gera o alerta (medido: load 8,04 → 15,63). */
+  isCliente: boolean;
   logout: (reason?: string) => void;
 };
 const Ctx = createContext<AuthCtx | null>(null);
@@ -92,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session.user,
       isSuper: papel === "superadmin",
       canConfigure: canConfigurePapel(papel),
+      isCliente: papel === "cliente",
       logout,
     };
   }, [session, logout]);
@@ -143,7 +149,7 @@ function LoginScreen({
             preservado (m-0/font-normal anulam os defaults de h1); o glifo ▣ vira o
             Cctv do shell (Lucide único — regra 11 da doutrina). */}
         <h1 className="login-brand m-0 flex items-center justify-center gap-2 font-normal">
-          <Cctv size={20} strokeWidth={1.75} aria-hidden /> Visão de Pátio
+          <Cctv size={20} strokeWidth={1.75} aria-hidden /> Visão Computacional
         </h1>
         <p className="login-sub">Acesso restrito</p>
         <Field label="Usuário" htmlFor="login-user">

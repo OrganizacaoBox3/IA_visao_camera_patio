@@ -35,7 +35,7 @@ lt2() { echo "drawtext=fontfile=$FT:text='$1':fontsize=46:fontcolor=0xe6edf3:x=(
 
 # S0 — card de abertura (3s)
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=$BG:s=1920x1080:d=3:r=30" -vf "\
-drawtext=fontfile=$FT:text='Visão de Pátio':fontsize=96:fontcolor=0xe6edf3:x=(w-text_w)/2:y=(h/2)-90,\
+drawtext=fontfile=$FT:text='Visão Computacional':fontsize=96:fontcolor=0xe6edf3:x=(w-text_w)/2:y=(h/2)-90,\
 drawtext=fontfile=$FR:text='inteligência operacional por câmeras':fontsize=42:fontcolor=0x7dd3fc:x=(w-text_w)/2:y=(h/2)+30,\
 drawtext=fontfile=$FR:text='demonstração em CD industrial':fontsize=30:fontcolor=0x8b949e:x=(w-text_w)/2:y=(h/2)+100,\
 fade=t=in:st=0:d=0.4,fade=t=out:st=2.6:d=0.4" -an "s0.mp4"
@@ -82,7 +82,7 @@ fade=t=in:st=0:d=0.3,fade=t=out:st=4.0:d=0.4" -an "s7.mp4"
 
 # S8 — card final (3s)
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=$BG:s=1920x1080:d=3:r=30" -vf "\
-drawtext=fontfile=$FT:text='Visão de Pátio':fontsize=84:fontcolor=0xe6edf3:x=(w-text_w)/2:y=(h/2)-60,\
+drawtext=fontfile=$FT:text='Visão Computacional':fontsize=84:fontcolor=0xe6edf3:x=(w-text_w)/2:y=(h/2)-60,\
 drawtext=fontfile=$FR:text='hardware industrial + IA de visão — do chão de fábrica ao indicador':fontsize=36:fontcolor=0x7dd3fc:x=(w-text_w)/2:y=(h/2)+40,\
 fade=t=in:st=0:d=0.4,fade=t=out:st=2.5:d=0.5" -an "s8.mp4"
 

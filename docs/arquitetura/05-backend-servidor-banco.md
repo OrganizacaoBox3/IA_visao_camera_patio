@@ -340,7 +340,7 @@ Objeto de configuração (defaults em `settings.js:11-22`):
 
 ```jsonc
 {
-  "marca": "Visão de Pátio",
+  "marca": "Visão Computacional",
   "incluirLocal": true,
   "incluirHora": true,
   "incluirRodape": true,

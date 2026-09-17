@@ -105,7 +105,7 @@ async function handle(req, res, ctx) {
     try {
       const result = await whatsapp.sendText(
         numero,
-        "✅ Teste — Visão de Pátio: notificações de WhatsApp funcionando.",
+        "✅ Teste — Visão Computacional: notificações de WhatsApp funcionando.",
       );
       json(res, 200, { ok: true, delivery: result.delivery });
     } catch (e) {

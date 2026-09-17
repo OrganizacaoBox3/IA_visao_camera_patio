@@ -1,4 +1,4 @@
-# systemd unit — hub de câmeras (socket.io) do Visão de Pátio. (EXEMPLO — sem segredos)
+# systemd unit — hub de câmeras (socket.io) do Visão Computacional. (EXEMPLO — sem segredos)
 # Copie para visao-hub.service (gitignored) e preencha os segredos via EnvironmentFile.
 # Instalar:
 #   sudo cp deploy/visao-hub.service /etc/systemd/system/visao-hub.service

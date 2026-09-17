@@ -1,4 +1,4 @@
-# Manual — conectar uma câmera IP (RTSP) no Visão de Pátio
+# Manual — conectar uma câmera IP (RTSP) no Visão Computacional
 
 ## 1. Só o IP basta? Não.
 O sistema precisa da **URL RTSP completa**:
@@ -61,7 +61,7 @@ Confirme que a URL funciona fora do sistema:
   ```
 - **ffplay (ao vivo):** `ffplay -rtsp_transport tcp "rtsp://user:senha@IP:554/..."`
 
-## 6. Conectar no Visão de Pátio
+## 6. Conectar no Visão Computacional
 1. ffmpeg instalado no host do hub.
 2. Crie/edite `server/rtsp.sources.json` (modelo em `server/rtsp.sources.example.json`):
    ```json

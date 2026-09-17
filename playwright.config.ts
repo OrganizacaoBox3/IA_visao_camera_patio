@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// E2E do Visão de Pátio. Orquestra: hub isolado na 4100 (global-setup, sem PG, bootstrap admin),
+// E2E do Visão Computacional. Orquestra: hub isolado na 4100 (global-setup, sem PG, bootstrap admin),
 // vite dev na 5180 apontando p/ esse hub (VITE_HUB_URL), e Chromium com WEBCAM FAKE
 // (--use-fake-device-for-media-stream) p/ o nó de câmera funcionar headless.
 export default defineConfig({

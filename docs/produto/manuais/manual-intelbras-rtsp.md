@@ -20,7 +20,7 @@ rtsp://USUARIO:SENHA@IP:554/cam/realmonitor?channel=CANAL&subtype=TIPO
 
 ## Exemplos prontos
 ```bash
-# Câmera IP VIP (direta), substream — ideal para o Visão de Pátio:
+# Câmera IP VIP (direta), substream — ideal para o Visão Computacional:
 rtsp://admin:suasenha@10.0.0.50:554/cam/realmonitor?channel=1&subtype=1
 
 # Câmera IP VIP, stream principal (alta resolução):
@@ -56,4 +56,4 @@ rtsp://admin:suasenha@10.0.0.10:554/cam/realmonitor?channel=3&subtype=0
 | Conecta sem imagem | canal/subtype errado — teste `channel=1&subtype=0` |
 | Travando/atrasado | use `subtype=1` e baixe `RTSP_FPS`/`RTSP_WIDTH` |
 
-> Dica: para o Visão de Pátio, o **substream** (`subtype=1`) é o ideal — leve e suficiente para detectar ocupação, movimento e área parada.
+> Dica: para o Visão Computacional, o **substream** (`subtype=1`) é o ideal — leve e suficiente para detectar ocupação, movimento e área parada.
