@@ -206,7 +206,12 @@ export function evolution(ds: Dataset, f: Filters, lastN = 14) {
 export type EventRow = ShiftStamp & {
   ts: number;
   area: string;
+  /** RÓTULO exibível da câmera (é o que a tabela mostra). */
   camera: string;
+  /** ID da câmera — ADITIVO (2026-09-16), para o recorte por câmera. Opcional porque o
+   *  evento gravado por hub antigo só trazia o rótulo; sem id, o evento não entra em nenhum
+   *  recorte de câmera (não se atribui o que não se sabe — ver calc/camera.ts). */
+  cameraId?: string;
   durationMin: number;
   /** rótulo exibível do turno (nome cadastrado ou legado) — sempre presente na linha gravada. */
   shift: string;

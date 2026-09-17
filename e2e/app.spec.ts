@@ -520,6 +520,51 @@ test("Câmeras: botão único leva a /cameras e a validação de url bloqueia ur
 // O hub do E2E sobe SEM Postgres (global-setup), então `GET /api/data/ativ/buckets` devolve [] e
 // a página fica no estado "sem dados" — as abas nunca renderizariam. Mockamos APENAS essa rota
 // (só metadados agregados, coerente com LGPD) para exercitar a SEMÂNTICA das abas, não os dados.
+// A FOLHA DE IMPRESSÃO — o artefato que sai da empresa e que NENHUM teste via.
+//
+// Duas regressões reais, medidas em 16/09/2026 gerando o PDF de verdade:
+//   1. LARGURA. O `@media print` morava no MEIO do index.css, então `.shell { display: block }`
+//      dele perdia para `.shell { display: grid }` de 100 linhas abaixo — mesma especificidade,
+//      e no empate vence quem vem depois. Com o grid de pé e o rail em `display:none`, o
+//      conteúdo caía na COLUNA DO RAIL: o relatório inteiro saía com 240px de largura, uma
+//      palavra por linha. No papel de verdade seria pior (A4 ≈ 794px dispara o responsivo de
+//      900px e a coluna vira 52px).
+//   2. CONTRASTE. O app é dark-first; a folha pintava o fundo de branco e deixava os TOKENS de
+//      texto escuros-para-tela. Os NÚMEROS — o produto do relatório — saíam em cinza-claro
+//      sobre branco, ou seja, a parte menos legível da página.
+//
+// Ambas passavam por todo teste existente porque nenhum emulava `print`. Este emula.
+test("PDF: a folha de impressão usa a página inteira e imprime em tinta escura", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("link", { name: /Relatório/i }).click();
+  await expect(page.getByRole("heading", { name: /Relatório Operacional/i })).toBeVisible();
+
+  await page.emulateMedia({ media: "print" });
+  const folha = await page.evaluate(() => {
+    const main = document.querySelector(".shell-main") as HTMLElement;
+    const cs = getComputedStyle(document.body);
+    const rgb = (v: string) => (v.match(/\d+/g) || []).map(Number).slice(0, 3);
+    const [r, g, b] = rgb(cs.color);
+    return {
+      larguraMain: Math.round(main.getBoundingClientRect().width),
+      larguraJanela: window.innerWidth,
+      // Luminância do TEXTO: alta = cinza-claro/branco (ilegível no papel).
+      luzTexto: Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b),
+      shellDisplay: getComputedStyle(document.querySelector(".shell") as HTMLElement).display,
+    };
+  });
+  await page.emulateMedia({ media: "screen" });
+
+  // O conteúdo ocupa a página, não a coluna do rail (o bug era 240px de 1280).
+  expect(folha.larguraMain).toBeGreaterThan(folha.larguraJanela * 0.9);
+  // O grid da casca precisa estar desfeito — é ele que criava a coluna.
+  expect(folha.shellDisplay).toBe("block");
+  // Tinta escura sobre papel branco: o texto não pode ser claro (o bug era ~230).
+  expect(folha.luzTexto).toBeLessThan(90);
+});
+
 test("Tabs (Relatório): setas/clique trocam a aba e só o tabpanel ativo é exibido", async ({
   page,
 }) => {
