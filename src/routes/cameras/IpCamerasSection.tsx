@@ -36,6 +36,8 @@ import {
   type Camera as IpCamera,
   type CameraTransport,
   type NewCamera,
+  uploadCameraBg,
+  deleteCameraBg,
 } from "../../api";
 import {
   CAMERA_ESTADOS,
@@ -271,6 +273,35 @@ export function CamerasList() {
   // ESTADO OPERACIONAL no lugar do liga/desliga (2026-09-13). O Switch só sabia dizer duas
   // coisas, e o problema é de QUATRO: uma câmera em manutenção não está "parada" (ela continua
   // medindo) nem "ativa" (ela não deve notificar ninguém). Ver src/types/cameraEstado.ts.
+  // IMAGEM DE REFERÊNCIA (ADR-021). O servidor é quem valida de verdade (tipo, tamanho e a
+  // ASSINATURA dos bytes — content-type declarado não é evidência); aqui só reportamos.
+  async function enviarFundo(cameraId: string, file: File) {
+    setBusy(true);
+    try {
+      await uploadCameraBg(cameraId, file);
+      toast("Imagem de fundo enviada — o cliente já a vê.", "ok");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Não foi possível enviar a imagem.", "alert");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removerFundo(cameraId: string, label: string) {
+    setBusy(true);
+    try {
+      const r = await deleteCameraBg(cameraId);
+      toast(
+        r.apagou ? `Imagem de ${label} removida.` : `${label} não tinha imagem de fundo.`,
+        "ok",
+      );
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Não foi possível remover a imagem.", "alert");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setEstado(c: IpCamera, estado: CameraEstado) {
     setBusy(true);
     try {
@@ -407,6 +438,38 @@ export function CamerasList() {
                           label: CAMERA_ESTADO_LABEL[e],
                         }))}
                       />
+                    </div>
+                  )}
+                  {/* IMAGEM DE REFERÊNCIA (ADR-021) — o FUNDO do desenho de zonas que o CLIENTE
+                      vê. Fica aqui, ao lado do estado operacional, porque é config da câmera.
+                      O aviso é parte do controle, não nota de rodapé: quem sobe precisa saber
+                      que a imagem fica no servidor e é vista pelo cliente. */}
+                  {row.ip && (
+                    <div className="cam-set-field cam-set-bg">
+                      <FieldLabel>Imagem de fundo (o cliente vê)</FieldLabel>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        aria-label={`Imagem de fundo de ${row.label}`}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = ""; // permite reenviar o MESMO arquivo depois
+                          if (f) void enviarFundo(row.id, f);
+                        }}
+                      />
+                      <p className="cam-set-bg__aviso">
+                        Fica <b>salva no servidor</b> e é exibida ao cliente no lugar do vídeo.
+                        Envie o pátio <b>vazio</b>, uma planta ou um croqui — nunca uma foto com
+                        pessoas. JPEG, PNG ou WebP, até 2 MB.
+                      </p>
+                      <Button
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => void removerFundo(row.id, row.label)}
+                      >
+                        Remover imagem
+                      </Button>
                     </div>
                   )}
                   <div className="cam-set-field">

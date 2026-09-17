@@ -5,12 +5,15 @@
 // ao vivo. Tirar o vídeo do painel do cliente é a economia mais direta que existe: medido em
 // produção, painel aberto levou o load de 8,04 para 15,63 numa máquina de 4 vCPU.
 //
-// É DESENHO, não foto — e isso é requisito, não escolha estética: persistir um instantâneo da
-// cena no servidor violaria o ADR-002 ("nenhuma imagem/frame é persistida"). Ver o racional
-// completo no cabeçalho de zonasEstaticas.ts. Custo aqui: alguns polígonos em SVG. Zero banda
-// de vídeo, zero frame, zero armazenamento.
+// O desenho é VETORIAL (polígonos em SVG), e por cima de um FUNDO opcional: a imagem de
+// referência que o admin envia (ADR-021) para o cliente ter noção do lugar. O fundo é um
+// arquivo ESCOLHIDO POR UM HUMANO, nunca um frame capturado do feed — o ADR-002 segue valendo
+// inteiro para o pipeline. Sem imagem enviada, o desenho aparece sozinho e nada quebra.
+//
+// Custo: zero banda de vídeo, zero frame, e uma imagem estática cacheada pelo navegador.
 import { useEffect, useState } from "react";
-import { getZones } from "../../api";
+import { cameraBgUrl, getZones } from "../../api";
+import { getVideoTicket } from "../../video/ticket";
 import { ZONE_MODE_LABEL, type Zone } from "../../zones";
 import {
   COR_DO_MODO,
@@ -24,11 +27,14 @@ export function PlantaDeZonas({
   cameraLabel,
   /** muda quando alguém edita as zonas por outro posto — força re-busca (idioma `zonesRev`). */
   zonesRev = 0,
+  bgRev = 0,
   onOpen,
 }: {
   cameraId: string;
   cameraLabel: string;
   zonesRev?: number;
+  /** muda quando o admin troca a imagem de referência — força o navegador a largar o cache. */
+  bgRev?: number;
   onOpen?: () => void;
 }) {
   // `null` = ainda carregando; `[]` = carregou e não há zona. São estados DIFERENTES na tela:
@@ -54,6 +60,25 @@ export function PlantaDeZonas({
     };
   }, [cameraId, zonesRev]);
 
+  // IMAGEM DE REFERÊNCIA (ADR-021): fundo ESTÁTICO enviado pelo admin. Precisa de TICKET porque
+  // <image> não manda header (ver cameraBgUrl). Sem imagem enviada o GET dá 404, o `onError`
+  // dispara e o fundo some — um quadrado quebrado seria pior que um desenho sem fundo.
+  const [fundo, setFundo] = useState<string | null>(null);
+  useEffect(() => {
+    let morto = false;
+    setFundo(null);
+    getVideoTicket(cameraId)
+      .then((t) => {
+        if (!morto) setFundo(cameraBgUrl(cameraId, t, bgRev));
+      })
+      .catch(() => {
+        /* sem ticket, sem fundo — o desenho continua de pé sozinho */
+      });
+    return () => {
+      morto = true;
+    };
+  }, [cameraId, bgRev]);
+
   const desenhadas = zonas ? desenharZonas(zonas) : [];
   const corpo = (
     <div className="planta">
@@ -71,6 +96,21 @@ export function PlantaDeZonas({
             : `Carregando as áreas de ${cameraLabel}`
         }
       >
+        {fundo && (
+          // `preserveAspectRatio="none"` casa com o do <svg>: a zona foi desenhada em
+          // coordenadas normalizadas sobre ESTE enquadramento, então a imagem tem de esticar
+          // igual — respeitar a proporção aqui descolaria o desenho do fundo.
+          <image
+            href={fundo}
+            x={0}
+            y={0}
+            width={VIEWBOX}
+            height={VIEWBOX}
+            preserveAspectRatio="none"
+            opacity={0.55}
+            onError={() => setFundo(null)}
+          />
+        )}
         {desenhadas.map((z) => {
           const cor = COR_DO_MODO[z.modo];
           const r = ancoraDoRotulo(z.caixa);

@@ -10,9 +10,15 @@ const analyze = !!process.env.ANALYZE;
 // Headers de segurança SÓ do dev/preview (vite). Em produção o CSP é o do nginx (mesma origem).
 // `http:` no connect-src libera o hub local (http://localhost:4000 / IP-da-LAN:4000) p/ o /api/login;
 // em produção SPA e /api são mesma origem, então lá basta 'self'. `font-src data:` silencia fontes data:.
+//
+// `img-src http:` (dev) existe pela IMAGEM DE REFERÊNCIA da câmera (ADR-021): ela é servida pelo
+// HUB (:4000) e entra num <image> do SVG, então em dev é cross-origin e o 'self' a bloqueia —
+// medido: a tag nem chega a fazer o pedido, o navegador recusa antes ("blocked by CSP").
+// Em PRODUÇÃO nada muda: o nginx serve SPA e /api na mesma origem, e o img-src de lá segue
+// 'self' data: blob: — este afrouxamento é do servidor de desenvolvimento e não vai para o ar.
 const securityHeaders = {
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://storage.googleapis.com https://tfhub.dev https://www.kaggle.com; connect-src 'self' http: ws: wss: https://cdn.jsdelivr.net https://storage.googleapis.com https://tfhub.dev https://www.kaggle.com https://*.kaggle.com https://huggingface.co https://*.huggingface.co https://*.hf.co; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self';",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://storage.googleapis.com https://tfhub.dev https://www.kaggle.com; connect-src 'self' http: ws: wss: https://cdn.jsdelivr.net https://storage.googleapis.com https://tfhub.dev https://www.kaggle.com https://*.kaggle.com https://huggingface.co https://*.huggingface.co https://*.hf.co; img-src 'self' data: blob: http:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self';",
   "Permissions-Policy": "camera=(self), microphone=(), geolocation=()",
   "X-Content-Type-Options": "nosniff",
 };

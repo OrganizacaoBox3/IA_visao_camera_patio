@@ -38,6 +38,7 @@ const routeNotif = require("./routes/notif");
 const routeShifts = require("./routes/shifts");
 const routeUsers = require("./routes/users");
 const routeCameras = require("./routes/cameras");
+const routeCameraBg = require("./routes/camera-bg"); // imagem de referência por câmera (ADR-021)
 const routeConfig = require("./routes/config-routes");
 const routeAnalysis = require("./routes/analysis");
 const routeRtmpLog = require("./routes/rtmp-log"); // Painel de log do ingest RTMP (/api/rtmp-ingest/log)
@@ -127,6 +128,7 @@ const httpServer = createServer(async (req, res) => {
     if (await routeShifts.handle(req, res, ctx)) return;
     if (await routeUsers.handle(req, res, ctx)) return;
     if (await routeCameras.handle(req, res, ctx)) return;
+    if (await routeCameraBg.handle(req, res, ctx)) return;
     if (await routeConfig.handle(req, res, ctx)) return;
     if (await routeAnalysis.handle(req, res, ctx)) return;
     if (await routeRtmpLog.handle(req, res, ctx)) return;
