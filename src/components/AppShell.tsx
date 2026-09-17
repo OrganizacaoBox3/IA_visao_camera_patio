@@ -105,7 +105,7 @@ const norm = (s: string) =>
     .toLowerCase();
 
 export function AppShell() {
-  const { user, canConfigure, logout } = useAuth();
+  const { user, canConfigure, isCliente, logout } = useAuth();
   const navigate = useNavigate();
   const mainRef = useRef<HTMLElement>(null);
   const { pathname } = useLocation();
@@ -233,9 +233,12 @@ export function AppShell() {
         // Rótulo curto já cabe no bottom-nav, então dispensa `short`. (Os itens BLE — Mapa/BLE/
         // Planta — migraram para o repo mvp_trilateracao_BLE; ADR-018.)
         { to: "/monitoramento", icon: LayoutDashboard, label: "Central" },
-        // Câmeras (add/gestão): visível a TODOS, como o antigo "+ Nó de câmera" do header —
-        // dentro da tela, o CRUD de câmera IP continua restrito ao superadmin (RBAC preservado).
-        { to: "/cameras", icon: Video, label: "Câmeras" },
+        // Câmeras (add/gestão): visível a todos MENOS ao cliente. Quem contrata não instala
+        // câmera — e o servidor já barra o CRUD com requireSuper, então para ele o item só
+        // levava a uma tela que diz "não". Item de menu que promete o que a tela recusa é ruído
+        // (o mesmo motivo pelo qual o botão "limpar histórico" deixou de aparecer a quem não
+        // pode usá-lo). Para `usuario`/`engenheiro` nada muda: seguem podendo subir o nó local.
+        ...(isCliente ? [] : [{ to: "/cameras", icon: Video, label: "Câmeras" }]),
         // Relatório: o histórico E a saúde do alarme (a faixa do topo, que precede a leitura — se o
         // alarme está inundando, todo número abaixo é suspeito). Absorveu a /alarmes-saude (§2).
         { to: "/relatorio", icon: BarChart3, label: "Relatório" },
@@ -380,16 +383,16 @@ export function AppShell() {
         {/* ── Header: brand + toggle de colapso (PanelLeft, padrão shadcn/VSCode) ── */}
         <div className="rail-head">
           {iconOnly ? (
-            <Tooltip content="Visão de Pátio">
+            <Tooltip content="Visão Computacional">
               <div className="rail-brand">
                 <Cctv size={20} strokeWidth={1.75} aria-hidden />
-                <span className="rail-brand-lb">Visão de Pátio</span>
+                <span className="rail-brand-lb">Visão Computacional</span>
               </div>
             </Tooltip>
           ) : (
             <div className="rail-brand">
               <Cctv size={20} strokeWidth={1.75} aria-hidden />
-              <span className="rail-brand-lb">Visão de Pátio</span>
+              <span className="rail-brand-lb">Visão Computacional</span>
             </div>
           )}
           {desktop && (

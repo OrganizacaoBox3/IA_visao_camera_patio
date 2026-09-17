@@ -624,6 +624,41 @@ label.file input {
   padding: 8px;
   min-width: 0;
 }
+/* ── PLANTA DE ZONAS (papel CLIENTE) ─────────────────────────────────────────────────────────
+   O que o cliente vê no lugar do vídeo: as áreas demarcadas, desenhadas em SVG. Zero imagem —
+   um instantâneo da cena no servidor violaria o ADR-002 (ver zonasEstaticas.ts). O desenho
+   preenche o tile como o vídeo preenchia; a legenda embaixo diz quantas áreas e que o vídeo
+   está desligado de propósito (silêncio sem explicação se lê como falha). */
+.planta {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  gap: 4px;
+  padding: 6px;
+}
+.planta-svg {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+}
+/* Rótulo da zona: pequeno porque o viewBox é 0..100 — 4 unidades ≈ 4% da altura do tile. */
+.planta-rotulo {
+  font-size: 4px;
+  font-family: var(--sans);
+  font-weight: 600;
+  paint-order: stroke;
+}
+.planta-legenda {
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 /* O NOME domina: sem vídeo, é o que identifica a câmera. Quebra em vez de vazar do tile. */
 .cam-tile__nome {
   color: var(--text);
