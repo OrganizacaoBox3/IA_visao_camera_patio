@@ -1,4 +1,4 @@
-# Plano de Desenvolvimento — MVP Visão de Pátio (inteligência operacional por área)
+# Plano de Desenvolvimento — MVP Visão Computacional (inteligência operacional por área)
 
 > Plano em **2026-06-08**. Baseado em `document_pdf.pdf` (proposta de conceito Box3.work / Tiago Lucena).
 > Mira o mesmo nível de maturidade e estilo do `sensor_fadiga_mvp`: **web, em tempo real, 100% local no navegador, orientado a demonstração**, com thresholds calibráveis e roteiro de demo.
@@ -206,4 +206,4 @@ Mapa de calor histórico, comparativo por turno, análise de gargalos, **WhatsAp
 - Clipe de demo + perfil de thresholds "demo".
 - **Relatório de sessão** como artefato de resultado (o que vira material de validação).
 
-> Nome de trabalho sugerido: **"Visão de Pátio"** (ou *PátioVision* / *Sentinela Operacional*) — a definir.
+> Nome de trabalho sugerido: **"Visão Computacional"** (ou *PátioVision* / *Sentinela Operacional*) — a definir.

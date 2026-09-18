@@ -27,7 +27,7 @@ ffmpeg -i "http://IP/caminho/mjpg" -vf fps=8,scale=480:-2 -f mjpeg -q:v 7 pipe:1
 Poderíamos adaptar o ingestor do hub para uma URL HTTP/MJPEG. **RTSP é improvável** nesses aparelhos. Para visualização "de verdade", o normal é usar o software do fabricante.
 
 ### Caminho B — como EVENTO / indicador (recomendado) ⭐
-O encaixe certo no Visão de Pátio: consumir o **resultado das leituras** e transformar em **indicador operacional**:
+O encaixe certo no Visão Computacional: consumir o **resultado das leituras** e transformar em **indicador operacional**:
 - **throughput** (leituras por minuto/hora por estação);
 - **tempo sem leitura** → "estação parada há X min" (mesma lógica de área parada → **alerta**);
 - **taxa de NOK / falhas de leitura**.

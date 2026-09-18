@@ -1,4 +1,4 @@
-# Manuais — Visão de Pátio
+# Manuais — Visão Computacional
 
 Guias práticos de consulta para conectar dispositivos e operar o sistema.
 

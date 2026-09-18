@@ -117,3 +117,6 @@ server/bt/fusion-session*.jsonl
 tc22-scanner/build/
 tc22-scanner/debug.keystore
 *.tmp.mjs
+
+# Imagem de REFERÊNCIA por câmera (ADR-021) — estado de runtime, nunca versionado.
+server/camera-bg/

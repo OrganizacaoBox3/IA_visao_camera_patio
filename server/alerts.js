@@ -17,7 +17,7 @@ function andonEnabled() {
 
 async function post(text, ts, priority) {
   const payload = {
-    app: "Visão de Pátio",
+    app: "Visão Computacional",
     source: "andon",
     text,
     content: text,

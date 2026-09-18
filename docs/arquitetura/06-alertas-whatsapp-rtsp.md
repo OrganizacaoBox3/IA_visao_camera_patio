@@ -61,7 +61,7 @@ O Andon só está ativo quando `ALERT_WEBHOOK_URL` está definido — `andonEnab
 O payload do webhook inclui **tanto `text` quanto `content`** propositalmente, para casar sem configuração extra com Slack, Teams, Discord, Zapier, Make, n8n e endpoints próprios (`server/alerts.js:3-4`, `server/alerts.js:15`):
 
 ```json
-{ "app": "Visão de Pátio", "source": "andon", "text": "...", "content": "...", "ts": 1700000000000 }
+{ "app": "Visão Computacional", "source": "andon", "text": "...", "content": "...", "ts": 1700000000000 }
 ```
 
 O envio é um `POST` JSON via `fetch`; erros (HTTP não-OK ou falha de rede) são apenas logados, sem lançar exceção (`server/alerts.js:14-22`).
@@ -192,7 +192,7 @@ Controla, pelo superadmin, **marca**, o que a mensagem mostra e, por tipo de ale
 
 ### Estrutura (DEFAULTS, `server/settings.js:11-22`)
 
-- `marca` (default `"Visão de Pátio"`), `incluirLocal`, `incluirHora`, `incluirRodape` (booleanos).
+- `marca` (default `"Visão Computacional"`), `incluirLocal`, `incluirHora`, `incluirRodape` (booleanos).
 - `tipos`: objeto com `atividade`, `fadiga`, `leitura`, `objetos`, cada um com `{ ativo, titulo, instrucao }`.
 
 `normalize(p)` valida/mescla sobre os defaults e limita tamanhos (`titulo` ≤ 80, `instrucao` ≤ 300, `marca` ≤ 80) (`server/settings.js:25-43`). Há um valor inicial síncrono para o dispatch nunca ver `undefined` (`server/settings.js:45`).

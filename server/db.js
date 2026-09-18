@@ -1,5 +1,5 @@
 // Conexão Postgres do hub. Reusa as credenciais do ecossistema (PGHOST/PGPORT/PGUSER/PGPASSWORD)
-// + um BANCO específico do Visão de Pátio em PGDATABASE (ou DATABASE_URL como override).
+// + um BANCO específico do Visão Computacional em PGDATABASE (ou DATABASE_URL como override).
 // Sem PG configurado, `configured()` é false e o hub segue de pé (histórico fica indisponível).
 const { Pool, types } = require("pg");
 const fs = require("node:fs");

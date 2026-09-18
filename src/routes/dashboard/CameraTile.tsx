@@ -6,6 +6,7 @@ import { FadigaView } from "../../FadigaView";
 import { recordFadigaSamples, recordFadigaEvent } from "../../report/store";
 import { APP_CONFIG } from "../../config";
 import { getVideoTicket } from "../../video/ticket";
+import { PlantaDeZonas } from "./PlantaDeZonas";
 import type { VideoStreamElement } from "../../vendor/go2rtc/go2rtc";
 import { HUB_TRACKS_STALE_MS } from "../../types/analysis";
 import { Tooltip, StatusDot } from "../../ui";
@@ -355,6 +356,10 @@ type CameraTileProps = {
   // encerra o rAF/motion/decode-draw daquele feed. Reversível: ao fechar a aberta, volta ao vivo.
   // Primitiva → amigável ao React.memo (só os tiles cujo `paused` muda re-renderizam).
   paused?: boolean;
+  /** Papel CLIENTE: nunca exibe vídeo — mostra as ÁREAS DEMARCADAS desenhadas. O produto dele
+   *  é a notificação; imagem ao vivo é ferramenta de setup e custa CPU da análise que gera o
+   *  alerta (medido: painel aberto levou o load de 8,04 para 15,63 em 4 vCPU). */
+  semVideo?: boolean;
   isFadiga: boolean;
   getFrame: () => FrameSource | null;
   tripwiresRev: number;
@@ -403,6 +408,7 @@ export const CameraTile = memo(function CameraTile({
   camera,
   isOpen,
   paused,
+  semVideo,
   isFadiga,
   getFrame,
   tripwiresRev,
@@ -424,7 +430,12 @@ export const CameraTile = memo(function CameraTile({
   // Zona restrita VIOLADA agora (null = "não sei"; [] = quieta) — ver useViolatedZones.
   const violadas = useViolatedZones(getHubAnalysis);
   const emViolacao = !!violadas && violadas.length > 0;
-  const inner = isOpen ? (
+  const inner = semVideo ? (
+    // CLIENTE: o desenho das zonas SUBSTITUI o vídeo — vem ANTES de qualquer outro ramo para que
+    // nenhum caminho (aberto/pausado/webrtc/mjpeg) consiga montar um stream por engano.
+    // Sem `onOpen`: para o cliente não existe "ver ao vivo", então o bloco não é clicável.
+    <PlantaDeZonas cameraId={camera.id} cameraLabel={camera.label} zonesRev={zonesRev} />
+  ) : isOpen ? (
     <div className="tile tile-open">aberta no painel</div>
   ) : paused ? (
     // VÍDEO SOB DEMANDA. Antes isto era só "pausa de fundo" (outra câmera aberta); agora é
@@ -572,7 +583,12 @@ export const CameraTile = memo(function CameraTile({
           <StatusDot color={st.dot} label={st.text} />
           <span className="cam-status-pill__text">
             {st.text}
-            {st.fps != null ? ` · ${st.fps}fps` : ""}
+            {/* O FPS é do VÍDEO. No painel do cliente não há vídeo, então "0fps" e
+                "conectando…" descreveriam um transporte que ninguém pediu — e "0fps" ao lado de
+                um desenho estático se lê como AVARIA, que é o oposto do que está acontecendo.
+                A pílula segue mostrando o estado da CÂMERA (online/offline), que é informação
+                real e útil para quem recebe o alerta. */}
+            {!semVideo && st.fps != null ? ` · ${st.fps}fps` : ""}
           </span>
         </span>
       </Tooltip>

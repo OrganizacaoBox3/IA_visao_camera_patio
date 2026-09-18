@@ -1,6 +1,6 @@
 # 07 — Deploy, Infraestrutura e Testes (E2E)
 
-> Documento de referência técnica do **MVP Visão de Pátio** (`visao_computacional_mvp`).
+> Documento de referência técnica do **MVP Visão Computacional** (`visao_computacional_mvp`).
 > Cobre execução local, arquitetura de deploy em produção (nginx + systemd + DigitalOcean),
 > variáveis de ambiente, a suíte de testes E2E com Playwright e ponteiros para os manuais de
 > operação de câmeras/leitores.

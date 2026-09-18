@@ -13,7 +13,7 @@ const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 // nem de titularidade. Vai como PRIMEIRA linha de propósito: rodapé de planilha longa não é
 // lido, e no Excel a linha 1 fica visível junto do primeiro bloco. Gate: csv.test.ts.
 export const CSV_AVISO_PROPRIEDADE =
-  "Documento gerado por Visão de Pátio — Copyright (c) 2026 Box 3. " +
+  "Documento gerado por Visão Computacional — Copyright (c) 2026 Box 3. " +
   "Todos os direitos reservados. Uso interno autorizado; redistribuição vedada.";
 
 // Monta o CSV a partir de seções; linha em branco separa cada bloco (legível no Excel).

@@ -238,3 +238,16 @@
     width: 100%;
   }
 }
+
+/* Imagem de REFERÊNCIA por câmera (ADR-021) — o fundo do desenho que o cliente vê.
+   O aviso fica COLADO no controle: quem sobe precisa ler que a imagem vai para o servidor e
+   é exibida ao cliente. Nota de rodapé não alcança quem só clica. */
+.cam-set-bg {
+  min-width: 18rem;
+}
+.cam-set-bg__aviso {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-micro);
+  color: var(--state-warn-fg);
+  line-height: 1.4;
+}

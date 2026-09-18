@@ -10,7 +10,7 @@ const FILE = statePath("notif-settings.json");
 let usingPg = false;
 
 const DEFAULTS = {
-  marca: "Visão de Pátio",
+  marca: "Visão Computacional",
   incluirLocal: true,
   incluirHora: true,
   incluirRodape: true,

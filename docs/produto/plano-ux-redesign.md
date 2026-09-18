@@ -1,4 +1,4 @@
-# Plano de redesign de UX — Visão de Pátio (SPA, sem scroll, responsiva)
+# Plano de redesign de UX — Visão Computacional (SPA, sem scroll, responsiva)
 
 > Levantamento + plano em **2026-06-09**. Foco: otimizar espaço, padronizar espaçamentos, virar uma SPA de verdade, analisar cada quadrante por importância × frequência, e avaliar uma tela dedicada a "mais informações". Meta: **sem scroll (ou mínimo) e responsiva**.
 

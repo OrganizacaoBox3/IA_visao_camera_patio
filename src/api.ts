@@ -311,6 +311,32 @@ export type { CameraCfg } from "./cameraConfig";
 import type { Zone } from "./zones";
 import type { CameraCfg } from "./cameraConfig";
 
+// ── IMAGEM DE REFERÊNCIA por câmera (ADR-021) ────────────────────────────────────────────────
+// Fundo ESTÁTICO do desenho de zonas que o cliente vê. Enviada por um humano (superadmin), nunca
+// capturada do feed: o ADR-002 segue valendo inteiro para o pipeline. Ver server/camera-bg.js.
+export type CameraBg = { cameraId: string; ext: string; bytes: number; enviadoEm: number };
+/** URL da imagem para usar em `<image href>`/`<img src>`.
+ *
+ *  O TICKET não é enfeite: tag de imagem NÃO manda header, então o Bearer não chega ao
+ *  servidor. É o mesmo problema que o /go2rtc/* já tinha, e a solução é a MESMA — passe HMAC
+ *  de curta duração, escopado nesta câmera (src/video/ticket.ts + server/video-ticket.js).
+ *  `rev` força o navegador a largar o cache depois de um upload. */
+export const cameraBgUrl = (cameraId: string, ticket: string, rev = 0) =>
+  `${APP_CONFIG.net.serverUrl}/api/camera-bg/${encodeURIComponent(cameraId)}?ticket=${encodeURIComponent(ticket)}&r=${rev}`;
+/** Envia a imagem (superadmin). O corpo é o ARQUIVO CRU — o servidor confere tipo, tamanho e a
+ *  assinatura dos bytes (content-type declarado não é evidência). */
+export function uploadCameraBg(cameraId: string, file: File): Promise<CameraBg> {
+  return request<CameraBg>(
+    fetch(`${APP_CONFIG.net.serverUrl}/api/camera-bg/${encodeURIComponent(cameraId)}`, {
+      method: "PUT",
+      headers: { ...headers(), "content-type": file.type },
+      body: file,
+    }),
+  );
+}
+export const deleteCameraBg = (cameraId: string) =>
+  apiSend<{ ok: true; apagou: boolean }>("DELETE", `/api/camera-bg/${encodeURIComponent(cameraId)}`);
+
 // GET /api/zones/:cameraId → Zone[]. Auth: qualquer usuário autenticado.
 export const getZones = (cameraId: string) =>
   apiGet<Zone[]>(`/api/zones/${encodeURIComponent(cameraId)}`);

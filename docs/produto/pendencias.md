@@ -1,4 +1,4 @@
-# Backlog / pendências — Visão de Pátio (POC)
+# Backlog / pendências — Visão Computacional (POC)
 
 > Itens deixados para depois, com origem. Atualizado em 2026-06-09.
 

@@ -1,4 +1,4 @@
-# Visão de Pátio — Visão geral do projeto (estado atual)
+# Visão Computacional — Visão geral do projeto (estado atual)
 
 > Consolidação em **2026-06-09**. Leitura única do projeto como um todo. POC de visão computacional industrial.
 > Origem do conceito: `document_pdf.pdf` (proposta Box3.work / Tiago Lucena). Planos/análises em `docs/produto/`, manuais em `docs/produto/manuais/`.

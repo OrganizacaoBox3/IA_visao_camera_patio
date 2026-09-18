@@ -32,7 +32,7 @@ function colsFor(n: number): number {
 // paginação/feeds ativos e o JSX. A grade mostra SEMPRE todas as câmeras conectadas, paginadas
 // por feedsPerPage.
 export function DashboardPage() {
-  const { token, user, logout } = useAuth();
+  const { token, user, logout, isCliente } = useAuth();
   const { toast } = useToast();
 
   // Estado próprio da orquestração (feeds/paginação/overlay). O demais é dos hooks abaixo.
@@ -194,7 +194,18 @@ export function DashboardPage() {
   );
 
   // Abertura de câmera: callback único e estável; o tile chama com o próprio id.
-  const handleOpen = useCallback((id: string) => setOpenId(id), []);
+  // O CLIENTE NÃO ABRE VÍDEO (17/09/2026). O produto dele é a notificação; a imagem ao vivo é
+  // ferramenta de SETUP (desenhar zona, conferir enquadramento) e custa CPU da análise que gera
+  // o alerta — medido: painel aberto levou o load de 8,04 para 15,63 numa máquina de 4 vCPU.
+  // O tile dele mostra as ÁREAS DEMARCADAS desenhadas (PlantaDeZonas), e clicar não faz nada:
+  // um clique que não abre é promessa falsa, então o tile do cliente nem é botão.
+  const handleOpen = useCallback(
+    (id: string) => {
+      if (isCliente) return;
+      setOpenId(id);
+    },
+    [isCliente],
+  );
 
   return (
     <div className="page">
@@ -204,14 +215,18 @@ export function DashboardPage() {
           os alvos ≥44px do mobile (index.css) selecionam por ele. */}
       <PageHeader title="Central" className="page-head">
         {/* Ação ÚNICA de câmeras: leva à tela /cameras, que adiciona/gerencia tanto câmera IP
-            (superadmin) quanto o nó local (webcam) — visível a todos. */}
-        <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
-          <Button asChild variant="primary">
-            <Link to="/cameras">
-              <Video size={16} strokeWidth={1.75} aria-hidden /> + Câmera
-            </Link>
-          </Button>
-        </Tooltip>
+            (superadmin) quanto o nó local (webcam). Escondida do CLIENTE: quem contrata não
+            instala câmera, e o servidor já barra o CRUD — o botão só levava a uma tela que
+            diz "não". */}
+        {!isCliente && (
+          <Tooltip content="Adicionar/gerenciar câmeras (IP/RTSP ou webcam/nó local)">
+            <Button asChild variant="primary">
+              <Link to="/cameras">
+                <Video size={16} strokeWidth={1.75} aria-hidden /> + Câmera
+              </Link>
+            </Button>
+          </Tooltip>
+        )}
         {/* Paginação: réplica do .switch em utilities — utility em layer não vence o gap:6px
             do .switch (index.css não-layered), por isso sem a classe. */}
         {pageCount > 1 && (
@@ -304,6 +319,7 @@ export function DashboardPage() {
                 // dispara o alerta de WhatsApp, que é o produto. Status e VIOLADA seguem visíveis
                 // no tile em repouso; o que sai é só o vídeo.
                 paused={c.id !== openId}
+                semVideo={isCliente}
                 isFadiga={isFadiga(c.id)}
                 getFrame={getterFor(c.id)}
                 tripwiresRev={revByCamera.get(c.id) ?? 0}

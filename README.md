@@ -6,7 +6,7 @@
 > A visibilidade existe para auditoria por terceiros autorizados. Termos completos
 > em [`LICENSE`](LICENSE) · licenciamento: contato@box3.work
 
-# Visão de Pátio — POC (central de câmeras)
+# Visão Computacional — POC (central de câmeras)
 
 MVP web de **inteligência operacional por área** (visão computacional industrial). Processamento **100% local**, **sem identificação individual**.
 

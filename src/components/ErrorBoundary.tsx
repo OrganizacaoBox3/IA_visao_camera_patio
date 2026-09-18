@@ -31,7 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
               aria-hidden
               className="inline-block align-[-0.2em]"
             />{" "}
-            Visão de Pátio
+            Visão Computacional
           </div>
           <h1 className="error-title">Algo deu errado</h1>
           <p className="error-sub">

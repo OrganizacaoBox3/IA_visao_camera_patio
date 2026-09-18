@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- Visão de Pátio — esquema COMPLETO do Postgres (fonte única; o hub roda no boot).
+-- Visão Computacional — esquema COMPLETO do Postgres (fonte única; o hub roda no boot).
 -- Só INDICADORES agregados — nunca imagens (LGPD). Idempotente (CREATE ... IF NOT EXISTS).
 -- Criar o banco antes:  CREATE DATABASE visao_patio;  e apontar PGDATABASE para ele.
 -- ════════════════════════════════════════════════════════════════════════════
