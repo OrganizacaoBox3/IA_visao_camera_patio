@@ -724,10 +724,32 @@ async function gateAndDispatch(st, now) {
   }
 }
 
+// Câmera que DORME por decisão do gate de turno não recebe frame porque NÓS paramos de
+// decodificar — ausência de frame aqui é consequência nossa, não sinal de câmera morta. Podar
+// pelo prazo normal a transformava em FANTASMA: sumia do log de minuto, de /api/analysis/status
+// e do tile (regressão do PR #37, medida em produção 19/09/2026: as 7 câmeras go2rtc sem turno
+// desapareceram do motor e o painel de saúde passou a acusá-las de "invisíveis para o motor",
+// nível down — 7 alarmes falsos). Ela fica; o teto de 24h existe só para câmera REMOVIDA do
+// cadastro não segurar estado para sempre (removida → sem zonas → "sem-turno" → dormiria eterna).
+const PRUNE_DORMINDO_MS = 24 * 60 * 60_000;
+
+/**
+ * PURA (contrato de teste — engine.test.js): este state venceu e deve sair do motor?
+ * `gateOn` é parâmetro (não lê a env) para o teste cobrir os dois mundos sem mexer no processo.
+ * Sem frame há mais que o prazo → poda. O prazo é o normal (5 min), salvo para câmera que dorme
+ * PELO GATE — aí é o teto de 24h, porque a ausência de frame ali é decisão nossa, não morte.
+ */
+function pruneVencido(st, now, gateOn = SHIFT_GATE_ON) {
+  const dormePeloGate =
+    gateOn && (st.shiftEstado === "sem-turno" || st.shiftEstado === "fora-janela");
+  const prazo = dormePeloGate ? PRUNE_DORMINDO_MS : PRUNE_MS;
+  return now - st.lastFrameAt > prazo;
+}
+
 function prune() {
   const now = Date.now();
   for (const [id, st] of states) {
-    if (now - st.lastFrameAt > PRUNE_MS) {
+    if (pruneVencido(st, now)) {
       states.delete(id);
       go2rtcSource.dropPull(id);
       emitAnalysisStatus(id, null);
@@ -1198,4 +1220,8 @@ module.exports = {
   // rolante de 60s que o telemetry.js agrega em perCamera[].gate.
   movingOf,
   recordGateRound,
+  // PURO (contrato de teste — engine.test.js): a decisão do prune. Exposta porque é onde uma
+  // câmera que DORME pelo gate virava fantasma (regressão do PR #37): sem frame por decisão
+  // nossa não é morte, e o prazo tem de saber a diferença.
+  pruneVencido,
 };
