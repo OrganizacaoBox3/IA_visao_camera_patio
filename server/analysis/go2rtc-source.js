@@ -122,7 +122,23 @@ function streamArgs(id, { host, port }, fps = STREAM_FPS, width = STREAM_WIDTH) 
  * @param {Function} [deps.spawn]        injeção de teste (default child_process.spawn)
  * @param {() => string} [deps.ffmpegBin] injeção de teste (default rtsp.resolveFfmpegBin)
  */
-function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spawn, ffmpegBin }) {
+// `deveDecodificar(id, now)` — o GATE DO DECODE. O pullTick mantinha UM ffmpeg por câmera que
+// o go2rtc conhecia, decodificando H.264→MJPEG a STREAM_FPS continuamente, sem perguntar se
+// alguém ia usar o frame. Medido em produção (15-18/09/2026): desligar a ANÁLISE de 11 câmeras
+// devolveu 0,9 vCPU; a máquina ficou em ~2,5 vCPU com 4 câmeras analisando — e ~2,2 desses
+// eram exatamente estes decodificadores, rodando para ninguém (nem motor, nem painel). Quinze
+// televisões ligadas em canais que ninguém via. Ausente = sempre decodifica (comportamento
+// anterior, retrocompat com quem instancia sem a dep).
+function createGo2rtcSource({
+  go2rtc,
+  states,
+  createState,
+  running,
+  roundMs,
+  spawn,
+  ffmpegBin,
+  deveDecodificar = () => true,
+}) {
   const doSpawn = spawn || require("node:child_process").spawn;
   const binOf =
     ffmpegBin ||
@@ -291,6 +307,17 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spa
       }
       if (!ps) pulls.set(id, (ps = { inflight: false, nextAt: 0, fails: 0, lastAt: now, streaming: false, stopping: false, proc: null, lastFrameAt: 0 }));
       ps.lastAt = now; // marca atividade recente (stream ainda conhecido/elegível) p/ o prunePulls
+      // GATE DO DECODE: câmera que o gate de turno diz que dorme não ganha ffmpeg — e se já tinha
+      // um aberto, ele cai AQUI, não no fim do turno seguinte. É o corte que devolve a máquina:
+      // o relay RTMP segue recebendo os bytes (barato, sem decode), a câmera não entra em loop de
+      // reconexão, e quando a janela abrir o próximo tick reabre o stream sozinho. `ps.dormindo`
+      // fica visível em stats() — economia silenciosa é indistinguível de stream quebrado.
+      if (!deveDecodificar(id, now)) {
+        if (ps.streaming) stopStream(ps);
+        ps.dormindo = true;
+        continue;
+      }
+      ps.dormindo = false;
       if (STREAM_MODE) {
         if (ps.streaming) {
           // STALL WATCHDOG (nunca-cego): processo vivo sem frame novo → derruba; o exit agenda backoff.
@@ -337,11 +364,18 @@ function createGo2rtcSource({ go2rtc, states, createState, running, roundMs, spa
   /** Estado do pull p/ status()/diagnóstico (aditivo — campos novos: transport/streaming). */
   function stats() {
     let streaming = 0;
-    for (const ps of pulls.values()) if (ps.streaming) streaming += 1;
+    let dormindo = 0;
+    for (const ps of pulls.values()) {
+      if (ps.streaming) streaming += 1;
+      if (ps.dormindo) dormindo += 1;
+    }
     return {
       active: pullActive(),
       mode: PULL_FORCE_ALL ? "all" : "relay-less",
       streams: go2rtcStreams.size,
+      // ADITIVO: decodificadores que o gate de turno segurou. É a prova do ganho — e o que
+      // separa "parou de decodificar de propósito" de "ffmpeg morreu".
+      dormindo,
       transport: STREAM_MODE ? "stream" : "snapshot", // aditivo — incidente 2026-07-26
       streaming, // conexões stream.mjpeg vivas agora (aditivo)
     };

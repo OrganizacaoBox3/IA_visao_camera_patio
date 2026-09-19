@@ -628,6 +628,9 @@ export type AnalysisStatus = {
     streams: number;
     transport?: string;
     streaming?: number;
+    /** Decodificadores (ffmpeg do pull) que o gate de turno segurou — a prova do ganho, e o que
+     *  separa "parou de decodificar de propósito" de "ffmpeg morreu". Aditivo: hub antigo não manda. */
+    dormindo?: number;
   };
   /** Uma entrada por câmera VIVA no motor. Câmera sem frame há >5 min SAI daqui (prune). */
   perCamera: Record<string, AnalysisCamera>;

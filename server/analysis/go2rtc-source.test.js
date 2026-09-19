@@ -277,3 +277,114 @@ describe("streamLoop via pullTick — ffmpeg rtsp→mjpeg: ingest, anti-dobra e 
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
+
+
+// ── GATE DO DECODE (deveDecodificar) ─────────────────────────────────────────────────────────
+// O que estes testes guardam: o pullTick mantinha um ffmpeg por câmera conhecida, decodificando
+// para ninguém — ~2,2 vCPU medidos em produção com 4 câmeras analisando. A regressão que importa
+// é o decodificador VOLTAR a abrir para câmera que o gate de turno mandou dormir.
+describe("pullTick — gate do decode: câmera dormindo não ganha ffmpeg", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeGatedSource(dorme) {
+    global.fetch = vi.fn(async (url) => {
+      if (url.includes("/api/streams")) return { ok: true, json: async () => ({ cam1: {} }) };
+      return { ok: false, status: 503 };
+    });
+    const procs = [];
+    const spawn = vi.fn(() => {
+      const p = fakeProc();
+      procs.push(p);
+      return p;
+    });
+    const states = new Map();
+    const src = createGo2rtcSource({
+      go2rtc: {
+        enabled: () => true,
+        apiTarget: () => ({ host: "h", port: 1 }),
+        rtspTarget: () => ({ host: "127.0.0.1", port: 8554 }),
+      },
+      states,
+      createState: (id) => {
+        const s = { id, latest: null, lastFrameAt: 0, lastRelayAt: 0, source: "relay" };
+        states.set(id, s);
+        return s;
+      },
+      running: () => true,
+      roundMs: 1000,
+      spawn,
+      ffmpegBin: () => "ffmpeg-fake",
+      deveDecodificar: (id) => !dorme.has(id),
+    });
+    return { src, procs, spawn };
+  }
+
+  it("câmera dormindo: nenhum ffmpeg é aberto, e stats() conta o decodificador segurado", async () => {
+    const dorme = new Set(["cam1"]);
+    const { src, spawn } = makeGatedSource(dorme);
+    src.pullTick(); // descobre streams
+    await tick();
+    src.pullTick(); // aqui abriria o ffmpeg — não pode
+    expect(spawn).not.toHaveBeenCalled();
+    expect(src.stats().dormindo).toBe(1);
+    expect(src.stats().streaming).toBe(0);
+  });
+
+  it("câmera que PASSA a dormir tem o ffmpeg aberto derrubado no tick seguinte, não no fim do turno", async () => {
+    const dorme = new Set();
+    const { src, procs } = makeGatedSource(dorme);
+    src.pullTick();
+    await tick();
+    src.pullTick(); // acordada: abre
+    expect(procs).toHaveLength(1);
+    dorme.add("cam1"); // o turno acabou / o turno foi removido
+    src.pullTick();
+    expect(procs[0].kill).toHaveBeenCalled(); // derrubado AGORA
+    expect(src.stats().streaming).toBe(0);
+    expect(src.stats().dormindo).toBe(1);
+  });
+
+  it("câmera que ACORDA reabre o decodificador sozinha — a janela abrindo não exige nada de ninguém", async () => {
+    const dorme = new Set(["cam1"]);
+    const { src, procs } = makeGatedSource(dorme);
+    src.pullTick();
+    await tick();
+    src.pullTick();
+    expect(procs).toHaveLength(0);
+    dorme.delete("cam1"); // entrou no turno
+    src.pullTick();
+    expect(procs).toHaveLength(1);
+    expect(src.stats().dormindo).toBe(0);
+  });
+
+  it("sem a dep (quem instancia sem deveDecodificar): decodifica sempre — comportamento anterior intacto", async () => {
+    // Retrocompat: o default `() => true` é o que o teste acima de streamLoop já exercita; aqui
+    // só se trava que a AUSÊNCIA da dep não vira "dorme tudo" por acidente.
+    global.fetch = vi.fn(async (url) => {
+      if (url.includes("/api/streams")) return { ok: true, json: async () => ({ cam1: {} }) };
+      return { ok: false, status: 503 };
+    });
+    const spawn = vi.fn(() => fakeProc());
+    const states = new Map();
+    const src = createGo2rtcSource({
+      go2rtc: { enabled: () => true, apiTarget: () => ({ host: "h", port: 1 }), rtspTarget: () => ({ host: "127.0.0.1", port: 8554 }) },
+      states,
+      createState: (id) => { const s = { id, latest: null, lastFrameAt: 0, lastRelayAt: 0, source: "relay" }; states.set(id, s); return s; },
+      running: () => true,
+      roundMs: 1000,
+      spawn,
+      ffmpegBin: () => "ffmpeg-fake",
+    });
+    src.pullTick();
+    await tick();
+    src.pullTick();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(src.stats().dormindo).toBe(0);
+  });
+});
