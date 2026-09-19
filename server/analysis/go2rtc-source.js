@@ -315,6 +315,17 @@ function createGo2rtcSource({
       if (!deveDecodificar(id, now)) {
         if (ps.streaming) stopStream(ps);
         ps.dormindo = true;
+        // A câmera que dorme desde o boot nunca recebe frame — e é o frame que cria o state no
+        // engine (ingestPulled → createState). Sem state ela não existe para o tick, não ganha
+        // `shiftEstado`, não entra no log de minuto nem em /api/analysis/status: FANTASMA. Pior,
+        // o painel de saúde a acusa de "online na central, invisível para o motor" (nível down).
+        // Criar o state aqui é seguro: `latest` nasce null e o dispatchReady nunca despacha sem
+        // frame — ela aparece como dormindo, e só isso. Medido em produção (19/09/2026): as 7
+        // câmeras go2rtc sem turno sumiram do motor exatamente assim.
+        if (!states.has(id)) {
+          const st = createState(id);
+          st.source = "go2rtc";
+        }
         continue;
       }
       ps.dormindo = false;

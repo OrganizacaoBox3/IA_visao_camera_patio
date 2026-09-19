@@ -423,3 +423,40 @@ describe("gate: pulo COM gente em movimento vira skipMoving1m no /api/analysis/s
     expect(cam.gate.ratioP95).toBe(0.004);
   });
 });
+
+
+// ── pruneVencido — câmera que dorme pelo gate não vira fantasma ──────────────────────────────
+// Regressão do PR #37 medida em produção (19/09/2026): o gate parou de decodificar a câmera sem
+// turno → ela parou de receber frame → o prune leu "sem frame há 5 min" como câmera morta e a
+// apagou do motor. Sumiu do log, do /api/analysis/status e do tile, e o painel de saúde passou a
+// acusá-la de "online na central, invisível para o motor" (down) — 7 alarmes falsos.
+describe("pruneVencido — ausência de frame por decisão nossa não é morte", () => {
+  const MIN = 60_000;
+  const H = 60 * MIN;
+  const st = (over) => ({ lastFrameAt: 0, shiftEstado: null, ...over });
+
+  it("câmera ATIVA sem frame há mais de 5 min é podada (comportamento de sempre)", () => {
+    expect(engine.pruneVencido(st({ shiftEstado: "ativa" }), 6 * MIN, true)).toBe(true);
+    expect(engine.pruneVencido(st({ shiftEstado: "ativa" }), 4 * MIN, true)).toBe(false);
+  });
+
+  it("câmera SEM TURNO sem frame há 5 min, 1h, 12h: FICA — é o gate que a calou, não a câmera", () => {
+    for (const t of [6 * MIN, 1 * H, 12 * H]) {
+      expect(engine.pruneVencido(st({ shiftEstado: "sem-turno" }), t, true)).toBe(false);
+      expect(engine.pruneVencido(st({ shiftEstado: "fora-janela" }), t, true)).toBe(false);
+    }
+  });
+
+  it("câmera dormindo há mais de 24h sai — teto anti-vazamento para câmera removida do cadastro", () => {
+    // Removida do cadastro → sem zonas → "sem-turno" → dormiria para sempre segurando estado.
+    expect(engine.pruneVencido(st({ shiftEstado: "sem-turno" }), 25 * H, true)).toBe(true);
+  });
+
+  it("gate DESLIGADO: o estado de turno antigo não estende o prazo (a regra só existe com o gate)", () => {
+    expect(engine.pruneVencido(st({ shiftEstado: "sem-turno" }), 6 * MIN, false)).toBe(true);
+  });
+
+  it("state sem shiftEstado (câmera nunca avaliada, hub antigo): prazo normal", () => {
+    expect(engine.pruneVencido(st({}), 6 * MIN, true)).toBe(true);
+  });
+});

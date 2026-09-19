@@ -322,7 +322,7 @@ describe("pullTick — gate do decode: câmera dormindo não ganha ffmpeg", () =
       ffmpegBin: () => "ffmpeg-fake",
       deveDecodificar: (id) => !dorme.has(id),
     });
-    return { src, procs, spawn };
+    return { src, procs, spawn, states };
   }
 
   it("câmera dormindo: nenhum ffmpeg é aberto, e stats() conta o decodificador segurado", async () => {
@@ -361,6 +361,23 @@ describe("pullTick — gate do decode: câmera dormindo não ganha ffmpeg", () =
     src.pullTick();
     expect(procs).toHaveLength(1);
     expect(src.stats().dormindo).toBe(0);
+  });
+
+  it("câmera dormindo desde o boot ganha STATE (sem frame) — existe para o motor, não vira fantasma", async () => {
+    // Regressão medida em produção (19/09): câmera go2rtc sem turno nunca recebia frame, nunca
+    // criava state, e sumia do log/status/tile — o painel de saúde a acusava de "invisível para
+    // o motor" (down). O state nasce com latest=null: o dispatchReady nunca despacha, ela só
+    // APARECE, como dormindo.
+    const dorme = new Set(["cam1"]);
+    const { src, spawn, states } = makeGatedSource(dorme);
+    src.pullTick(); // descobre streams
+    await tick();
+    src.pullTick(); // dormindo: não abre ffmpeg, mas cria o state
+    expect(spawn).not.toHaveBeenCalled();
+    const st = states.get("cam1");
+    expect(st).toBeTruthy();
+    expect(st.latest).toBeNull(); // sem frame: nada para despachar
+    expect(st.source).toBe("go2rtc");
   });
 
   it("sem a dep (quem instancia sem deveDecodificar): decodifica sempre — comportamento anterior intacto", async () => {

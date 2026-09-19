@@ -107,6 +107,15 @@ recebendo os bytes (barato, sem decode; a câmera é push e não entra em loop d
 janela abrindo reabre o stream sozinha. Visível em `/api/analysis/status` →
 `go2rtcPull.dormindo` e no painel de saúde ("N parados por turno").
 
+**Câmera dormindo não vira fantasma (19/09/2026).** Efeito colateral do corte no decode, medido
+em produção no mesmo dia: câmera go2rtc sem turno parou de receber frame (por decisão nossa), o
+`prune` leu "sem frame há 5 min" como câmera morta e a apagou do motor — sumiu do log, do
+`/api/analysis/status` e do tile, e o painel de saúde passou a acusá-la de "online na central,
+invisível para o motor" (down): 7 alarmes falsos. Correção em dois pontos: `pullTick` cria o
+state da câmera dormindo (nasce com `latest: null`, o `dispatchReady` nunca despacha — ela só
+APARECE), e `pruneVencido` dá 24h de prazo a quem dorme pelo gate (teto anti-vazamento para
+câmera removida do cadastro, que ficaria "sem-turno" para sempre).
+
 Por isso os dois motivos de sono são separados no log de minuto:
 
 | no log | significa | ação |
