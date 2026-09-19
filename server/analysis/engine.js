@@ -155,6 +155,11 @@ const go2rtcSource = createGo2rtcSource({
   createState,
   running: () => enabled && !stopping,
   roundMs: ROUND_MS,
+  // GATE DO DECODE = o MESMO gate de turno da análise (shift-gate.js). Antes, o tick() pulava a
+  // inferência da câmera dormindo mas o pullTick continuava mantendo o ffmpeg dela aberto — a
+  // economia parava no modelo e o decodificador seguia queimando CPU para ninguém. Uma fonte de
+  // verdade para as duas decisões: nunca o decode parado com o motor achando que analisa.
+  deveDecodificar: (id, now) => !SHIFT_GATE_ON || !cameraPodeDormir(id, now).dorme,
 });
 
 // ── Estado por câmera ────────────────────────────────────────────────────────

@@ -97,6 +97,16 @@ muda é quando o motor gasta CPU, não quando o alarme dispara.
 > análise inteira** — o sistema fica cego até alguém configurar os turnos na tela. Confira o
 > cadastro ANTES de ligar, e o log de minuto DEPOIS.
 
+**O gate também para o DECODE, não só a inferência (18/09/2026).** A primeira versão pulava a
+rodada de análise e deixava o `pullTick` (go2rtc-source.js) mantendo um ffmpeg por câmera
+decodificando H.264→MJPEG a 8 fps, para ninguém. Medido em produção: desligar a análise de 11
+câmeras devolveu 0,9 vCPU; a máquina ficou em ~2,5 vCPU com 4 câmeras analisando — e ~2,2
+desses eram os decodificadores. Agora o mesmo `cameraPodeDormir` decide os dois: câmera
+dormindo não ganha ffmpeg, e o que estiver aberto cai no tick seguinte. O relay RTMP segue
+recebendo os bytes (barato, sem decode; a câmera é push e não entra em loop de reconexão); a
+janela abrindo reabre o stream sozinha. Visível em `/api/analysis/status` →
+`go2rtcPull.dormindo` e no painel de saúde ("N parados por turno").
+
 Por isso os dois motivos de sono são separados no log de minuto:
 
 | no log | significa | ação |

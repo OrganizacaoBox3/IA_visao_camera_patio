@@ -305,7 +305,10 @@ function TechDetail({ status }: { status: AnalysisStatus }) {
         {status.go2rtcPull && (
           <li>
             <b>go2rtc</b> {status.go2rtcPull.active ? "ativo" : "inativo"} ·{" "}
-            {status.go2rtcPull.streams} streams · {status.go2rtcPull.streaming ?? 0} puxando
+            {status.go2rtcPull.streams} streams · {status.go2rtcPull.streaming ?? 0} decodificando
+            {/* Decodificadores segurados pelo gate de turno: é onde a economia da máquina de fato
+                acontece (ver go2rtc-source.js). Só aparece quando há algum — going-gray. */}
+            {(status.go2rtcPull.dormindo ?? 0) > 0 && ` · ${status.go2rtcPull.dormindo} parados por turno`}
           </li>
         )}
       </ul>
