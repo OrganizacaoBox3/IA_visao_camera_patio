@@ -150,6 +150,30 @@ function classifyCamera(s = {}, limites = {}) {
   if (s.analiseLigada === false)
     return { estado: "ok", motivo: "análise não cobre esta câmera", desde: null, medido };
 
+  // A CÂMERA ESTÁ DORMINDO PELO GATE DE TURNO — mesma natureza do caso acima, e o motivo de
+  // este bloco existir: a câmera dormindo CONTINUA recebendo frame (o gate corta a inferência,
+  // não o vídeo), então ela chega aqui com frame fresco e `lastInferAt` velho — que é
+  // literalmente a definição de "ia-parada" logo abaixo.
+  //
+  // MEDIDO antes deste conserto: 15 câmeras fora do turno → 16 incidentes abertos e UM alarme
+  // de FROTA com severidade `critical`, renotificado a cada 30min a noite inteira, fechando de
+  // manhã com "Frota normalizada". Todo dia. Era o que travava ligar o `ANALYSIS_SHIFT_GATE`:
+  // a economia existia, mas vinha junto com um alarme falso crítico por noite.
+  //
+  // O estado é "ok" e não um estado próprio de propósito: do ponto de vista de SAÚDE não há
+  // nada errado — a câmera está fazendo exatamente o que foi mandada fazer. O `motivo` diz por
+  // que o número está parado, para que a tela não pareça uma câmera quebrada.
+  if (s.dormindoPorTurno === true)
+    return {
+      estado: "ok",
+      motivo:
+        s.motivoDoSono === "sem-turno"
+          ? "parada: nenhum turno atribuído às zonas desta câmera"
+          : "fora da janela de turno (economia de processamento)",
+      desde: null,
+      medido,
+    };
+
   // 3. IA PARADA — TEM frame fresco (passou pelo gate 1) e a inferência sumiu.
   const limiteParada = Math.max(L.iaParadaMinMs, cadenciaMs * L.iaParadaFactor);
   if (semInferMs != null && semInferMs > limiteParada)

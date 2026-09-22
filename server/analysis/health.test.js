@@ -297,3 +297,77 @@ describe("observeFrame — lacuna e retomada de vídeo (O(1) por frame)", () => 
     expect(h.estado).toBe("video-instavel");
   });
 });
+
+// ── GATE DE TURNO × SAÚDE (2026-09-22) ───────────────────────────────────────────────────────
+// O bug que estes testes travam, e que impedia ligar o `ANALYSIS_SHIFT_GATE` em produção:
+// a câmera dormindo pelo gate CONTINUA recebendo frame (o gate corta a inferência, não o
+// vídeo), então ela chegava aqui com frame fresco e `lastInferAt` velho — a definição literal
+// de "ia-parada". MEDIDO antes do conserto: 15 câmeras fora do turno → 16 incidentes abertos e
+// UM alarme de FROTA `critical`, renotificado a cada 30min a noite inteira. Todo dia.
+//
+// O contrapeso, testado junto e igualmente importante: dormir NÃO pode cegar a saúde. Feed
+// morto é falha real independente do turno — só a inferência parada é que passa a ser esperada.
+describe("classifyCamera — câmera dormindo pelo gate de turno", () => {
+  const T = 1_700_000_000_000;
+  // Frame fresco + inferência parada há 20min: o padrão de uma câmera dormindo.
+  const dormindo = {
+    now: T,
+    lastFrameAt: T - 500,
+    lastInferAt: T - 20 * 60_000,
+    fps: 0,
+    targetFps: 1,
+    frameAgeP50: 300,
+    maxGapMs: 900,
+    retomadas1m: 0,
+    analiseLigada: true,
+  };
+
+  it("SEM o sinal do gate, o mesmo dado vira 'ia-parada' — é o bug que isto conserta", () => {
+    expect(classifyCamera(dormindo).estado).toBe("ia-parada");
+  });
+
+  it("fora da janela de turno é 'ok' — a câmera faz o que foi mandada fazer", () => {
+    const v = classifyCamera({ ...dormindo, dormindoPorTurno: true, motivoDoSono: "fora-janela" });
+    expect(v.estado).toBe("ok");
+    expect(v.motivo).toMatch(/fora da janela de turno/);
+  });
+
+  it("SEM TURNO atribuído tem motivo PRÓPRIO — é pendência de config, não economia", () => {
+    // Somados num texto só, um parque inteiro sem turno leria como economia bem-sucedida.
+    const v = classifyCamera({ ...dormindo, dormindoPorTurno: true, motivoDoSono: "sem-turno" });
+    expect(v.estado).toBe("ok");
+    expect(v.motivo).toMatch(/nenhum turno atribuído/);
+  });
+
+  it("dormir não CEGA a saúde: feed morto continua sendo 'sem-video'", () => {
+    // Precedência preservada — perder vídeo é falha real, esteja a câmera no turno ou não.
+    const v = classifyCamera({
+      ...dormindo,
+      lastFrameAt: T - 60_000,
+      dormindoPorTurno: true,
+      motivoDoSono: "fora-janela",
+    });
+    expect(v.estado).toBe("sem-video");
+  });
+
+  it("dormir não CEGA a saúde: vídeo picado continua sendo 'video-instavel'", () => {
+    const v = classifyCamera({
+      ...dormindo,
+      retomadas1m: 5,
+      dormindoPorTurno: true,
+      motivoDoSono: "fora-janela",
+    });
+    expect(v.estado).toBe("video-instavel");
+  });
+
+  it("o veredito continua carregando os NÚMEROS que o sustentam", () => {
+    const v = classifyCamera({ ...dormindo, dormindoPorTurno: true, motivoDoSono: "fora-janela" });
+    expect(v.medido.semInferMs).toBe(20 * 60_000);
+    expect(v.medido.fps).toBe(0);
+  });
+
+  it("`dormindoPorTurno` só vale como TRUE explícito (undefined/false não mudam nada)", () => {
+    expect(classifyCamera({ ...dormindo, dormindoPorTurno: false }).estado).toBe("ia-parada");
+    expect(classifyCamera({ ...dormindo, dormindoPorTurno: undefined }).estado).toBe("ia-parada");
+  });
+});

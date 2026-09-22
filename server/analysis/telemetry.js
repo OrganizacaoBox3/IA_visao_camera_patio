@@ -217,6 +217,11 @@ function buildStatus(snap) {
         // fadiga roda no CLIENTE (ADR-009) → o motor não a cobre; acusar "IA parada" nela
         // seria acusar o desenho, não uma falha.
         analiseLigada: snap.enabled !== false && !st.fadiga,
+        // GATE DE TURNO: a câmera dormindo continua recebendo frame e para de inferir — o
+        // padrão exato de "ia-parada". Sem estes dois campos, ligar o gate gerava um alarme
+        // CRÍTICO de frota por noite (medido: 15 câmeras → 16 incidentes). Ver health.js.
+        dormindoPorTurno: st.shiftEstado === "fora-janela" || st.shiftEstado === "sem-turno",
+        motivoDoSono: st.shiftEstado === "sem-turno" ? "sem-turno" : "fora-janela",
       }),
     };
     // Auto-máscara: transparência — o operador vê onde a máscara agiu (rects
