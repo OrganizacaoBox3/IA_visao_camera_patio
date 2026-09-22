@@ -169,8 +169,90 @@ async function setActiveTier(key, allowDownload) {
   }
 }
 
+// ── TIER POR CÂMERA (2026-09-22) ─────────────────────────────────────────────────────────────
+// Resolve a KEY de um tier no CAMINHO do arquivo, para o engine mandar no job e o worker abrir
+// a sessão daquele modelo. É o que permite uma câmera de portaria rodar em N (barato) enquanto
+// a da linha de produção roda em M, no MESMO pool.
+//
+// Devolve `null` (e quem chama cai no modelo default do worker) quando:
+//   · a key não está no catálogo — config corrompida não pode cegar a câmera;
+//   · há override de path (eval/) — ali o .onnx é fixado de fora, tier nominal não existe;
+//   · o arquivo NÃO ESTÁ NO DISCO. Este é o caso que importa: o download é do tier GLOBAL
+//     (ensureModel), então um pin de câmera para um tier nunca baixado apontaria para um
+//     arquivo ausente e o worker morreria no `create`. Cair no default é degradar; apontar
+//     para o vazio é ficar cego.
+function tierPathIfReady(key) {
+  if (MODEL_OVERRIDE) return null;
+  const spec = MODELS[String(key || "").toLowerCase()];
+  if (!spec) return null;
+  const p = statePath("models", spec.file);
+  try {
+    return fs.statSync(p).size === spec.bytes ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Tiers do catálogo que JÁ estão no disco — o que a UI pode oferecer sem prometer download. */
+function tiersDisponiveis() {
+  return Object.keys(MODELS).filter((k) => tierPathIfReady(k) !== null);
+}
+
+// Downloads de tier em voo, para não baixar o mesmo arquivo duas vezes quando duas câmeras são
+// pinadas no mesmo tier em sequência.
+const baixando = new Map();
+
+/**
+ * Garante no disco o arquivo de um tier ESPECÍFICO, sem tocar no tier ativo global.
+ *
+ * POR QUE EXISTE: o download do boot (`ensureModel`) só busca o tier ATIVO. Sem isto, o
+ * operador escolhia "Leve" na tela, a UI dizia "salvo", e a câmera seguia no tier global para
+ * sempre — o pin degradava em SILÊNCIO. Falso-OK clássico: a configuração existe, não faz
+ * nada, e ninguém descobre porque a tela não mente de forma visível.
+ *
+ * Fail-soft: falha de rede/sha só loga. A câmera continua no tier global (que funciona) e a
+ * próxima troca de config tenta de novo — pin sem arquivo nunca aponta o worker para o vazio.
+ */
+async function ensureTier(key) {
+  const k = String(key || "").toLowerCase();
+  const spec = MODELS[k];
+  if (!spec || MODEL_OVERRIDE) return false;
+  if (tierPathIfReady(k)) return true;
+  if (baixando.has(k)) return baixando.get(k);
+  const alvo = statePath("models", spec.file);
+  const p = (async () => {
+    try {
+      console.log(`[analysis] tier ${spec.label} pedido por uma câmera — baixando (${(spec.bytes / 1e6).toFixed(1)} MB) …`);
+      const res = await fetch(spec.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length !== spec.bytes) throw new Error(`tamanho inesperado: ${buf.length}`);
+      const sha = crypto.createHash("sha256").update(buf).digest("hex");
+      if (sha !== spec.sha256) throw new Error(`sha256 divergente: ${sha}`);
+      fs.mkdirSync(path.dirname(alvo), { recursive: true });
+      // Escrita ATÔMICA (tmp+rename), como o downloadModel: um arquivo meio-escrito seria pior
+      // que nenhum — o worker abriria um .onnx truncado e morreria no create.
+      const tmp = `${alvo}.tmp`;
+      fs.writeFileSync(tmp, buf);
+      fs.renameSync(tmp, alvo);
+      console.log(`[analysis] tier ${spec.label} pronto em ${alvo}`);
+      return true;
+    } catch (e) {
+      console.error(`[analysis] não consegui baixar o tier ${spec.label}: ${e.message} — a câmera segue no tier global`);
+      return false;
+    } finally {
+      baixando.delete(k);
+    }
+  })();
+  baixando.set(k, p);
+  return p;
+}
+
 module.exports = {
   MODELS,
+  tierPathIfReady,
+  tiersDisponiveis,
+  ensureTier,
   sha256File,
   modelOk,
   downloadModel,

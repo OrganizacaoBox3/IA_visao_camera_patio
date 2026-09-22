@@ -18,13 +18,20 @@
 //
 // PROTOCOLO IPC (advanced serialization — Buffer viaja como binário):
 //   engine → worker: { type:"detect", id, cameraId, jpeg:Buffer, w?, h?,
-//                      tiles?:{cols,rows,overlap} }   (tiles ausente → squash único)
+//                      tiles?:{cols,rows,overlap},    (tiles ausente → squash único)
+//                      input?, modelPath? }           (ADITIVOS — ver abaixo)
+//   `modelPath` (2026-09-22) = TIER POR CÂMERA: caminho do .onnx daquela câmera, já resolvido
+//   e conferido no disco pelo hub (model.tierPathIfReady). Ausente → o modelo do fork, que é o
+//   comportamento de sempre. O worker abre UMA sessão por caminho, sob demanda.
 //   worker → engine: { id, cameraId, dets:[{class, score, bbox:[x,y,w,h] 0..1}],
 //                      decodeMs, inferMs, cpu }        (sucesso)
 //                    { id, cameraId, dropped:true }     (substituído na fila antes de rodar)
 //                    { id, cameraId, error }            (falha neste frame; worker segue vivo)
 //   worker → engine: { type:"ready", model, cpu } no boot ·
-//                    { type:"fatal", error } se o modelo não carregar (e sai).
+//                    { type:"fatal", error } se o modelo não carregar (e sai) ·
+//                    { type:"tier-carregado", model } / { type:"tier-falhou", model, error }
+//                    quando uma sessão de tier extra sobe ou falha (observabilidade do pin
+//                    por câmera; falha DEGRADA para o modelo default, não cega a câmera).
 //   4 CONSUMIDORES: engine (via worker-host) + eval/run-eval.mjs + eval/gate.mjs
 //   + eval/compare-models.mjs — mudança de shape SÓ aditiva.
 //
@@ -66,7 +73,54 @@ const COCO80 = [
 
 let ort = null;
 let sharp = null;
-let session = null;
+let session = null; // sessão do modelo DEFAULT (o do fork) — o caminho de sempre
+
+// ── TIER POR CÂMERA (2026-09-22) ─────────────────────────────────────────────
+// Uma sessão POR ARQUIVO DE MODELO, criada SOB DEMANDA. O job pode trazer `modelPath`
+// (resolvido no hub por model.tierPathIfReady) e então a inferência roda naquele modelo, sem
+// que o pool precise de um worker dedicado por tier.
+//
+// POR QUE SOB DEMANDA, e não todas no boot: uma instalação que usa um tier só (o caso comum)
+// paga exatamente o que pagava antes. Cada tier extra custa memória residente no worker —
+// ~15 MB (N), ~40 MB (S), ~75 MB (M) — e multiplicada pelo nº de workers. Carregar os três em
+// todo worker seria pagar 130 MB × N por uma flexibilidade que quase ninguém usa.
+//
+// O Map guarda a PROMESSA, não a sessão: dois jobs do mesmo tier novo chegando juntos criariam
+// duas sessões (o dobro da memória e do tempo de warmup) se a chave só fosse gravada no fim.
+const sessoesPorModelo = new Map(); // caminho → Promise<InferenceSession>
+
+/** Sessão para este job: a do `modelPath` pedido, ou a default. Falha ao abrir um tier
+ *  específico CAI na default — degradar é melhor que devolver erro e cegar a câmera. */
+async function sessionFor(modelPath) {
+  if (!modelPath || modelPath === MODEL) return session;
+  let p = sessoesPorModelo.get(modelPath);
+  if (!p) {
+    p = (async () => {
+      const s = await ort.InferenceSession.create(modelPath, {
+        executionProviders: ["cpu"],
+        intraOpNumThreads: INTRA_THREADS,
+      });
+      // Mesmo warmup do boot: o 1º frame real não paga a inicialização do grafo.
+      await s.run({
+        pixel_values: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]),
+      });
+      send({ type: "tier-carregado", model: path.basename(modelPath) });
+      return s;
+    })().catch((e) => {
+      // Tira a promessa rejeitada do mapa: senão a falha fica grudada e a câmera nunca mais
+      // tentaria aquele tier, nem depois de o arquivo aparecer no disco.
+      sessoesPorModelo.delete(modelPath);
+      send({
+        type: "tier-falhou",
+        model: path.basename(modelPath),
+        error: e && e.message ? e.message : String(e),
+      });
+      return session; // degrada para o modelo default
+    });
+    sessoesPorModelo.set(modelPath, p);
+  }
+  return p;
+}
 
 function send(msg) {
   if (process.send) process.send(msg);
@@ -223,7 +277,7 @@ function tileGrid(cols, rows, overlap) {
  * Devolve { dets, decodeMs, inferMs } com dets em frações 0..1 do FRAME.
  * Custo: N× inferência por rodada (medição: README.md §Longo alcance).
  */
-async function detectTiled(jpegBuf, spec, size = SIZE) {
+async function detectTiled(jpegBuf, spec, size = SIZE, ses = session) {
   const cols = Math.max(1, Math.min(4, Math.round(spec.cols) || 1));
   const rows = Math.max(1, Math.min(4, Math.round(spec.rows) || 1));
   const overlap = Math.max(0, Math.min(0.5, Number(spec.overlap) || 0));
@@ -250,7 +304,7 @@ async function detectTiled(jpegBuf, spec, size = SIZE) {
       .toBuffer({ resolveWithObject: true });
     const tensor = rgbToTensor(tileRgb, size);
     const t1 = performance.now();
-    const outputs = await session.run({ pixel_values: tensor });
+    const outputs = await ses.run({ pixel_values: tensor });
     inferMs += performance.now() - t1;
     decodeMs += t1 - t0;
     // reprojeção: frações do TILE → frações do FRAME (mesma conta do detect.ts)
@@ -297,16 +351,19 @@ async function drain() {
       // Input por-requisição (câmera FOCADA pede menor p/ inferência rápida = overlay fresco, 07-*).
       // Validado [160,1024]; ausente/inválido → SIZE (input global, comportamento de sempre).
       const size = Number.isFinite(job.input) && job.input >= 160 && job.input <= 1024 ? job.input : SIZE;
+      // TIER POR CÂMERA: `modelPath` vem resolvido do hub (model.tierPathIfReady) ou ausente.
+      // Ausente/igual ao default → a sessão de sempre, sem custo nenhum.
+      const ses = await sessionFor(job.modelPath);
       // pedido com `tiles` multi-bloco → tiling (longo alcance); senão, squash único.
       // ts: ECHO do ts de captura (engine → guarda de ordem + latencyMs no worker-host).
       if (job.tiles && (job.tiles.cols > 1 || job.tiles.rows > 1)) {
-        const r = await detectTiled(job.jpeg, job.tiles, size);
+        const r = await detectTiled(job.jpeg, job.tiles, size, ses);
         send({ id: job.id, cameraId, ts: job.ts, dets: r.dets, decodeMs: r.decodeMs, inferMs: r.inferMs, cpu: process.cpuUsage() });
       } else {
         const t0 = performance.now();
         const tensor = await preprocess(job.jpeg, size);
         const t1 = performance.now();
-        const outputs = await session.run({ pixel_values: tensor });
+        const outputs = await ses.run({ pixel_values: tensor });
         const t2 = performance.now();
         send({
           id: job.id,

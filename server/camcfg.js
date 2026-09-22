@@ -342,6 +342,10 @@ function camMode(c, strict) {
 
 // Config de câmera (src/cameraConfig.ts CameraCfg): modo + ponto de leitura + preset + classes.
 // `strict` = caminho de ESCRITA (ver camMode): LANÇA badRequest em vez de normalizar em silêncio.
+// Tiers que uma câmera pode fixar. "auto" = não fixa (global/autoscale) e é o default.
+// A lista é a do catálogo de model.js — crescer aqui exige crescer lá, e vice-versa.
+const CAMERA_TIERS = new Set(["auto", "n", "s", "m"]);
+
 function cleanCamConfig(c, strict) {
   if (!c || typeof c !== "object") return null;
   return {
@@ -353,6 +357,11 @@ function cleanCamConfig(c, strict) {
     // longRange liga o tiling 2×2 no motor de análise (ADR-009). INVARIANTE desta allowlist:
     // campo NOVO de config TEM que ser adicionado aqui, senão é descartado MUDO no save.
     longRange: c.longRange === true,
+    // ── TIER POR CÂMERA (2026-09-22) ────────────────────────────────────────────────────────
+    // `tier` fixa o modelo DESTA câmera ("n" leve · "s" padrão · "m" pesado); "auto" (default)
+    // deixa com o tier global/autoscale. Valor fora do enum vira "auto" — config corrompida
+    // não pode cegar a câmera nem derrubar o boot (mesma assimetria do modo de zona).
+    tier: CAMERA_TIERS.has(c.tier) ? c.tier : "auto",
   };
 }
 

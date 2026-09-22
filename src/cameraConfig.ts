@@ -29,6 +29,27 @@ export type CameraCfg = {
   //   "mjpeg"  (OVERRIDE): força o relé JPEG por socket (o tile de sempre). Escape hatch.
   //   "webrtc" (OVERRIDE): força o vídeo fluido via go2rtc (RTSP→WHEP / webcam→WHIP). Escape hatch.
   transport: "auto" | "mjpeg" | "webrtc";
+  // ── TIER DE MODELO DESTA CÂMERA (2026-09-22) ────────────────────────────────────────────────
+  // Espelho de server/camcfg.js (cleanCamConfig) — campo novo TEM que existir nos dois lados.
+  //
+  // `tier` = qual modelo de IA analisa ESTA câmera:
+  //   "auto" (default) — o tier global, que o autoscale dimensiona sozinho. Nada muda.
+  //   "n" leve · "s" padrão · "m" pesado — mais recall custa mais CPU, e a troca vale a pena
+  //   em câmeras diferentes por motivos diferentes: a portaria só precisa saber que há gente;
+  //   a linha de produção alimenta contagem de travessia, que quebra com recall baixo.
+  tier: CameraTier;
+};
+
+/** Tier do modelo por câmera. "auto" = não fixa (segue o global/autoscale). */
+export type CameraTier = "auto" | "n" | "s" | "m";
+export const CAMERA_TIERS: CameraTier[] = ["auto", "n", "s", "m"];
+
+/** Rótulo + o que muda, para a tela não pedir uma escolha que ela não explica. */
+export const CAMERA_TIER_LABEL: Record<CameraTier, string> = {
+  auto: "Automático (recomendado)",
+  n: "Leve — menos CPU, menos alcance",
+  s: "Padrão",
+  m: "Pesado — mais alcance, mais CPU",
 };
 
 const DEFAULT: CameraCfg = {
@@ -44,6 +65,8 @@ const DEFAULT: CameraCfg = {
   selectedClasses: [...OBJECT_KEYS],
   longRange: false,
   transport: "auto",
+  // Default = não fixa nada: a câmera nova se comporta exatamente como antes deste campo.
+  tier: "auto",
 };
 
 function key(cameraId: string) {
@@ -75,6 +98,8 @@ export function normalizeCfg(c: Partial<CameraCfg> | null | undefined): CameraCf
     // Retrocompat: overrides antigos ("mjpeg"/"webrtc") são PRESERVADOS; ausente/inválido → "auto"
     // (novo default = melhor disponível, resolvido no dashboard por transportOf).
     transport: c.transport === "mjpeg" || c.transport === "webrtc" ? c.transport : "auto",
+    // Tier fora do enum → "auto". Config corrompida não pode cegar a câmera (mesma regra do back).
+    tier: (CAMERA_TIERS as string[]).includes(c.tier as string) ? (c.tier as CameraTier) : "auto",
   };
 }
 

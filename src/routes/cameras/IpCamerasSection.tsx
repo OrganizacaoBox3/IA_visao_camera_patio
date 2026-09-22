@@ -22,7 +22,7 @@ import {
   SectionTitle,
 } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
-import { setCameraCfg, type CameraCfg } from "../../cameraConfig";
+import { setCameraCfg, CAMERA_TIERS, CAMERA_TIER_LABEL, type CameraCfg } from "../../cameraConfig";
 import { useCamCfgs } from "../useCamCfgs";
 import { type Camera } from "../dashboard/types";
 import {
@@ -152,6 +152,13 @@ export function CamerasList() {
   }
   function setTransport(id: string, transport: CameraCfg["transport"]) {
     applyCfg(id, { ...cfgOf(id), transport });
+  }
+
+  // ── TIER DE MODELO DESTA CÂMERA (2026-09-22) ──────────────────────────────────────────────
+  // O parque não é homogêneo: a portaria só precisa saber que há gente; a linha de produção
+  // alimenta contagem de travessia. Um tier global obriga a pagar o pior caso em TODAS.
+  function setTier(id: string, tier: CameraCfg["tier"]) {
+    applyCfg(id, { ...cfgOf(id), tier });
   }
 
   // ── RECONCILIAÇÃO das duas fontes por id ──
@@ -507,6 +514,32 @@ export function CamerasList() {
                         { value: "mjpeg", label: "MJPEG" },
                         { value: "webrtc", label: "WebRTC" },
                       ]}
+                    />
+                  </div>
+                  {/* ── TIER DE MODELO ──────────────────────────────────────────────────────
+                      Quanto ESTA câmera pesa no servidor. O Select diz a CONSEQUÊNCIA no
+                      rótulo — pedir "n/s/m" a quem não leu o catálogo de modelos seria pedir
+                      uma escolha que a tela não explica. */}
+                  <div className="cam-set-field">
+                    <span className="cam-set-field__label">
+                      <FieldLabel>Precisão da análise</FieldLabel>
+                      <HelpTip label="O que muda ao trocar a precisão">
+                        Escolhe o modelo de IA que analisa esta câmera. Automático deixa o
+                        sistema dimensionar sozinho conforme a carga — é o recomendado. Leve
+                        gasta bem menos processamento e enxerga menos longe: bom para câmera de
+                        passagem, ruim para contagem de linha, que precisa ver a mesma pessoa
+                        dos dois lados. Pesado é o contrário. Vale só para esta câmera.
+                      </HelpTip>
+                    </span>
+                    <Select
+                      value={cfg.tier}
+                      onChange={(v) => setTier(row.id, v as CameraCfg["tier"])}
+                      ariaLabel="Precisão da análise"
+                      disabled={!canAdjust}
+                      options={CAMERA_TIERS.map((t) => ({
+                        value: t,
+                        label: CAMERA_TIER_LABEL[t],
+                      }))}
                     />
                   </div>
                   {!canAdjust && (

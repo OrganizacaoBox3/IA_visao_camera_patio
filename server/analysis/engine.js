@@ -244,6 +244,25 @@ function longRangeOf(cameraId) {
   return !!(cfg && cfg.longRange === true);
 }
 
+// ── TIER POR CÂMERA (2026-09-22) ──────────────────────────────────────────────
+// Responde "qual modelo esta câmera usa", lida do camcfg com a mesma leitura DEFENSIVA do
+// longRange: ausente/legada/inválida → o comportamento global de sempre.
+//
+// POR QUE POR CÂMERA, e não um número global: o parque não é homogêneo. A câmera da portaria
+// só precisa saber que há gente (tier N basta, e ninguém fica olhando); a da linha de produção
+// alimenta contagem de travessia. Um tier global obriga a pagar o pior caso em TODAS — que é
+// exatamente a conta que estamos tentando baixar.
+
+/** Caminho do .onnx fixado NESTA câmera, ou `null` (= usa o tier global/autoscale).
+ *  `tierPathIfReady` devolve null quando o arquivo não está no disco: pin órfão degrada para o
+ *  global em vez de mandar o worker abrir um arquivo que não existe. */
+function tierPathOf(cameraId) {
+  const cfg = camcfg.getCamConfig(cameraId);
+  const key = cfg && cfg.tier;
+  if (!key || key === "auto") return null;
+  return model.tierPathIfReady(key);
+}
+
 // Câmera modo "fadiga" roda no CLIENTE (MediaPipe do operador) — o hub NÃO detecta
 // pessoa nela: (a) economiza worker, (b) tira do relatório o ruído de "pessoa"
 // contada sobre o rosto em close. Leitura defensiva: sem config → "atividade".
@@ -423,6 +442,8 @@ function createState(id) {
       },
       ROUNDS,
     ),
+    // Tier fixado nesta câmera (null = global/autoscale) — vai no job p/ o worker.
+    tierPath: tierPathOf(id),
     autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
     // Acumulação p/ o ingest "ativ" (~AGG_MS). `observedMs`/`lastRoundAt` sustentam o
     // indicador de atividade ponderado por TEMPO (pipeline.js: a média por RODADA dependia
@@ -551,6 +572,12 @@ function dispatchToWorker(st, frame, now) {
       // Câmera FOCADA com input de foco configurado (< global) → inferência mais rápida = overlay mais
       // fresco (07-*). Só manda o campo quando difere do global — o caminho default fica idêntico.
       ...(st.roundMs === ROUND_MS_FOCUS && FOCUS_INPUT !== INPUT ? { input: FOCUS_INPUT } : {}),
+      // TIER POR CÂMERA (2026-09-22): quando o operador fixou um tier NESTA câmera e o arquivo
+      // está no disco, o job carrega o caminho e o worker usa aquele modelo. Sem pin (o caso
+      // comum) o campo nem é enviado e o worker usa o modelo do fork — caminho idêntico ao de
+      // sempre. `tierPathIfReady` devolve null para tier ausente do disco: pin órfão DEGRADA
+      // para o global em vez de apontar para um arquivo que não existe (worker morreria).
+      ...(st.tierPath ? { modelPath: st.tierPath } : {}),
     });
   } catch {
     st.slots.abort(jobId); // send falhou (canal fechado) → libera o slot p/ re-despacho
@@ -1022,6 +1049,19 @@ function onCamcfgUpdated(p) {
     st.lastTracks = null; // snapshot de coasting carrega a lista de zonas ANTIGA → invalida
   } else if (p.kind === "camconfig") {
     st.longRange = longRangeOf(st.id); // liga/desliga o tiling na PRÓXIMA rodada
+    // Tier fixado nesta câmera vale já na PRÓXIMA rodada (sem respawn do pool — o tier viaja
+    // no job, e o worker abre a sessão daquele modelo sob demanda).
+    st.tierPath = tierPathOf(st.id);
+    // Pin para um tier que ainda não está no disco: busca o arquivo UMA vez, em segundo plano.
+    // Sem isto o pin degradava em SILÊNCIO — a tela dizia "salvo" e a câmera seguia no tier
+    // global para sempre. Enquanto o download não termina, `tierPathOf` segue null e a câmera
+    // roda no global: degradar é correto, apontar o worker para um arquivo ausente não seria.
+    const pin = (camcfg.getCamConfig(st.id) || {}).tier;
+    if (pin && pin !== "auto" && !st.tierPath) {
+      void model.ensureTier(pin).then((ok) => {
+        if (ok) st.tierPath = tierPathOf(st.id); // vale a partir da próxima rodada
+      });
+    }
     // Entrou/saiu do modo fadiga → atualiza o contrato anti-duplicação (hub ⇄ cliente).
     const wasFadiga = st.fadiga;
     st.fadiga = isFadiga(st.id);

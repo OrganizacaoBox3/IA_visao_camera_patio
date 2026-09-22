@@ -16,6 +16,9 @@ describe("normalizeCfg — defaults e saneamento", () => {
       selectedClasses: [...OBJECT_KEYS],
       longRange: false,
       transport: "auto",
+      // Tier por câmera (2026-09-22): o default NÃO fixa nada — "auto" segue o tier global.
+      // Câmera nova se comporta como antes deste campo.
+      tier: "auto",
     });
     expect(normalizeCfg(undefined)).toEqual(d);
   });
@@ -61,5 +64,16 @@ describe("normalizeCfg — defaults e saneamento", () => {
     expect(normalizeCfg({ pontoLeitura: "Doca 5" }).pontoLeitura).toBe("Doca 5");
     expect(normalizeCfg({ pontoLeitura: "   " }).pontoLeitura).toBe(APP_CONFIG.reading.defaultPonto);
     expect(normalizeCfg({ pontoLeitura: "" }).pontoLeitura).toBe(APP_CONFIG.reading.defaultPonto);
+  });
+});
+
+// ── TIER DE MODELO POR CÂMERA (espelho de server/camcfg.js) ──────────────────────────────────
+// Os dois lados aceitam o MESMO enum de propósito: uma tela que oferece um valor que o
+// servidor depois descarta em silêncio é uma tela que mente sobre o que foi salvo.
+describe("normalizeCfg — tier", () => {
+  it("tier do catálogo é preservado; fora dele vira 'auto' (nunca cega a câmera)", () => {
+    for (const t of ["auto", "n", "s", "m"]) expect(normalizeCfg({ tier: t } as never).tier).toBe(t);
+    for (const ruim of ["xl", "", 7, null, undefined, "N; DROP"])
+      expect(normalizeCfg({ tier: ruim } as never).tier).toBe("auto");
   });
 });
