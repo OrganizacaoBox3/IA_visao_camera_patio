@@ -13,6 +13,8 @@ const {
   roundObserver,
   evaluateWindow,
   statusOf,
+  applyOverride,
+  clearOverride,
   AM_COLS,
   AM_ROWS,
   AM_PRESENT,
@@ -229,14 +231,106 @@ describe("statusOf — apresentação p/ o status() (célula → rect normalizad
     expect(s.suppressed).toBe(AUTOMASK_MODE === "hide" ? 1 : 0);
     expect(s.suggestions).toEqual([
       {
+        cell,
         x: 12 / AM_COLS,
         y: 9 / AM_ROWS,
         w: 1 / AM_COLS,
         h: 1 / AM_ROWS,
         presentPct: 0.99, // arredondado a 2 casas
         jitter: 0.012, // arredondado a 3 casas
+        decision: null, // sem override — ver describe("decisão do operador…") abaixo
       },
     ]);
+  });
+});
+
+// ── DECISÃO DO OPERADOR (2026-09-24) — "Está correto" / "É falso positivo" ───────────────────
+// automask.js já aprende sozinho; isto é o operador CORRIGINDO essa inferência nos dois
+// sentidos, sem esperar (nem depender d)a estatística. É o mecanismo que evita manequim/
+// foto/TV/boneco lido como pessoa SEM cegar um guarda que fica parado no mesmo posto.
+describe("decisão do operador — applyOverride/clearOverride sobrepõem a estatística", () => {
+  let am;
+  let logSpy;
+  beforeEach(() => {
+    am = createAutoMask();
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => logSpy.mockRestore());
+
+  it("createAutoMask(overrides) carrega decisões persistidas (automask-store.js) já no boot", () => {
+    const cell = amCell(0.5, 0.5);
+    const am2 = createAutoMask({ [cell]: { decision: "falsoPositivo", em: 123 } });
+    expect(am2.overrides.get(cell)).toBe("falsoPositivo");
+  });
+
+  it("overrides corrompidos/fora do enum são DESCARTADOS — nunca viram override silencioso", () => {
+    const am2 = createAutoMask({
+      abc: { decision: "falsoPositivo" }, // célula não-numérica
+      "-1": { decision: "falsoPositivo" }, // célula negativa
+      3: { decision: "chute" }, // decisão fora do enum
+      4: {}, // sem decisão
+    });
+    expect(am2.overrides.size).toBe(0);
+  });
+
+  it('"falsoPositivo" suprime JÁ — não espera AM_CONFIRM_WINDOWS', () => {
+    const cell = amCell(0.5, 0.5);
+    applyOverride(am, cell, "falsoPositivo");
+    expect(am.suppressed.has(cell)).toBe(true); // efeito imediato, sem nenhuma rodada observada
+  });
+
+  it('roundObserver.observe() honra "falsoPositivo" mesmo ANTES de am.suppressed ser tocado', () => {
+    am.overrides.set(amCell(0.5, 0.5), "falsoPositivo"); // simula override sem passar por applyOverride
+    const obs = roundObserver(am);
+    expect(obs.observe(0.5, 0.5, 0.1, 0.2)).toBe(true); // SUPRIMIR
+  });
+
+  it('"correto" NUNCA suprime, mesmo com presença/jitter que estatisticamente qualificaria', () => {
+    const cell = amCell(0.5, 0.5);
+    applyOverride(am, cell, "correto");
+    for (let j = 0; j < AM_CONFIRM_WINDOWS + 1; j++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10); // estático, presente sempre
+      evaluateWindow(am, Date.now(), "camT");
+    }
+    expect(am.suppressed.has(cell)).toBe(false); // o operador tem a palavra final
+  });
+
+  it('"correto" aplicado DEPOIS de já suprimido REMOVE a supressão imediatamente', () => {
+    const cell = amCell(0.5, 0.5);
+    for (let j = 0; j < AM_CONFIRM_WINDOWS; j++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+      evaluateWindow(am, Date.now(), "camT");
+    }
+    expect(am.suppressed.has(cell)).toBe(true);
+    applyOverride(am, cell, "correto");
+    expect(am.suppressed.has(cell)).toBe(false);
+  });
+
+  it('"falsoPositivo" sobrevive à janela seguinte mesmo se o objeto sumir (override é STICKY)', () => {
+    const cell = amCell(0.5, 0.5);
+    applyOverride(am, cell, "falsoPositivo");
+    // janela roda vazia (objeto sumiu) — sem override, isso derrubaria a supressão (ver o teste
+    // "adaptativo: objeto que SOME…" acima). Com override, a decisão do operador persiste.
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suppressed.has(cell)).toBe(true);
+  });
+
+  it("clearOverride desfaz a decisão — a célula volta a depender só da estatística", () => {
+    const cell = amCell(0.5, 0.5);
+    applyOverride(am, cell, "falsoPositivo");
+    clearOverride(am, cell);
+    expect(am.overrides.has(cell)).toBe(false);
+    evaluateWindow(am, Date.now(), "camT"); // sem dado observado → não qualifica sozinho
+    expect(am.suppressed.has(cell)).toBe(false);
+  });
+
+  it("statusOf ecoa a decisão gravada no campo `decision` da sugestão", () => {
+    const cell = amCell(0.5, 0.5);
+    applyOverride(am, cell, "correto");
+    am.suggestions = [{ cell, presentPct: 1, jitter: 0, janelas: 1 }];
+    const s = statusOf(am);
+    expect(s.suggestions[0].decision).toBe("correto");
+    expect(s.suggestions[0].cell).toBe(cell);
   });
 });
 

@@ -460,3 +460,12 @@ describe("pruneVencido — ausência de frame por decisão nossa não é morte",
     expect(engine.pruneVencido(st({}), 6 * MIN, true)).toBe(true);
   });
 });
+
+// NOTA (2026-09-24): `setAutomaskDecision` (glue de server/routes/analysis.js) NÃO ganhou teste
+// neste arquivo de propósito — engine.test.js requer `./engine` sem isolar VISAO_STATE_DIR, e
+// exercitar a persistência aqui escreveria no server/automask-decisions.json REAL (a mesma
+// classe de risco que torna server/recipients.test.js instável — ver CLAUDE.md). A persistência
+// já está integralmente coberta, isolada, em server/automask-store.test.js; a mutação AO VIVO
+// (`applyOverride`) está coberta em server/analysis/automask.test.js. `setAutomaskDecision` em
+// si é só o repasse de uma linha entre as duas — nada fica sem prova, só sem REPETIR a prova
+// num arquivo que não pode isolar o disco.

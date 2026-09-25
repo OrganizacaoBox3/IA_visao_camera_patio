@@ -117,6 +117,32 @@
   font-size: 11px;
 }
 
+/* Revisão de detecções fixas da auto-máscara (AutomaskReview.tsx) — lista compacta, sem
+   imagem (ADR-002: só a posição normalizada, nunca um frame). */
+.automask-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.automask-review__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: 12px;
+}
+.automask-review__actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
 /* Status de conexão (online/offline). Going-gray: online = neutro (operação normal);
    offline = âmbar (atenção — cadastro parado ou fora do ar). */
 .cam-status {

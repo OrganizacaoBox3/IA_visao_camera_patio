@@ -47,7 +47,8 @@ const { createPipeline } = require("./pipeline");
 const { pickRoundMs, idleRoundMs, focusUnion, createFocusRegistry } = require("./focus");
 const { createWorkerPool, resolveWorkerCount, dispatchReady } = require("./worker-host");
 const { createGo2rtcSource } = require("./go2rtc-source");
-const { createAutoMask, AUTOMASK_ON, AUTOMASK_MODE } = require("./automask");
+const { createAutoMask, applyOverride, AUTOMASK_ON, AUTOMASK_MODE } = require("./automask");
+const automaskStore = require("../automask-store");
 
 // ── Cadência/custo (qualidade mora em precision.js — fronteira documentada lá) ──
 const FPS = Math.min(4, Math.max(0.2, Number(process.env.ANALYSIS_FPS) || 1));
@@ -444,7 +445,9 @@ function createState(id) {
     ),
     // Tier fixado nesta câmera (null = global/autoscale) — vai no job p/ o worker.
     tierPath: tierPathOf(id),
-    autoMask: AUTOMASK_ON ? createAutoMask() : null, // hotspots fixos aprendidos (automask.js)
+    // Hotspots fixos aprendidos (automask.js), já com as decisões do operador desta câmera
+    // (automask-store.js) carregadas — "É falso positivo"/"Está correto" sobrevivem ao restart.
+    autoMask: AUTOMASK_ON ? createAutoMask(automaskStore.decisionsFor(id)) : null,
     // Acumulação p/ o ingest "ativ" (~AGG_MS). `observedMs`/`lastRoundAt` sustentam o
     // indicador de atividade ponderado por TEMPO (pipeline.js: a média por RODADA dependia
     // de quem estava olhando a câmera — 11× de viés medido).
@@ -1105,6 +1108,21 @@ function clearFocus(socketId) {
 }
 
 /**
+ * DECISÃO DO OPERADOR sobre uma célula da auto-máscara ("Está correto" / "É falso positivo" —
+ * rota /api/automask/:cameraId). Persiste (automask-store.js, sobrevive a restart) e aplica
+ * AO VIVO no estado da câmera, se ela estiver com o motor ligado nesta rodada — sem isso o
+ * operador clicaria "salvo" e o efeito só apareceria depois de um restart do hub.
+ * @returns {{ok:true}|{error:string}}
+ */
+function setAutomaskDecision(cameraId, cell, decision) {
+  const r = automaskStore.setDecision(cameraId, cell, decision);
+  if (r.error) return r;
+  const st = states.get(cameraId);
+  if (st && st.autoMask) applyOverride(st.autoMask, Number(cell), decision);
+  return r;
+}
+
+/**
  * Cadência EFETIVA da câmera em fps — FPS_FOCUS > FPS_LINE > FPS normal conforme o
  * estado corrente (fadiga = 0: roda no cliente). Câmera ainda sem estado (nenhum
  * frame materializou) devolve o FPS normal. CONTRATO ADITIVO p/ o ingest dinâmico
@@ -1238,6 +1256,7 @@ module.exports = {
   snapshotTo,
   setFocus,
   clearFocus,
+  setAutomaskDecision,
   effectiveFps, // cadência efetiva por câmera (fps) — consumidor: ingest dinâmico (P2)
   status,
   stop,

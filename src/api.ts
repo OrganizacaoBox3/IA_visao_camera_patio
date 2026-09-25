@@ -337,6 +337,33 @@ export function uploadCameraBg(cameraId: string, file: File): Promise<CameraBg> 
 export const deleteCameraBg = (cameraId: string) =>
   apiSend<{ ok: true; apagou: boolean }>("DELETE", `/api/camera-bg/${encodeURIComponent(cameraId)}`);
 
+// ── AUTO-MÁSCARA — decisão do operador sobre detecção FIXA recorrente (2026-09-24) ──────────
+// automask.js já aprende sozinho (presença ~100% + jitter baixíssimo por janelas longas =
+// provável manequim/foto/TV/boneco lido como pessoa) e some SOZINHO com o fantasma — isto é a
+// CORREÇÃO manual quando o operador discorda: "Está correto" (é gente de verdade, nunca
+// suprimir) ou "É falso positivo" (confirma agora, sem esperar a estatística). Nenhum frame é
+// mostrado (ADR-002) — a posição vem como retângulo NORMALIZADO, para desenhar sobre a imagem
+// de referência (ADR-021) ou mostrar só como texto de posição.
+export type AutomaskSuggestion = {
+  cell: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  presentPct: number;
+  jitter: number;
+  decision: "correto" | "falsoPositivo" | null;
+};
+export type AutomaskStatus = { mode: string; suppressed: number; suggestions: AutomaskSuggestion[] };
+// GET /api/automask/:cameraId → estado atual (sugestões + decisão já gravada, se houver).
+// Auth: qualquer usuário com acesso à câmera.
+export const getAutomask = (cameraId: string) =>
+  apiGet<AutomaskStatus>(`/api/automask/${encodeURIComponent(cameraId)}`);
+// PUT /api/automask/:cameraId {cell, decision} → grava a decisão (persiste + aplica ao vivo).
+// Auth: perfil de configuração (engenharia) — muda o que a câmera detecta.
+export const setAutomaskDecision = (cameraId: string, cell: number, decision: "correto" | "falsoPositivo") =>
+  apiPut<{ ok: true }>(`/api/automask/${encodeURIComponent(cameraId)}`, { cell, decision });
+
 // GET /api/zones/:cameraId → Zone[]. Auth: qualquer usuário autenticado.
 export const getZones = (cameraId: string) =>
   apiGet<Zone[]>(`/api/zones/${encodeURIComponent(cameraId)}`);

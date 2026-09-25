@@ -23,6 +23,7 @@ import {
 } from "../../ui";
 import { copyToClipboard } from "../../ui/clipboard";
 import { setCameraCfg, CAMERA_TIERS, CAMERA_TIER_LABEL, type CameraCfg } from "../../cameraConfig";
+import { AutomaskReview } from "./AutomaskReview";
 import { useCamCfgs } from "../useCamCfgs";
 import { type Camera } from "../dashboard/types";
 import {
@@ -542,6 +543,11 @@ export function CamerasList() {
                       }))}
                     />
                   </div>
+                  {/* Câmera de ÁREA (não "Operador"): o motor no hub é quem aprende objeto fixo
+                      — o modo fadiga roda no navegador do operador (não passa por automask.js). */}
+                  {!isFadiga && (
+                    <AutomaskReview cameraId={row.id} cameraLabel={row.label} canDecide={canConfigure} />
+                  )}
                   {!canAdjust && (
                     <span className="muted cam-adjust-hint">
                       {canConfigure

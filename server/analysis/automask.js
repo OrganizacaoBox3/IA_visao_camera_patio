@@ -11,14 +11,26 @@
 // anda. Tudo é logado e contado (automasked1m em status()) — nada some em silêncio.
 //
 // CONTRATO (o caller NÃO toca os internals Welford — rounds/cells/present):
-//   createAutoMask() → estado por câmera (opaco)
+//   createAutoMask(overrides?) → estado por câmera (opaco). `overrides` = decisões
+//     PERSISTIDAS do operador (automask-store.js), no formato `{ [cell]: {decision} }` —
+//     carregadas no boot/criação do estado, não recarregadas sozinhas depois (ver
+//     applyOverride p/ o caminho ao vivo).
 //   roundObserver(am) → { observe(fx,fy,w,h) → bool (true = SUPRIMIR esta det),
 //                         close(now, camId) } — 1 observer por RODADA; observe
 //     APRENDE de TODAS as dets (mesmo as suprimidas: objeto ainda presente segue
 //     confirmado; quando some, deixa de ser reaprendido e a supressão cai);
 //     close fecha a rodada e reavalia a janela quando vence.
-//   statusOf(am) → { mode, suppressed, suggestions:[{x,y,w,h,…}] } (rects
-//     normalizados, prontos p/ o operador pintar uma zona manual ali).
+//   statusOf(am) → { mode, suppressed, suggestions:[{cell,x,y,w,h,…,decision?}] }
+//     (rects normalizados, prontos p/ o operador pintar uma zona manual ali OU
+//     confirmar/corrigir a sugestão — `decision` ecoa o override já gravado).
+//   applyOverride(am, cell, decision) / clearOverride(am, cell) → aplica AO VIVO a
+//     decisão do operador (chamado pela rota; automask-store.js já persistiu antes).
+//     CORREÇÃO EM DOIS SENTIDOS (2026-09-24) — evita manequim/foto/TV/boneco lido como
+//     pessoa SEM cegar quem fica parado de verdade (guarda de posto):
+//       "falsoPositivo" → suprime JÁ, sem esperar AM_CONFIRM_WINDOWS (o operador viu
+//                          que é objeto fixo; a estatística só confirmaria o óbvio).
+//       "correto"       → NUNCA suprime esta célula, mesmo que a estatística volte a
+//                          qualificar — o operador tem a palavra final sobre a própria imagem.
 //
 // ANALYSIS_AUTOMASK — default "hide" (decisão de produto: o fantasma de objeto fixo
 // some sozinho, zero interação): "suggest" aprende+expõe sem suprimir (observar-e-
@@ -63,7 +75,20 @@ const AM_CONFIRM_WINDOWS = 2;
 // std norm máx p/ "fixo" (env ANALYSIS_AUTOMASK_JITTER — ver racional no cabeçalho).
 const AM_JITTER = Math.max(0.001, Number(process.env.ANALYSIS_AUTOMASK_JITTER) || 0.02);
 
-function createAutoMask() {
+/** `raw` (de automask-store.decisionsFor) → Map cell(number) → "correto"|"falsoPositivo".
+ *  Entrada corrompida/fora do enum é DESCARTADA (nunca vira override que ninguém explica). */
+function normalizeOverrides(raw) {
+  const m = new Map();
+  for (const [k, v] of Object.entries(raw || {})) {
+    const cell = Number(k);
+    const decision = v && v.decision;
+    if (Number.isInteger(cell) && cell >= 0 && (decision === "correto" || decision === "falsoPositivo"))
+      m.set(cell, decision);
+  }
+  return m;
+}
+
+function createAutoMask(overrides) {
   // cells: cellIndex → { present, n, mean:[fx,fy,w,h], m2:[...] } (Welford p/ variância).
   // candidatas: cellIndex → nº de janelas CONSECUTIVAS em que a célula qualificou como fixa
   // (a supressão só entra em AM_CONFIRM_WINDOWS — ver o racional em AM_MIN_ROUNDS).
@@ -74,7 +99,20 @@ function createAutoMask() {
     candidatas: new Map(),
     suppressed: new Set(),
     suggestions: [],
+    overrides: normalizeOverrides(overrides), // decisões do operador — ver applyOverride
   };
+}
+
+/** Aplica AO VIVO a decisão do operador (a rota já persistiu via automask-store antes). */
+function applyOverride(am, cell, decision) {
+  am.overrides.set(cell, decision);
+  if (decision === "correto") am.suppressed.delete(cell);
+  else if (decision === "falsoPositivo" && AUTOMASK_MODE === "hide") am.suppressed.add(cell);
+}
+
+/** Desfaz a decisão — a célula volta a depender só da estatística. */
+function clearOverride(am, cell) {
+  am.overrides.delete(cell);
 }
 
 /** célula do grid AM p/ um ponto NORMALIZADO (o PÉ da detecção — igual à zona de exclusão). */
@@ -110,6 +148,10 @@ function roundObserver(am) {
       const cell = amCell(fx, fy);
       roundCells.add(cell);
       accumulate(am, cell, [fx, fy, w, h]);
+      // Decisão do OPERADOR tem a palavra final — vem antes da estatística nos dois sentidos.
+      const ov = am.overrides.get(cell);
+      if (ov === "correto") return false;
+      if (ov === "falsoPositivo") return AUTOMASK_MODE === "hide";
       return AUTOMASK_MODE === "hide" && am.suppressed.has(cell);
     },
     /** Fecha a rodada (presenças) e reavalia a janela quando ela vence. */
@@ -151,6 +193,14 @@ function evaluateWindow(am, now, camId) {
     if (janelas >= AM_CONFIRM_WINDOWS) next.add(cell);
   }
   am.candidatas = candidatas; // quem não qualificou nesta janela perde a sequência (adaptativo)
+  // Decisão do OPERADOR OVERRULA a estatística desta janela — nos dois sentidos. Sem isto, um
+  // "falsoPositivo" confirmado podia CAIR na próxima janela se a amostra ficasse rasa demais
+  // (o objeto saiu de quadro um pouco), e um "correto" podia voltar a ser suprimido se o guarda
+  // ficasse parado tempo/jitter suficiente para requalificar sozinho.
+  for (const [cell, decision] of am.overrides) {
+    if (decision === "correto") next.delete(cell);
+    else if (decision === "falsoPositivo" && AUTOMASK_MODE === "hide") next.add(cell);
+  }
   for (const cell of next) {
     if (prev.has(cell)) continue; // já conhecida — só loga a novidade
     const col = cell % AM_COLS;
@@ -173,7 +223,9 @@ function evaluateWindow(am, now, camId) {
 
 /**
  * Apresentação p/ o status() — cada célula como rect NORMALIZADO (transparência:
- * o operador vê onde a máscara agiu e pode pintar uma zona manual ali).
+ * o operador vê onde a máscara agiu e pode pintar uma zona manual ali, OU confirmar/corrigir
+ * a sugestão — `cell` é o id estável que a rota de decisão espera de volta; `decision` ecoa
+ * o override já gravado, se houver, para a tela não perguntar de novo o que já foi respondido).
  * `suppressed` conta células ENFORCED — só no modo "hide" ("suggest" não suprime nada).
  */
 function statusOf(am) {
@@ -184,12 +236,14 @@ function statusOf(am) {
       const col = s.cell % AM_COLS;
       const row = Math.floor(s.cell / AM_COLS);
       return {
+        cell: s.cell,
         x: col / AM_COLS,
         y: row / AM_ROWS,
         w: 1 / AM_COLS,
         h: 1 / AM_ROWS,
         presentPct: Math.round(s.presentPct * 100) / 100,
         jitter: Math.round(s.jitter * 1000) / 1000,
+        decision: (am.overrides && am.overrides.get(s.cell)) || null,
       };
     }),
   };
@@ -201,6 +255,9 @@ module.exports = {
   roundObserver,
   evaluateWindow,
   statusOf,
+  applyOverride,
+  clearOverride,
+  normalizeOverrides,
   AM_COLS,
   AM_ROWS,
   AM_WIN_MS,

@@ -54,6 +54,10 @@ server/notif-settings.json
 # Config de câmeras/views compartilhadas (runtime)
 server/camcfg.json
 
+# Decisões do operador sobre a auto-máscara (runtime) — automask-store.js
+server/automask-decisions.json
+server/automask-decisions.json.tmp
+
 # Shelves de alarme persistidas (runtime)
 server/alarm-shelves.json
 
