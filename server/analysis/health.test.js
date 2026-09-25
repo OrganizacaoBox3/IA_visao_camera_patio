@@ -143,6 +143,63 @@ describe("classifyCamera — 4. ia-atrasada (mede, mas não acompanha o vídeo)"
   });
 });
 
+// ── GATE DE MOVIMENTO × "ia-atrasada" (2026-09-24) ────────────────────────────────────────────
+// ACHADO #1 (benchmark local, engine real + worker real): com o gate de movimento ligado (o
+// default), uma câmera ociosa de VERDADE (cena parada) roda só no PROBE — no máximo 1/probeMs.
+// Contra a meta NOMINAL (não-gateada) isso é SEMPRE < atrasoFpsRatio(0.25): 1000/6000=0.167 <
+// 0.25. Sem `gateFloorFps`, TODA câmera ociosa com o gate ligado reportaria "ia-atrasada" para
+// sempre — o gate reduz a cadência DE PROPÓSITO, e o check antigo não sabia disso. É a MESMA
+// classe do bug do gate de turno (health.js §"dormindoPorTurno"), agora no gate de movimento.
+//
+// ACHADO #2 (mesmo benchmark, 2ª rodada): o piso CRU (sem folga) ainda disparava na 1ª
+// avaliação de saúde de uma câmera RECÉM-LIGADA — a janela de `fps` (rounds/60) ainda não
+// tinha 60s de vida (só ~5 rodadas reais até o 1º tick de HEALTH_TICK_MS=30s), então o fps
+// OBSERVADO ficava artificialmente baixo por conta do RELÓGIO, não por economia nem por falha.
+// `gateFloorSlack` (4×) absorve esse boot sem deixar de pegar um pool travado de verdade —
+// telemetry.js manda o piso CRU (1 inferência por probe, sem fudge); a folga é 100% aqui.
+describe("classifyCamera — gateFloorFps: o gate de movimento não pode virar falso-atraso", () => {
+  it("fps só abaixo da meta NOMINAL, mas ACIMA do piso do gate (com folga) → ok", () => {
+    // Câmera normal (não focada): probeMs=6000 → piso cru = 1000/6000 = 0.1667; /gateFloorSlack(4) = 0.0417.
+    const h = classifyCamera(saudavel({ fps: 0.15, targetFps: 1, gateFloorFps: 0.1667 }));
+    expect(h.estado).toBe("ok");
+  });
+
+  it("fps abaixo do piso COM folga → ia-atrasada (não é boot nem economia, é problema real)", () => {
+    const h = classifyCamera(saudavel({ fps: 0.03, targetFps: 1, gateFloorFps: 0.1667 }));
+    expect(h.estado).toBe("ia-atrasada");
+    expect(h.motivo).toContain("0.03 de 1");
+  });
+
+  it("sem gateFloorFps (gate desligado, ou caller antigo) → comportamento de SEMPRE, sem folga inventada", () => {
+    const h = classifyCamera(saudavel({ fps: 0.15, targetFps: 1 }));
+    expect(h.estado).toBe("ia-atrasada"); // idêntico ao teste "cadência muito abaixo da meta"
+  });
+
+  it("fps EXATAMENTE no piso COM folga → ok (corte inclusivo, a favor do nunca-cego)", () => {
+    // piso cru 0.16 / slack 4 = 0.04 exato.
+    const h = classifyCamera(saudavel({ fps: 0.04, targetFps: 1, gateFloorFps: 0.16 }));
+    expect(h.estado).toBe("ok");
+  });
+
+  it("câmera FOCADA: piso cru maior (probeFocusMs, mais curto) — mesma folga, meta diferente", () => {
+    // Focada: probeFocusMs=2000 → piso cru = 1000/2000 = 0.5; /4 = 0.125.
+    const h = classifyCamera(saudavel({ fps: 0.15, targetFps: 6, gateFloorFps: 0.5 }));
+    expect(h.estado).toBe("ok"); // 0.15 < 6*0.25=1.5 (abaixo da meta nominal) mas ≥ 0.125 (piso com folga)
+  });
+
+  it("`medido.gateFloorFps` viaja no veredito (transparência: o número que justificou 'ok')", () => {
+    const h = classifyCamera(saudavel({ fps: 0.15, targetFps: 1, gateFloorFps: 0.1667 }));
+    expect(h.medido.gateFloorFps).toBe(0.17); // arredondado a 2 casas (r2) — o CRU, não o com-folga
+  });
+
+  it("PRECEDÊNCIA intacta: ia-parada ainda vence, gateFloorFps não cega parada de verdade", () => {
+    const h = classifyCamera(
+      saudavel({ lastInferAt: NOW - 60_000, fps: 0.15, targetFps: 1, gateFloorFps: 0.1667 }),
+    );
+    expect(h.estado).toBe("ia-parada");
+  });
+});
+
 describe("classifyCamera — 5. linha-sem-cadencia (in/out 0 que parece 'ninguém passou')", () => {
   it("câmera COM linha e cadência insuficiente → aviso explícito, com o piso e o medido", () => {
     const h = classifyCamera(saudavel({ hasTripwire: true, fps: 0.3, targetFps: 0.4 }));

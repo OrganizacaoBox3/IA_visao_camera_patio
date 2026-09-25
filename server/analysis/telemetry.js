@@ -162,10 +162,24 @@ function buildStatus(snap) {
     const frameAge = frameAgeStatsOf(ageLog);
     skipped1mAll += gate.skipped1m;
     skippedAll += st.skipped;
+    const focused = focusedCams.has(id);
+    // PISO honesto de fps que o gate de movimento (motion.js) entrega numa câmera parada de
+    // verdade: 1 inferência por PROBE efetivo, sem fudge — a FOLGA (jitter de boot, janela de
+    // 60s ainda não preenchida) é responsabilidade de health.js (DEFAULTS.gateFloorSlack), não
+    // daqui — este número é o fato cru, não a política. Gate desligado → null: o check de
+    // saúde volta a decidir só pelo atrasoFpsRatio de sempre, sem inventar folga que ninguém
+    // mediu. ACHADO (2026-09-24, benchmark local): sem este piso, TODA câmera ociosa com o
+    // gate ligado (o default) reporta "ia-atrasada" para sempre — o gate reduz a cadência DE
+    // PROPÓSITO, e o check de saúde não sabia disso.
+    const probeMsEfetivo = focused ? snap.motionGate.probeFocusMs : snap.motionGate.probeMs;
+    const gateFloorFps =
+      snap.motionGate.enabled && Number.isFinite(probeMsEfetivo) && probeMsEfetivo > 0
+        ? 1000 / probeMsEfetivo
+        : null;
     perCamera[id] = {
       fps: Math.round((st.rounds.length / 60) * 100) / 100,
       targetFps: targetFpsOf(st), // cadência efetiva (foco > linha > normal); 0 se fadiga
-      focused: focusedCams.has(id), // aberta em tela cheia por ≥1 dashboard
+      focused, // aberta em tela cheia por ≥1 dashboard
       queue: st.slots.count() + (st.latest ? 1 : 0), // inferências em voo (foco pode ter >1) + frame pendente
       skipped1m: gate.skipped1m, // rodadas puladas pelo gate nos últimos 60s
       skippedTotal: st.skipped, // total pulado desde o boot
@@ -210,6 +224,7 @@ function buildStatus(snap) {
         lastInferAt: st.lastInferAt,
         fps: Math.round((st.rounds.length / 60) * 100) / 100,
         targetFps: targetFpsOf(st),
+        gateFloorFps,
         frameAgeP50: frameAge ? frameAge.p50 : null,
         maxGapMs: st.frameGapMax,
         retomadas1m: st.frameRetomadas,

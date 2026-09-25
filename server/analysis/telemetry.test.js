@@ -165,6 +165,10 @@ describe("buildStatus — agregação por câmera", () => {
           frameAgeP50: null,
           maxGapMs: null,
           retomadas1m: null,
+          // gateFloorFps=0.5 CRU (câmera FOCADA → probeFocusMs=2000, ver o cálculo em
+          // buildStatus); com a folga de health.js (÷4) o piso efetivo é 0.125 — fps 0.1 fica
+          // ABAIXO até dele, então "ia-atrasada" é o veredito certo (não é boot nem economia).
+          gateFloorFps: 0.5,
         },
       },
     });
@@ -213,6 +217,40 @@ describe("buildStatus — agregação por câmera", () => {
     expect(s.perCamera.cam1.skipped1m).toBe(0);
     expect(s.perCamera.cam1.gate).toEqual(GATE_ZERO);
     expect(s.perCamera.cam1.skippedTotal).toBe(3); // acumulado do boot é independente da janela
+  });
+});
+
+// ── gateFloorFps — o piso que salva "ia-atrasada" de virar alarme permanente (2026-09-24) ──
+// buildStatus deriva o piso CRU do PROBE efetivo (probeFocusMs se a câmera está focada, senão
+// probeMs) — 1 inferência por probe, SEM fudge — e SÓ quando o gate está ligado. A FOLGA (boot
+// da janela de 60s, jitter) é aplicada em health.js (DEFAULTS.gateFloorSlack), não aqui — ver
+// health.test.js "gateFloorFps". Esta descrição cobre só o CÁLCULO cru.
+describe("gateFloorFps — piso CRU derivado do probe efetivo (probeMs × focused)", () => {
+  it("não-focada usa probeMs; focada usa probeFocusMs (mais curto → piso maior)", () => {
+    const stNormal = fakeSt({});
+    const stFocada = fakeSt({});
+    const s = buildStatus(
+      snapWith(
+        new Map([
+          ["cam-normal", stNormal],
+          ["cam-focada", stFocada],
+        ]),
+        { focusedCams: new Set(["cam-focada"]) },
+      ),
+    );
+    // probeMs=6000 → 1000/6000 = 0.1667… (r2 arredonda a 0.17); probeFocusMs=2000 → 1000/2000 = 0.5.
+    expect(s.perCamera["cam-normal"].health.medido.gateFloorFps).toBe(0.17);
+    expect(s.perCamera["cam-focada"].health.medido.gateFloorFps).toBe(0.5);
+  });
+
+  it("gate DESLIGADO → gateFloorFps null (health.js não inventa folga sem gate)", () => {
+    const st = fakeSt({});
+    const s = buildStatus(
+      snapWith(new Map([["cam1", st]]), {
+        motionGate: { enabled: false, ratio: 0.005, probeMs: 6000, probeFocusMs: 2000, thumb: "64x48" },
+      }),
+    );
+    expect(s.perCamera.cam1.health.medido.gateFloorFps).toBeNull();
   });
 });
 

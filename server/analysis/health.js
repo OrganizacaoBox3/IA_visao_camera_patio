@@ -24,7 +24,13 @@
 //   4. "ia-atrasada"    — inferência rodando, mas (a) o frame analisado está
 //                         velho (frameAgeP50 > atrasoFrameMs) ou (b) a cadência
 //                         real está muito abaixo da meta (fps < atrasoFpsRatio ×
-//                         targetFps). Número existe, mas não acompanha o vídeo.
+//                         targetFps) E abaixo do que o PRÓPRIO gate de movimento
+//                         garante numa cena parada (gateFloorFps — ver DEFAULTS
+//                         e o achado de 2026-09-24 no cabeçalho de motion.js:
+//                         sem esta folga, TODA câmera ociosa com o gate ligado
+//                         (o default) dispara "atrasada" para sempre — o gate
+//                         reduz a cadência de propósito, e o check não sabia.
+//                         Número existe, mas não acompanha o vídeo.
 //   5. "linha-sem-cadencia" — a câmera TEM tripwire e a cadência real não fecha
 //                         travessia. MEDIDO: cruzamento exige ver a MESMA pessoa
 //                         antes e depois da linha; a <linhaFpsMin fps a pessoa
@@ -64,8 +70,19 @@ const DEFAULTS = Object.freeze({
   // Idade do frame analisado (p50) acima da qual a análise não acompanha o vídeo.
   atrasoFrameMs: 3_000,
   // Fração da meta de fps abaixo da qual a cadência é "atrasada" (0.25 = a
-  // câmera está entregando menos de 1/4 do que foi pedido pra ela).
+  // câmera está entregando menos de 1/4 do que foi pedido pra ela). SÓ decide
+  // sozinha quando `gateFloorFps` não vem no sinal (gate de movimento desligado
+  // ou caller antigo) — com o gate ligado, `gateFloorFps` é quem tem a palavra
+  // final (ver o item 4 no cabeçalho).
   atrasoFpsRatio: 0.25,
+  // Folga sobre `gateFloorFps` (que chega CRU de telemetry.js — 1 inferência por PROBE
+  // efetivo, sem fudge). MEDIDO (2026-09-24, benchmark local): sem folga, uma câmera recém-
+  // ligada tropeça no PRÓPRIO piso na 1ª avaliação de saúde (HEALTH_TICK_MS=30s) — a janela
+  // de 60s de `fps` ainda não encheu (só ~5 rodadas reais até ali), então o fps OBSERVADO fica
+  // artificialmente baixo por pura conta do relógio, não por economia nem por falha. 4× dá
+  // folga suficiente pro boot sem deixar de pegar um pool travado de verdade (mesmo espírito
+  // do fator 6 de "ia-parada" acima).
+  gateFloorSlack: 4,
   // Cadência mínima pra contagem de LINHA fechar travessia (ver counting.js:
   // o cruzamento precisa da MESMA pessoa em duas observações consecutivas).
   linhaFpsMin: 1.5,
@@ -88,6 +105,10 @@ const isNum = (v) => typeof v === "number" && Number.isFinite(v);
  * @param {number} [s.fps]              cadência REAL medida (rodadas/s na última janela)
  * @param {number} [s.targetFps]        cadência pedida pra esta câmera
  * @param {number} [s.frameAgeP50]      idade captura→despacho do frame analisado (ms, p50)
+ * @param {number} [s.gateFloorFps]     PISO honesto de fps que o gate de movimento entrega
+ *   numa cena 100% estática (telemetry.js deriva de motion.PROBE_MS/PROBE_FOCUS_MS, já com
+ *   folga). Ausente (gate desligado, ou câmera fadiga) → o check de "ia-atrasada" volta a
+ *   decidir só pelo `atrasoFpsRatio` de sempre — nunca INVENTA folga que ninguém mediu.
  * @param {number} [s.maxGapMs]         maior lacuna entre frames na janela
  * @param {number} [s.retomadas1m]      lacunas-e-retomadas do vídeo na última janela de 1min
  * @param {boolean} [s.hasTripwire]     a câmera tem linha de contagem configurada?
@@ -117,6 +138,7 @@ function classifyCamera(s = {}, limites = {}) {
     frameAgeP50: isNum(s.frameAgeP50) ? Math.round(s.frameAgeP50) : null,
     maxGapMs: isNum(s.maxGapMs) ? Math.round(s.maxGapMs) : null,
     retomadas1m: isNum(s.retomadas1m) ? s.retomadas1m : null,
+    gateFloorFps: isNum(s.gateFloorFps) ? r2(s.gateFloorFps) : null,
   };
 
   // 1. SEM VÍDEO — a IA não tem o que ver. Precede tudo: explica os de baixo.
@@ -190,10 +212,18 @@ function classifyCamera(s = {}, limites = {}) {
     isNum(s.frameAgeP50) && s.frameAgeP50 > L.atrasoFrameMs
       ? `frame analisado com ${(s.frameAgeP50 / 1000).toFixed(1)}s de atraso`
       : null;
+  // Abaixo da meta NOMINAL... mas isso sozinho não basta com o gate de movimento ligado (o
+  // default): ele PULA rodadas de propósito numa cena parada, e o piso que ele mesmo garante
+  // (gateFloorFps) pode estar bem abaixo de atrasoFpsRatio×targetFps sem que nada esteja
+  // quebrado — MEDIDO (2026-09-24): câmera ociosa parada, gate ligado, regime permanente →
+  // fps~0.15-0.17 contra targetFps=1 (0.15 < 0.25 = SEMPRE dispara sem esta folga). Só acusa
+  // quando o medido fica abaixo do que o PRÓPRIO gate entregaria numa cena 100% estática —
+  // esse sim é sinal de problema real (pool saturado, worker travado), não economia.
+  const abaixoDaMeta = isNum(s.fps) && s.fps < targetFps * L.atrasoFpsRatio;
+  const explicadoPeloGate =
+    isNum(s.gateFloorFps) && isNum(s.fps) && s.fps >= s.gateFloorFps / L.gateFloorSlack;
   const cadenciaBaixa =
-    isNum(s.fps) && s.fps < targetFps * L.atrasoFpsRatio
-      ? `${r2(s.fps)} de ${r2(targetFps)} análises/s`
-      : null;
+    abaixoDaMeta && !explicadoPeloGate ? `${r2(s.fps)} de ${r2(targetFps)} análises/s` : null;
   if (frameVelho || cadenciaBaixa)
     return {
       estado: "ia-atrasada",
