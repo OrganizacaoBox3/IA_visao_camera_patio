@@ -7,22 +7,21 @@ import {
   Input,
   Select,
   Switch,
-  ToggleGroup,
   Skeleton,
   Table,
   TableEmpty,
   useConfirm,
   useToast,
   SectionTitle,
-  Field,
 } from "../../ui";
 import { createUser, patchUser, deleteUser, type AdminUser, type ConnectedCamera } from "../../api";
+import { CameraAllocationField } from "./CameraAllocationField";
 import type { ConfirmRemove, NovoUser, Reveal } from "./types";
 
 // Papéis atribuíveis (RBAC Setup × Live — Onda C item 12). "engenheiro" = equipe de configuração
 // (pode editar thresholds/zonas); "usuario" = operador só-visualização; "superadmin" = acesso
-// total; "cliente" = RBAC com escopo — só-visualização das câmeras alocadas (ver CamerasField
-// abaixo), nunca configura.
+// total; "cliente" = RBAC com escopo — só-visualização das câmeras alocadas (ver
+// CameraAllocationField.tsx), nunca configura.
 const PAPEL_OPTS = [
   { value: "usuario", label: "Usuário" },
   { value: "cliente", label: "Cliente" },
@@ -45,38 +44,6 @@ function genSenha(): string {
   let s = "";
   for (let i = 0; i < 10; i++) s += a[Math.floor(Math.random() * a.length)];
   return s;
-}
-
-// Seletor de câmeras alocadas (só aparece p/ papel "cliente" — RBAC com escopo). Sem câmeras
-// conhecidas ainda (hub subindo) mostra um aviso em vez de uma lista vazia enganosa.
-function CamerasField({
-  cameras,
-  value,
-  onChange,
-}: {
-  cameras: ConnectedCamera[];
-  value: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  return (
-    <Field
-      label="Câmeras alocadas"
-      hint="Este cliente só vê e recebe notificação das câmeras marcadas aqui. Nenhuma marcada = não vê nenhuma câmera."
-    >
-      {cameras.length === 0 ? (
-        <p className="muted">Nenhuma câmera conectada ainda.</p>
-      ) : (
-        <ToggleGroup
-          type="multiple"
-          className="ws-cfg ws-chips"
-          ariaLabel="Câmeras alocadas"
-          value={value}
-          onValueChange={onChange}
-          items={cameras.map((c) => ({ value: c.id, label: c.label, ariaLabel: c.label }))}
-        />
-      )}
-    </Field>
-  );
 }
 
 type Props = {
@@ -151,6 +118,37 @@ export function UsersTab({
     }
     setBusy(false);
   }
+  // Alocação de câmera POR CÂMERA (não pelo `busy` de página inteira): CameraAllocationField já
+  // trava "1 salvamento por vez" DENTRO do próprio picker (a base da lista pode ficar velha em
+  // dois cliques rápidos); duas linhas DIFERENTES da tabela podem salvar em paralelo sem
+  // colidir (são usuários distintos). Erro é REPASSADO (throw), não só toast — é o picker quem
+  // mostra "salvando/salvo/erro" AO LADO da câmera clicada (spec: "deixar claro que salvou").
+  async function patchCameraIds(u: AdminUser, cameraId: string, next: boolean) {
+    const atual = u.cameraIds ?? [];
+    const cameraIds = next
+      ? [...new Set([...atual, cameraId])]
+      : atual.filter((id) => id !== cameraId);
+    try {
+      await patchUser(u.id, { cameraIds });
+      await refresh();
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "Falha ao atualizar câmeras.";
+      toast(m, "alert");
+      throw e; // o picker mostra o erro na linha da câmera
+    }
+  }
+  // Formulário de "novo usuário": nada é persistido até "Criar" — o toggle só atualiza o
+  // rascunho em memória. `async` só p/ casar o contrato do picker (onToggle devolve Promise).
+  async function toggleNovoCamera(cameraId: string, next: boolean) {
+    setNovo((n) => {
+      const atual = n.cameraIds ?? [];
+      const cameraIds = next
+        ? [...new Set([...atual, cameraId])]
+        : atual.filter((id) => id !== cameraId);
+      return { ...n, cameraIds };
+    });
+  }
+
   // Troca de papel com assimetria de risco corrigida: ELEVAR (ganhar privilégio) exige
   // confirmação — antes aplicava na hora, enquanto REMOVER confirmava (risco invertido).
   // Decisão documentada: REBAIXAR terceiros aplica direto (reversível em 1 clique e não
@@ -258,10 +256,13 @@ export function UsersTab({
           </Button>
         </form>
         {novo.papel === "cliente" && (
-          <CamerasField
+          <CameraAllocationField
             cameras={cameras}
+            allUsers={rows}
+            currentUserId={null}
             value={novo.cameraIds ?? []}
-            onChange={(ids) => setNovo((n) => ({ ...n, cameraIds: ids }))}
+            onToggle={toggleNovoCamera}
+            storageKey="novo"
           />
         )}
       </section>
@@ -331,10 +332,13 @@ export function UsersTab({
                 {u.papel === "cliente" && (
                   <tr>
                     <td colSpan={4}>
-                      <CamerasField
+                      <CameraAllocationField
                         cameras={cameras}
+                        allUsers={rows}
+                        currentUserId={u.id}
                         value={u.cameraIds ?? []}
-                        onChange={(ids) => onPatch(u.id, { cameraIds: ids })}
+                        onToggle={(cameraId, next) => patchCameraIds(u, cameraId, next)}
+                        storageKey={u.id}
                       />
                     </td>
                   </tr>

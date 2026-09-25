@@ -246,22 +246,62 @@ function sanitizeCameraIds(v) {
   return Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter(Boolean))] : undefined;
 }
 
+// ── REGRA: uma câmera pertence a NO MÁXIMO UM cliente por vez (2026-09-24) ───────────────────
+// Decisão de produto: alocação é EXCLUSIVA, não compartilhada. Uma câmera de um site é do
+// CONTRATO daquele cliente — deixar dois clientes verem a mesma câmera seria vazar o pátio de
+// um cliente para a tela de outro, sem ninguém ter pedido isso. A tela de alocação (CamerasField)
+// já EVITA a colisão desabilitando o toggle de uma câmera alheia; esta é a fonte da verdade que
+// a valida de qualquer jeito — API direta, corrida entre duas abas, bug futuro na tela.
+/** Dono ATUAL de `cameraId` entre os clientes ATIVOS, ou `null` se disponível.
+ *  `excludeUserId` deixa o PRÓPRIO dono salvar de novo sem se autobloquear. */
+function cameraOwner(cameraId, excludeUserId) {
+  const u = users.find(
+    (x) =>
+      x.id !== excludeUserId &&
+      x.papel === "cliente" &&
+      x.ativo &&
+      Array.isArray(x.cameraIds) &&
+      x.cameraIds.includes(cameraId),
+  );
+  return u ? { id: u.id, usuario: u.usuario } : null;
+}
+/** Primeira câmera de `cameraIds` que já pertence a OUTRO cliente, ou `null` (tudo livre).
+ *  PURA sobre o cache em memória — não persiste nada, só decide. */
+function findCameraConflict(cameraIds, excludeUserId) {
+  for (const id of cameraIds) {
+    const dono = cameraOwner(id, excludeUserId);
+    if (dono) return { cameraId: id, dono };
+  }
+  return null;
+}
+
 async function createUser({ usuario, senha, papel, cameraIds }) {
   usuario = String(usuario || "").trim();
   if (!usuario || !senha) return { error: "usuário e senha são obrigatórios" };
   if (users.some((u) => u.usuario.toLowerCase() === usuario.toLowerCase()))
     return { error: "usuário já existe" };
+  const papelFinal = normalizeRole(papel);
+  const cameraIdsFinal = sanitizeCameraIds(cameraIds) ?? [];
+  // Exclusividade só faz sentido pra quem a lista TEM efeito (ver canSeeCamera) — equipe
+  // (superadmin/engenheiro/usuario) pode ter cameraIds órfão no registro sem conflito nenhum.
+  if (papelFinal === "cliente" && cameraIdsFinal.length) {
+    const conflito = findCameraConflict(cameraIdsFinal, null);
+    if (conflito)
+      return {
+        error: `câmera "${conflito.cameraId}" já está vinculada ao cliente "${conflito.dono.usuario}" — desvincule lá antes de alocar aqui`,
+      };
+  }
   const u = {
     id: genId(),
     usuario,
     senhaHash: hashPassword(senha),
-    papel: normalizeRole(papel),
+    papel: papelFinal,
     ativo: true,
     whatsapp: "",
     filtros: null,
     optInEm: null,
     criadoEm: Date.now(),
-    cameraIds: sanitizeCameraIds(cameraIds) ?? [],
+    cameraIds: cameraIdsFinal,
     recipientMigrationVersion: 1,
   };
   users.push(u);
@@ -285,11 +325,21 @@ async function updateUser(id, patch) {
   ).length;
   if (otherSupers + (willPapel === "superadmin" && willActive ? 1 : 0) < 1)
     return { error: "precisa de ao menos 1 superadmin ativo" };
+  const newCameraIds = sanitizeCameraIds(patch.cameraIds);
+  // Mesma regra de createUser: câmera é de UM cliente por vez. Valida ANTES de tocar o
+  // usuário — um 400 aqui não pode deixar `u` meio-mudado (ver o `before`/rollback abaixo,
+  // que é só para a FALHA DE PERSISTÊNCIA, não para validação de negócio).
+  if (willPapel === "cliente" && newCameraIds !== undefined && newCameraIds.length) {
+    const conflito = findCameraConflict(newCameraIds, id);
+    if (conflito)
+      return {
+        error: `câmera "${conflito.cameraId}" já está vinculada ao cliente "${conflito.dono.usuario}" — desvincule lá antes de alocar aqui`,
+      };
+  }
   const before = { ...u }; // snapshot p/ rollback
   if (typeof patch.ativo === "boolean") u.ativo = patch.ativo;
   u.papel = willPapel;
   if (patch.senha) u.senhaHash = hashPassword(patch.senha);
-  const newCameraIds = sanitizeCameraIds(patch.cameraIds);
   if (newCameraIds !== undefined) u.cameraIds = newCameraIds;
   try {
     await persist(u);
@@ -401,4 +451,5 @@ module.exports = {
   normalizeRole,
   canConfigure,
   canSeeCamera,
+  cameraOwner,
 };

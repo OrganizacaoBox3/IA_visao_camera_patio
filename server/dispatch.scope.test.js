@@ -199,13 +199,17 @@ describe("dispatch.targets — alarme de SAÚDE só para administração", () =>
 
   it("CLIENTE não recebe alarme de saúde nem da câmera que é dele", async () => {
     const tag = Date.now();
+    // Câmera PRÓPRIA deste teste (não "cam-1" — o describe "escopo por câmera" acima já
+    // alocou "cam-1" a outro cliente, e a exclusividade de câmera por cliente
+    // (users.cameras.test.js) rejeitaria a colisão aqui).
+    const cam = `cam-saude-cli-${tag}`;
     await makeNotifiableUser({
       usuario: `cli-saude-${tag}`,
       papel: "cliente",
-      cameraIds: ["cam-1"],
+      cameraIds: [cam],
       whatsapp: "5588910000003",
     });
-    expect(dispatch.targets(SAUDE, "cam-1").some((x) => x.numero === "5588910000003")).toBe(false);
+    expect(dispatch.targets(SAUDE, cam).some((x) => x.numero === "5588910000003")).toBe(false);
   });
 
   it("engenheiro não recebe por default (a regra diz ADMIN; ampliar é decisão explícita)", async () => {

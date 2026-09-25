@@ -71,16 +71,20 @@ describe("users — cameraIds no createUser/updateUser (sanitização)", () => {
     // este arquivo de teste ainda não criou nenhum (users.persist.test.js roda em outro
     // módulo isolado), então precisa de 1 aqui antes de editar o usuário "cliente".
     await users.createUser({ usuario: `boss-scope-${Date.now()}`, senha: "x", papel: "superadmin" });
+    // IDs de câmera PRÓPRIOS deste teste (não "cam-1"/"cam-2" — o teste "createUser aceita
+    // papel 'cliente'" acima já os alocou a outro cliente, e a exclusividade de câmera
+    // (users.cameras.test.js) rejeitaria a colisão aqui).
     const created = await users.createUser({
       usuario: `cliente3-${Date.now()}`,
       senha: "x",
       papel: "cliente",
-      cameraIds: ["cam-1"],
+      cameraIds: [`cam-upd1-${Date.now()}`],
     });
-    const r1 = await users.updateUser(created.user.id, { cameraIds: ["cam-2", "cam-3"] });
-    expect(r1.user.cameraIds).toEqual(["cam-2", "cam-3"]);
+    const [b, c] = [`cam-upd2-${Date.now()}`, `cam-upd3-${Date.now()}`];
+    const r1 = await users.updateUser(created.user.id, { cameraIds: [b, c] });
+    expect(r1.user.cameraIds).toEqual([b, c]);
     const r2 = await users.updateUser(created.user.id, { ativo: true }); // sem cameraIds no patch
-    expect(r2.user.cameraIds).toEqual(["cam-2", "cam-3"]); // preservado, não zerado
+    expect(r2.user.cameraIds).toEqual([b, c]); // preservado, não zerado
   });
 
   it("ROLES inclui 'cliente' e normalizeRole aceita", () => {
