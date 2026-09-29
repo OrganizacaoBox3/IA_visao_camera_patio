@@ -20,6 +20,12 @@ import {
   type EstadoFiltro,
 } from "./cameraAllocation";
 
+// Radix Select trata value="" como "sem valor": o gatilho fica EM BRANCO (achado nos prints do
+// teste ao vivo de 2026-09-24 — os filtros apareciam sem rótulo). O filtro puro continua usando
+// "" = sem filtro; o sentinela vive só na fronteira do Select.
+const TODOS = "__todos__";
+const semTodos = (v: string) => (v === TODOS ? "" : v);
+
 export function CameraAllocationField({
   cameras,
   allUsers,
@@ -116,11 +122,11 @@ export function CameraAllocationField({
               onChange={(e) => setFiltro((f) => ({ ...f, busca: e.target.value }))}
             />
             <Select
-              value={filtro.estado}
-              onChange={(v) => setFiltro((f) => ({ ...f, estado: v as EstadoFiltro }))}
+              value={filtro.estado || TODOS}
+              onChange={(v) => setFiltro((f) => ({ ...f, estado: semTodos(v) as EstadoFiltro }))}
               ariaLabel="Filtrar por estado"
               options={[
-                { value: "", label: "Qualquer estado" },
+                { value: TODOS, label: "Qualquer estado" },
                 { value: "ativa", label: "Ativa" },
                 { value: "parada", label: "Parada" },
                 { value: "producao", label: CAMERA_ESTADO_LABEL.producao },
@@ -129,21 +135,23 @@ export function CameraAllocationField({
               ]}
             />
             <Select
-              value={filtro.conectividade}
-              onChange={(v) => setFiltro((f) => ({ ...f, conectividade: v as Filtro["conectividade"] }))}
+              value={filtro.conectividade || TODOS}
+              onChange={(v) =>
+                setFiltro((f) => ({ ...f, conectividade: semTodos(v) as Filtro["conectividade"] }))
+              }
               ariaLabel="Filtrar por conectividade"
               options={[
-                { value: "", label: "Online e offline" },
+                { value: TODOS, label: "Online e offline" },
                 { value: "online", label: "Online" },
                 { value: "offline", label: "Offline" },
               ]}
             />
             <Select
-              value={filtro.alocacao}
-              onChange={(v) => setFiltro((f) => ({ ...f, alocacao: v as Filtro["alocacao"] }))}
+              value={filtro.alocacao || TODOS}
+              onChange={(v) => setFiltro((f) => ({ ...f, alocacao: semTodos(v) as Filtro["alocacao"] }))}
               ariaLabel="Filtrar por alocação"
               options={[
-                { value: "", label: "Qualquer alocação" },
+                { value: TODOS, label: "Qualquer alocação" },
                 { value: "disponivel", label: "Disponível" },
                 { value: "deste", label: "Vinculada a este cliente" },
                 { value: "deOutro", label: "Vinculada a outro cliente" },
