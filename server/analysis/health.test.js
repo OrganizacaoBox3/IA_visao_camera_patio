@@ -428,3 +428,35 @@ describe("classifyCamera — câmera dormindo pelo gate de turno", () => {
     expect(classifyCamera({ ...dormindo, dormindoPorTurno: undefined }).estado).toBe("ia-parada");
   });
 });
+
+// ── IMAGEM CONGELADA (2026-09-29) ─────────────────────────────────────────────────────────────
+// Frame chegando no ritmo, mas IDÊNTICO byte a byte há minutos (server/frame-freeze.js). Antes
+// deste estado, a câmera travada caía em "ok" (cena vazia) — o falso-OK mais caro: paga ingest,
+// decode e inferência, e devolve zero com cara de "ninguém passou".
+describe("classifyCamera — imagem-congelada", () => {
+  it("congelada → estado próprio, com os minutos parada no motivo", () => {
+    const h = classifyCamera(saudavel({ congelada: true, paradoMs: 5 * 60_000 }));
+    expect(h.estado).toBe("imagem-congelada");
+    expect(h.motivo).toMatch(/idêntica há 5min/);
+    expect(h.desde).toBe(NOW - 5 * 60_000);
+  });
+
+  it("vale mesmo com a câmera dormindo pelo turno ou fora da análise (é falha de VÍDEO)", () => {
+    expect(
+      classifyCamera(saudavel({ congelada: true, paradoMs: 1, dormindoPorTurno: true })).estado,
+    ).toBe("imagem-congelada");
+    expect(classifyCamera(saudavel({ congelada: true, paradoMs: 1, analiseLigada: false })).estado).toBe(
+      "imagem-congelada",
+    );
+  });
+
+  it("PRECEDÊNCIA: sem-video vence (frame que parou de chegar explica tudo abaixo)", () => {
+    const h = classifyCamera(saudavel({ lastFrameAt: NOW - 60_000, congelada: true, paradoMs: 1 }));
+    expect(h.estado).toBe("sem-video");
+  });
+
+  it("congelada ausente/false não muda nada (sinal ausente nunca vira acusação)", () => {
+    expect(classifyCamera(saudavel({ congelada: false })).estado).toBe("ok");
+    expect(classifyCamera(saudavel({ congelada: undefined })).estado).toBe("ok");
+  });
+});

@@ -18,6 +18,8 @@
 //   2. "video-instavel" — frame chegando, mas com reconexão/lacuna frequente
 //                         (reconnects1m ≥ instavelReconnects OU maior lacuna
 //                         medida > instavelGapMs). O dado existe mas é picado.
+//   2b."imagem-congelada" — frame chegando no ritmo, mas IDÊNTICO byte a byte há
+//                         minutos (frame-freeze.js): DVR travado, câmera tampada/escura.
 //   3. "ia-parada"      — TEM frame fresco e a inferência parou (nenhuma rodada
 //                         há > iaParadaFactor × cadência esperada). É o caso que
 //                         mais engana: vídeo bonito na tela, número congelado.
@@ -169,6 +171,18 @@ function classifyCamera(s = {}, limites = {}) {
 
   // Sem análise cobrindo a câmera (fadiga roda no cliente, ou motor desligado):
   // os estados de IA abaixo não se aplicam — acusá-los seria acusar o desenho.
+  // IMAGEM CONGELADA (2026-09-29) — o frame CHEGA, no ritmo, mas é sempre o MESMO (bytes
+  // idênticos por minutos — server/frame-freeze.js). Vem ANTES de "análise desligada" e do
+  // gate de turno de propósito: é falha de VÍDEO, e vale para qualquer câmera, analisada ou
+  // não, dormindo ou não. Sem este estado a câmera travada aparecia "ok · cena vazia".
+  if (s.congelada === true)
+    return {
+      estado: "imagem-congelada",
+      motivo: `imagem idêntica há ${Math.round((isNum(s.paradoMs) ? s.paradoMs : 0) / 60_000)}min — feed congelado ou câmera tampada/escura`,
+      desde: isNum(s.paradoMs) ? now - s.paradoMs : null,
+      medido,
+    };
+
   if (s.analiseLigada === false)
     return { estado: "ok", motivo: "análise não cobre esta câmera", desde: null, medido };
 
@@ -292,6 +306,7 @@ function observeFrame(st, now, limites = {}) {
 const ESTADOS_RUINS = Object.freeze([
   "sem-video",
   "video-instavel",
+  "imagem-congelada",
   "ia-parada",
   "ia-atrasada",
   "linha-sem-cadencia",

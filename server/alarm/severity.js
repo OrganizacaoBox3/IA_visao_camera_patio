@@ -62,6 +62,9 @@ const TABELA = Object.freeze({
   // ── ATENÇÃO — degradação real, tratável dentro do turno ─────────────────────
   // Tem vídeo, mas picado: ainda se mede, com buracos. Merece ação, não interrupção.
   "saude:video-instavel": "high",
+  // Frame chegando mas IDÊNTICO há minutos: DVR/encoder travado ou câmera tampada. O vídeo na
+  // tela engana (parece cena vazia) — ação no turno, como a instável.
+  "saude:imagem-congelada": "high",
   // Vídeo chegando e inferência parada/atrasada: o vídeo na tela engana, mas o histórico
   // registra a lacuna (observedMs) e o relatório sabe declarar. Ação no turno.
   "saude:ia-parada": "high",

@@ -521,6 +521,37 @@ export type ConnectedCamera = {
 export const getConnectedCameras = () =>
   apiGet<{ cameras: ConnectedCamera[] }>("/api/cameras/connected");
 
+// ── DIAGNÓSTICO DE UTILIDADE por câmera (2026-09-29) — GET /api/cameras/diagnostico ──────────
+// Quais câmeras custam e não devolvem nada (offline, imagem congelada, sem área demarcada,
+// horas sem ver ninguém). O veredito é do hub (server/camera-diagnostico.js); a tela desenha.
+// Perfil de configuração. `ultimaPessoaEm`/`analisadaDesde` são do boot do hub (memória).
+export type CameraUtilidade = "ok" | "atencao" | "inutil" | "desativada";
+export type CameraMotivo = {
+  codigo: string;
+  nivel: "inutil" | "atencao" | "info";
+  texto: string;
+  sugestao: string;
+};
+export type CameraDiagnostico = {
+  id: string;
+  label: string;
+  online: boolean;
+  estado: string;
+  modo: string;
+  zonas: number;
+  linhas: number;
+  congelada: boolean;
+  paradoMs: number;
+  analisadaDesde: number | null;
+  ultimaPessoaEm: number | null;
+  utilidade: CameraUtilidade;
+  motivos: CameraMotivo[];
+};
+export const getCamerasDiagnostico = () =>
+  apiGet<{ geradoEm: number; horasSemPessoa: number; motorLigado: boolean; cameras: CameraDiagnostico[] }>(
+    "/api/cameras/diagnostico",
+  );
+
 // ── SAÚDE DO MOTOR DE ANÁLISE (ADR-009) — GET /api/analysis/status ───────────────────────────
 // O motor mede muita coisa e, até esta onda, NINGUÉM no front consumia: motor desligado, worker
 // morrendo em loop, gate cegando a câmera e Postgres caído se pareciam todos com "0 pessoas".

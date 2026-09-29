@@ -25,6 +25,10 @@ const dvr = require("./dvr"); // Ponte DVR — store do domínio (coletores/dvrs
 const db = require("./db");
 const settings = require("./settings");
 const analysis = require("./analysis/engine");
+// Câmera conectada mas com a imagem PARADA (bytes idênticos por minutos) — observa TODO frame
+// no tee abaixo, independente do motor de análise estar ligado (é falha de vídeo, não da IA).
+const frameFreeze = require("./frame-freeze").shared;
+setInterval(() => frameFreeze.prune(), 60_000).unref();
 const { json, requireAuth, requireSuper, requireConfigurer } = require("./http-auth");
 const { createShed } = require("./shed");
 const { visibleCameras, dashboardSockets } = require("./socket-scope");
@@ -199,6 +203,7 @@ function analysisTee(target) {
     of: (ns) => target.of(ns),
     emit(ev, payload) {
       if (ev === "frame" && payload) {
+        frameFreeze.observe(payload.id, payload.buf);
         analysis.onFrame(payload.id, payload.buf, payload.ts);
         // Pipeline de FADIGA no hub (F1a, spec-fadiga-no-hub) — host PARALELO ao engine
         // (câmera modo fadiga é excluída do D-FINE; este host é quem a analisa 24/7).

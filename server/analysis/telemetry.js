@@ -12,6 +12,11 @@
 
 const automask = require("./automask");
 const health = require("./health"); // veredito de saúde por câmera + resumo da frota
+const frameFreeze = require("../frame-freeze").shared;
+/** Veredito de imagem parada — {} quando o tracker nunca viu a câmera (não inventa estado). */
+function freezeOf(id, now) {
+  return frameFreeze.statusOf(id, now) || {};
+}
 
 // ── Sensor do GATE de movimento (engine.recordGateRound alimenta st.gateLog) ──
 // Chaves SEMPRE presentes em reasons1m (zero-fill) — um "0" declarado vale mais que
@@ -207,6 +212,10 @@ function buildStatus(snap) {
       // rodada despachada na janela (câmera parada/gateada), que NÃO é o mesmo que "idade 0".
       frameAge,
       dets1m,
+      // UTILIDADE (aditivo): desde quando o motor analisa a câmera e quando viu gente pela
+      // última vez — `null` = nunca (desde o boot do hub; estado em memória, declarado).
+      analisadaDesde: st.analisadaDesde ?? null,
+      ultimaPessoaEm: st.ultimaPessoaEm ?? null,
       excluded1m, // dets de pessoa suprimidas por zona de exclusão em 60s
       longRange: st.longRange, // true = rodada com tiling no worker
       fadiga: st.fadiga, // true = câmera modo=fadiga (NÃO analisada no hub)
@@ -235,6 +244,10 @@ function buildStatus(snap) {
         // GATE DE TURNO: a câmera dormindo continua recebendo frame e para de inferir — o
         // padrão exato de "ia-parada". Sem estes dois campos, ligar o gate gerava um alarme
         // CRÍTICO de frota por noite (medido: 15 câmeras → 16 incidentes). Ver health.js.
+        // IMAGEM CONGELADA: bytes idênticos há minutos (frame-freeze.js, mesmo tracker do relé
+        // e do pull go2rtc). Ausente no tracker → undefined → health não afirma nada.
+        congelada: freezeOf(id, now).congelada,
+        paradoMs: freezeOf(id, now).paradoMs,
         dormindoPorTurno: st.shiftEstado === "fora-janela" || st.shiftEstado === "sem-turno",
         motivoDoSono: st.shiftEstado === "sem-turno" ? "sem-turno" : "fora-janela",
       }),

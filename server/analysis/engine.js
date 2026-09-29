@@ -960,6 +960,7 @@ const healthIncidents = createHealthIncidents({
 const ESTADO_TXT = Object.freeze({
   "sem-video": "sem vídeo",
   "video-instavel": "vídeo instável",
+  "imagem-congelada": "imagem congelada",
   "ia-parada": "análise parada (vídeo chegando)",
   "ia-atrasada": "análise atrasada",
   "linha-sem-cadencia": "linha sem cadência p/ contar",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { Copy } from "lucide-react";
+import { Copy, ChevronDown, ChevronRight } from "lucide-react";
 import { APP_CONFIG } from "../../config";
 import { useAuth } from "../../auth";
 import {
@@ -39,7 +39,15 @@ import {
   type NewCamera,
   uploadCameraBg,
   deleteCameraBg,
+  getCamerasDiagnostico,
+  type CameraDiagnostico,
 } from "../../api";
+import {
+  passaFiltro,
+  resumo,
+  FILTRO_CAMERAS_DEFAULT,
+  type FiltroCameras,
+} from "./camerasFiltro";
 import {
   CAMERA_ESTADOS,
   CAMERA_ESTADO_LABEL,
@@ -179,6 +187,80 @@ export function CamerasList() {
       .map((c) => ({ id: c.id, label: c.label || "(sem nome)", ip: null, online: true })),
   ];
 
+  // ── BUSCA / FILTRO / DIAGNÓSTICO (2026-09-29) ─────────────────────────────────────────────
+  // Com dezenas de câmeras, a lista com TODOS os controles abertos virou parede. Agora: linha
+  // compacta (nome, conexão, estado, diagnóstico) + "Ajustes" abre os controles de UMA câmera.
+  // O diagnóstico ("inútil"/"atenção" + o porquê + o que fazer) vem do hub
+  // (GET /api/cameras/diagnostico — server/camera-diagnostico.js); perfil sem configuração
+  // não recebe o selo, e a lista funciona igual sem ele.
+  const [filtro, setFiltro] = useState<FiltroCameras>(FILTRO_CAMERAS_DEFAULT);
+  const [diag, setDiag] = useState<Map<string, CameraDiagnostico>>(new Map());
+  const carregarDiag = useCallback(async () => {
+    if (!canConfigure) return;
+    try {
+      const r = await getCamerasDiagnostico();
+      setDiag(new Map(r.cameras.map((c) => [c.id, c])));
+    } catch {
+      /* sem diagnóstico: a lista segue funcionando, só sem o selo */
+    }
+  }, [canConfigure]);
+  useEffect(() => {
+    void carregarDiag();
+    const t = setInterval(() => void carregarDiag(), 30_000);
+    return () => clearInterval(t);
+  }, [carregarDiag]);
+
+  // NÃO PERDER O PONTO: a câmera com "Ajustes" aberto volta aberta — e rolada até ela — depois
+  // de salvar, atualizar ou dar F5 (sessionStorage: "onde eu estava", não preferência eterna).
+  const ABERTA_KEY = "vp-cameras-aberta";
+  const [aberta, setAberta] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(ABERTA_KEY);
+    } catch {
+      return null;
+    }
+  });
+  function toggleAberta(id: string) {
+    setAberta((cur) => {
+      const next = cur === id ? null : id;
+      try {
+        if (next) sessionStorage.setItem(ABERTA_KEY, next);
+        else sessionStorage.removeItem(ABERTA_KEY);
+      } catch {
+        /* sem storage — só perde a restauração pós-F5 */
+      }
+      return next;
+    });
+  }
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const [destaque, setDestaque] = useState<string | null>(null);
+  const restaurou = useRef(false);
+  useEffect(() => {
+    if (restaurou.current || !aberta) return;
+    const el = rowRefs.current.get(aberta);
+    if (!el) return; // a lista ainda não carregou — tenta de novo quando `rows` mudar
+    restaurou.current = true;
+    el.scrollIntoView({ block: "center" });
+    setDestaque(aberta);
+    const t = setTimeout(() => setDestaque(null), 2500);
+    return () => clearTimeout(t);
+  }, [aberta, rows.length]);
+
+  // Conexão EXIBIDA: a do diagnóstico quando existe. A "conectada" do socket inclui a fonte RTSP
+  // registrada mesmo com o ffmpeg em erro — a tela dizia "Online" para câmera com URL quebrada.
+  const onlineDe = (r: CameraRow) => diag.get(r.id)?.online ?? r.online;
+  const filtraveis = rows.map((r) => ({
+    id: r.id,
+    label: r.label,
+    online: onlineDe(r),
+    estado: r.ip ? cameraEstadoDe(r.ip) : ("producao" as CameraEstado),
+    utilidade: diag.get(r.id)?.utilidade ?? null,
+  }));
+  const visiveis = rows.filter((_, i) => passaFiltro(filtraveis[i], filtro));
+  const sumario = resumo(filtraveis);
+  const TODOS = "__todos__"; // Radix Select mostra gatilho em branco com value="" (ver CameraAllocationField)
+  const semTodos = (v: string) => (v === TODOS ? "" : v);
+
   // ── CRUD do registro IP (superadmin) ── Form (Dialog) serve CRIAR (editing=null) e EDITAR.
   const [busy, setBusy] = useState(false); // trava dupla submissão / mutações concorrentes
   const [confirmDel, setConfirmDel] = useState<IpCamera | null>(null);
@@ -316,6 +398,7 @@ export function CamerasList() {
       await updateCamera(c.id, { estado });
       toast(`${c.label}: ${CAMERA_ESTADO_LABEL[estado].toLowerCase()}.`, "ok");
       await load();
+      void carregarDiag(); // desativar/reativar muda o diagnóstico — não espera o próximo ciclo
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Não foi possível atualizar a câmera.", "alert");
     } finally {
@@ -380,199 +463,312 @@ export function CamerasList() {
         </EmptyState>
       )}
       {!loading && !loadErr && rows.length > 0 && (
+        <div className="cam-toolbar" role="search" aria-label="Filtrar câmeras">
+          <Input
+            className="cam-toolbar__busca"
+            placeholder="Buscar câmera por nome…"
+            aria-label="Buscar câmera por nome"
+            value={filtro.busca}
+            onChange={(e) => setFiltro((f) => ({ ...f, busca: e.target.value }))}
+          />
+          <Select
+            value={filtro.conexao || TODOS}
+            onChange={(v) => setFiltro((f) => ({ ...f, conexao: semTodos(v) as FiltroCameras["conexao"] }))}
+            ariaLabel="Filtrar por conexão"
+            options={[
+              { value: TODOS, label: "Online e offline" },
+              { value: "online", label: "Online" },
+              { value: "offline", label: "Offline" },
+            ]}
+          />
+          <Select
+            value={filtro.estado || TODOS}
+            onChange={(v) => setFiltro((f) => ({ ...f, estado: semTodos(v) as FiltroCameras["estado"] }))}
+            ariaLabel="Filtrar por estado operacional"
+            options={[
+              { value: TODOS, label: "Qualquer estado" },
+              ...CAMERA_ESTADOS.map((e) => ({ value: e, label: CAMERA_ESTADO_LABEL[e] })),
+            ]}
+          />
+          {canConfigure && (
+            <Select
+              value={filtro.utilidade || TODOS}
+              onChange={(v) =>
+                setFiltro((f) => ({ ...f, utilidade: semTodos(v) as FiltroCameras["utilidade"] }))
+              }
+              ariaLabel="Filtrar por diagnóstico"
+              options={[
+                { value: TODOS, label: "Qualquer diagnóstico" },
+                { value: "problema", label: "Com problema" },
+                { value: "inutil", label: "Inúteis" },
+                { value: "atencao", label: "Pedem atenção" },
+                { value: "ok", label: "Úteis" },
+              ]}
+            />
+          )}
+          <span className="cam-toolbar__resumo" aria-live="polite">
+            {visiveis.length === sumario.total
+              ? `${sumario.total} ${sumario.total === 1 ? "câmera" : "câmeras"}`
+              : `${visiveis.length} de ${sumario.total} câmeras`}
+            {canConfigure && diag.size > 0 && (
+              <>
+                {" · "}
+                <span data-tone={sumario.inuteis ? "warn" : undefined}>
+                  {sumario.inuteis} {sumario.inuteis === 1 ? "inútil" : "inúteis"}
+                </span>
+                {" · "}
+                {sumario.atencao} {sumario.atencao === 1 ? "pede" : "pedem"} atenção
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {!loading && !loadErr && rows.length > 0 && visiveis.length === 0 && (
+        <EmptyState>
+          <p className="m-0">Nenhuma câmera bate com o filtro.</p>
+          <Button size="sm" onClick={() => setFiltro(FILTRO_CAMERAS_DEFAULT)}>
+            Limpar filtros
+          </Button>
+        </EmptyState>
+      )}
+      {!loading && !loadErr && visiveis.length > 0 && (
         <div className="cam-list">
-          {rows.map((row) => {
+          {visiveis.map((row) => {
             const cfg = cfgOf(row.id);
             const isFadiga = cfg.modo === "fadiga";
+            const online = onlineDe(row);
             // papel/vídeo só p/ câmera conectada E perfil de configuração — o PUT /api/camconfig
             // exige canConfigure; deixar o Select habilitado p/ operador era falha silenciosa.
-            const canAdjust = row.online && canConfigure;
+            const canAdjust = online && canConfigure;
+            const d = diag.get(row.id);
+            const problemas = d ? d.motivos.filter((m) => m.nivel !== "info") : [];
+            const isAberta = aberta === row.id;
             return (
-              <div key={`cam-${row.id}`} className="cam-row cam-set-row">
-                <div className="cam-row__name">
-                  <b>{row.label}</b>
-                  {/* IP → url mascarada (host visível, credenciais ocultas — LGPD); nó local →
-                      ID encurtado + copiar (o UUID completo mora no tooltip, não na superfície).
-                      title= no span anota um DADO exibido (não-interativo) — exceção documentada. */}
-                  {row.ip ? (
-                    <span className="muted" title="URL com credenciais ocultas">
-                      {maskCameraUrl(row.ip.url)}
-                    </span>
-                  ) : (
-                    <span className="muted cam-row__id">
-                      {shortId(row.id)}
-                      <Tooltip content={`ID completo: ${row.id}`}>
-                        <button
-                          type="button"
-                          className="cam-help"
-                          aria-label="Copiar ID da câmera"
-                          onClick={() => void copyId(row.id)}
-                        >
-                          <Copy size={12} strokeWidth={1.75} aria-hidden />
-                        </button>
-                      </Tooltip>
-                    </span>
-                  )}
-                </div>
-                {row.ip && <Badge>{cameraKind(row.ip.url)}</Badge>}
-                {/* going-gray: online = neutro (operação normal); offline = âmbar (atenção). */}
-                <span className="cam-status" data-online={row.online ? "1" : "0"}>
-                  {row.online ? "Online" : "Offline"}
-                </span>
-                {/* going-gray: produção é o NORMAL (selo neutro, sem cor); qualquer outro
-                    estado é desvio DECLARADO — âmbar, não vermelho: é escolha do time, não
-                    falha do sistema. A consequência vai por extenso no HelpTip porque
-                    "Teste" sozinho não conta a ninguém que a câmera parou de notificar. */}
-                {row.ip && (
-                  <span className="cam-estado">
-                    <Badge tone={cameraEstadoDe(row.ip) === "producao" ? undefined : "warn"}>
-                      {CAMERA_ESTADO_LABEL[cameraEstadoDe(row.ip)]}
-                    </Badge>
-                    <HelpTip label="O que este estado faz">
-                      {CAMERA_ESTADO_NOTA[cameraEstadoDe(row.ip)]}
-                    </HelpTip>
+              <div
+                key={`cam-${row.id}`}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(row.id, el);
+                  else rowRefs.current.delete(row.id);
+                }}
+                className={"cam-row cam-row--v2" + (destaque === row.id ? " cam-row--destaque" : "")}
+                data-utilidade={d?.utilidade}
+              >
+                <div className="cam-row__head">
+                  <div className="cam-row__name">
+                    <b>{row.label}</b>
+                    {/* IP → url mascarada (host visível, credenciais ocultas — LGPD); nó local →
+                        ID encurtado + copiar (o UUID completo mora no tooltip, não na superfície).
+                        title= no span anota um DADO exibido (não-interativo) — exceção documentada. */}
+                    {row.ip ? (
+                      <span className="muted" title="URL com credenciais ocultas">
+                        {maskCameraUrl(row.ip.url)}
+                      </span>
+                    ) : (
+                      <span className="muted cam-row__id">
+                        {shortId(row.id)}
+                        <Tooltip content={`ID completo: ${row.id}`}>
+                          <button
+                            type="button"
+                            className="cam-help"
+                            aria-label="Copiar ID da câmera"
+                            onClick={() => void copyId(row.id)}
+                          >
+                            <Copy size={12} strokeWidth={1.75} aria-hidden />
+                          </button>
+                        </Tooltip>
+                      </span>
+                    )}
+                  </div>
+                  {row.ip && <Badge>{cameraKind(row.ip.url)}</Badge>}
+                  {/* going-gray: online = neutro (operação normal); offline = âmbar (atenção). */}
+                  <span className="cam-status" data-online={online ? "1" : "0"}>
+                    {online ? "Online" : "Offline"}
                   </span>
-                )}
-                <div className="cam-set-controls">
+                  {/* going-gray: produção é o NORMAL (selo neutro, sem cor); qualquer outro
+                      estado é desvio DECLARADO — âmbar, não vermelho: é escolha do time, não
+                      falha do sistema. A consequência vai por extenso no HelpTip porque
+                      "Teste" sozinho não conta a ninguém que a câmera parou de notificar. */}
                   {row.ip && (
-                    <div className="cam-set-field">
-                      <FieldLabel>Estado operacional</FieldLabel>
-                      <Select
-                        value={cameraEstadoDe(row.ip)}
-                        onChange={(v) => void setEstado(row.ip!, v as CameraEstado)}
-                        ariaLabel="Estado operacional"
-                        options={CAMERA_ESTADOS.map((e) => ({
-                          value: e,
-                          label: CAMERA_ESTADO_LABEL[e],
-                        }))}
-                      />
-                    </div>
-                  )}
-                  {/* IMAGEM DE REFERÊNCIA (ADR-021) — o FUNDO do desenho de zonas que o CLIENTE
-                      vê. Fica aqui, ao lado do estado operacional, porque é config da câmera.
-                      O aviso é parte do controle, não nota de rodapé: quem sobe precisa saber
-                      que a imagem fica no servidor e é vista pelo cliente. */}
-                  {row.ip && (
-                    <div className="cam-set-field cam-set-bg">
-                      <FieldLabel>Imagem de fundo (o cliente vê)</FieldLabel>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        aria-label={`Imagem de fundo de ${row.label}`}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          e.target.value = ""; // permite reenviar o MESMO arquivo depois
-                          if (f) void enviarFundo(row.id, f);
-                        }}
-                      />
-                      <p className="cam-set-bg__aviso">
-                        Fica <b>salva no servidor</b> e é exibida ao cliente no lugar do vídeo.
-                        Envie o pátio <b>vazio</b>, uma planta ou um croqui — nunca uma foto com
-                        pessoas. JPEG, PNG ou WebP, até 2 MB.
-                      </p>
-                      <Button
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => void removerFundo(row.id, row.label)}
-                      >
-                        Remover imagem
-                      </Button>
-                    </div>
-                  )}
-                  <div className="cam-set-field">
-                    <FieldLabel>Tipo da câmera</FieldLabel>
-                    <Select
-                      value={isFadiga ? "fadiga" : "area"}
-                      onChange={(v) => setKind(row.id, v === "fadiga")}
-                      ariaLabel="Tipo da câmera"
-                      disabled={!canAdjust}
-                      options={[
-                        { value: "area", label: "Câmera de área (zonas)" },
-                        { value: "fadiga", label: "Operador (fadiga)" },
-                      ]}
-                    />
-                  </div>
-                  {/* Transporte do VÍDEO NO PAINEL (go2rtc). Rótulo EXTERNO (Field) + valores
-                      limpos — o prefixo saiu de dentro do value (auditoria #15); a mecânica
-                      auto/override (go2rtc × relé) mora no tooltip "?", não na superfície. */}
-                  <div className="cam-set-field">
-                    <span className="cam-set-field__label">
-                      <FieldLabel>Vídeo no painel</FieldLabel>
-                      <HelpTip label="Como o vídeo chega ao painel">
-                        Automático (padrão) escolhe o melhor transporte e troca sozinho: WebRTC
-                        (vídeo fluido) quando disponível, senão MJPEG — sem configurar nada.
-                        MJPEG e WebRTC forçam um modo fixo (ajuste manual).
+                    <span className="cam-estado">
+                      <Badge tone={cameraEstadoDe(row.ip) === "producao" ? undefined : "warn"}>
+                        {CAMERA_ESTADO_LABEL[cameraEstadoDe(row.ip)]}
+                      </Badge>
+                      <HelpTip label="O que este estado faz">
+                        {CAMERA_ESTADO_NOTA[cameraEstadoDe(row.ip)]}
                       </HelpTip>
                     </span>
-                    <Select
-                      value={cfg.transport}
-                      onChange={(v) => setTransport(row.id, v as CameraCfg["transport"])}
-                      ariaLabel="Vídeo no painel"
-                      disabled={!canAdjust}
-                      options={[
-                        { value: "auto", label: "Automático" },
-                        { value: "mjpeg", label: "MJPEG" },
-                        { value: "webrtc", label: "WebRTC" },
-                      ]}
-                    />
-                  </div>
-                  {/* ── TIER DE MODELO ──────────────────────────────────────────────────────
-                      Quanto ESTA câmera pesa no servidor. O Select diz a CONSEQUÊNCIA no
-                      rótulo — pedir "n/s/m" a quem não leu o catálogo de modelos seria pedir
-                      uma escolha que a tela não explica. */}
-                  <div className="cam-set-field">
-                    <span className="cam-set-field__label">
-                      <FieldLabel>Precisão da análise</FieldLabel>
-                      <HelpTip label="O que muda ao trocar a precisão">
-                        Escolhe o modelo de IA que analisa esta câmera. Automático deixa o
-                        sistema dimensionar sozinho conforme a carga — é o recomendado. Leve
-                        gasta bem menos processamento e enxerga menos longe: bom para câmera de
-                        passagem, ruim para contagem de linha, que precisa ver a mesma pessoa
-                        dos dois lados. Pesado é o contrário. Vale só para esta câmera.
-                      </HelpTip>
-                    </span>
-                    <Select
-                      value={cfg.tier}
-                      onChange={(v) => setTier(row.id, v as CameraCfg["tier"])}
-                      ariaLabel="Precisão da análise"
-                      disabled={!canAdjust}
-                      options={CAMERA_TIERS.map((t) => ({
-                        value: t,
-                        label: CAMERA_TIER_LABEL[t],
-                      }))}
-                    />
-                  </div>
-                  {/* Câmera de ÁREA (não "Operador"): o motor no hub é quem aprende objeto fixo
-                      — o modo fadiga roda no navegador do operador (não passa por automask.js). */}
-                  {!isFadiga && (
-                    <AutomaskReview cameraId={row.id} cameraLabel={row.label} canDecide={canConfigure} />
                   )}
-                  {!canAdjust && (
-                    <span className="muted cam-adjust-hint">
-                      {canConfigure
-                        ? "Conecte a câmera para ajustar tipo e vídeo."
-                        : "Seu perfil não permite alterar tipo e vídeo."}
-                    </span>
+                  {/* DIAGNÓSTICO: selo só quando há o que dizer (going-gray — útil é silêncio). */}
+                  {d && d.utilidade === "inutil" && <Badge tone="alert">Inútil</Badge>}
+                  {d && d.utilidade === "atencao" && <Badge tone="warn">Atenção</Badge>}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-expanded={isAberta}
+                    aria-controls={`cam-ajustes-${row.id}`}
+                    onClick={() => toggleAberta(row.id)}
+                  >
+                    {isAberta ? (
+                      <ChevronDown size={14} aria-hidden />
+                    ) : (
+                      <ChevronRight size={14} aria-hidden />
+                    )}
+                    Ajustes
+                  </Button>
+                  {row.ip && (
+                    <div className="cam-row__actions">
+                      <Tooltip content="Editar cadastro (nome, URL, transporte, avançado)">
+                        <Button size="sm" disabled={busy} onClick={() => openEdit(row.ip!)}>
+                          Editar
+                        </Button>
+                      </Tooltip>
+                      <Tooltip content="Remover câmera">
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          disabled={busy}
+                          onClick={() => setConfirmDel(row.ip)}
+                        >
+                          Remover
+                        </Button>
+                      </Tooltip>
+                    </div>
                   )}
                 </div>
-                {row.ip && (
-                  <div className="cam-row__actions">
-                    <Tooltip content="Editar cadastro (nome, URL, transporte, avançado)">
-                      <Button size="sm" disabled={busy} onClick={() => openEdit(row.ip!)}>
-                        Editar
-                      </Button>
-                    </Tooltip>
-                    <Tooltip content="Remover câmera">
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        disabled={busy}
-                        onClick={() => setConfirmDel(row.ip)}
-                      >
-                        Remover
-                      </Button>
-                    </Tooltip>
+                {problemas.length > 0 && (
+                  <ul className="cam-diag" aria-label={`Por que ${row.label} precisa de atenção`}>
+                    {problemas.map((m) => (
+                      <li key={m.codigo} data-nivel={m.nivel}>
+                        <b>{m.texto}</b> <span className="muted">{m.sugestao}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {isAberta && (
+                  <div id={`cam-ajustes-${row.id}`} className="cam-row__ajustes">
+                    <div className="cam-set-controls">
+                      {row.ip && (
+                        <div className="cam-set-field">
+                          <FieldLabel>Estado operacional</FieldLabel>
+                          <Select
+                            value={cameraEstadoDe(row.ip)}
+                            onChange={(v) => void setEstado(row.ip!, v as CameraEstado)}
+                            ariaLabel="Estado operacional"
+                            options={CAMERA_ESTADOS.map((e) => ({
+                              value: e,
+                              label: CAMERA_ESTADO_LABEL[e],
+                            }))}
+                          />
+                        </div>
+                      )}
+                      {/* IMAGEM DE REFERÊNCIA (ADR-021) — o FUNDO do desenho de zonas que o CLIENTE
+                          vê. Fica aqui, ao lado do estado operacional, porque é config da câmera.
+                          O aviso é parte do controle, não nota de rodapé: quem sobe precisa saber
+                          que a imagem fica no servidor e é vista pelo cliente. */}
+                      {row.ip && (
+                        <div className="cam-set-field cam-set-bg">
+                          <FieldLabel>Imagem de fundo (o cliente vê)</FieldLabel>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            aria-label={`Imagem de fundo de ${row.label}`}
+                            disabled={busy}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = ""; // permite reenviar o MESMO arquivo depois
+                              if (f) void enviarFundo(row.id, f);
+                            }}
+                          />
+                          <p className="cam-set-bg__aviso">
+                            Fica <b>salva no servidor</b> e é exibida ao cliente no lugar do vídeo.
+                            Envie o pátio <b>vazio</b>, uma planta ou um croqui — nunca uma foto com
+                            pessoas. JPEG, PNG ou WebP, até 2 MB.
+                          </p>
+                          <Button
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => void removerFundo(row.id, row.label)}
+                          >
+                            Remover imagem
+                          </Button>
+                        </div>
+                      )}
+                      <div className="cam-set-field">
+                        <FieldLabel>Tipo da câmera</FieldLabel>
+                        <Select
+                          value={isFadiga ? "fadiga" : "area"}
+                          onChange={(v) => setKind(row.id, v === "fadiga")}
+                          ariaLabel="Tipo da câmera"
+                          disabled={!canAdjust}
+                          options={[
+                            { value: "area", label: "Câmera de área (zonas)" },
+                            { value: "fadiga", label: "Operador (fadiga)" },
+                          ]}
+                        />
+                      </div>
+                      {/* Transporte do VÍDEO NO PAINEL (go2rtc). Rótulo EXTERNO (Field) + valores
+                          limpos — o prefixo saiu de dentro do value (auditoria #15); a mecânica
+                          auto/override (go2rtc × relé) mora no tooltip "?", não na superfície. */}
+                      <div className="cam-set-field">
+                        <span className="cam-set-field__label">
+                          <FieldLabel>Vídeo no painel</FieldLabel>
+                          <HelpTip label="Como o vídeo chega ao painel">
+                            Automático (padrão) escolhe o melhor transporte e troca sozinho: WebRTC
+                            (vídeo fluido) quando disponível, senão MJPEG — sem configurar nada.
+                            MJPEG e WebRTC forçam um modo fixo (ajuste manual).
+                          </HelpTip>
+                        </span>
+                        <Select
+                          value={cfg.transport}
+                          onChange={(v) => setTransport(row.id, v as CameraCfg["transport"])}
+                          ariaLabel="Vídeo no painel"
+                          disabled={!canAdjust}
+                          options={[
+                            { value: "auto", label: "Automático" },
+                            { value: "mjpeg", label: "MJPEG" },
+                            { value: "webrtc", label: "WebRTC" },
+                          ]}
+                        />
+                      </div>
+                      {/* ── TIER DE MODELO ──────────────────────────────────────────────────────
+                          Quanto ESTA câmera pesa no servidor. O Select diz a CONSEQUÊNCIA no
+                          rótulo — pedir "n/s/m" a quem não leu o catálogo de modelos seria pedir
+                          uma escolha que a tela não explica. */}
+                      <div className="cam-set-field">
+                        <span className="cam-set-field__label">
+                          <FieldLabel>Precisão da análise</FieldLabel>
+                          <HelpTip label="O que muda ao trocar a precisão">
+                            Escolhe o modelo de IA que analisa esta câmera. Automático deixa o
+                            sistema dimensionar sozinho conforme a carga — é o recomendado. Leve
+                            gasta bem menos processamento e enxerga menos longe: bom para câmera de
+                            passagem, ruim para contagem de linha, que precisa ver a mesma pessoa
+                            dos dois lados. Pesado é o contrário. Vale só para esta câmera.
+                          </HelpTip>
+                        </span>
+                        <Select
+                          value={cfg.tier}
+                          onChange={(v) => setTier(row.id, v as CameraCfg["tier"])}
+                          ariaLabel="Precisão da análise"
+                          disabled={!canAdjust}
+                          options={CAMERA_TIERS.map((t) => ({
+                            value: t,
+                            label: CAMERA_TIER_LABEL[t],
+                          }))}
+                        />
+                      </div>
+                      {/* Câmera de ÁREA (não "Operador"): o motor no hub é quem aprende objeto fixo
+                          — o modo fadiga roda no navegador do operador (não passa por automask.js). */}
+                      {!isFadiga && (
+                        <AutomaskReview cameraId={row.id} cameraLabel={row.label} canDecide={canConfigure} />
+                      )}
+                      {!canAdjust && (
+                        <span className="muted cam-adjust-hint">
+                          {canConfigure
+                            ? "Conecte a câmera para ajustar tipo e vídeo."
+                            : "Seu perfil não permite alterar tipo e vídeo."}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

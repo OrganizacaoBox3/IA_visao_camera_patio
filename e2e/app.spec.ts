@@ -362,6 +362,11 @@ test("Ajustes da câmera (/cameras): o Select de papel (área × fadiga) muda o 
   await page.getByRole("link", { name: "Câmeras" }).click();
   await expect(page).toHaveURL(/\/cameras/);
 
+  // Lista v2 (2026-09-29): os controles de cada câmera ficam atrás de "Ajustes" (com dezenas de
+  // câmeras, todos abertos viravam parede). Abre o da câmera conectada antes de mexer.
+  const ajustes = page.getByRole("button", { name: "Ajustes" }).first();
+  await expect(ajustes).toBeVisible({ timeout: 30_000 });
+  await ajustes.click();
   const tipo = page.getByLabel("Tipo da câmera").first();
   await expect(tipo).toBeVisible({ timeout: 30_000 });
   await tipo.click();

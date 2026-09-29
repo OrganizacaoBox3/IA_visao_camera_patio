@@ -45,6 +45,7 @@
 const GRAVIDADE = Object.freeze({
   "sem-video": 5,
   "video-instavel": 4,
+  "imagem-congelada": 4, // falha de VÍDEO como a instável: há frame, mas não há imagem viva
   "ia-parada": 3,
   "ia-atrasada": 2,
   "linha-sem-cadencia": 1,

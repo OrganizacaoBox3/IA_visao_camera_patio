@@ -133,6 +133,9 @@ describe("buildStatus — agregação por câmera", () => {
       // regressão: ausência de medição passando por medição de zero é o falso-OK da casa.
       frameAge: null,
       dets1m: 5,
+      // UTILIDADE (aditivo, 2026-09-29): `null` = este estado sintético nunca passou pelo pipeline.
+      analisadaDesde: null,
+      ultimaPessoaEm: null,
       excluded1m: 1,
       longRange: true,
       fadiga: false,

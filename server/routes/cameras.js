@@ -8,9 +8,67 @@ const { bearer } = require("../http-auth");
 const videoTicket = require("../video-ticket");
 const { visibleCameras } = require("../socket-scope");
 const { estadoDe } = require("../camera-state");
+const camcfg = require("../camcfg");
+const engine = require("../analysis/engine");
+const frameFreeze = require("../frame-freeze").shared;
+const { diagnosticar, HORAS_SEM_PESSOA } = require("../camera-diagnostico");
 
 async function handle(req, res, ctx) {
-  const { json, readBody, requireAuth, requireSuper, cameraList } = ctx;
+  const { json, readBody, requireAuth, requireSuper, requireConfigurer, cameraList } = ctx;
+
+  // DIAGNÓSTICO DE UTILIDADE (2026-09-29): quais câmeras custam e não devolvem nada — offline,
+  // imagem congelada, sem área demarcada, horas sem ver ninguém. Junta sinais que o hub JÁ tem
+  // (registro, conexão, camcfg, frame-freeze, motor) e delega o veredito ao módulo puro
+  // camera-diagnostico.js. Perfil de configuração: é decisão de engenharia (desativar/remover).
+  if (req.url === "/api/cameras/diagnostico" && req.method === "GET") {
+    if (!requireConfigurer(req, res)) return true;
+    const agora = Date.now();
+    const rtspState = new Map(rtsp.statuses().map((s) => [s.id, s.state]));
+    const vivas = new Map(cameraList().map((c) => [String(c.id), c]));
+    const registro = cameraStore.all();
+    const ids = [...new Set([...registro.map((c) => String(c.id)), ...vivas.keys()])];
+    let perCamera = {};
+    let motorLigado = false;
+    try {
+      const st = engine.status();
+      perCamera = (st && st.perCamera) || {};
+      motorLigado = !!(st && st.enabled);
+    } catch {
+      /* motor indisponível — diagnostica sem os sinais dele (não inventa "sem pessoa") */
+    }
+    const cameras = ids.map((id) => {
+      const viva = vivas.get(id);
+      const reg = cameraStore.get(id);
+      const online = viva
+        ? viva.kind === "rtsp"
+          ? ["online", "idle"].includes(rtspState.get(id))
+          : true
+        : false;
+      const cfg = camcfg.getCamConfig(id);
+      const fz = frameFreeze.statusOf(id, agora) || {};
+      const pc = perCamera[id] || {};
+      const sinais = {
+        online,
+        estado: estadoDe(reg || viva || {}),
+        modo: (cfg && cfg.modo) || "atividade",
+        zonas: camcfg.getZones(id).length,
+        linhas: camcfg.getTripwires(id).length,
+        congelada: fz.congelada === true,
+        paradoMs: fz.paradoMs || 0,
+        analiseLigada: motorLigado && !pc.fadiga,
+        analisadaDesde: pc.analisadaDesde ?? null,
+        ultimaPessoaEm: pc.ultimaPessoaEm ?? null,
+      };
+      return {
+        id,
+        label: String((reg && reg.label) || (viva && viva.label) || id),
+        ...sinais,
+        ...diagnosticar(sinais, { agora }),
+      };
+    });
+    json(res, 200, { geradoEm: agora, horasSemPessoa: HORAS_SEM_PESSOA, motorLigado, cameras });
+    return true;
+  }
 
   // Token de enrolamento de câmera (superadmin) — p/ montar o link /camera?key=
   if (req.url === "/api/camera-enroll" && req.method === "GET") {

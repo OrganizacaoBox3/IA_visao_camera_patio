@@ -22,6 +22,7 @@
 "use strict";
 
 const health = require("./health"); // observeFrame: lacuna/retomada por câmera (saúde)
+const frameFreeze = require("../frame-freeze").shared; // imagem parada (mesmo tracker do relé)
 
 // ANALYSIS_SOURCE=go2rtc → puxa TODAS as streams do go2rtc (força); ausente/qualquer
 // outro valor → modo "relay-less" (puxa só quem não manda relé). ANALYSIS_GO2RTC_PULL=0
@@ -175,6 +176,7 @@ function createGo2rtcSource({
     const st = states.get(id) || createState(id);
     const now = Date.now();
     health.observeFrame(st, now); // lacuna/retomada (O(1)) — ANTES de atualizar lastFrameAt
+    frameFreeze.observe(id, buf, now); // imagem parada (bytes idênticos) — mesmo tracker do relé
     st.lastFrameAt = now;
     st.source = "go2rtc";
     st.latest = { buf, ts: now - ageMs };

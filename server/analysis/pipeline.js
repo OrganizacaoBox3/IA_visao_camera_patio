@@ -101,6 +101,11 @@ function createPipeline({ highScore, ingest, hasViewers, emitTracks, cameraLabel
     // Logs rolantes (60s) que alimentam fps real/dets1m/excluded1m no status.
     st.rounds.push(now);
     st.detsLog.push({ t: now, n: persons.length, x: excluded, a: autoHidden });
+    // Diagnóstico de UTILIDADE (camera-diagnostico.js): desde quando esta câmera é analisada e
+    // quando viu gente pela última vez. Câmera que roda horas sem NUNCA ver uma pessoa está
+    // pagando inferência para devolver zero — sinal de câmera mal posicionada ou sem propósito.
+    if (!st.analisadaDesde) st.analisadaDesde = now;
+    if (persons.length > 0) st.ultimaPessoaEm = now;
     const cutoff = now - 60_000;
     while (st.rounds.length && st.rounds[0] < cutoff) st.rounds.shift();
     while (st.detsLog.length && st.detsLog[0].t < cutoff) st.detsLog.shift();
