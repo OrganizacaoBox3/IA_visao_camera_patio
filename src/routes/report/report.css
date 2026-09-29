@@ -149,6 +149,44 @@
   color: var(--state-neutral-fg);
 }
 
+/* ── Comparar dias ou turnos (ComparePanel.tsx, 2026-09-29) ── */
+.cmp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.cmp-recortes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.cmp-recorte {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.cmp-vs {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cmp-aviso {
+  margin: 0 0 var(--sp-2);
+  font-size: 12px;
+  color: var(--state-warn-fg);
+}
+.cmp-delta[data-tom="ruim"] {
+  color: var(--state-critical-fg);
+  font-weight: 600;
+}
+.cmp-delta[data-tom="bom"] {
+  color: var(--state-ok-fg);
+  font-weight: 600;
+}
+
 @media print {
   /* EXCEÇÃO G8 (contraste, não estado): impressão é tinta sobre papel BRANCO — os tokens
      dark do :root ficariam ilegíveis. Mesmos hex do bloco @media print do index.css. */

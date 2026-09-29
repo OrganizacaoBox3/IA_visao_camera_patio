@@ -66,6 +66,7 @@ import { useLeituraVM } from "./report/useLeituraVM";
 import { useObjetosVM } from "./report/useObjetosVM";
 import { useFadigaVM } from "./report/useFadigaVM";
 import { useAlarmesVM } from "./report/useAlarmesVM";
+import { ComparePanel } from "./report/ComparePanel";
 import { EmptyHistory } from "./report/EmptyHistory";
 import { AlarmHealthStrip } from "./report/AlarmHealthStrip";
 import { SaudeMotorPanel } from "./report/SaudeMotorPanel";
@@ -754,6 +755,14 @@ export function ReportPage() {
             é a leitura que o gestor abre o relatório para fazer; o resto é o detalhamento dela. */}
         {/* COBERTURA antes de tudo (inclusive da eficiência): se o período não foi observado,
             todo número abaixo é suspeito — e descobrir isso no rodapé é tarde demais. */}
+        {/* COMPARAR DIAS OU TURNOS (2026-09-29): dois recortes (dia × turno) lado a lado. Usa os
+            datasets JÁ filtrados pela câmera do topo (mesma lente). Aparece sempre que HÁ
+            histórico — inclusive com o PERÍODO vazio: o comparativo escolhe qualquer dia
+            carregado, então esconder por causa do filtro de período seria esconder dado que existe. */}
+        {isResumo && (ready || emptyWindow) && (
+          <ComparePanel ds={dsCam} flow={flowCam} shiftItems={shiftItems} />
+        )}
+
         {ready && isResumo && (
           <CoberturaCard
             c={cob}
