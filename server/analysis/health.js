@@ -144,6 +144,24 @@ function classifyCamera(s = {}, limites = {}) {
   };
 
   // 1. SEM VÍDEO — a IA não tem o que ver. Precede tudo: explica os de baixo.
+  // 0. DORMINDO COM O DECODE PAUSADO PELO GATE (go2rtc-source.js, PR #37). A câmera fora do
+  // turno não recebe frame POR DECISÃO NOSSA — o decode foi desligado para economizar CPU. Sem
+  // este ramo, ela virava "sem-video" (CRÍTICO) 15s depois de dormir, todo fim de turno, em
+  // toda câmera go2rtc. Vem ANTES de "sem-video" porque aqui a ausência de frame é esperada.
+  // O preço é declarado no motivo: enquanto o decode está pausado, o vídeo NÃO é verificado —
+  // uma câmera que morrer dormindo só é descoberta quando o turno abrir e o decode voltar.
+  // (A câmera de RELÉ segue recebendo frame dormindo, e por isso segue alarmando feed morto.)
+  if (s.dormindoPorTurno === true && s.decodePausado === true)
+    return {
+      estado: "ok",
+      motivo:
+        (s.motivoDoSono === "sem-turno"
+          ? "parada: nenhum turno atribuído às zonas desta câmera"
+          : "fora da janela de turno") + " — decode pausado, vídeo verificado quando o turno abrir",
+      desde: null,
+      medido,
+    };
+
   if (semFrameMs != null && semFrameMs > L.semVideoMs)
     return {
       estado: "sem-video",

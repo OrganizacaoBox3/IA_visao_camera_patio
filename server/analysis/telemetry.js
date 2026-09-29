@@ -248,6 +248,9 @@ function buildStatus(snap) {
         // e do pull go2rtc). Ausente no tracker → undefined → health não afirma nada.
         congelada: freezeOf(id, now).congelada,
         paradoMs: freezeOf(id, now).paradoMs,
+        // DECODE PAUSADO pelo gate (go2rtc-source.js, PR #37): a câmera dormindo não recebe
+        // frame POR DECISÃO NOSSA — health.js não pode ler isso como "sem-video".
+        decodePausado: st.decodePausado === true,
         dormindoPorTurno: st.shiftEstado === "fora-janela" || st.shiftEstado === "sem-turno",
         motivoDoSono: st.shiftEstado === "sem-turno" ? "sem-turno" : "fora-janela",
       }),

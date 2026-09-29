@@ -380,6 +380,22 @@ describe("pullTick — gate do decode: câmera dormindo não ganha ffmpeg", () =
     expect(st.source).toBe("go2rtc");
   });
 
+  it("marca decodePausado no state enquanto dorme e desmarca ao acordar (a saúde lê isto)", async () => {
+    // Sem a marca, a câmera que dorme no FIM do turno (tinha frame) virava "sem-video" CRÍTICO:
+    // health.js não tinha como saber que a falta de frame era decisão do gate (2026-09-29).
+    const dorme = new Set();
+    const { src, states } = makeGatedSource(dorme);
+    src.pullTick();
+    await tick();
+    src.pullTick(); // acordada: abre o stream
+    dorme.add("cam1");
+    src.pullTick(); // dormiu
+    expect(states.get("cam1").decodePausado).toBe(true);
+    dorme.delete("cam1");
+    src.pullTick(); // acordou
+    expect(states.get("cam1").decodePausado).toBe(false);
+  });
+
   it("sem a dep (quem instancia sem deveDecodificar): decodifica sempre — comportamento anterior intacto", async () => {
     // Retrocompat: o default `() => true` é o que o teste acima de streamLoop já exercita; aqui
     // só se trava que a AUSÊNCIA da dep não vira "dorme tudo" por acidente.

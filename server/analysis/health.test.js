@@ -460,3 +460,47 @@ describe("classifyCamera — imagem-congelada", () => {
     expect(classifyCamera(saudavel({ congelada: undefined })).estado).toBe("ok");
   });
 });
+
+// ── GATE DE TURNO × DECODE PAUSADO (PR #37) — 2026-09-29 ─────────────────────────────────────
+// O #37 parou de decodificar a câmera go2rtc que dorme. Combinado com "sem-video vence o sono"
+// (feed morto alarma mesmo dormindo), a câmera que dorme no FIM do turno — tinha frame antes —
+// virava "sem-video" CRÍTICO 15s depois. Aqui a ausência de frame é decisão nossa.
+describe("classifyCamera — dormindo com o decode pausado pelo gate", () => {
+  const T = 1_700_000_000_000;
+  const dormiuSemFrame = {
+    now: T,
+    lastFrameAt: T - 10 * 60_000, // último frame antes de dormir: 10 min atrás
+    lastInferAt: T - 10 * 60_000,
+    fps: 0,
+    targetFps: 1,
+    analiseLigada: true,
+    dormindoPorTurno: true,
+    motivoDoSono: "fora-janela",
+  };
+
+  it("SEM a marca de decode pausado, o mesmo dado é 'sem-video' — o bug que isto conserta", () => {
+    expect(classifyCamera(dormiuSemFrame).estado).toBe("sem-video");
+  });
+
+  it("decode pausado pelo gate → ok, e o motivo DECLARA que o vídeo não está sendo verificado", () => {
+    const v = classifyCamera({ ...dormiuSemFrame, decodePausado: true });
+    expect(v.estado).toBe("ok");
+    expect(v.motivo).toMatch(/decode pausado/);
+    expect(v.motivo).toMatch(/verificado quando o turno abrir/);
+  });
+
+  it("sem turno atribuído mantém o motivo próprio (pendência de config)", () => {
+    const v = classifyCamera({ ...dormiuSemFrame, decodePausado: true, motivoDoSono: "sem-turno" });
+    expect(v.motivo).toMatch(/nenhum turno atribuído/);
+  });
+
+  it("decode pausado SEM estar dormindo não esconde nada (a marca só vale junto do sono)", () => {
+    expect(classifyCamera({ ...dormiuSemFrame, decodePausado: true, dormindoPorTurno: false }).estado).toBe(
+      "sem-video",
+    );
+  });
+
+  it("câmera de RELÉ dormindo (decode NÃO pausado) com feed morto segue alarmando", () => {
+    expect(classifyCamera({ ...dormiuSemFrame, decodePausado: false }).estado).toBe("sem-video");
+  });
+});

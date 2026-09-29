@@ -328,9 +328,15 @@ function createGo2rtcSource({
           const st = createState(id);
           st.source = "go2rtc";
         }
+        // A SAÚDE precisa saber que a falta de frame é DECISÃO NOSSA: sem esta marca, a câmera
+        // que dorme no fim do turno (tinha frame antes) virava "sem-video" CRÍTICO 15s depois
+        // — o decode parou de propósito. Ver health.js ("decodePausado").
+        states.get(id).decodePausado = true;
         continue;
       }
       ps.dormindo = false;
+      const stVivo = states.get(id);
+      if (stVivo) stVivo.decodePausado = false;
       if (STREAM_MODE) {
         if (ps.streaming) {
           // STALL WATCHDOG (nunca-cego): processo vivo sem frame novo → derruba; o exit agenda backoff.
