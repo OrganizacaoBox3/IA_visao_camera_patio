@@ -97,7 +97,11 @@ export function AutomaskReview({
             sugestoes.map((s) => (
               <div key={s.cell} className="automask-review__row">
                 <span>
-                  Objeto parado em {posicao(s)} — presente {Math.round(s.presentPct * 100)}% do tempo
+                  {s.tipo === "recorrente" ? "Aparece e some" : "Objeto parado"} em {posicao(s)} —
+                  presente {Math.round(s.presentPct * 100)}% do tempo
+                  {s.tipo === "recorrente" && !s.decision && (
+                    <span className="muted"> · não é escondido sozinho: confirme abaixo</span>
+                  )}
                   {s.decision && (
                     <span style={{ marginLeft: 6 }}>
                       <Badge tone={s.decision === "correto" ? "info" : "ok"}>

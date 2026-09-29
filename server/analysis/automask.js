@@ -51,6 +51,13 @@ const AM_COLS = 24; // colunas do grid de aprendizado
 const AM_ROWS = 18; // linhas do grid de aprendizado
 const AM_WIN_MS = 600_000; // janela de aprendizado (≥10min)
 const AM_PRESENT = 0.97; // fração da janela com presença p/ ser "objeto fixo"
+// DETECÇÃO FIXA *RECORRENTE* (2026-09-29): pôster, manequim, foto na parede que o modelo acusa
+// de forma INTERMITENTE — o score oscila em volta do limiar e a caixa aparece em 30-80% das
+// rodadas, sempre no MESMO pixel. Esses nunca batiam AM_PRESENT (97%) e por isso nunca viravam
+// nem sugestão: o fantasma ficava para sempre. Aqui eles viram SUGESTÃO para o operador
+// ("Está correto" / "É falso positivo") — NUNCA supressão automática: presença parcial também é
+// o padrão de alguém que senta e levanta da mesma cadeira, e só um humano separa os dois.
+const AM_RECORRENTE = 0.25;
 // Amostra mínima na janela/célula antes de decidir.
 //
 // ERA 120 — e isso MATAVA o mecanismo nesta operação (medido 2026-09-04): a contagem de
@@ -177,19 +184,25 @@ function evaluateWindow(am, now, camId) {
   for (const [cell, c] of am.cells) {
     if (c.n < AM_MIN_ROUNDS) continue; // pouca amostra → não decide
     const presentPct = c.present / am.rounds;
-    if (presentPct < AM_PRESENT) continue; // não está presente ~100% do tempo → não é objeto fixo
+    if (presentPct < AM_RECORRENTE) continue; // aparece pouco demais p/ afirmar qualquer coisa
     const std0 = Math.sqrt(c.m2[0] / c.n);
     const std1 = Math.sqrt(c.m2[1] / c.n);
     const std2 = Math.sqrt(c.m2[2] / c.n);
     const std3 = Math.sqrt(c.m2[3] / c.n);
     const jitter = Math.max(std0, std1, std2, std3);
     if (jitter > AM_JITTER) continue; // ainda VARIA (pé/tamanho oscilam) → provável pessoa real
+    if (presentPct < AM_PRESENT) {
+      // RECORRENTE: parado no mesmo pixel, mas intermitente → só SUGESTÃO (ver AM_RECORRENTE).
+      // Não entra em `candidatas`: a supressão automática continua exigindo presença ~total.
+      suggestions.push({ cell, presentPct, jitter, janelas: 0, tipo: "recorrente" });
+      continue;
+    }
     // Qualificou nesta janela. Só SUPRIME depois de AM_CONFIRM_WINDOWS janelas consecutivas —
     // é o que compensa a amostra menor (ver AM_MIN_ROUNDS) e o que separa mobília de pessoa
     // que ficou parada uma janela. A SUGESTÃO sai já na 1ª (observabilidade sem ação).
     const janelas = (candidatasAntes.get(cell) || 0) + 1;
     candidatas.set(cell, janelas);
-    suggestions.push({ cell, presentPct, jitter, janelas });
+    suggestions.push({ cell, presentPct, jitter, janelas, tipo: "fixa" });
     if (janelas >= AM_CONFIRM_WINDOWS) next.add(cell);
   }
   am.candidatas = candidatas; // quem não qualificou nesta janela perde a sequência (adaptativo)
@@ -243,6 +256,9 @@ function statusOf(am) {
         h: 1 / AM_ROWS,
         presentPct: Math.round(s.presentPct * 100) / 100,
         jitter: Math.round(s.jitter * 1000) / 1000,
+        // "fixa" = presente ~sempre (auto-esconde no modo hide) · "recorrente" = intermitente no
+        // mesmo lugar (só sugere — o operador decide). Ausente em estado legado → "fixa".
+        tipo: s.tipo || "fixa",
         decision: (am.overrides && am.overrides.get(s.cell)) || null,
       };
     }),
@@ -262,6 +278,7 @@ module.exports = {
   AM_ROWS,
   AM_WIN_MS,
   AM_PRESENT,
+  AM_RECORRENTE,
   AM_MIN_ROUNDS,
   AM_CONFIRM_WINDOWS,
   AM_JITTER,

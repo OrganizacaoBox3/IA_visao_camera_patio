@@ -352,6 +352,9 @@ export type AutomaskSuggestion = {
   h: number;
   presentPct: number;
   jitter: number;
+  /** "fixa" = presente ~sempre (some sozinha no modo hide) · "recorrente" = aparece e some no
+   *  MESMO lugar (pôster/manequim com score oscilando) — só sugere, o operador decide. */
+  tipo?: "fixa" | "recorrente";
   decision: "correto" | "falsoPositivo" | null;
 };
 export type AutomaskStatus = { mode: string; suppressed: number; suggestions: AutomaskSuggestion[] };

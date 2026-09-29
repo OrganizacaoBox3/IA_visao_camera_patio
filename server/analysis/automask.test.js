@@ -15,6 +15,7 @@ const {
   statusOf,
   applyOverride,
   clearOverride,
+  AM_RECORRENTE,
   AM_COLS,
   AM_ROWS,
   AM_PRESENT,
@@ -163,15 +164,18 @@ describe("evaluateWindow — gate objeto-fixo (presença + jitter + janela)", ()
     expect(am.suggestions).toHaveLength(0);
   });
 
-  it("presença BAIXA (< AM_PRESENT) mesmo com jitter ~0 → NÃO decide", () => {
+  it("presença BAIXA (< AM_PRESENT) mesmo com jitter ~0 → NÃO SUPRIME (vira só sugestão 'recorrente')", () => {
     // 130 presenças / 200 rodadas = 0.65 < AM_PRESENT(0.97); n=130 ≥ AM_MIN_ROUNDS.
+    // Até 2026-09-28 isto não gerava NADA; desde 29/09 vira sugestão "recorrente" (ver o
+    // describe "detecção fixa RECORRENTE" abaixo) — mas a SUPRESSÃO segue exigindo ~100%.
     observeRounds(am, [0.5, 0.5, 0.1, 0.2], 200, { presentRounds: 130 });
     const c = am.cells.get(amCell(0.5, 0.5));
     expect(c.n).toBe(130);
     expect(c.present / am.rounds).toBeLessThan(AM_PRESENT);
     evaluateWindow(am, Date.now(), "camT");
     expect(am.suppressed.size).toBe(0);
-    expect(am.suggestions).toHaveLength(0);
+    expect(am.suggestions).toHaveLength(1);
+    expect(am.suggestions[0].tipo).toBe("recorrente");
   });
 
   it("amostra INSUFICIENTE (n < AM_MIN_ROUNDS) → NÃO decide mesmo presente 100%", () => {
@@ -238,6 +242,7 @@ describe("statusOf — apresentação p/ o status() (célula → rect normalizad
         h: 1 / AM_ROWS,
         presentPct: 0.99, // arredondado a 2 casas
         jitter: 0.012, // arredondado a 3 casas
+        tipo: "fixa", // sugestão sem `tipo` (estado legado) apresenta como "fixa"
         decision: null, // sem override — ver describe("decisão do operador…") abaixo
       },
     ]);
@@ -388,5 +393,67 @@ describe("cadência REAL da operação: o mecanismo tem de funcionar a 0,05-0,32
     expect(am.windowStart).toBe(t0 + 600_001); // reposicionada: NÃO congelou
     expect(am.rounds).toBe(0); // contagem reiniciada com a janela
     expect(am.suppressed.size).toBe(0); // e nada foi decidido com amostra insuficiente
+  });
+});
+
+// ── DETECÇÃO FIXA *RECORRENTE* (2026-09-29) ──────────────────────────────────────────────────
+// Pôster/manequim/foto que o modelo acusa de forma INTERMITENTE (score oscilando no limiar):
+// parado no MESMO pixel, mas presente em 25-97% das rodadas. Nunca batia AM_PRESENT e o
+// fantasma ficava para sempre. Agora vira SUGESTÃO pro operador — nunca supressão automática
+// (presença parcial também é o padrão de quem senta e levanta da mesma cadeira).
+describe("detecção fixa RECORRENTE — intermitente no mesmo lugar vira sugestão, não supressão", () => {
+  let am;
+  let logSpy;
+  beforeEach(() => {
+    am = createAutoMask();
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => logSpy.mockRestore());
+
+  it("presença intermitente (50%) e caixa parada → sugestão tipo 'recorrente'", () => {
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], 100, { presentRounds: 50 });
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suggestions).toHaveLength(1);
+    expect(am.suggestions[0]).toMatchObject({ cell: amCell(0.5, 0.5), tipo: "recorrente" });
+    expect(statusOf(am).suggestions[0].tipo).toBe("recorrente");
+  });
+
+  it("NUNCA auto-suprime, nem em várias janelas seguidas (só o operador decide)", () => {
+    for (let j = 0; j < AM_CONFIRM_WINDOWS + 2; j++) {
+      observeRounds(am, [0.5, 0.5, 0.1, 0.2], 100, { presentRounds: 50 });
+      evaluateWindow(am, Date.now(), "camT");
+    }
+    expect(am.suppressed.size).toBe(0);
+    expect(am.candidatas.size).toBe(0); // nem entra na contagem de confirmação
+  });
+
+  it("operador marca 'É falso positivo' → passa a ser suprimida", () => {
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], 100, { presentRounds: 50 });
+    evaluateWindow(am, Date.now(), "camT");
+    applyOverride(am, am.suggestions[0].cell, "falsoPositivo");
+    expect(am.suppressed.has(amCell(0.5, 0.5))).toBe(AUTOMASK_MODE === "hide");
+  });
+
+  it("abaixo de AM_RECORRENTE não sugere (aparece pouco demais p/ afirmar algo)", () => {
+    const rodadas = 200;
+    const presentes = Math.floor(rodadas * AM_RECORRENTE) - 10; // ≥ AM_MIN_ROUNDS, < 25%
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], rodadas, { presentRounds: presentes });
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suggestions).toHaveLength(0);
+  });
+
+  it("intermitente MAS se mexendo (jitter alto) → não sugere (provável pessoa real)", () => {
+    observeRounds(am, null, 100, {
+      presentRounds: 50,
+      valsAt: (i) => [0.5, 0.5, i % 2 ? 0.2 : 0.1, 0.2],
+    });
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suggestions).toHaveLength(0);
+  });
+
+  it("presença ~total continua sendo 'fixa' (o caminho de auto-supressão de sempre)", () => {
+    observeRounds(am, [0.5, 0.5, 0.1, 0.2], AM_MIN_ROUNDS + 10);
+    evaluateWindow(am, Date.now(), "camT");
+    expect(am.suggestions[0].tipo).toBe("fixa");
   });
 });
