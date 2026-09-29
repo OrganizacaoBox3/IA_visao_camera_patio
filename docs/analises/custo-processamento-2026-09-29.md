@@ -49,8 +49,10 @@ depósito à noite, corredor vazio, manequim parado). O número é `engine.statu
 
 ## Recomendação
 
-1. **Ligar o gate de turno em produção** (`ANALYSIS_SHIFT_GATE=1`) — é a maior economia (100%
-   fora do turno) e o bloqueio dele (alarme falso de frota) foi corrigido em 22/09.
+1. **Confirmar o gate de turno em produção** (`ANALYSIS_SHIFT_GATE=1`) — é a maior economia (100%
+   fora do turno). Não está no `fly.toml`; a medição noturna do PR #37 (19/09, "todas dormindo")
+   indica que já está ligado via secret — `flyctl secrets list --app visao-patio` confirma. E
+   **dar turno a toda câmera que precisa vigiar**: sem turno ela dorme o dia inteiro.
 2. **Fixar tier N** nas câmeras de passagem (portaria, corredor) — 28–37% cada uma.
 3. **Desativar ou remover as câmeras "inúteis"** que a tela de Câmeras agora aponta (offline,
    congelada, sem área) — é o único item que reduz o custo do INGEST, que o resto não toca.
