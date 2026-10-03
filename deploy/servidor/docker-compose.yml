@@ -1,0 +1,33 @@
+# Visão de pátio em servidor próprio (substitui o Fly, desativado em 03/10/2026).
+# O mesmo Dockerfile do Fly (nginx :8080 + hub :8091 + RTMP :1935), com o Caddy na frente
+# fazendo o HTTPS automático do domínio — o papel que o proxy do Fly fazia.
+# Quem usa: deploy/servidor/subir.sh (não precisa rodar à mão).
+services:
+  visao:
+    build: ./src
+    restart: unless-stopped
+    env_file: ./visao.env
+    volumes:
+      - ./data:/data            # estado do hub (VISAO_STATE_DIR=/data, imposto pelo Dockerfile)
+    ports:
+      - "1935:1935"             # RTMP push das câmeras: TCP direto, sem passar pelo Caddy
+    expose:
+      - "8080"                  # painel: só o Caddy fala com ele
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [visao]
+    environment:
+      VISAO_DOMINIO: ${VISAO_DOMINIO:-cam.box3.software}
+    ports:
+      - "80:80"                 # o Let's Encrypt valida pela 80 e o Caddy redireciona para a 443
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # certificados: sobrevivem a recriação do container
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -120,3 +120,6 @@ tc22-scanner/debug.keystore
 
 # Imagem de REFERÊNCIA por câmera (ADR-021) — estado de runtime, nunca versionado.
 server/camera-bg/
+
+# Backups locais de estado de produção (credenciais/PII — nunca no git)
+/backups/

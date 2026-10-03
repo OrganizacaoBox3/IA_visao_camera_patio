@@ -1,0 +1,5 @@
+# O certificado sai sozinho assim que o DNS do domínio apontar para este servidor.
+# Antes disso o Caddy fica tentando e o painel só responde pelo IP na porta 80 (sem HTTPS).
+{$VISAO_DOMINIO:cam.box3.software} {
+	reverse_proxy visao:8080
+}
